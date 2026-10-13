@@ -20,6 +20,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A jailed agent's box has its project even when the jail hides files in it** (#210). An agent in
+  ai-jail whose project had a path the jail hides (an `ai-jail --mask`, or the project's own
+  `.ai-jail` file, which ai-jail hides by default) got a box without its project: `run` started in
+  the box HOME. Now the project is mounted with those paths hidden in the box as in the jail (empty),
+  checked before the box starts. So are `--ro-bind` of such a folder and a git worktree's main `.git`
+  with a hidden `config`. Plugins, themes, `--omarchy`, `--hyprland` and `--overlay` inside such a
+  project are still refused, and so is `--seed` from one whose hidden paths sit below its folders.
 - **A frozen shell reads as `hung`, not `running`** (#209). A shell whose pid lived but which
   answered nothing (a crash whose handler hung, its bar left frozen with no report and no relaunch)
   was taken as healthy by `ls` and every command. Now `ls` (and `ls --json`'s `shell_state`) says

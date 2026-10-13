@@ -5714,6 +5714,65 @@ from them.
     QML warnings. Qt 6.12 itself was not available to run. t_unit_version: no bare `Color.` in
     `plugin/*.qml`; on the code before, it names `Panel.qml`'s two lines.
 
+292. **A jailed agent's project goes into its box with what the jail hides there hidden again**
+    (2026-10-13, #210; was refused whole, finding 282). A project ai-jail hides any path in (a
+    `--mask`/`--deny-path`, and its own `.ai-jail`, hidden by default: so every project with one) had
+    no project mount: the box mounts from the host, where the hidden files are real. Now `repo_top`
+    takes such a folder (one the policy lists the hidden paths of, none of them the folder itself:
+    `JAIL_COVERABLE`), as do `--ro-bind` (`jail_root_covered`) and #193's worktree common dir with a
+    hidden `config`, and `up` mounts it read-only as before, then, after every other mount, an empty
+    file over each hidden file and an empty folder over each hidden folder, as ai-jail does
+    (`jail_cover`; none for a path inside another, a link, or one not there now). The paths are the
+    policy's, read when the broker started the command (mountinfo, finding 282); the jail can still
+    rename the folders above one while `up` runs, and a cover made at the path read before then hides
+    some other file of that name while the real one sits uncovered elsewhere: with a loop in the jail
+    swapping such a folder with one of its own, the real file was in some of six boxes. So the covers
+    are checked on the mounts themselves before anything runs: bwrap holds the box's PID 1 on
+    `--block-fd` (a FIFO in the box dir, opened again inside pasta, which closes what it inherits;
+    bwrap closes it before the session starts), and `jail_verify` (python3 -I: an O_PATH walk with
+    O_NOFOLLOW, which bash has not) reads the jail's mountinfo through the caller (`mntpid`, its
+    mount namespace checked against `mntns`, recorded by broker_init) and walks to each hidden path
+    through `/proc/PID/root` never following a link, checks what it reaches is that mount (fdinfo
+    `mnt_id`), and names it by the folder holding it (device, inode) and its name; then the same for
+    each place the box shows one of its empty files or folders, through its PID 1. A mount point is
+    never renamed or removed, so that name is the mount's whatever the folders above it do; every
+    hidden one must be among the box's, else the box goes (`up` says what was not covered and to try
+    again); a walk a rename upsets is tried again, five times. bwrap failing to make a cover (its path
+    gone mid-rename) ends the box too, and `died_starting` now says bwrap's line. With the check, the
+    same loop: each up came up with nothing hidden in it, or was refused. After `up` a rename moves
+    the box's cover with the file (the mount is on the file, as the jail's is), and a hidden path
+    cannot leave its folder (a rename across mounts fails), so a whole folder of the jail's stays
+    covered; a box mount is otherwise a snapshot of the jail's at `up`. A box process has no
+    capability in its user namespace to unmount a cover, and in one of its own (`unshare -Urm`) the
+    covers are locked to what they cover. Not covered, so still refused: an `--overlay` (the box's
+    view is on overlayfs, whose inodes are not the host's, so nothing can check it), and what the
+    broker reads on the host, `--plugin`, `--theme-dir`, `--omarchy` and `--hyprland` in such a
+    project (`own_path_visible` and their `top` takes only folders with nothing hidden: a hidden path
+    could be moved in by a rename between the check and the read); a throwaway `run` from such a
+    project does not overlay it (said): its box has it read-only, those hidden, the command there. A file read on the host
+    for git's worktree layout must not be hidden and must be straight in one of the jail's folders or
+    in one where nothing hidden can move (`jail_readable`; only paths straight in a folder cannot
+    move, `jail_deep`), and `--seed` takes nothing from a folder where a hidden path could have moved
+    (it copies on the host), nor mise's toolchains when they hold or could gain one. Needs
+    `/usr/bin/python3` (already a dependency); without it such a project is left out, said. Also: a
+    folder `jail_mounts` takes as hidden whole (a mount point with a newline) was left unmarked when
+    nothing else was mounted in it, so `jail_root` took it; now marked. Seen with plain bwrap: a host
+    rename over a hidden path (an editor's save, a checkout) detaches the jail's mount (the kernel
+    drops mounts on a replaced name in every namespace), so the jail then reads the new file; a box's
+    cover goes the same way (the same mechanism; not run in a box). Checked: t_unit_jail_covers
+    (plain bwraps as jail and box: the covers each kind gets, every hidden path covered and the box let
+    go finding none, through a link, `/proc/self/root` and `/proc/1/root`; one left out, a cover put at
+    the path the jail's mounts said after a swap, a gone jail process: refused; renamed after the box's
+    mounts: still covered; fails with jail_verify stubbed), t_unit_jail_policy (the newline folder),
+    t_unit_git_dirs (a hidden config: the common dir; a hidden commondir or `.git` file, a movable
+    hidden path: none), t_jail from a real ai-jail 2.8.1 (the project with `.env`, `.ai-jail`, a folder
+    and a file below a folder hidden: mounted, run starting there, each empty, nothing of them found
+    anywhere; `umount` refused, also in `unshare -Urm`; renamed after `up` and before it; `--seed`
+    refused; a user's `save` of that box and a box `up --from` it hold none; `--ro-bind DIR:DEST` of a
+    folder with a hidden file; `--overlay` and `--plugin` there refused; a worktree's common dir with
+    `.git/config` hidden: in, empty, `git status` works; the swap loop: 6 ups, each refused or clean, and
+    with jail_verify stubbed the real file was in a box).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -5750,7 +5809,7 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
 - The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
   `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
   `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried (→ #81).
-- A jailed agent's project with a path the jail hides inside (any `ai-jail --mask`, or its own `.ai-jail`
-  file, hidden by default) gets no project mount in its box (finding 282): safe, but the agent's
-  repo is missing there. Mounting it with the jail's hidden paths covered again in the box (an empty
-  file over each, as ai-jail does) would give it back.
+- A jailed agent's `--plugin`, `--theme-dir`, `--omarchy` or `--hyprland` inside a project the jail
+  hides a path in, and an `--overlay` of one, are still refused (finding 292): the broker reads them
+  on the host, and an overlay's covers cannot be checked. Reading through the jail's own mounts
+  (`/proc/PID/root`, no link followed, as jail_verify walks) would allow the first four.

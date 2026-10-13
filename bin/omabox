@@ -1123,7 +1123,13 @@ died_starting() {
   # Or why share/session.sh ended it before Hyprland started (finding 245: up --theme's omarchy-theme-set;
   # not its line naming an --hyprland build).
   if [ -n "$last" ]; then why=" (Hyprland: $last)"
-  elif sess=$(grep '^session\.sh: ' "$D/box.log" 2>/dev/null | grep -vm 1 '^session\.sh: Hyprland ' | cut -c 1-200) && [ -n "$sess" ]; then why=" (${sess#session.sh: })"; fi
+  elif sess=$(grep '^session\.sh: ' "$D/box.log" 2>/dev/null | grep -vm 1 '^session\.sh: Hyprland ' | cut -c 1-200) && [ -n "$sess" ]; then why=" (${sess#session.sh: })"
+  # bwrap's own refusal: a mount it could not make (#210: a jailed caller's cover, the folder above it
+  # renamed meanwhile), said with it.
+  elif sess=$(grep -m 1 '^bwrap: ' "$D/box.log" 2>/dev/null | cut -c 1-300) && [ -n "$sess" ]; then
+    why=" ($sess)"
+    [ -z "${cover_srcs[*]:-}" ] || why+="; if the jail renamed a folder holding a path it hides meanwhile, try again"
+  fi
   die "box '$NAME' died while starting$why; logs: $D/home/*.log $D/box.log"
 }
 
@@ -1936,7 +1942,9 @@ home_link() {
 # refuse_src keeps it out), a same-path --ro-bind (`up`'s robinds, which --hyprland, --omarchy and
 # mise's add to) or an --overlay (`up`'s overlays: at its own path, writable, so a plugin in one is
 # what the box's writes there make it), with no mount from elsewhere at or above it. Under ai-jail repo_top is the jail's project, and the jail must see
-# PATH (jail_sees: not through a link out of its folders).
+# PATH (jail_sees: not through a link out of its folders), and the mount must be of a folder of the
+# jail's with nothing hidden in it (jail_root, #210): what is linked to this way is read on the host
+# (a plugin's files, a theme's), where a hidden path could be moved in with the folder above it.
 own_path_visible() {
   local p top x src dest seen=1 specs=()
   p=$(readlink -e -- "$1" 2>/dev/null) || return 1
@@ -1948,6 +1956,7 @@ own_path_visible() {
     src=${x%%$'\t'*} dest=${x#*$'\t'}
     [ "$p" = "$dest" ] || [[ $p == "$dest"/* ]] || continue
     [ "$src" = "$dest" ] || return 1
+    ! in_jail || jail_root "$src" >/dev/null || return 1
     seen=0
   done
   return $seen
@@ -1968,7 +1977,7 @@ seed_spec() {
   # A jailed caller's SRC (#198): followed only inside its jail's folders, then resolved and checked
   # there (jail_sees: a link swapped in since is caught); refused as written, one way for all.
   if in_jail; then
-    { src=$(jail_path "$src") && [ -e "$src" ] && src=$(jail_sees "$src") && ! jail_masked "$src"; } ||
+    { src=$(jail_path "$src") && [ -e "$src" ] && src=$(jail_sees "$src") && ! jail_masked "$src" && ! jail_deep "$src"; } ||
       { say "up: --seed ${1%%:*} is not a file or folder in a folder this jail sees, so it does not go into the box"; return 1; }
   else
     [ -e "$src" ] || { say "--seed: no such path: $src"; return 1; }
@@ -2027,8 +2036,9 @@ robind_spec() {
   local src=$1 dest=""
   if [[ $1 == *:/* ]]; then src=${1%%:/*}; dest=/${1#*:/}; fi
   src=${src/#\~/$HOME}
-  # A jailed caller's (#198): followed only inside its jail's folders, and one of them, whole.
-  if in_jail; then { src=$(jail_path "$src") && [ -e "$src" ] && src=$(jail_root "$src"); } || return 1
+  # A jailed caller's (#198): followed only inside its jail's folders, and one of them, whole, or with
+  # what the jail hides in it covered in the box (#210).
+  if in_jail; then { src=$(jail_path "$src") && [ -e "$src" ] && src=$(jail_root_covered "$src"); } || return 1
   else [ -e "$src" ] || return 1; src=$(readlink -f -- "$src"); fi
   [ -z "$dest" ] || dest=$(realpath -m -- "$dest")   # //usr and /a/../usr are /usr
   printf '%s\t%s\n' "$src" "${dest:-$src}"
@@ -2286,14 +2296,14 @@ cmd_up() {
     # resolves there, in the box's view, not the host's.
     if [ -n "$hyprland" ] && ! jail_root "${hyprland%/*}" >/dev/null; then
       local top
-      top=$(repo_top) && jail_sees "$hyprland" >/dev/null && [[ $hyprland == "$top"/* ]] ||
+      top=$(repo_top) && jail_root "$top" >/dev/null && jail_sees "$hyprland" >/dev/null && [[ $hyprland == "$top"/* ]] ||
         jail_refuse --hyprland "$hypr_given" "$W_HYPR"
       hypr_bind=0
     fi
     # --omarchy's tree likewise.
     if [ -n "$omarchy" ] && ! jail_root "$omarchy" >/dev/null; then
       local top
-      top=$(repo_top) && jail_sees "$omarchy" >/dev/null && [[ $omarchy == "$top"/* ]] ||
+      top=$(repo_top) && jail_root "$top" >/dev/null && jail_sees "$omarchy" >/dev/null && [[ $omarchy == "$top"/* ]] ||
         jail_refuse --omarchy "$omarchy_given" "$W_OMARCHY"
       omarchy_bind=0
     fi
@@ -2421,15 +2431,16 @@ cmd_up() {
   # Host code, read-only (at the same path unless DIR:DEST): the repo `up` runs from, mise's
   # toolchains, ~/.config/omabox/ro-bind, --ro-bind. Checked before anything is created: a refusal
   # leaves no box dir. What the user named is refused loudly; what omabox adds by itself is skipped.
-  local top gd
+  local top gd auto=()
   if top=$(repo_top); then
+    auto+=("$top")
     if why=$(refuse_src "$top"); then say "not mounting the repo $top: $why"
     else
       robinds=("$top"$'\t'"$top" "${robinds[@]}")
       # A linked worktree's git dir (finding 250), before the repo: mounted after, one that held it would hide it.
       while IFS= read -r gd; do
         if why=$(refuse_src "$gd") || why=$(refuse_dest "$gd"); then say "not mounting $gd, the git dir of $top: $why"
-        else robinds=("$gd"$'\t'"$gd" "${robinds[@]}"); fi
+        else robinds=("$gd"$'\t'"$gd" "${robinds[@]}"); auto+=("$gd"); fi
       done < <(repo_git_dirs "$top")
     fi
   fi
@@ -2437,7 +2448,10 @@ cmd_up() {
   # Mounted so `omabox run` finds the same ones as the host (finding 47); rustup's ~/.cargo is not.
   # Not for a jailed agent whose jail has no mise, nor the user's own mounts (finding 99).
   local mise=${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs
-  [ -d "$mise" ] && { ! in_jail || jail_sees "$mise" >/dev/null; } && robinds+=("$(readlink -f "$mise")"$'\t'"$(readlink -f "$mise")")
+  # A jailed caller's: holding nothing the jail hides, where nothing hidden can move to (jail_cover, #210).
+  local mi=""; [ -d "$mise" ] && mi=$(readlink -f "$mise") || mi=""
+  [ -z "$mi" ] || { in_jail && ! { jail_sees "$mi" >/dev/null && ! jail_masked "$mi" && ! jail_deep "$mi"; }; } ||
+    robinds+=("$mi"$'\t'"$mi")
   if [ -f "$HOME/.config/omabox/ro-bind" ] && ! in_jail; then
     local line
     while IFS= read -r line || [ -n "$line" ]; do
@@ -2464,11 +2478,20 @@ cmd_up() {
     g=${p#* }; g=${g% *}
     why=$(refuse_src "$g") && die "refusing to ${p%% *} $g ${p##* } a box: $why"
   done
-  local src dest ro_args=()
+  # A jailed caller's folders go in with what the jail hides in them hidden again (#210): `covers`, the
+  # mounts that do it, made after every other mount; `cover_srcs`, the folders jail_verify checks.
+  local src dest ro_args=() covers=() cover_srcs=()
   for p in "${robinds[@]}"; do
     src=${p%%$'\t'*} dest=${p#*$'\t'}
     why=$(refuse_src "$src") && die "refusing to mount $src into a box: $why"
     why=$(refuse_dest "$dest") && die "refusing to mount $src at $dest in a box: $why"
+    if in_jail && ! jail_cover "$src" "$dest"; then
+      why="this jail hides paths in it, and the box hides them too only with /usr/bin/python3 (package python) to check it does"
+      # What up mounts by itself (the repo, its git dir) is left out, said; what the caller named is refused.
+      local a isauto=0; for a in ${auto[@]+"${auto[@]}"}; do [ "$a" != "$src" ] || isauto=1; done
+      [ $isauto = 0 ] || { say "not mounting $src: $why"; continue; }
+      die "refusing to mount $src into a box: $why"
+    fi
     ro_args+=(--ro-bind "$src" "$dest")
   done
   # A plugin the box sees at its own path anyway (inside the repo `up` runs from, a same-path
@@ -2497,6 +2520,12 @@ cmd_up() {
   # The box's XDG_RUNTIME_DIR, 0700 as a session's (#153): a helper that checks its session bus
   # refuses a runtime dir others can read.
   chmod 700 "$D/run"
+  # What jail_cover's mounts hide a jailed caller's hidden paths with, and the pipe the box's PID 1 waits
+  # on until jail_verify has checked them (#210). In the box dir: no jail sees it.
+  if [ ${#cover_srcs[@]} -gt 0 ]; then
+    if ! { : > "$D/cover-file" && mkdir "$D/cover-dir" && chmod 444 "$D/cover-file" && chmod 555 "$D/cover-dir" &&
+      mkfifo -m 600 "$D/go"; }; then die "up: could not make the box's covers in $D"; fi
+  fi
   [ -z "$from_dir" ] || cp -a --reflink=auto "$from_dir/home/." "$HOMES/$NAME/home/" || die "could not copy save '$FROM' into box '$NAME'"
   # The name is taken now (its dir exists): let the next `up --new` choose, and keep the lock out of
   # the box's long-lived processes.
@@ -2624,6 +2653,9 @@ cmd_up() {
     [[ " ${LINKED_PLUGINS[*]} " == *" ${p%%$'\t'*} "* ]] || args+=(--ro-bind "${p#*$'\t'}" "/home/sbx/.config/omarchy/plugins/${p%%$'\t'*}")
   done
   for p in "${overlays[@]}"; do args+=(--overlay-src "$p" --tmp-overlay "$p"); done
+  # Last, so nothing is mounted over them: what a jailed caller's jail hides in its folders (#210),
+  # with the box's PID 1 held on fd 4 (the go pipe) until jail_verify has seen them made.
+  [ ${#cover_srcs[@]} = 0 ] || args+=("${covers[@]}" --block-fd 4)
   # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
   # The XDG base dirs, as an Omarchy session has them: dbus-daemon reads the box HOME's D-Bus services
   # only from $XDG_DATA_HOME; without it, it looks in the passwd entry's home, not $HOME (finding 87).
@@ -2697,9 +2729,13 @@ cmd_up() {
     # pasta adds its own pid namespace (no --no-pidns in Arch's yet), so it writes its pid for
     # pasta_pid to find the box's. It is bwrap's parent: --die-with-parent ends the box with it (OOM, a
     # killall), rather than leave it up with no network, DNS or forwards for the rest of its life.
+    # The go pipe (#210) opened in there too: pasta closes what it inherits.
     # shellcheck disable=SC2016 # $0 and $@ belong to the inner sh
+    local wrap='exec 3>"$0"; exec "$@"'
+    # shellcheck disable=SC2016 # the inner sh's
+    [ ${#cover_srcs[@]} = 0 ] || wrap='exec 3>"$0" 4<>"${0%/*}/go"; exec "$@"'
     launch=(pasta "${pasta_args[@]}" --
-      sh -c 'exec 3>"$0"; exec "$@"' "$D/info.json" "${launch[@]}" --unshare-user --uid "$UID" --gid "$(id -g)"
+      sh -c "$wrap" "$D/info.json" "${launch[@]}" --unshare-user --uid "$UID" --gid "$(id -g)"
       --die-with-parent)
   fi
   # --systemd: the whole box (including pasta when used) runs in a transient scope that delegates
@@ -2735,7 +2771,10 @@ cmd_up() {
     printf ' %s' '${HL_EXEC_RULE_TOKEN:+HL_EXEC_RULE_TOKEN=$HL_EXEC_RULE_TOKEN}'
     [ "$(ulimit -Hc)" = 0 ] || printf ' %q' prlimit --core=1:   # nocore, for the whole box
     printf ' %q' setsid "${launch[@]}" --unsetenv HL_EXEC_RULE_TOKEN "${args[@]}"
-    printf ' 3>%q </dev/null >%q 2>&1\n' "$D/info.json" "$D/box.log"
+    printf ' 3>%q </dev/null >%q 2>&1' "$D/info.json" "$D/box.log"
+    # The go pipe (#210), for a box with no pasta (behind pasta, its sh opens it again).
+    [ ${#cover_srcs[@]} = 0 ] || printf ' 4<>%q' "$D/go"
+    echo
   } > "$D/launch.sh"
   # Its reaper now, before the box starts, not once up is done (#137): an up killed after the launch
   # (SIGKILL: no EXIT trap; a harness's timeout) left a box that nothing took down, its idle limit and
@@ -2773,6 +2812,14 @@ cmd_up() {
   # What box_pid checks from now on: this box's pid namespace, not a later owner of the pid.
   local ns; ns=$(readlink "/proc/$(box_pid)/ns/pid") || died_starting
   jq --arg ns "$ns" '.pidns = $ns' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  # A jailed caller's covers (#210): checked on the box's own mounts while its PID 1 waits, before
+  # anything runs in it; the box goes (the EXIT trap) when one is missing.
+  if [ ${#cover_srcs[@]} -gt 0 ]; then
+    local miss go
+    miss=$(jail_verify "$(box_pid)" "${cover_srcs[@]}" 2>&1) ||
+      die "up: the box could not hide what this jail hides in ${cover_srcs[*]} (${miss//$'\n'/, }): not started. If the jail renamed a folder meanwhile, try again"
+    exec {go}<>"$D/go"; printf go >&"$go"; exec {go}>&-
+  fi
   if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
   wait_ready "$shell"
   # More monitors (#122), as `monitor add` makes them: one at a time, each placed by what the last one
@@ -3807,7 +3854,12 @@ cmd_run() {
   # all of HOME, finding 63); outside one the command runs in the box HOME.
   local top why overlay=()
   if top=$(repo_top); then
-    if why=$(refuse_src "$top"); then say "not overlaying $top: $why"; else overlay=(--overlay "$top"); fi
+    if why=$(refuse_src "$top"); then say "not overlaying $top: $why"
+    # A jailed caller's project with paths its jail hides (#210): an overlay is not covered; the box
+    # has it read-only instead, those hidden (as `up` mounts it), the command starting there.
+    elif in_jail && ! jail_root "$top" >/dev/null; then
+      say "not overlaying $top: this jail hides paths in it; the command sees it read-only, with those hidden"
+    else overlay=(--overlay "$top"); fi
   fi
   # The name keeps its -run<pid> whatever the base's length: two runs in one repo never share a box.
   select_box "$(printf '%s' "$NAME" | cut -c1-28)-run$$"
@@ -8431,6 +8483,214 @@ jail_root() {
   local p; p=$(readlink -e -- "$1" 2>/dev/null) || return 1
   jq -e --arg p "$p" 'any(.roots[]; $p == .path and (.masked | not))' <<<"$OMABOX_JAIL" >/dev/null && echo "$p"
 }
+# The jail's folders a box may mount with what the jail hides in them covered again (#210): one with
+# nothing hidden, or one whose hidden paths the policy lists (an older broker's does not), none of
+# them the folder itself. A jq filter, on the policy, for a root (.path, .masked) given as input.
+# shellcheck disable=SC2016 # jq's
+JAIL_COVERABLE='(.path as $r | $pol.masks // [] | any(.[]; . == $r) | not) and ((.masked | not) or ($pol | has("masks")))'
+# jail_root_covered PATH: as jail_root, but a folder the jail hides paths in too (#210): the box mounts
+# it and covers each of them (jail_cover), for --ro-bind, whose folder nothing on the host reads.
+jail_root_covered() {
+  local p; p=$(readlink -e -- "$1" 2>/dev/null) || return 1
+  jq -e --arg p "$p" ". as \$pol | any(.roots[]; \$p == .path and ($JAIL_COVERABLE))" <<<"$OMABOX_JAIL" >/dev/null && echo "$p"
+}
+# jail_hidden PATH (#210): PATH (resolved) at or under one of the jail's hidden paths; true when the
+# policy cannot say which those are.
+jail_hidden() {
+  local p=$1 m
+  jq -e 'has("masks")' <<<"$OMABOX_JAIL" >/dev/null || return 0
+  while IFS= read -r -d '' m; do
+    if [ "$p" = "$m" ] || [[ $p == "$m"/* ]]; then return 0; fi
+  done < <(jq -j '.masks[] | . + "\u0000"' <<<"$OMABOX_JAIL")
+  return 1
+}
+# jail_deep PATH (#210): the innermost of the jail's folders holding PATH has a hidden path below a
+# folder of its own rather than straight in it. The jail can move such a path with the folder above it
+# (`mv config config2`: the mount goes along, finding 282), so where the policy says it is may be
+# stale by the time the host reads a file there; one straight in the folder cannot move (a mount point
+# is neither renamed nor removed, and the folder is one itself), nor can a hidden path leave its
+# folder (a rename across mounts fails). True when the policy cannot tell (no masks: an older broker),
+# or PATH is in none of them.
+jail_deep() {
+  jq -e --arg p "$1" '
+    def inner($x): [.roots[].path | select(. as $r | $x == $r or ($x | startswith($r + "/")))] | max_by(length);
+    if has("masks") | not then true else
+      inner($p) as $r
+      | if $r == null then true
+        else . as $pol | any(.masks[]; . as $m | ($m | startswith($r + "/")) and ($pol | inner($m)) == $r
+          and ($m | sub("/[^/]*$"; "")) != $r) end end' <<<"$OMABOX_JAIL" >/dev/null
+}
+# jail_readable FILE (#210): FILE (resolved, inside the jail's folders) may be read on the host for a
+# jailed caller: not a path the jail hides nor under one, and where none of those can have moved since
+# the policy was read: straight in one of the jail's folders, or in one where none can move (jail_deep).
+jail_readable() {
+  ! jail_hidden "$1" || return 1
+  jq -e --arg f "$1" 'any(.roots[]; .path == ($f | sub("/[^/]*$"; "")))' <<<"$OMABOX_JAIL" >/dev/null || ! jail_deep "$1"
+}
+# jail_cover SRC DEST (#210): a jailed caller's folder SRC, mounted at DEST in the box, gets what the
+# jail hides in it hidden there again, as ai-jail hides it: an empty folder over each hidden folder,
+# an empty file over anything else, mounted after everything else (up's `covers`; nothing for a path
+# not there now, a link, or one inside another: the outer one's cover hides it). SRC goes in
+# `cover_srcs` when it holds any, for jail_verify to check against the jail's own mounts once the box
+# has made them. The paths are the policy's, from the broker's start: one the jail moved since (a
+# folder above it renamed) gets no cover where it is now, which jail_verify catches. A path inside one
+# of the jail's folders (mise's installs) instead must hold none and be where none can move to
+# (jail_masked, jail_deep): a hidden path moved in after `up` would have no cover. Fails when it
+# cannot be done (the policy does not say what is hidden, SRC is hidden whole, or there is no python
+# for jail_verify).
+jail_cover() {
+  local fs=$1 fd=$2 m k inner ms=() kept=()
+  jq -e 'has("masks")' <<<"$OMABOX_JAIL" >/dev/null || return 1
+  if ! jq -e --arg p "$fs" 'any(.roots[]; .path == $p)' <<<"$OMABOX_JAIL" >/dev/null; then
+    ! jail_masked "$fs" && ! jail_deep "$fs"
+    return
+  fi
+  ! jq -e --arg p "$fs" 'any(.masks[]; . == $p)' <<<"$OMABOX_JAIL" >/dev/null || return 1
+  mapfile -d '' ms < <(jq -j --arg p "$fs" '[.masks[] | select(startswith($p + "/"))] | sort[] | . + "\u0000"' <<<"$OMABOX_JAIL")
+  [ ${#ms[@]} -gt 0 ] || return 0
+  [ -x /usr/bin/python3 ] || return 1
+  cover_srcs+=("$fs")
+  for m in "${ms[@]}"; do
+    inner=0
+    for k in ${kept[@]+"${kept[@]}"}; do [[ $m != "$k"/* ]] || { inner=1; break; }; done
+    [ $inner = 0 ] && [ ! -L "$m" ] && [ -e "$m" ] || continue
+    if [ -d "$m" ]; then covers+=(--ro-bind "$D/cover-dir" "$fd${m#"$fs"}")
+    else covers+=(--ro-bind "$D/cover-file" "$fd${m#"$fs"}"); fi
+    kept+=("$m")
+  done
+}
+# jail_verify BOXPID SRC... (#210): whether the box hides everything the jail hides in the folders
+# SRC... it mounts (jail_cover's), checked on the mounts themselves, not their paths: the jail can
+# rename the folders above a hidden path while `up` runs, and a cover made at the path read earlier
+# would then hide some other file of that name while the real one sat uncovered where it went. The
+# box's PID 1 is held before it runs anything (bwrap --block-fd) while this runs. Each hidden path is
+# taken from the jail's mountinfo (the caller's process, its mount namespace checked to be the one
+# broker_init read) and named by the folder holding it (device and inode) and its name, found by a walk
+# through the jail's own mounts (/proc/PID/root) that follows no link, and checked to be that mount (its
+# mnt_id); the box's covers likewise, through its PID 1, each the place where the box shows one of
+# its empty files or folders. A mount point is never renamed or removed, so the place a mount is
+# found at is that mount's whatever the folders above it do meanwhile. Every hidden path's place must
+# be one of the box's covered places. A walk a rename upsets is tried again, a few times; then it is a
+# failure. Prints what is not covered.
+jail_verify() {
+  local bp=$1 cf cd; shift
+  [ -x /usr/bin/python3 ] || return 1
+  cf=$(stat -c %d:%i -- "$D/cover-file") && cd=$(stat -c %d:%i -- "$D/cover-dir") || return 1
+  # (A time limit: a walk could meet a filesystem that does not answer; that is a failure too.)
+  timeout -k 2 30 /usr/bin/python3 -I - "$(jail_get '.mntpid // empty')" "$(jail_get '.mntns // empty')" "$bp" "$cf" "$cd" "$OMABOX_JAIL" "$@" <<'PY'
+import json, os, re, sys, time
+jpid, jns, bpid, cfile, cdir, pol = sys.argv[1:7]
+srcs = [s.encode() for s in sys.argv[7:]]
+if not (jpid.isdigit() and jns and bpid.isdigit()):
+    sys.exit("no jail process to read its mounts from")
+roots = {r["path"].encode() for r in json.loads(pol)["roots"]}
+covers = {tuple(int(x) for x in c.split(":")) for c in (cfile, cdir)}
+P = os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC
+
+def mounts(pid):
+    with open(f"/proc/{pid}/mountinfo", "rb") as f:
+        data = f.read()
+    out = []
+    for line in data.split(b"\n"):
+        f = line.split(b" ")
+        if len(f) > 4:
+            out.append((int(f[0]), int(f[1]), re.sub(rb"\\([0-7]{3})", lambda m: bytes([int(m.group(1), 8)]), f[4])))
+    return out
+
+def mnt_id(fd):
+    with open(f"/proc/self/fdinfo/{fd}") as f:
+        for line in f:
+            if line.startswith("mnt_id:"):
+                return int(line.split()[1])
+    return -1
+
+def place(root, path):
+    # (device, inode of the folder holding PATH, its name), and an O_PATH fd of what is there (mounts
+    # followed, a link not), walked from ROOT one name at a time, never through a link.
+    parts = path.split(b"/")[1:]
+    if not parts or any(c in (b"", b".", b"..") for c in parts):
+        raise OSError("not a plain path")
+    fd = os.open(".", P | os.O_DIRECTORY, dir_fd=root)
+    try:
+        for c in parts[:-1]:
+            n = os.open(c, P | os.O_DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = n
+        st = os.fstat(fd)
+        return (st.st_dev, st.st_ino, parts[-1]), os.open(parts[-1], P, dir_fd=fd)
+    finally:
+        os.close(fd)
+
+def under(p, dirs):
+    return any(p.startswith(d + b"/") for d in dirs)
+
+def hidden():
+    root = os.open(f"/proc/{jpid}/root", os.O_PATH | os.O_CLOEXEC)
+    try:
+        ms = mounts(jpid)
+        if os.readlink(f"/proc/{jpid}/ns/mnt") != jns:
+            sys.exit("the jail's process is gone")
+        mask = {m[0] for m in ms if m[2] not in roots and under(m[2], roots)}
+        res = {}
+        for m in ms:
+            # Its own (not one inside another hidden one, whose cover hides it), in a folder the box mounts.
+            if m[0] not in mask or m[1] in mask or not under(m[2], srcs):
+                continue
+            stack, grew = {m[0]}, True
+            while grew:
+                grew = False
+                for x in ms:
+                    if x[0] not in stack and x[1] in stack and x[2] == m[2]:
+                        stack.add(x[0])
+                        grew = True
+            pl, fd = place(root, m[2])
+            try:
+                if mnt_id(fd) not in stack:
+                    raise OSError("moved")
+            finally:
+                os.close(fd)
+            res[pl] = m[2]
+        return res
+    finally:
+        os.close(root)
+
+def covered():
+    root = os.open(f"/proc/{bpid}/root", os.O_PATH | os.O_CLOEXEC)
+    try:
+        res = set()
+        for m in mounts(bpid):
+            if m[2] == b"/":
+                continue
+            try:
+                pl, fd = place(root, m[2])
+            except OSError:
+                continue
+            try:
+                st = os.fstat(fd)
+            finally:
+                os.close(fd)
+            if (st.st_dev, st.st_ino) in covers:
+                res.add(pl)
+        return res
+    finally:
+        os.close(root)
+
+missing = [b"(the jail's mounts could not be walked)"]
+for attempt in range(6):
+    try:
+        h = hidden()
+        c = covered()
+        missing = [p for k, p in h.items() if k not in c]
+        if not missing:
+            sys.exit(0)
+    except OSError:
+        pass
+    time.sleep(0.05 * (attempt + 1))
+for p in missing:
+    print(p.decode(errors="replace").replace("\n", "?"))
+sys.exit(1)
+PY
+}
 # jail_mounts POLICY MOUNTINFO: POLICY with the jail's hidden paths as the kernel has them now, from the
 # caller's /proc/PID/mountinfo (its mount namespace is the jail's): every mount point inside one of
 # the jail's folders that is not a folder itself is added to `masks`, and its folder is marked masked.
@@ -8454,7 +8714,7 @@ jail_mounts() {
     done
   done < "$mi" || return 1
   jq -c '.masks = ((.masks // []) + $ARGS.positional | unique)
-    | .masks as $ms | .roots |= map(.path as $p | .masked = (.masked or any($ms[]; startswith($p + "/"))))' \
+    | .masks as $ms | .roots |= map(.path as $p | .masked = (.masked or any($ms[]; . == $p or startswith($p + "/"))))' \
     --args ${out[@]+"${out[@]}"} <<<"$pol"
 }
 # jail_masked PATH (#198 security): PATH (resolved, inside the jail's folders) at, under, or holding
@@ -8535,8 +8795,9 @@ jail_refuse() { die "up: $1 $2 is not $3, so it does not go into the box"; }
 repo_top() {
   if ! in_jail; then git rev-parse --show-toplevel 2>/dev/null; return; fi
   local cwd r; cwd=$(jail_get '.cwd // empty'); [ -n "$cwd" ] || return 1
-  r=$(jq -r --arg p "$cwd" '[.roots[] | select(.masked | not) | .path as $r | select($p == $r or ($p | startswith($r + "/"))) | $r]
-    | max_by(length) // empty' <<<"$OMABOX_JAIL")
+  # One the jail hides paths in too (#210): `up` mounts it with those covered (jail_cover).
+  r=$(jq -r --arg p "$cwd" ". as \$pol | [.roots[] | select($JAIL_COVERABLE) | .path as \$r | select(\$p == \$r or (\$p | startswith(\$r + \"/\"))) | \$r]
+    | max_by(length) // empty" <<<"$OMABOX_JAIL")
   [ -n "$r" ] && [ -e "$r/.git" ] && echo "$r"
 }
 
@@ -8550,13 +8811,13 @@ repo_top() {
 # failure is the same failure.
 git_link_dirs() {
   local co=$1 j=${2:-} t g c
-  if [ "$j" = jail ]; then { t=$(jail_path "$co/.git") && [ -f "$t" ] && t=$(jail_read "$t"); } || return 1
+  if [ "$j" = jail ]; then { t=$(jail_path "$co/.git") && jail_readable "$t" && [ -f "$t" ] && t=$(jail_read "$t"); } || return 1
   else { [ -f "$co/.git" ] && t=$(cat -- "$co/.git" 2>/dev/null); } || return 1; fi
   g=$(sed -n '1s/^gitdir: //p' <<<"$t") || return 1
   [ -n "$g" ] || return 1
   [[ $g == /* ]] || g=$co/$g
   g=$(git_link_path "$g" "$j") && [ -d "$g" ] || return 1
-  if [ "$j" = jail ]; then t=$(jail_path "$g/commondir") || return 1; else t=$g/commondir; fi
+  if [ "$j" = jail ]; then { t=$(jail_path "$g/commondir") && jail_readable "$t"; } || return 1; else t=$g/commondir; fi
   if [ -f "$t" ]; then
     if [ "$j" = jail ]; then c=$(jail_read "$t") || return 1; else c=$(cat -- "$t" 2>/dev/null) || return 1; fi
     [ -n "$c" ] || return 1
@@ -8594,9 +8855,10 @@ repo_git_dirs() {
     [[ $d == */.git && ${out%%$'\n'*} == "$d"/worktrees/* && ${out%%$'\n'*} != "$d"/worktrees/*/* ]] || return 0
     jq -e --arg p "$d" 'any(.roots[]; .path == $p)' <<<"$OMABOX_JAIL" >/dev/null || return 0
     [[ $d/ != "${top%/}"/* ]] || return 0
-    # One the jail hides something in (an ai-jail --mask on its config, say) would show the box the
-    # host's file: the box mounts it from the host (#198 security).
-    ! jail_masked "$d" || return 0
+    # One the jail hides something in (an ai-jail --mask on its config, say) is mounted with those
+    # covered (#210; it showed the box the host's files, #198 security), unless the policy cannot say
+    # what they are (jail_root_covered).
+    jail_root_covered "$d" >/dev/null || return 0
     echo "$d"; return 0
   fi
   out=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir --git-dir 2>/dev/null) || return 0
@@ -8725,6 +8987,10 @@ broker_init() {
   start=$(proc_start "$jail") && [ -n "$start" ] || die "broker: the jail is gone"
   policy=$(jail_policy "/proc/$pp/fd" < "/proc/$jail/cmdline") || die "broker: cannot read the jail's policy: $policy"
   policy=$(jail_mounts "$policy" "/proc/$peer/mountinfo") || die "broker: cannot read the jail's mounts"
+  # The caller's mount namespace (the jail's), and the caller to reach it through, for jail_verify (#210)
+  # to read the jail's mounts again once a box has made its own; it checks the namespace is still this.
+  local mntns; mntns=$(readlink "/proc/$peer/ns/mnt") || die "broker: cannot read the jail's mounts"
+  policy=$(jq -c --argjson p "$peer" --arg ns "$mntns" '. + {mntpid: $p, mntns: $ns}' <<<"$policy")
   peer_there || die "broker: the caller is gone"
   eval "exec $pfd<&-"
   OMABOX_JAIL=$(jq -c --arg id "$jail $start" '. + {id: $id}' <<<"$policy"); export OMABOX_JAIL

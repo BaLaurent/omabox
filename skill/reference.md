@@ -433,7 +433,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   backend (modesetting, real monitors, HDR/VRR, multi-GPU), libinput with real devices, and the
   session and suspend paths, or a real password at the lock screen (the lock itself runs: "Testing
   the lock screen"). Those stay the real desktop's (or a VM's with passthrough): say so.
-- Inside ai-jail the build must be in the jail's project (or a folder the jail was given whole).
+- Inside ai-jail the build must be in the jail's project (or a folder the jail was given whole), one
+  the jail hides no file in (`--mask`, its `.ai-jail`): the project itself still goes in then, those hidden.
 - **A hang or a crash**: `omabox gdb` prints every thread's backtrace of the box's Hyprland, stopped
   or deadlocked too, and leaves it as it was (`-- -ex 'info threads'`: gdb's own commands). A crash:
   `omabox gdb --watch` before the step that crashes it; the box then goes down as it would have, and

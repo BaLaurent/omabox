@@ -1880,6 +1880,9 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
     "$(lib jail_mounts "$jp" "$mi" | jq -r '[.roots[].masked] | map(tostring) | join(" ")')"
   printf '%s\n' "7 2 0:3 /ai-jail-empty $d/proj/x\\012y ro - tmpfs tmpfs ro" >> "$mi"
   check_match "...a mount point with a newline hides its whole folder" "\"$d/proj\"" "$(lib jail_mounts "$jp" "$mi" | jq -c '.masks')"
+  printf '%s\n' "1 0 0:1 / / rw - tmpfs tmpfs rw" "7 1 0:3 /ai-jail-empty $d/proj/x\\012y ro - tmpfs tmpfs ro" > "$d/mountinfo-nl"
+  check_eq "...marked masked even when that is all there is (jail_root takes no such folder; #210)" "true" \
+    "$(lib jail_mounts "$(jq -nc --arg p "$d/proj" '{roots: [{path: $p, masked: false}], masks: []}')" "$d/mountinfo-nl" | jq -r '.roots[0].masked')"
   check_fails "...an unreadable mountinfo fails" lib jail_mounts "$jp" "$d/no-mountinfo"
   printf '%s\n' "8 1 0:3 /ai-jail-empty $d/sp\\040ace/.env ro - tmpfs tmpfs ro" > "$d/mountinfo-sp"
   check_eq "...a folder with a space in its path (the kernel writes it \\040)" "$d/sp ace/.env" \
@@ -1892,6 +1895,91 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   git -C "$d/proj" config core.fsmonitor "touch $d/gitrev-ran"
   check_eq "git_rev: nothing for a jailed caller" "" "$(OMABOX_JAIL=$JM lib git_rev "$d/proj")"
   check_fails "...its core.fsmonitor never ran" test -e "$d/gitrev-ran"
+}
+
+# #210: a jailed caller's folder goes into its box with what the jail hides in it covered again, and the
+# covers are checked on the mounts themselves. A plain bwrap stands in for the jail (its masks as
+# ai-jail makes them: an empty file over a file, a tmpfs over a folder), another for the box, held
+# before it runs anything (--block-fd), as `up` holds one.
+t_unit_jail_covers() {
+  local d=$TMP/jc p lm=$TMP/lib/bin/omabox; p=$d/proj
+  mkdir -p "$p/cfg" "$p/secrets/in" "$p/a" "$p/b" "$p/plain" "$d/box"
+  echo SEKRIT > "$p/.env"; echo SEKRIT > "$p/cfg/key"; echo SEKRIT > "$p/secrets/in/k"
+  echo SEKRIT > "$p/a/.env"; echo fake > "$p/b/.env"; echo hi > "$p/README"; ln -s .env "$p/envlink"
+  : > "$d/empty"; : > "$d/box/cover-file"; mkdir -p "$d/box/cover-dir"
+  # The policy as broker_init has it (jail_policy, jail_mounts).
+  local J
+  J=$(jq -nc --arg p "$p" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: true}],
+    masks: ["\($p)/.env", "\($p)/cfg/key", "\($p)/secrets", "\($p)/secrets/in/k", "\($p)/a/.env", "\($p)/gone/.env", "\($p)/envlink"]}')
+  jl() { OMABOX_JAIL=$J bash -c 'source "$1"; shift; "$@"' _ "$lm" "$@"; }
+  check_eq "jail_root_covered: a folder the jail hides paths in (repo_top, --ro-bind)" "$p" "$(jl jail_root_covered "$p")"
+  check_fails "...jail_root still not (what the host reads: --plugin, --overlay, --theme-dir)" jl jail_root "$p"
+  check_fails "...not one hidden whole" env OMABOX_JAIL="$(jq -c --arg p "$p" '.masks += [$p]' <<<"$J")" bash -c 'source "$1"; jail_root_covered "$2"' _ "$lm" "$p"
+  check_fails "...not when the policy cannot say what is hidden (an older broker)" env OMABOX_JAIL="$(jq -c 'del(.masks)' <<<"$J")" bash -c 'source "$1"; jail_root_covered "$2"' _ "$lm" "$p"
+  check_eq "repo_top: the jail's project with hidden paths in it" "$p" "$(git -C "$p" init -q && jl repo_top)"
+  check "jail_deep: a hidden path below a folder of the project's" jl jail_deep "$p/README"
+  check_fails "...not with only ones straight in it" env OMABOX_JAIL="$(jq -c --arg p "$p" '.masks = ["\($p)/.env", "\($p)/secrets"]' <<<"$J")" bash -c 'source "$1"; jail_deep "$2"' _ "$lm" "$p/README"
+  check "jail_readable: a file straight in the folder" jl jail_readable "$p/README"
+  check_fails "...not one hidden" jl jail_readable "$p/.env"
+  check_fails "...nor one under a hidden folder" jl jail_readable "$p/secrets/in/k"
+  check_fails "...nor one deeper, where a hidden path can have moved" jl jail_readable "$p/plain/x"
+  check_match "seed_spec: nothing from a folder with hidden paths below its own folders (one could move in)" "does not go into the box" \
+    "$(cd "$p" && jl seed_spec "plain:.config/x" 2>&1)"
+  local covers
+  covers=$(cd "$p" && OMABOX_JAIL=$J D=$d/box bash -c 'source "$1"; covers=() cover_srcs=(); jail_cover "$2" /dest; printf "%s\n" "${covers[@]}" "--" "${cover_srcs[@]}"' _ "$lm" "$p")
+  check_eq "jail_cover: an empty file over a file, an empty folder over a folder, none inside one, nor for a link or a path not there" \
+    "--ro-bind $d/box/cover-file /dest/.env|--ro-bind $d/box/cover-file /dest/a/.env|--ro-bind $d/box/cover-file /dest/cfg/key|--ro-bind $d/box/cover-dir /dest/secrets|--|$p" \
+    "$(paste -sd' ' <<<"$covers" | sed 's/ --ro-bind/|--ro-bind/g; s/ -- /|--|/')"
+  check "...a folder inside one of the jail's, holding nothing hidden where nothing can move" \
+    env OMABOX_JAIL="$(jq -c --arg p "$p" '.masks = ["\($p)/.env"]' <<<"$J")" bash -c 'source "$1"; covers=() cover_srcs=(); jail_cover "$2/plain" /x' _ "$lm" "$p"
+  check_fails "...not one where something hidden could be moved in" jl jail_cover "$p/plain" /x
+  # The jail: its masks over the real files. Its process is the one the broker reads (mntpid).
+  local jb bb jpid bpid info=$d/jinfo binfo=$d/binfo
+  bwrap --unshare-user --die-with-parent --info-fd 3 --dev-bind / / --ro-bind "$d/empty" "$p/.env" --ro-bind "$d/empty" "$p/cfg/key" \
+    --tmpfs "$p/secrets" --ro-bind "$d/empty" "$p/a/.env" sleep 120 3>"$info" & jb=$!
+  until_ok 5 jq -e '."child-pid"' "$info" >/dev/null
+  jpid=$(jq '."child-pid"' "$info")
+  until_ok 5 grep -q "$p/a/.env" "/proc/$jpid/mountinfo"
+  J=$(jq -c --argjson j "$jpid" --arg ns "$(readlink "/proc/$jpid/ns/mnt")" '. + {mntpid: $j, mntns: $ns}' <<<"$J")
+  check_eq "the stand-in jail hides the files" "" "$(cat "/proc/$jpid/root$p/.env" "/proc/$jpid/root$p/a/.env"; ls "/proc/$jpid/root$p/secrets")"
+  # box COVER-ARGS...: a box held before it runs, with the project and those covers; its pid in $bpid.
+  box() {
+    [ -z "${bb:-}" ] || { kill "$bb" 2>/dev/null; wait "$bb" 2>/dev/null; }
+    rm -f "$binfo" "$d/go"; mkfifo "$d/go"
+    bash -c 'exec 4<>"$1"; shift; exec "$@"' _ "$d/go" bwrap --unshare-user --unshare-pid --die-with-parent --info-fd 3 --block-fd 4 \
+      --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 --proc /proc --dev /dev \
+      --ro-bind "$p" "$p" "$@" sh -c 'grep -R SEKRIT "$1" /proc/self/root"$1" /proc/1/root"$1"; echo "rc=$?"' _ "$p" 3>"$binfo" >"$d/boxout" 2>&1 & bb=$!
+    until_ok 5 jq -e '."child-pid"' "$binfo" >/dev/null
+    bpid=$(jq '."child-pid"' "$binfo")
+    until_ok 5 grep -q " $p " "/proc/$bpid/mountinfo"
+  }
+  local F=$d/box/cover-file DIR=$d/box/cover-dir out
+  vf() { OMABOX_JAIL=$J D=$d/box bash -c 'source "$1"; shift; jail_verify "$@"' _ "$lm" "$bpid" "$p"; }
+  box --ro-bind "$F" "$p/.env" --ro-bind "$F" "$p/cfg/key" --ro-bind "$DIR" "$p/secrets" --ro-bind "$F" "$p/a/.env"
+  check "jail_verify: every hidden path covered (a file, one below a folder, a folder)" vf
+  # Let the box go: what it reads through the project and a link in it.
+  exec {go}<>"$d/go"; printf go >&"$go"; exec {go}>&-; wait "$bb" 2>/dev/null; bb=""
+  check_eq "...and the box, let go, finds none of them (through a link, /proc/self/root, /proc/1/root)" "rc=1" "$(cat "$d/boxout")"
+  box --ro-bind "$F" "$p/.env" --ro-bind "$DIR" "$p/secrets" --ro-bind "$F" "$p/a/.env"
+  out=$(vf); check_eq "...one left out: refused, named" "$p/cfg/key 1" "$out $(vf >/dev/null; echo $?)"
+  # The race jail_verify is for: the jail renames the folder holding a hidden file after its mounts
+  # were read, and a folder of its own takes the old name; the box covers the path read before,
+  # hiding the jail's own file while the real one sits elsewhere.
+  mv "$p/a" "$p/c"; mv "$p/b" "$p/a"
+  box --ro-bind "$F" "$p/.env" --ro-bind "$F" "$p/cfg/key" --ro-bind "$DIR" "$p/secrets" --ro-bind "$F" "$p/a/.env"
+  out=$(vf); check_eq "...a cover at the path the jail's mounts said, now another file: refused, the real one named where it is" "$p/c/.env 1" "$out $(vf >/dev/null; echo $?)"
+  mv "$p/a" "$p/b"; mv "$p/c" "$p/a"
+  check_fails "...still, once the folders are back (each mount went with its file)" vf
+  # A box made right, then the jail renames: both mounts go with their files.
+  box --ro-bind "$F" "$p/.env" --ro-bind "$F" "$p/cfg/key" --ro-bind "$DIR" "$p/secrets" --ro-bind "$F" "$p/a/.env"
+  mv "$p/a" "$p/c"
+  check "...renamed after the box's mounts: still covered (the box's cover went with it)" vf
+  exec {go}<>"$d/go"; printf go >&"$go"; exec {go}>&-; wait "$bb" 2>/dev/null; bb=""
+  check_eq "...and still hidden in the box" "rc=1" "$(cat "$d/boxout")"
+  mv "$p/c" "$p/a"
+  check_match "...the jail's process gone (or another's in its pid): refused" "gone" \
+    "$(OMABOX_JAIL="$(jq -c '.mntns = "mnt:[1]"' <<<"$J")" D=$d/box bash -c 'source "$1"; shift; jail_verify "$@"' _ "$lm" "$$" "$p" 2>&1)"
+  kill "$jb" 2>/dev/null; wait "$jb" 2>/dev/null
 }
 
 # omabox broker on/off writes a socket and a service for the user manager (systemctl stubbed: the real
@@ -2160,19 +2248,96 @@ EOF
   check_match "a jailed agent's box from a linked worktree: git status there (#193)" "(^| )## $P-jailwt rc=0 $" "$(tr '\n' ' ' <<<"$out")"
   check_fails "...the main checkout's files not in it" grep -q main-files <<<"$out"
   # #198 security: the jail hides the main checkout's .git/config (ai-jail --mask): the box, mounting
-  # from the host, would show the real one, so the common dir does not go in.
+  # from the host, would show the real one. #210: the common dir goes in with it covered, empty as in
+  # the jail, and git works there as in the jail.
   git -C "$M" config omabox.marker SEKRITCFG
   out=$(cd "$W" && timeout 120 ai-jail --no-save-config --worktree --mask "$M/.git/config" --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" \
-    bash -c '"$1" up "$2" >/dev/null 2>&1 || echo up-failed; "$1" run -b "$2" -- cat "$3/.git/config" 2>&1; "$1" down "$2" >/dev/null 2>&1' wt "$CLI" "$P-jailwm" "$M" </dev/null 2>&1)
+    bash -c '"$1" up "$2" >/dev/null 2>&1 || echo up-failed; "$1" run -b "$2" -- sh -c "cat $3/.git/config; wc -c < $3/.git/config; git -C $4 status --short --branch" 2>&1
+      "$1" down "$2" >/dev/null 2>&1' wt "$CLI" "$P-jailwm" "$M" "$W" </dev/null 2>&1)
   check_fails "...its .git/config masked in the jail: the real one is not in the box" grep -q SEKRITCFG <<<"$out"
   check_fails "...and the box came up" grep -q up-failed <<<"$out"
-  # A project the jail hides a path in (an ai-jail --mask, and its own .ai-jail, hidden by default) is not
-  # mounted in its box: the box would show the real files.
-  local H; H=$(tmp_repo jailmask); echo SEKRITENV > "$H/.env"; printf 'mask = []\n' > "$H/.ai-jail"
-  out=$(cd "$H" && timeout 120 ai-jail --no-save-config --mask .env --map "$ROOT" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" \
-    bash -c '"$1" up "$2" >/dev/null 2>&1 || echo up-failed; "$1" run -b "$2" -- sh -c "cat $3/.env; test -e $3/.ai-jail && echo has-config" 2>&1; "$1" down "$2" >/dev/null 2>&1' mp "$CLI" "$P-jailmp" "$H" </dev/null 2>&1)
-  check_fails "a project the jail hides a file in: not in its box (the real .env is not there)" grep -q -e SEKRITENV -e has-config <<<"$out"
-  check_fails "...and the box came up" grep -q up-failed <<<"$out"
+  check_match "...the common dir in it, its config empty, git status there (#210)" "(^| )0 ## $P-jailwt" "$(tr '\n' ' ' <<<"$out")"
+  # #210: a project the jail hides paths in (ai-jail --mask, and its own .ai-jail, hidden by default) is
+  # mounted in its box with those hidden again: a file empty, a folder empty, one below a folder of the
+  # project's too, through a link, /proc/self/root and /proc/1/root; still hidden when the jail renames
+  # the folder holding one after `up`, and covered where it is now when it did so before. Nothing comes
+  # from it by --seed, nor into a save of that box. And the race the check is for: the jail swapping
+  # the folder holding a hidden file with one of its own while `up` runs, many times over.
+  local H; H=$(tmp_repo jailmask); mkdir -p "$H/cfg" "$H/secrets" "$H/x" "$H/y" "$TMP/jsync"
+  echo SEKRITENV > "$H/.env"; printf 'mask = []\n# SEKRITCONF\n' > "$H/.ai-jail"; echo hi > "$H/README"
+  echo SEKRITKEY > "$H/cfg/key"; echo SEKRITDIR > "$H/secrets/k"; echo SEKRITX > "$H/x/.env"; echo fake > "$H/y/.env"
+  ln -s .env "$H/envlink"; ln -s "$H/cfg/key" "$H/keylink"
+  mkdir -p "$H/plug" "$TMP/jro"; echo '{"id": "p", "schemaVersion": 1}' > "$H/plug/manifest.json"
+  echo SEKRITRO > "$TMP/jro/s"; echo ok > "$TMP/jro/ok"
+  # (The script outside the project: it names what it looks for.)
+  cat > "$TMP/jsync/t.sh" <<EOF
+O=$CLI
+r() { echo "== \$1"; shift; "\$@" 2>&1; echo "rc=\$?"; }
+leak() { \$O run -b "\$1" -- sh -c 'grep -RIls SEKRIT "\$1" /proc/self/root"\$1" /proc/1/root"\$1"; echo "found"' _ "$H"; }
+r throwaway \$O run -- sh -c 'pwd; cat README; wc -c < .env; touch new 2>&1'
+r up \$O up $P-jm
+r pwd \$O run -b $P-jm -- sh -c 'pwd; cat README'
+r leak leak $P-jm
+r empty \$O run -b $P-jm -- sh -c 'for f in .env .ai-jail cfg/key envlink keylink; do printf "%s:%s " "\$f" "\$(wc -c < "\$f")"; done; ls -A secrets | wc -l'
+r unmount \$O run -b $P-jm -- sh -c 'umount "$H/.env" 2>&1; unshare -Urm sh -c "umount $H/.env 2>&1 || echo refused; cat $H/.env" || echo no-unshare'
+r renamed sh -c 'mv "$H/cfg" "$H/cfg2" && $CLI run -b $P-jm -- cat "$H/cfg2/key"'
+r leak2 leak $P-jm
+r seedenv \$O up $P-js --seed "$H/.env:.config/leak"
+r rob \$O up $P-jo --net isolated --no-shell --ro-bind "$TMP/jro:/mnt/jro"
+r robread \$O run -b $P-jo -- sh -c 'cat /mnt/jro/s; wc -c < /mnt/jro/s; cat /mnt/jro/ok'
+r robdown \$O down $P-jo
+r overlay \$O up $P-jv --overlay "$H"
+r plugin \$O up $P-jp --plugin "$H/plug"
+r seedplain \$O up $P-js --seed "$H/README:.config/r"
+r save sh -c 'touch "$TMP/jsync/ready"; i=0; until [ -e "$TMP/jsync/saved" ] || [ \$i -ge 300 ]; do sleep 0.2; i=\$((i+1)); done; cat "$TMP/jsync/saved"'
+r down \$O down $P-jm
+r before sh -c 'mv "$H/cfg2" "$H/cfg3" && $CLI up $P-jb >/dev/null 2>&1 && $CLI run -b $P-jb -- cat "$H/cfg3/key"'
+r leak3 leak $P-jb
+r downb \$O down $P-jb
+( while [ ! -e "$TMP/jsync/stop" ]; do mv "$H/x" "$H/t" 2>/dev/null; mv "$H/y" "$H/x" 2>/dev/null; mv "$H/t" "$H/y" 2>/dev/null; done ) &
+for i in 1 2 3 4 5 6; do
+  if \$O up $P-jr >/dev/null 2>"$TMP/jsync/err\$i"; then echo "race up"; leak $P-jr; \$O down $P-jr >/dev/null 2>&1
+  elif grep -q "could not hide" "$TMP/jsync/err\$i"; then echo "race refused"
+  elif grep -q "died while starting (bwrap: Can't" "$TMP/jsync/err\$i"; then echo "race refused by bwrap"
+  else echo "race other: \$(tail -1 "$TMP/jsync/err\$i")"; fi
+done
+touch "$TMP/jsync/stop"; wait
+EOF
+  ( cd "$H" && timeout 400 ai-jail --no-save-config --mask .env --mask secrets --mask cfg/key --mask x/.env \
+      --map "$ROOT" --map "$br" --rw-map "$TMP/jsync" --map "$TMP/jro" --mask "$TMP/jro/s" --env OMABOX_BROKER_SOCK="$br/sock" bash "$TMP/jsync/t.sh" </dev/null > "$TMP/jailmask.out" 2>&1 ) &
+  local jm=$! S=$P-jmsave
+  until_ok 120 test -e "$TMP/jsync/ready" >/dev/null
+  if sv save -b "$P-jm" "$S" >/dev/null 2>&1; then
+    check_fails "...a save of that box holds none of the hidden files (the user's save)" grep -rIl SEKRIT "$TMP/data/omabox/saves/$S"
+    sv up "$P-jmf" --from "$S" --net isolated --no-shell >/dev/null 2>&1
+    check_eq "...nor does a box up --from it" "found" "$(ob run -b "$P-jmf" -- sh -c 'grep -RIls SEKRIT /home/sbx; echo found')"
+    ob down "$P-jmf" >/dev/null 2>&1; sv saves rm "$S" >/dev/null 2>&1
+  else no "...a save of that box" "save failed"; fi
+  echo ok > "$TMP/jsync/saved"
+  wait "$jm"
+  sect() { awk -v s="== $1" '$0 == s {on = 1; next} /^== / {on = 0} on' "$TMP/jailmask.out" | tr '\n' ' '; }
+  check_match "a project the jail hides paths in: a throwaway run does not overlay it (said)" "not overlaying $H: this jail hides paths in it" "$(sect throwaway)"
+  check_match "...the command there, the project read-only, the hidden file empty" "$H hi 0 .*Read-only file system rc=1" "$(sect throwaway)"
+  check_match "...its box comes up" "box '$P-jm' up .*rc=0" "$(sect up)"
+  check_eq "...with the project mounted, run starting there" "$H hi rc=0 " "$(sect pwd)"
+  check_eq "...no hidden file's content anywhere in it (grep -R, through /proc/self/root and /proc/1/root)" "found rc=0 " "$(sect leak)"
+  check_eq "...each hidden file empty, by a link too, the hidden folder empty" ".env:0 .ai-jail:0 cfg/key:0 envlink:0 keylink:0 0 rc=0 " "$(sect empty)"
+  check_match "...a cover cannot be unmounted in the box, nor in a namespace of its own there" "refused rc=0" "$(sect unmount)"
+  check_fails "...nor read that way" grep -q SEKRIT <<<"$(sect unmount)"
+  check_eq "...renamed by the jail after up: still empty" "rc=0 " "$(sect renamed)"
+  check_eq "...and nothing hidden anywhere after it" "found rc=0 " "$(sect leak2)"
+  check_match "...--seed of a hidden file refused" "does not go into the box.* rc=1" "$(sect seedenv)"
+  check_match "...--seed of any from a project whose hidden paths can move refused" "does not go into the box.* rc=1" "$(sect seedplain)"
+  check_match "--ro-bind DIR:DEST of a folder the jail hides a file in: the box comes up" "box '$P-jo' up .*rc=0" "$(sect rob)"
+  check_eq "...that file empty at DEST, the rest there" "0 ok rc=0 " "$(sect robread)"
+  check_match "--overlay of a project the jail hides paths in: still refused (an overlay is not covered)" "is not .* rc=1" "$(sect overlay)"
+  check_match "--plugin inside it: still refused (the host reads a plugin's files)" "is not .* rc=1" "$(sect plugin)"
+  check_eq "renamed before up: covered where it is now" "rc=0 " "$(sect before)"
+  check_eq "...nothing hidden in that box either" "found rc=0 " "$(sect leak3)"
+  local races; races=$(grep '^race ' "$TMP/jailmask.out" | sort | uniq -c | tr '\n' ' ')
+  note "the jail swapping a hidden file's folder during up: $races"
+  check_fails "the jail swapping a hidden file's folder with its own while up runs: never in a box" grep -q '^/' <<<"$(awk '/^race up/ {getline; print}' "$TMP/jailmask.out")"
+  check_fails "...each up either came up or was refused for it" grep -q '^race other' "$TMP/jailmask.out"
 }
 
 # Every test runs: a t_* function left out of UNIT and BOX would never run, and nobody would notice.
@@ -4248,9 +4413,17 @@ t_unit_git_dirs() {
   check_eq "a jailed caller in a linked worktree, its jail sees the common dir (ai-jail --worktree): it" "$C" "$(jdirs "$W" "$W" "$C" "$G")"
   check_eq "...the common dir alone a folder of the jail's: the same" "$C" "$(jdirs "$W" "$W" "$C")"
   # #198 security: a path the jail hides in the common dir (ai-jail --mask on its config) would be the
-  # host's in the box, which mounts it from the host: the common dir does not go.
+  # host's in the box, which mounts it from the host. #210: the common dir goes, and `up` covers it
+  # (jail_cover); unless git's files read here are hidden, or where a hidden path could have moved.
   jmask=$C/config
-  check_eq "...the jail hiding its config: nothing" "" "$(jdirs "$W" "$W" "$C" "$G")"
+  check_eq "...the jail hiding its config: it, to be mounted with that covered (#210)" "$C" "$(jdirs "$W" "$W" "$C" "$G")"
+  jmask=$G/commondir
+  check_eq "...the jail hiding the gitdir's commondir (read here): nothing" "" "$(jdirs "$W" "$W" "$C" "$G")"
+  jmask=$C/hooks/x
+  check_eq "...a hidden path below a folder of the common dir, the gitdir in it: nothing (one could be moved to the file read)" "" "$(jdirs "$W" "$W" "$C")"
+  check_eq "...the gitdir a folder of the jail's itself (ai-jail --worktree): it" "$C" "$(jdirs "$W" "$W" "$C" "$G")"
+  jmask=$W/.git
+  check_eq "...the jail hiding the worktree's .git file: nothing" "" "$(jdirs "$W" "$W" "$C" "$G")"
   jmask=$M/other
   check_eq "...a path hidden elsewhere: the common dir still" "$C" "$(jdirs "$W" "$W" "$C" "$G")"
   jmask=""
@@ -8744,7 +8917,7 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
