@@ -5607,6 +5607,33 @@ from them.
     `shot --monitor` say why; t_monitors: the same output takes 1280x720 and nothing is said;
     t_unit_monitors: `zero_note` from canned monitor lists (a disabled one left out, no other GPU, a
     box not on NVIDIA, a list that is not one).
+287. **A scroll's source reaches apps now; Qt names every wheel a touchpad's** (2026-10-13, #214;
+    corrects 213 and 236 (7)). A Qt Quick `WheelHandler` at its default `acceptedDevices` (Mouse)
+    never fired from `omabox scroll`, any source. Two causes. (1) Qt's own (qt6-wayland 6.11.2, its
+    code in qtbase now): the Wayland plugin registers one pointing device per seat, of type TouchPad
+    (named "touchpad", made when the compositor offers pointer gestures, which Hyprland does), and
+    QWaylandWindow::handleMouse gives every pointer event `primaryPointingDevice(seat)`, that one:
+    nothing a compositor sends picks the device, so a real mouse's wheel on the desktop is a
+    touchpad's too (QTBUG-112432, open since 2023). The source only sets the event's
+    `Qt::MouseEventSource` and phases; a wheel was already a wheel to Qt (angleDelta 120 a notch, no
+    pixelDelta, NoScrollPhase). Not omabox's to fix: `help scroll` and the reference say so and give
+    the app's way out (`acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad`, or a
+    `MouseArea`'s `onWheel`). (2) omabox's, through Hyprland (0.56.2, protocols/VirtualPointer.cpp):
+    the virtual pointer's `axis` request builds the frame's axis event afresh (source back to wheel)
+    and `axis_source` sets the source of the axis last named, so the pointer tool's
+    source-then-axis order lost it: a finger scroll arrived as source wheel with axis_value120 24 a
+    frame (Hyprland makes a discrete value for a smooth wheel), so no kinetic scrolling, no scroll
+    phases in Qt, and a Hyprland wheel bind per frame (finding 213's "10 binds"); a tilt's first
+    notch came as a wheel, the rest as tilt (finding 236's binds seeing "few"). The tool sends
+    `axis_source` after `axis`/`axis_discrete`/`axis_stop` now. Seen with Qt's input log in a box:
+    finger frames as finger (ScrollBegin, pixel deltas, ScrollEnd at the stop; Hyprland's touchpad
+    scroll factor applies), every tilt notch as wheel tilt (angleDelta 180: Hyprland sends tilt no
+    axis_value120); Hyprland binds only the wheel source's events, so a tilt or a finger fires none
+    (a real touchpad's none either; whether libinput reports a real tilt as tilt or wheel, untested). A GTK4 ScrolledWindow scrolls on with kinetic motion after a finger scroll (137
+    value changes from one) and by notches from a wheel; foot as before. Checks: t_pointer (binds:
+    none for a tilt or a finger; a QML probe: two `--source wheel` notches as -120, no pixels, no
+    phase, from the touchpad device; a finger's updates with pixel deltas ending in phase 3; a
+    default WheelHandler taking no wheel), the bind and finger checks failing with the old order.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

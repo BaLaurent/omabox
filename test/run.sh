@@ -8101,7 +8101,7 @@ t_pointer() {
   n0=$(reports | wc -l); ob pointer -b "$B" --window R -- move 60 60 hscroll 15 >/dev/null
   check_match "pointer hscroll 15: right" '^(67 )+$' "$(pr)"
   n0=$(reports | wc -l); ob scroll -b "$B" --window R 60 60 0 30 --source tilt >/dev/null 2>&1
-  check_match "scroll 0 30 --source tilt: right, the app sees it (#167; Hyprland's binds see few)" '^(67 )+$' "$(pr)"
+  check_match "scroll 0 30 --source tilt: right, the app sees it (#167)" '^(67 )+$' "$(pr)"
   n0=$(reports | wc -l); ob scroll -b "$B" --window R 60 60 -60 --source finger >/dev/null
   check_match "scroll -60 --source finger: up" '^(64 )+$' "$(pr)"
   # Hyprland's wheel binds: mouse_left/right too (with no delay between scroll events: binds take
@@ -8112,7 +8112,10 @@ t_pointer() {
     end' >/dev/null
   ob scroll -b "$B" 960 540 0 30 --source wheel >/dev/null; ob scroll -b "$B" 960 540 0 -15 >/dev/null
   ob scroll -b "$B" 960 540 45 --source wheel >/dev/null
-  check_eq "Hyprland binds: mouse_right twice (two notches), mouse_left once (one plain event), mouse_down 3" "2 1 3" \
+  # #214, finding 287: Hyprland binds a wheel's events only; a tilt and a finger scroll reach none (they
+  # did when their source was lost on the way: a finger scroll's 10 frames were 10 binds).
+  ob scroll -b "$B" 960 540 0 45 --source tilt >/dev/null 2>&1; ob scroll -b "$B" 960 540 60 --source finger >/dev/null
+  check_eq "Hyprland binds: mouse_right twice (two notches), mouse_left once (one plain event), mouse_down 3; none for a tilt or a finger (#214)" "2 1 3" \
     "$(ob run -b "$B" -- wc -l /tmp/mouse_right /tmp/mouse_left /tmp/mouse_down | awk 'NR <= 3 { printf "%s%s", (NR > 1 ? " " : ""), $1 }')"
   # scroll --mod (#167, finding 236): Omarchy's SUPER+wheel binds, held as click holds them; the plain
   # mouse_down bind does not fire under SUPER.
@@ -8141,6 +8144,35 @@ t_pointer() {
   ob click -b "$B" --window R 50 50 >/dev/null
   check_eq "...and nothing held after it (the next click plain)" "0 0 " "$(pr)"
   check_match "env: the box's display to export" "^export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/run/wayland-[0-9]+$" "$(ob env -b "$B" | head -1)"
+  # #214, finding 287: what a Qt Quick app gets. Left half: a WheelHandler as Qt makes it (a mouse's
+  # only); right half: one taking any device, logging the event. Wheels go up: the binds above take
+  # mouse_down.
+  if [ -x /usr/lib/qt6/bin/qml ]; then
+    printf '%s\n' 'import QtQuick' 'Window { width: 600; height: 400; visible: true; title: "qtwheel"' \
+      '  Item { width: parent.width / 2; height: parent.height; WheelHandler { onWheel: e => console.log("t214 mouse-only", e.angleDelta.y) } }' \
+      '  Item { x: parent.width / 2; width: parent.width / 2; height: parent.height' \
+      '    WheelHandler { acceptedDevices: PointerDevice.AllDevices' \
+      '      onWheel: e => console.log("t214", e.angleDelta.y, e.pixelDelta.y, e.phase, e.device.type === PointerDevice.TouchPad ? "touchpad" : e.device.type) } } }' \
+      > "$(ob path -b "$B")/home/t214.qml"
+    local qlog q0=0; qlog=$(ob run -b "$B" -d --wait -- /usr/lib/qt6/bin/qml /home/sbx/t214.qml 2>&1 >/dev/null | sed -n 's/.*(log: \(.*\))$/\1/p')
+    # shellcheck disable=SC2329 # called below
+    qw() { grep -a '^qml: t214' "$qlog" | tail -n +$((q0 + 1)) | sed 's/^qml: t214 //' | tr '\n' ',' | sed 's/,$//'; }
+    ob wait -b "$B" window title:qtwheel >/dev/null; ob wait -b "$B" still >/dev/null   # (its opening animated)
+    local qx; qx=$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.title == "qtwheel") | .size[0] * 3 / 4 | floor')
+    ob scroll -b "$B" --window qtwheel "$qx" 100 -30 --source wheel >/dev/null
+    check "Qt: --source wheel, two notches" until_ok 5 bash -c "grep -ac '^qml: t214 ' '$qlog' | grep -qx 2"
+    check_eq "...each a wheel's (angle 120, no pixels, no phase), from Qt's one pointing device, its touchpad (QTBUG-112432: if Mouse, help scroll's Qt note is stale)" \
+      "120 0 0 touchpad,120 0 0 touchpad" "$(qw)"
+    q0=$(grep -ac '^qml: t214' "$qlog"); ob scroll -b "$B" --window qtwheel "$qx" 100 30 --source finger >/dev/null
+    until_ok 5 grep -aq ' 3 touchpad$' "$qlog" >/dev/null
+    check_match "Qt: --source finger is a touchpad's: pixel deltas in a scroll's updates (phase 2), then its end (3); it came as a wheel's notches before #214" \
+      '^(-[0-9]+ -[0-9]+ 2 touchpad,)+0 0 3 touchpad$' "$(qw)"
+    # The left half, then the right (its line says both have been delivered: they come in order).
+    q0=$(grep -ac '^qml: t214' "$qlog"); ob scroll -b "$B" --window qtwheel 100 100 -30 --source wheel >/dev/null
+    ob scroll -b "$B" --window qtwheel "$qx" 100 -15 --source wheel >/dev/null
+    until_ok 5 bash -c "[ \$(grep -ac '^qml: t214' '$qlog') -gt $q0 ]" >/dev/null
+    check_eq "...a WheelHandler as Qt makes it takes none of it, a wheel's included (QTBUG-112432)" "120 0 0 touchpad" "$(qw)"
+  else skip "Qt: what a Qt Quick app gets from scroll (#214)" "no /usr/lib/qt6/bin/qml"; fi
   ob down "$B" >/dev/null
 }
 

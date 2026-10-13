@@ -8,7 +8,10 @@
 // positive is down / right). With no source they go as one axis event, as before. `source` sets it for
 // the scrolls after it (#134): wheel and tilt send a notch (15, discrete 1) per frame, as a mouse wheel
 // does, so an app counting notches sees each; finger and continuous send the distance in 10 frames,
-// then axis_stop (a touchpad lifting off: kinetic scrolling starts there).
+// then axis_stop (a touchpad lifting off: kinetic scrolling starts there). axis_source goes after the
+// axis request in each frame (#214): Hyprland's axis request builds that frame's event afresh, its
+// source reset to wheel, and axis_source sets the source of the axis last named, so sent first it was
+// lost (a finger scroll reached apps and binds as a wheel; a tilt's first notch too).
 // BTN is left (the default), right, middle, side (also back) or extra (also forward): BTN_SIDE and
 // BTN_EXTRA, a mouse's thumb buttons, which apps take as back and forward (#216). pause prints "paused" on stdout and waits for a line (or
 // the end) on stdin: `omabox drag --shot` takes its shot there, with the button still down.
@@ -125,8 +128,8 @@ static void scroll(struct zwlr_virtual_pointer_v1 *ptr, uint32_t axis, double d,
         if (notches < 1) notches = 1;
         int dir = d < 0 ? -1 : 1;
         for (long k = 0; k < notches; k++) {
-            zwlr_virtual_pointer_v1_axis_source(ptr, (uint32_t)source);
             zwlr_virtual_pointer_v1_axis_discrete(ptr, now_ms(), axis, wl_fixed_from_int(15 * dir), dir);
+            zwlr_virtual_pointer_v1_axis_source(ptr, (uint32_t)source);   // after: see the top
             zwlr_virtual_pointer_v1_frame(ptr);
             sync_or_die();
             sleep_ms(15);
@@ -134,14 +137,14 @@ static void scroll(struct zwlr_virtual_pointer_v1 *ptr, uint32_t axis, double d,
         return;
     }
     for (int k = 0; k < 10; k++) {
-        zwlr_virtual_pointer_v1_axis_source(ptr, (uint32_t)source);
         zwlr_virtual_pointer_v1_axis(ptr, now_ms(), axis, wl_fixed_from_double(d / 10));
+        zwlr_virtual_pointer_v1_axis_source(ptr, (uint32_t)source);
         zwlr_virtual_pointer_v1_frame(ptr);
         sync_or_die();
         sleep_ms(8);
     }
-    zwlr_virtual_pointer_v1_axis_source(ptr, (uint32_t)source);
     zwlr_virtual_pointer_v1_axis_stop(ptr, now_ms(), axis);
+    zwlr_virtual_pointer_v1_axis_source(ptr, (uint32_t)source);
     zwlr_virtual_pointer_v1_frame(ptr);
 }
 

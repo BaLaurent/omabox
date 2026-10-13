@@ -254,8 +254,12 @@ left), in wl_pointer units (15 is one wheel notch). Without --source it is one p
 --source wheel (or tilt) sends a notch a frame, as a mouse does (apps counting notches see each),
 finger or continuous the distance in 10 frames then a stop, as a touchpad does (kinetic scrolling).
 A wheel turns in whole notches: DY 20 scrolls 15, said on stderr. Hyprland binds see a wheel as
-mouse_up/mouse_down and mouse_left/mouse_right (--mod super: Omarchy's SUPER+wheel binds); a tilt
-reaches apps, but Hyprland's binds see few of its notches: test binds with a wheel.
+mouse_up/mouse_down and mouse_left/mouse_right (--mod super: Omarchy's SUPER+wheel binds); a tilt or
+a finger reaches apps but no bind (Hyprland binds the wheel source only): test binds with a wheel.
+Qt apps get every wheel, a real mouse's too, from a device of type TouchPad (Qt's Wayland plugin has
+no other: QTBUG-112432), so a Qt Quick WheelHandler left at its default acceptedDevices (Mouse)
+never fires; a wheel still is one (angleDelta 120 a notch, no pixelDelta). Give it
+\`acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad\`, or use a MouseArea's onWheel.
 @ click drag pointer scroll
 The pointer starts at the screen's centre and stays where it was left; \`click\` and \`pointer move\`
 jump there. --steps N travels in N steps from where it is, over what lies between: under Omarchy's

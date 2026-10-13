@@ -202,8 +202,12 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   smooth scroll ending in a stop (kinetic scrolling); none is one plain event. Hyprland binds see the
   wheel as `mouse_down`/`mouse_up`/`mouse_left`/`mouse_right`, at most one per
   `binds.scroll_event_delay` (300 ms) as from a real wheel; `--mod super` reaches Omarchy's
-  SUPER+wheel binds (workspaces, groups). `--source tilt` (a wheel pushed sideways) reaches apps, but
-  Hyprland's binds see few of its notches (3 notches: 0 or 1 binds): test binds with `wheel`.
+  SUPER+wheel binds (workspaces, groups). `--source tilt` (a wheel pushed sideways) and `finger` reach
+  apps but no Hyprland bind (it binds the wheel source only): test binds with `wheel`.
+  Qt apps get every wheel, a real mouse's too, from a device of type TouchPad (Qt's Wayland plugin
+  registers no other, QTBUG-112432): a Qt Quick `WheelHandler` at its default `acceptedDevices`
+  (Mouse) never fires, in a box or on the desktop. Not omabox's to fix; for the app:
+  `acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad`, or a `MouseArea`'s `onWheel`.
 - `keys -t TEXT` and `--pass VAR` type a newline as Return and a tab as Tab; any other control
   character (backspace, escape, a carriage return) is refused, exit 2, before anything is typed. A
   `--pass` value's one trailing `\r` (a Windows line ending) is dropped.

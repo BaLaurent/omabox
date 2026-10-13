@@ -24,6 +24,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   with 124, pointing at the screen. Now it says the command exited with status N, names any argument
   that is a host path the box does not have, shows its log's last lines, and exits with that status
   (124 still when it was 0).
+- **`scroll --source finger` and `tilt` arrive as a touchpad and a tilt** (#214). Hyprland dropped
+  the source omabox sent first in each frame, so a finger scroll reached apps as a wheel's small
+  notches (no kinetic scrolling, Qt with no scroll phases) and fired a wheel bind per frame, and a
+  tilt's first notch came as a wheel. It is sent last now. `help scroll` also says why a Qt Quick
+  `WheelHandler` at its defaults ignores every wheel, a real mouse's too (a Qt bug), and what to set.
 
 ## 0.5.3 — 2026-10-10
 
