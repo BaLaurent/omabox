@@ -11,7 +11,7 @@ PKGS=(
   labwc wlr-randr bubblewrap util-linux iproute2 jq grim gnome-keyring libsecret   # run a box
   quickshell gtk3 xdg-terminal-exec dbus                                 # in a box (Omarchy has them)
   passt                                                                  # every box's network (pasta)
-  python                                                                 # the agent guard's Codex check
+  python                                                                 # the agent guard's Codex check, a jailed box's covers
   wayland libxkbcommon base-devel pkgconf                                               # tools/
   git cmake ninja hyprwayland-scanner hyprutils seatd libdisplay-info hwdata libinput   # aquamarine
   libdrm mesa pixman
