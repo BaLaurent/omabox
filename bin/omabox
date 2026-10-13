@@ -8718,10 +8718,8 @@ def covered():
         for m in mounts(bpid):
             if m[2] == b"/":
                 continue
-            try:
-                pl, on, fd = place(root, m[2])
-            except OSError:
-                continue
+            # A mount that can't be walked could be one of SRC's: not checked is not covered.
+            pl, on, fd = place(root, m[2])
             try:
                 st, top = os.fstat(fd), mnt_id(fd)
             finally:

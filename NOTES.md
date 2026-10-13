@@ -5801,6 +5801,8 @@ from them.
     names; jail_read), t_jail_held (a stand-in jail: a `run` looped during a refused `up` never got
     in, said "still starting"; an `up` SIGKILLed while its box is held: `run` refused, the reaper
     took the box down), t_jail (the project mounted twice through a real ai-jail: empty on both).
+    A second review: a box mount the verifier cannot walk now fails the check (it was skipped, so a
+    mount of a hidden folder that could not be placed went unchecked); none was found to trigger it.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
