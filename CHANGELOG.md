@@ -27,6 +27,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   checked before the box starts. So are `--ro-bind` of such a folder and a git worktree's main `.git`
   with a hidden `config`. Plugins, themes, `--omarchy`, `--hyprland` and `--overlay` inside such a
   project are still refused, and so is `--seed` from one whose hidden paths sit below its folders.
+  The check needs `/usr/bin/python3` (package `python`): without it the project stays out, as
+  before, and `up` says why. If you replace a hidden file on the host while the jail runs, ai-jail
+  stops hiding it, and `up` from that jail is refused until the jail restarts.
 - **A frozen shell reads as `hung`, not `running`** (#209). A shell whose pid lived but which
   answered nothing (a crash whose handler hung, its bar left frozen with no report and no relaunch)
   was taken as healthy by `ls` and every command. Now `ls` (and `ls --json`'s `shell_state`) says
