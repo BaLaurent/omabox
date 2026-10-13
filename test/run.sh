@@ -4764,6 +4764,42 @@ t_shell_crash() {
   ob down "$B" >/dev/null
 }
 
+# #209 (finding 289): a shell whose pid lives but which answers nothing (a crash whose handler waits
+# forever in fork() for an allocator lock, finding 280; here a stopped one, which answers nothing either)
+# read as running: `ls` said so, every command drove its frozen bar, and restart-shell waited 10 s on it
+# before its SIGKILL. Now it is `hung`. A shell busy starting is not: polled through a restart.
+t_shell_hung() {
+  local B=$P-shhung D p p2 out rc t0 seen
+  # shellcheck disable=SC2329 # called through until_ok
+  shell_is() { [ "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .shell_state')" = "$1" ]; }
+  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  D=$XDG_RUNTIME_DIR/omabox/$B
+  check "just up: running, not hung" shell_is running
+  # A shell starting: never read as hung while restart-shell brings it up (polled all along).
+  ob restart-shell -b "$B" >/dev/null 2>&1 & rc=$!
+  seen=""; while kill -0 "$rc" 2>/dev/null; do seen+=" $(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .shell_state')"; done
+  wait "$rc"
+  check_fails "...nor while restart-shell starts it (seen:$seen)" grep -qw hung <<<"$seen"
+  sleep 10.5   # past its first 10 s, under which a shell that does not answer may still be loading
+  p=$(cat "$D/run/omabox-shell.pid")
+  ob run -b "$B" -- kill -STOP "$p"
+  check_match "stopped: ls says hung" "^$B +headless +[^ ]+ +up +hung " "$(ob ls | grep "^$B ")"
+  check "...ls --json too" shell_is hung
+  check_eq "...the box itself up, its Hyprland answering" "up false" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | "\(.state) \(.hung)"')"
+  check_match "...and a command warns" "warning: the shell of box '$B' does not answer \(hung: its bar is frozen; omabox log -b $B shell; omabox restart-shell -b $B\)" \
+    "$(ob windows -b "$B" 2>&1 >/dev/null)"
+  t0=$(now_ms); out=$(ob restart-shell -b "$B" 2>&1); rc=$?
+  check_eq "restart-shell: exit 0" 0 "$rc"
+  check_match "...says it killed the hung one" "box '$B': its shell \(pid $p\) did not answer \(hung\): killed" "$out"
+  check "...under 10 s ($(( ($(now_ms) - t0) / 1000 )) s; it waited 10 s on it before)" test $(($(now_ms) - t0)) -lt 10000
+  p2=$(cat "$D/run/omabox-shell.pid")
+  check "...a new shell ($p2), the old one gone" bash -c "[ -n '$p2' ] && [ '$p2' != '$p' ] && ! '$CLI' run -b '$B' -- test -d /proc/$p"
+  check "...the bar back" ob wait -b "$B" layer omarchy-bar
+  check "...running" shell_is running
+  check_fails "...no warning" grep -q shell <<<"$(ob windows -b "$B" 2>&1 >/dev/null)"
+  ob down "$B" >/dev/null
+}
+
 # finding 248 (#192): restart-shell right after edits to shell.json and a plugin, the shell having died
 # of a signal as they landed (a crash, a kill): Omarchy's launcher starts it again a second later.
 # shell.sh stopped only the recorded shell, so the new one met that relaunch ("An instance of this
@@ -8656,7 +8692,7 @@ t_inspect() {
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

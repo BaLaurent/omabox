@@ -5467,7 +5467,7 @@ from them.
     crashes (t_shell_crash's two, output's mid-cycle one) are now `shell_segv`: the signal sent with
     tgkill to a thread of the shell waiting in poll (`wchan` poll_schedule_timeout), which holds no
     allocator lock: 0 of 72 hung under the same load. A real crash inside the allocator would hang the
-    same way; omabox then reads the shell as running (Open). (2) **t_monitors_wait**: `wait still`
+    same way; omabox then reads the shell as running (`hung` since finding 289). (2) **t_monitors_wait**: `wait still`
     named the window's border as well as the cell (`1929,23 782x404`): the window not settled yet. Looked
     at again until it names a cell, 3 times at most (a note when it had to). (3) **t_output_nvidia**:
     finding 279. (4) **t_burst** (#191): the 100 ms pace is a schedule (frame N at (N-1) x 100 ms, or as
@@ -5653,6 +5653,36 @@ from them.
     and a GDK_BACKEND=x11 zenity is listed by `omabox windows` as xwayland. Checks: t_connected (no
     socket, no lock left, the xprop), t_keys (`DISPLAY` is :0; its X11 zenity as before).
 
+289. **A hung shell reads as `hung`; restart-shell kills it at once** (2026-10-13, #209; closes 280's
+    Open line). A shell whose pid lived but which answered nothing read as `running` to `ls`,
+    `shell_note` and restart-shell. Reproduced the real hang on purpose, deterministically: `omabox
+    gdb --shell` with `break _Fork`, `call (int)fork()` on thread 1 (stopped there, glibc's atfork
+    lock held), then `signal SIGSEGV`: Quickshell's handler fork()s and waits forever in
+    `__lll_lock_wait_private` (glibc's lock standing in for 280's jemalloc arena lock). As in 280: bar
+    mapped, no report, no relaunch, `ls` said running. Two ways to tell, both looked at: (a) its IPC,
+    `quickshell ipc --pid PID show` under `timeout 2` (~25 ms for a healthy shell, beside 2 busy loops
+    a core 0.6 s at most, polled from the shell's first ms through a restart on the RTX); (b) a thread
+    with SIGSEGV in `SigBlk`: the handler's thread showed it, but one look cannot tell a handler that
+    runs from one stuck (two looks seconds apart: slower than (a)), it says nothing of a stopped or
+    otherwise deadlocked shell, and it rests on how Quickshell installs its handler. **Decided: (a).**
+    Only a timeout (124) counts (no instance yet fails at once: cannot tell, not hung), and only for
+    a shell up 10 s or more, which may otherwise still be loading. `ls` asks every box's shell beside
+    its Hyprland, all at once (a hung one adds 2 s to `ls`; a shell is not asked when its Hyprland did
+    not answer, as a paused box's would not either); `ls --json`'s `shell_state` says `hung`; the
+    commands that drive the box warn (`shell_note`); restart-shell SIGTERMs its launcher (which would
+    start it again a second after a kill) and SIGKILLs it, saying "did not answer (hung): killed", in
+    ~4 s where shell.sh's `quickshell kill` waited 5 s on it and its stop loop 5 s more. A stopped shell
+    (SIGSTOP) is the suite's stand-in and reads the same. **A trap met on the way**: `on_box` enters
+    the box's user and mount namespaces only, so `/proc` there is the box's but a `kill` takes the pid
+    as the host's: the first version, killing from on_box, sent TERM and KILL to host pids of the
+    same numbers (none of them the desktop's shell, which kept running; whether they were anything
+    is unknown, no journal line at those times). Signals to box processes go through `nsenter -p` (or
+    `run`); on_box's comment says so. In a box on the RTX (renderD129): the gdb-made hang and the
+    stopped shell both `hung`, recovered by restart-shell, bar back. t_shell_hung: just up and all
+    through a restart, never hung; stopped, `ls` and `ls --json` hung, the box itself not, `windows`
+    warns, restart-shell exit 0, says it killed it, under 10 s, a new pid, the bar back, running, no
+    warning (5 checks fail on the old code).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -5693,7 +5723,3 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   file, hidden by default) gets no project mount in its box (finding 282): safe, but the agent's
   repo is missing there. Mounting it with the jail's hidden paths covered again in the box (an empty
   file over each, as ai-jail does) would give it back.
-- A shell hung in its crash handler (#209; finding 280: a crash inside jemalloc, Quickshell's handler
-  fork()ing into the lock) reads as running to `ls`, `restart-shell` and every command: its pid lives
-  and its bar stays mapped, frozen. A thread with SIGSEGV blocked for more than a few seconds (`SigBlk`
-  in `/proc/PID/task/*/status`, if the handler masks it while it runs) might tell it; untried.

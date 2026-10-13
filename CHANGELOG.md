@@ -16,6 +16,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A frozen shell reads as `hung`, not `running`** (#209). A shell whose pid lived but which
+  answered nothing (a crash whose handler hung, its bar left frozen with no report and no relaunch)
+  was taken as healthy by `ls` and every command. Now `ls` (and `ls --json`'s `shell_state`) says
+  `hung`, `shot`, `windows`, `keys`, `click`, `scroll`, `pixel` and `wait` warn, and `restart-shell` kills it at once
+  and says so (it waited 10 s on it before).
 - **No hidden X server in a box without `--xwayland`** (#211). The box's parent compositor kept a
   lazy Xwayland on `:0`: an X client that set `DISPLAY=:0` itself ran, but its window was on a screen
   nobody sees (`windows` never listed it, `wait window` timed out). Now there is no X server unless

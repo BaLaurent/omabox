@@ -835,7 +835,8 @@ BOX_EVENTS=/opt/omabox/bin/omabox-events
 # `keys`, `click` or `shot` to any compositor the host can reach, the user's included. Inside, every
 # path resolves in the box's own view, where only the box is. (Also short enough for Hyprland's
 # socket path, which from the host dir is past the 108-byte limit, finding 7.) stdin/stdout pass
-# through: `grim -` writes the host's file.
+# through: `grim -` writes the host's file. Not the box's pid namespace: its /proc shows the box's
+# pids, but a `kill` here takes a pid as the host's (finding 289): signal from box_exec or nsenter -p.
 on_box() {
   local pid wd sig rc=0
   pid=$(box_pid); [ -n "$pid" ] || die "box '$NAME' is not up"
@@ -1146,6 +1147,22 @@ shell_crash_dirs() { ls -1 -- "$D/home/.cache/quickshell/crashes" 2>/dev/null ||
 shell_pid() { local p; p=$(run_read omabox-shell.pid) && [[ $p =~ ^[0-9]+$ ]] && echo "$p"; }
 # Box pid PID is a process, and not one that exited and was not reaped yet.
 shell_running() { local st; st=$(on_box cat "/proc/$1/stat" 2>/dev/null) && [[ $st != *") Z "* ]]; }
+# The shell at box pid PID lives but does not answer (#209, finding 289): no answer over its IPC in
+# 2 s. A crash whose handler waits forever in fork() for a lock the crashed thread held (finding 280)
+# leaves it so, its bar mapped and frozen, with no report and no relaunch; a stopped one too. Only a
+# timeout counts: any other failure (no instance yet, a Quickshell without IPC) cannot tell. Nor a
+# shell up for under 10 s, which may still be loading (a healthy one answered within 0.6 s of its start
+# beside 2 busy loops a core). shell_hung PID
+shell_hung() {
+  local rc=0 age
+  on_box timeout 2 /usr/bin/quickshell ipc --pid "$1" show >/dev/null 2>&1 || rc=$?
+  [ $rc = 124 ] || return 1
+  # Its age in s: /proc/uptime less its start (stat's field 22, in clock ticks).
+  # shellcheck disable=SC2016 # the inner sh's
+  age=$(on_box sh -c 's=$(cat "/proc/$1/stat") || exit 1; set -- ${s##*") "}; t=$(getconf CLK_TCK) || t=100
+    read -r up _ < /proc/uptime; echo $(( ${up%.*} - ${20} / t ))' sh "$1" 2>/dev/null) || return 1
+  [[ $age =~ ^[0-9]+$ ]] && [ "$age" -ge 10 ]
+}
 # How the shell went since SHELL_BEFORE, or a failure when it did not: "crashed REPORT" (the report's
 # path here; - when there is none yet) or "exited" (its pid gone, no crash). shell_crash [PID]
 shell_crash() {
@@ -1198,11 +1215,13 @@ shell_adopt() {
 }
 # The shell mid-session (#147). Omarchy's launcher starts a crashed shell again, up to 5 times a minute
 # (finding 194); past that, or once something stopped the launcher, the box has no shell while every
-# command treated it as healthy. shell_state: none (--no-shell), running, restarting (gone, its launcher
-# about to start it again) or gone.
+# command treated it as healthy. shell_state: none (--no-shell), running, hung (its pid lives but its
+# IPC does not answer: shell_hung, #209), restarting (gone, its launcher about to start it again) or
+# gone. shell_state [hung|ok]: what shell_hung said already (`ls` asks every box's at once), not asked again.
 shell_state() {
   [ "$(meta shell)" = true ] || { echo none; return; }
-  local p; if p=$(shell_pid) && shell_running "$p"; then echo running
+  local p; if p=$(shell_pid) && shell_running "$p"; then
+    if [ "${1:-}" = hung ] || { [ -z "${1:-}" ] && shell_hung "$p"; }; then echo hung; else echo running; fi
   elif [ "$(on_box pgrep -cf '[o]marchy-launch-shell' 2>/dev/null)" -gt 0 ] 2>/dev/null; then echo restarting
   else echo gone; fi
 }
@@ -1218,6 +1237,8 @@ shell_note() {
   state=$(shell_state)
   if [ "$state" = gone ]; then
     say "warning: box '$NAME' has no shell (gone$([ "$n" = 0 ] || echo " after $n crash(es)"); omabox log -b $NAME shell; omabox restart-shell -b $NAME)"
+  elif [ "$state" = hung ]; then
+    say "warning: the shell of box '$NAME' does not answer (hung: its bar is frozen; omabox log -b $NAME shell; omabox restart-shell -b $NAME)"
   elif [ "$n" -gt "$seen" ]; then
     say "warning: the shell crashed since the last command and was started again$([ "$state" = running ] || echo " (it is starting)") (omabox log -b $NAME shell)"
   fi
@@ -7476,6 +7497,18 @@ cmd_restart_shell() {
   local name; name=$(name_arg restart-shell "$@") || exit 1
   select_box "$name"; need_box
   local old; old=$(run_read omabox-shell.pid) || old=""
+  # A hung shell (#209) is killed here, as a dead one would be gone: shell.sh asks it to quit first and
+  # would wait 5 s on it, then 5 s more. Its launcher stopped first, or it starts the shell again a
+  # second after the kill (it relaunches one killed by a signal; stopped, it ends at its next turn).
+  if [[ $old =~ ^[0-9]+$ ]] && shell_running "$old" && shell_hung "$old"; then
+    # In the box's pid namespace, never on_box's (user and mount only): there /proc is the box's, but a
+    # kill takes the pid as the host's, and would signal whatever host process has that number.
+    local bp; bp=$(box_pid)
+    # shellcheck disable=SC2016 # the inner sh's
+    [ -z "$bp" ] || nsenter -t "$bp" -U -m -p --preserve-credentials -- /usr/bin/sh -c 'pp=$(sed -n "s/^PPid:[[:space:]]*//p" "/proc/$1/status")
+      [ -z "$pp" ] || ! grep -qa omarchy-launch-shell "/proc/$pp/cmdline" || kill "$pp"; kill -KILL "$1"' sh "$old" 2>/dev/null || true
+    say "box '$NAME': its shell (pid $old) did not answer (hung): killed"
+  fi
   SHELL_BEFORE=$(shell_crash_dirs)
   # (A box whose shell.sh writes no token, one `up` by an omabox from before: a new pid, as then.)
   local tok="" got
@@ -8179,29 +8212,35 @@ box_theme() {
   printf '%s' "$theme"
 }
 
-# The boxes up whose Hyprland does not answer within 1 s (#125, finding 182), their names one a line.
-# All asked at once, so `ls` takes 1 s at most for them. One still starting (no omabox.env) is not asked.
+# The boxes up whose Hyprland does not answer within 1 s (#125, finding 182), as `hypr NAME` lines, and
+# those whose Hyprland answers but whose shell is hung (shell_hung, #209), as `shell NAME`. All asked
+# at once, so `ls` takes 1 s at most for them (3 s with a hung shell). One still starting (no
+# omabox.env) is not asked.
 hung_boxes() {
-  local n dir; dir=$(mktemp -d)
+  local n p dir; dir=$(mktemp -d) && mkdir -- "$dir/hypr" "$dir/shell" || return 0
   for n in $(list_names); do
     select_box "$n"
     [ "$(box_state)" = up ] && [ -s "$D/run/omabox.env" ] || continue
-    { hypr_answers 1 || : > "$dir/$n"; } 2>/dev/null &
+    { if hypr_answers 1; then
+        [ "$(meta shell)" != true ] || ! p=$(shell_pid) || ! shell_running "$p" || ! shell_hung "$p" || : > "$dir/shell/$n"
+      else : > "$dir/hypr/$n"; fi; } 2>/dev/null &
   done
   wait
-  ls -1 -- "$dir"; rm -rf -- "$dir"
+  for p in "$dir"/hypr/* "$dir"/shell/*; do [ ! -e "$p" ] || { p=${p#"$dir"/}; echo "${p%%/*} ${p#*/}"; }; done
+  rm -rf -- "${dir:?}"
 }
 
 # The selected box as one line of JSON, as `ls --json` lists it (and `up --json` prints it). HUNG: true
 # when hung_boxes named it. Its state stays `up`: the bar widget offers Down for any other state, as
-# for a dead box, and a box `save` has paused answers no IPC either. box_json [HUNG]
+# for a dead box, and a box `save` has paused answers no IPC either. SHELL: shell_state's hung or ok,
+# when hung_boxes asked already. box_json [HUNG [SHELL]]
 box_json() {
   local state peeking=false keys=false hung=${1:-false}
   state=$(box_state)
   peek_pid >/dev/null && peeking=true
   [ ! -f "$D/keys-to-box" ] || keys=true
   local theme; theme=$(box_theme)
-  local sh=none crashes=0; if [ "$state" = up ]; then sh=$(shell_state); crashes=$(shell_crashes); fi
+  local sh=none crashes=0; if [ "$state" = up ]; then sh=$(shell_state "${2:-}"); crashes=$(shell_crashes); fi
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" --argjson hung "$hung" \
     --arg sh "$sh" --argjson crashes "$crashes" \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
@@ -8231,12 +8270,13 @@ cmd_ls() {
   if [ "${1:-}" = --json ]; then
     for n in $(list_names); do
       select_box "$n"
-      box_json "$(grep -qFx -- "$n" <<<"$hung" && echo true || echo false)"
+      box_json "$(grep -qFx -- "hypr $n" <<<"$hung" && echo true || echo false)" \
+        "$(grep -qFx -- "shell $n" <<<"$hung" && echo hung || echo ok)"
     done | jq -s -c .
     return
   fi
   # IDLE: minutes since the box was last used, of its limit (it goes down when they meet). SHELL (#147):
-  # running, restarting or gone, and its crashes since up (+N, as running+2); - for none or a box not up.
+  # running, hung, restarting or gone, and its crashes since up (+N, as running+2); - for none or a box not up.
   printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' NAME MODE SIZE STATE SHELL NET IDLE PLUGINS
   local used gpus; gpus=$(render_nodes | wc -l)
   for n in $(list_names); do
@@ -8244,13 +8284,13 @@ cmd_ls() {
     # A box going down while this lists them has no box.json any more: left out, not the end of the
     # list (under errexit a failed lookup here ended `ls` there; seen with the suite's boxes in parallel).
     local state idle; state=$(box_state)
-    [ "$state" != up ] || ! grep -qFx -- "$n" <<<"$hung" || state=hung
+    [ "$state" != up ] || ! grep -qFx -- "hypr $n" <<<"$hung" || state=hung
     idle=$(meta idle) || continue
     if [ "${idle:-0}" -gt 0 ] && used=$(stat -c %Y "$D/used" 2>/dev/null); then
       idle="$((($(date +%s) - used) / 60))m/$(human_duration "$idle")"
     else idle=never; fi
     local sh=- c; if [ "$state" = up ] && [ "$(meta shell)" = true ]; then
-      sh=$(shell_state); c=$(shell_crashes); [ "$c" = 0 ] || sh+="+$c"
+      sh=$(shell_state "$(grep -qFx -- "shell $n" <<<"$hung" && echo hung || echo ok)"); c=$(shell_crashes); [ "$c" = 0 ] || sh+="+$c"
     fi
     local nm; nm=$(jq -r '.monitors // [] | length' "$D/box.json" 2>/dev/null) || nm=0
     printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$([ "${nm:-0}" -le 1 ] && meta size || echo "$nm monitors")" "$state" "$sh" "$(meta net)" "$idle" \
