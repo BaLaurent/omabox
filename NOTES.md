@@ -5553,6 +5553,18 @@ from them.
     does not keep a switch to vfio-pci from going through unseen. t_main (an NVIDIA box): no
     `nvidia-modeset`; `nvidia-uvm` there when the host has it, and CUDA's three calls 0 (skipped
     without the node or libcuda); on the code before, the node is missing and `cuInit` gives 999.
+284. **The thumb buttons: `back` and `forward`** (2026-10-13, #216). `click`, `drag` and the pointer
+    tool took only left, right and middle, so an app's mouse back/forward handling could not be
+    driven in a box. They take `back`/`side` (BTN_SIDE) and `forward`/`extra` (BTN_EXTRA) now: the
+    codes a mouse's thumb buttons send through libinput, which Qt maps to `Qt.BackButton` and
+    `Qt.ForwardButton` and foot reports as xterm buttons 8 and 9 (SGR 128, 129). BTN_BACK and
+    BTN_FORWARD (0x116, 0x115) are not those: no common mouse sends them, and apps do not read them as
+    back and forward, so the names follow what apps see. Verified in a box: a QML MouseArea with
+    `acceptedButtons: Qt.AllButtons` logged back, forward, back, forward for `click … back`,
+    `forward`, `side`, `extra`, and `pointer -- down back up back click forward`. peek's marks take the
+    names too (a ring tagged "back" or "forward"); an older peek drops such a line whole, as junk.
+    t_pointer: foot's reports for the four names and a `pointer down forward … up forward`;
+    t_unit_pointer: the names parsed, junk still refused; t_peek: a `click back` mark draws its ring.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

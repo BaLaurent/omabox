@@ -5,6 +5,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **Back and forward mouse buttons** (#216). `click X Y back`, `forward` (also `side`, `extra`), in
+  `drag` and `pointer -- click|down|up BTN` too: a mouse's thumb buttons, which apps take as back
+  and forward.
+
 ### Fixed
 
 - **CUDA works in a box on an NVIDIA GPU** (#149). The box had the GPU's node and `/dev/nvidiactl`

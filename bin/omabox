@@ -90,9 +90,9 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
-  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [left|right|middle] [--double]
+  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
                [--steps N] [--mod MODS]                  --steps: travel there; --mod ctrl: ctrl-click
-  omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [left|right|middle]
+  omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [BTN]
               [--steps 10] [--hold DURATION] [--mod MODS]  press, move, hold, release
               [--shot-fit N | --shot-g "X,Y WxH" | --shot-monitor NAME]   (with --shot: as shot's --fit, -g, --monitor)
   omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- ARGS...
@@ -264,6 +264,9 @@ move A move B\` passes through A). --mod MODS (ctrl, shift, alt, super, altgr; c
 again) holds modifiers down across a click, drag, scroll or pointer run, released after it, whatever
 happens to omabox. SUPER with the left or right button is Hyprland's move or resize window, not the
 app's.
+@ click drag pointer
+BTN is left (the default), right, middle, back or forward (also side and extra: a mouse's thumb
+buttons, BTN_SIDE and BTN_EXTRA, which apps take as back and forward).
 @ shot
 \`shot --burst N\` takes N frames (2-200) of the same capture 100 ms apart (--every DURATION; --every 0:
 back to back, ~16 ms a crop) into a folder, one line each: its path and time, with --diff where it
@@ -4824,7 +4827,7 @@ cmd_click() {
       --double) double=1 ;;
       --steps) optarg "$@"; steps=$(steps_arg click "$2"); shift ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
-      left|right|middle) btn=$1 ;;
+      left|right|middle|side|extra|back|forward) btn=$1 ;;
       -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "click: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
       *) [[ $1 =~ ^[0-9]+$ ]] || die "click: bad argument $1"; xy+=("$((10#$1))") ;;
     esac
@@ -5048,7 +5051,7 @@ cmd_drag() {
       --shot-g) optarg "$@"; shot_args+=(-g "$2"); shift ;;
       --shot-monitor) optarg "$@"; shot_args+=(--monitor "$2"); shift ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
-      left|right|middle) btn=$1 ;;
+      left|right|middle|side|extra|back|forward) btn=$1 ;;
       -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "drag: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
       *) [[ $1 =~ ^[0-9]+$ ]] || die "drag: bad argument $1"; xy+=("$((10#$1))") ;;
     esac

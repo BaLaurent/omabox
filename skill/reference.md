@@ -177,7 +177,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   when the way there matters (to the bar, across other windows) travel: `click --steps 20 X Y`,
   `pointer --steps 20 -- move X Y`. `--mod ctrl` (shift, alt; `ctrl+shift`) holds modifiers across a
   click or drag; SUPER with a button is Hyprland's own (move, resize), never the app's.
-- `omabox drag [--window SEL | --in SHOT] X1 Y1 X2 Y2 [left|right|middle] [--steps 10] [--hold DURATION]
+- `omabox drag [--window SEL | --in SHOT] X1 Y1 X2 Y2 [BTN] [--steps 10] [--hold DURATION]
   [--mod MODS] [--shot FILE | --wait]`: press at the first point, move to the second in steps, hold
   there `--hold` (a drop target reacting to the hover), release. `--hold` is a duration, `300ms` or
   `2s` (a bare number is seconds, up to 60s), unlike `keys -s` and `pointer sleep`, which take ms.
@@ -187,7 +187,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   move X1 Y1` first.
 - `omabox pointer [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- move X Y [--steps N], click
   [BTN], down [BTN], up [BTN], scroll DY, hscroll DX, source wheel|finger|continuous|tilt, sleep MS` in
-  one run: raw, it raises nothing (a `--window` must be on screen and uncovered). The button defaults to left. A button pressed with `down` stays
+  one run: raw, it raises nothing (a `--window` must be on screen and uncovered). BTN is left (the default), right, middle, back or forward (a mouse's thumb buttons, also `side` and `extra`; `click X Y back` too). A button pressed with `down` stays
   down after the call, until an `up` (in a later call too): end every `down` with an `up`, or the
   box's next clicks are drags.
 - `omabox scroll [--window SEL | --in SHOT] [--wait] [--mod MODS] X Y DY [DX] [--source wheel|finger]`:

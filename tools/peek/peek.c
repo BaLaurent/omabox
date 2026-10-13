@@ -496,7 +496,16 @@ static int mark_num(const char *s, long lo, long hi, long *out) {
     *out = v;
     return 1;
 }
-static int is_btn(const char *s) { return !strcmp(s, "left") || !strcmp(s, "right") || !strcmp(s, "middle"); }
+// tools/pointer's button names. A ripple's tag: none for left, else the button, a thumb button as
+// what apps take it for (#216).
+static const char *btn_tag(const char *s) {
+    static const char *const tags[][2] = {{"left", ""}, {"right", "right"}, {"middle", "middle"},
+                                          {"side", "back"}, {"back", "back"}, {"extra", "forward"}, {"forward", "forward"}};
+    for (size_t i = 0; i < sizeof tags / sizeof *tags; i++)
+        if (!strcmp(s, tags[i][0])) return tags[i][1];
+    return NULL;
+}
+static int is_btn(const char *s) { return btn_tag(s) != NULL; }
 
 static void ptr_pos(int64_t now, double *x, double *y) {
     double k = (double)(now - marks.moved) / GLIDE_MS;
@@ -550,7 +559,8 @@ static int mark_ptr(char *rest, int64_t now) {
             i += 2;
         } else if (!strcmp(t[i], "click") || !strcmp(t[i], "down")) {
             const char *b = i + 1 < n && is_btn(t[i + 1]) ? t[++i] : "left";
-            marks.ripples[marks.next_ripple] = (struct ripple){cx, cy, now, !strcmp(b, "left") ? NULL : !strcmp(b, "right") ? "right" : "middle"};
+            const char *tag = btn_tag(b);
+            marks.ripples[marks.next_ripple] = (struct ripple){cx, cy, now, *tag ? tag : NULL};
             marks.next_ripple = (marks.next_ripple + 1) % NRIPPLES;
         } else if (!strcmp(t[i], "up")) {
             if (i + 1 < n && is_btn(t[i + 1])) i++;   // nothing to show

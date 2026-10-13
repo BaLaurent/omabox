@@ -9,7 +9,8 @@
 // the scrolls after it (#134): wheel and tilt send a notch (15, discrete 1) per frame, as a mouse wheel
 // does, so an app counting notches sees each; finger and continuous send the distance in 10 frames,
 // then axis_stop (a touchpad lifting off: kinetic scrolling starts there).
-// BTN is left (the default), right or middle. pause prints "paused" on stdout and waits for a line (or
+// BTN is left (the default), right, middle, side (also back) or extra (also forward): BTN_SIDE and
+// BTN_EXTRA, a mouse's thumb buttons, which apps take as back and forward (#216). pause prints "paused" on stdout and waits for a line (or
 // the end) on stdin: `omabox drag --shot` takes its shot there, with the button still down.
 //
 // Commands run left to right in one connection, all checked before it connects. Coordinates are
@@ -52,15 +53,25 @@ static uint32_t now_ms(void) {
     return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
 
-static int is_button(const char *s) { return s && (!strcmp(s, "left") || !strcmp(s, "right") || !strcmp(s, "middle")); }
-static uint32_t button_code(const char *name) {
-    if (!name || !strcmp(name, "left")) return BTN_LEFT;
-    return !strcmp(name, "right") ? BTN_RIGHT : BTN_MIDDLE;   // validated before we connect
+static const struct { const char *name; uint32_t code; } buttons[] = {
+    {"left", BTN_LEFT}, {"right", BTN_RIGHT}, {"middle", BTN_MIDDLE},
+    {"side", BTN_SIDE}, {"back", BTN_SIDE}, {"extra", BTN_EXTRA}, {"forward", BTN_EXTRA},
+};
+static int is_button(const char *s) {
+    for (size_t i = 0; s && i < sizeof buttons / sizeof *buttons; i++)
+        if (!strcmp(s, buttons[i].name)) return 1;
+    return 0;
+}
+static uint32_t button_code(const char *name) {   // validated before we connect
+    for (size_t i = 0; name && i < sizeof buttons / sizeof *buttons; i++)
+        if (!strcmp(name, buttons[i].name)) return buttons[i].code;
+    return BTN_LEFT;
 }
 
 static void usage(void) {
     fprintf(stderr, "usage: omabox-pointer [--extent WxH] (move X Y | click [BTN] | down [BTN] | up [BTN] | scroll DY | hscroll DX |\n"
-                    "                      source wheel|finger|continuous|tilt | sleep MS | pause)...  BTN: left (default), right, middle\n");
+                    "                      source wheel|finger|continuous|tilt | sleep MS | pause)...\n"
+                    "  BTN: left (default), right, middle, side or back, extra or forward\n");
     exit(2);
 }
 

@@ -4891,6 +4891,8 @@ t_peek() {
   check "junk marks draw nothing" holds 1 no_accent 940 520 1900 1060
   printf 'ptr 1920x1080 move 300 200 click\n' >> "$D/run/marks-in"
   check "...and a good line after it still does" until_ok 3 accent_ok 21 1030 560 1150 680   # around 1090,620
+  printf 'ptr 1920x1080 move 1500 200 click back\n' >> "$D/run/marks-in"   # (#216: a thumb button's name)
+  check "...a click back draws its ring too" until_ok 3 accent_ok 21 1630 560 1820 700   # around 1690,620
   check "peek is still running" kill -0 "$(pgrep -f "omabox-peek --box /run/user/$UID/$wd" | head -1)"
   kill "$relay" 2>/dev/null; wait "$relay" 2>/dev/null
   ob click -b "$B" 10 10 >/dev/null
@@ -7916,6 +7918,12 @@ t_unit_pointer() {
   check_match "drag --mod junk refused" "not a modifier" "$(ob drag -b "$P-x" --mod ctrl,x 1 1 2 2 2>&1)"
   check_match "drag --hold 500 refused, saying the unit (#103)" "like 300ms or 2s \\(a bare number is seconds\\), got 500" "$(ob drag -b "$P-x" --hold 500 1 1 2 2 2>&1)"
   check_match "keys -m is omabox's own" "click, drag or pointer --mod" "$(ob keys -b "$P-x" -m ctrl a 2>&1)"
+  # #216: the thumb buttons by either name; anything else still refused.
+  local b; for b in back forward side extra; do
+    check_match "click X Y $b taken (to the box lookup)" "no box '$P-x'" "$(ob click -b "$P-x" 1 1 "$b" 2>&1)"
+  done
+  check_match "...drag X1 Y1 X2 Y2 back too" "no box '$P-x'" "$(ob drag -b "$P-x" 1 1 2 2 back 2>&1)"
+  check_match "...click thumb refused" "click: bad argument thumb" "$(ob click -b "$P-x" 1 1 thumb 2>&1)"
   # The input tools refuse outside a box before they connect (SECURITY.md): run from a host shell they
   # would drive the real desktop. Checked in a sandbox with no /opt/omabox, no runtime dir, no display.
   local t out rc
@@ -8081,6 +8089,12 @@ t_pointer() {
   check_eq "pointer down right ... up right: button 2" "2 " "$(pr)"
   n0=$(reports | wc -l); ob drag -b "$B" --window R 50 50 150 50 middle >/dev/null
   check_eq "drag middle: button 1" "1 " "$(pr)"
+  # #216, finding 284: the thumb buttons (BTN_SIDE, BTN_EXTRA), foot's 8 and 9 (128, 129): back, forward.
+  n0=$(reports | wc -l)
+  local b; for b in back forward side extra; do ob click -b "$B" --window R 50 50 "$b" >/dev/null; done
+  check_eq "click back, forward, side, extra: buttons 8, 9, 8, 9" "128 129 128 129 " "$(pr)"
+  n0=$(reports | wc -l); ob pointer -b "$B" --window R -- move 60 60 down forward up forward >/dev/null
+  check_eq "pointer down forward ... up forward: button 9" "129 " "$(pr)"
   local d3 d12
   n0=$(reports | wc -l); ob drag -b "$B" --window R 50 100 250 100 --steps 3 >/dev/null; d3=$(dragged)
   n0=$(reports | wc -l); ob drag -b "$B" --window R 50 100 250 100 --steps 12 >/dev/null; d12=$(dragged)
