@@ -1943,8 +1943,10 @@ t_unit_jail_covers() {
   J=$(jq -c --argjson j "$jpid" --arg ns "$(readlink "/proc/$jpid/ns/mnt")" '. + {mntpid: $j, mntns: $ns}' <<<"$J")
   check_eq "the stand-in jail hides the files" "" "$(cat "/proc/$jpid/root$p/.env" "/proc/$jpid/root$p/a/.env"; ls "/proc/$jpid/root$p/secrets")"
   # box COVER-ARGS...: a box held before it runs, with the project and those covers; its pid in $bpid.
+  # (A held PID 1 outlives its bwrap parent: both are ended, each this test's own.)
+  unbox() { [ -z "${bb:-}" ] || { kill -KILL "$bpid" "$bb" 2>/dev/null; wait "$bb" 2>/dev/null; bb=""; }; }
   box() {
-    [ -z "${bb:-}" ] || { kill "$bb" 2>/dev/null; wait "$bb" 2>/dev/null; }
+    unbox
     rm -f "$binfo" "$d/go"; mkfifo "$d/go"
     bash -c 'exec 4<>"$1"; shift; exec "$@"' _ "$d/go" bwrap --unshare-user --unshare-pid --die-with-parent --info-fd 3 --block-fd 4 \
       --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib --symlink usr/lib /lib64 --proc /proc --dev /dev \
@@ -1956,6 +1958,8 @@ t_unit_jail_covers() {
   local F=$d/box/cover-file DIR=$d/box/cover-dir out
   vf() { OMABOX_JAIL=$J D=$d/box bash -c 'source "$1"; shift; jail_verify "$@"' _ "$lm" "$bpid" "$p"; }
   box --ro-bind "$F" "$p/.env" --ro-bind "$F" "$p/cfg/key" --ro-bind "$DIR" "$p/secrets" --ro-bind "$F" "$p/a/.env"
+  check "box_held: the box's PID 1 waits on its go pipe" env D="$d" bash -c 'source "$1"; box_held "$2"' _ "$lm" "$bpid"
+  check_fails "...not a process that does not (the jail's)" env D="$d" bash -c 'source "$1"; box_held "$2"' _ "$lm" "$jpid"
   check "jail_verify: every hidden path covered (a file, one below a folder, a folder)" vf
   # Let the box go: what it reads through the project and a link in it.
   exec {go}<>"$d/go"; printf go >&"$go"; exec {go}>&-; wait "$bb" 2>/dev/null; bb=""
@@ -1977,8 +1981,77 @@ t_unit_jail_covers() {
   exec {go}<>"$d/go"; printf go >&"$go"; exec {go}>&-; wait "$bb" 2>/dev/null; bb=""
   check_eq "...and still hidden in the box" "rc=1" "$(cat "$d/boxout")"
   mv "$p/c" "$p/a"
+  # The folder mounted twice (the repo, and --ro-bind PROJ:/other): each mount is a way in, each checked.
+  box --ro-bind "$F" "$p/.env" --ro-bind "$F" "$p/cfg/key" --ro-bind "$DIR" "$p/secrets" --ro-bind "$F" "$p/a/.env" --ro-bind "$p" /other
+  out=$(vf; echo "rc=$?")
+  check_match "...a folder mounted twice, covered on one mount only: refused (#210 review)" "$p/a/.env.*rc=1" "$(tr '\n' ' ' <<<"$out")"
+  box --ro-bind "$F" "$p/.env" --ro-bind "$F" "$p/cfg/key" --ro-bind "$DIR" "$p/secrets" --ro-bind "$F" "$p/a/.env" --ro-bind "$p" /other \
+    --ro-bind "$F" /other/.env --ro-bind "$F" /other/cfg/key --ro-bind "$DIR" /other/secrets --ro-bind "$F" /other/a/.env
+  check "...covered on both: passed" vf
+  unbox
   check_match "...the jail's process gone (or another's in its pid): refused" "gone" \
     "$(OMABOX_JAIL="$(jq -c '.mntns = "mnt:[1]"' <<<"$J")" D=$d/box bash -c 'source "$1"; shift; jail_verify "$@"' _ "$lm" "$$" "$p" 2>&1)"
+  kill "$jb" 2>/dev/null; wait "$jb" 2>/dev/null
+  # A jail process shown none of the jail's mounts: the policy's
+  # hidden paths with none of them in its mounts is refused, not taken as nothing hidden.
+  bwrap --unshare-user --die-with-parent --info-fd 3 --dev-bind / / --ro-bind "$d/empty" "$p/a/.env" \
+    /usr/bin/python3 -I -c 'import os, sys, time; os.unshare(os.CLONE_NEWUSER); os.chroot(sys.argv[1]); time.sleep(60)' "$d/box/cover-dir" 3>"$info.2" & jb=$!
+  until_ok 5 jq -e '."child-pid"' "$info.2" >/dev/null
+  jpid=$(jq '."child-pid"' "$info.2")
+  until_ok 5 bash -c '! grep -q . "$1"' _ "/proc/$jpid/mountinfo"
+  J=$(jq -c --argjson j "$jpid" --arg ns "$(readlink "/proc/$jpid/ns/mnt")" '. + {mntpid: $j, mntns: $ns}' <<<"$J")
+  box --ro-bind "$F" "$p/.env" --ro-bind "$F" "$p/cfg/key" --ro-bind "$DIR" "$p/secrets"
+  check_match "...a jail process showing none of the policy's hidden paths: refused" "show nothing hidden" "$(vf 2>&1)"
+  unbox; kill "$jb" 2>/dev/null; wait "$jb" 2>/dev/null
+  # A box whose covers are not checked yet: nothing enters it (#210 review).
+  mkdir -p "$d/rt/omabox/$P-held"; : > "$d/rt/omabox/$P-held/covers-pending"
+  check_match "covers_held: a box still waiting for its check is not entered" "still starting" \
+    "$(XDG_RUNTIME_DIR=$d/rt bash -c 'source "$1"; select_box "$2"; covers_held' _ "$lm" "$P-held" 2>&1)"
+  # --omarchy TREE --theme NAME from a jail: TREE (in a folder with something hidden) is refused before
+  # its themes are listed, the same words as without --theme.
+  mkdir -p "$p/hid/bin" "$p/hid/default/hypr" "$p/hid/shell" "$p/hid/themes/secret-client-name"
+  : > "$p/hid/default/hypr/bootstrap.lua"; : > "$p/hid/shell/shell.qml"
+  out=$(cd "$p" && OMABOX_JAIL=$(jq -c --arg p "$p" '.masks += ["\($p)/hid"]' <<<"$J") "$CLI" up "$P-th" --omarchy "$p/hid" --theme nope 2>&1)
+  check_match "up --omarchy TREE --theme from a jail: TREE refused first, no theme names (#210 review)" "up: --omarchy $p/hid is not " "$out"
+  check_fails "...secret-client-name not said" grep -q secret-client-name <<<"$out"
+  # jail_read: not a file the jail hides, whatever led there.
+  check_fails "jail_read: not a hidden file (a link swapped in leads there)" jl jail_read "$p/envlink"
+  check_eq "...one that is not" hi "$(jl jail_read "$p/README")"
+}
+
+# #210 review: a jailed caller's box is entered by nothing while its covers wait for their check, and
+# one whose up is killed then goes. A plain bwrap stands in for the jail (as t_unit_jail_covers), its
+# policy set by hand as broker_init would; the jail has renamed the folder holding a hidden file after
+# its mounts were read, so the check refuses the box (retrying a second or so first).
+t_jail_held() {
+  local d=$TMP/jh p jb jinfo J N=$P-jh BD out up
+  p=$d/proj jinfo=$d/jinfo BD=$XDG_RUNTIME_DIR/omabox/$N
+  mkdir -p "$p/a" "$p/b"; : > "$d/empty"; echo SEKRIT > "$p/a/.env"; echo fake > "$p/b/.env"; git -C "$p" init -q
+  bwrap --unshare-user --die-with-parent --info-fd 3 --dev-bind / / --ro-bind "$d/empty" "$p/a/.env" sleep 300 3>"$jinfo" & jb=$!
+  until_ok 5 jq -e '."child-pid"' "$jinfo" >/dev/null
+  local jpid; jpid=$(jq '."child-pid"' "$jinfo")
+  J=$(jq -nc --arg p "$p" --argjson j "$jpid" --arg ns "$(readlink "/proc/$jpid/ns/mnt")" \
+    '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: true}], masks: ["\($p)/a/.env"], mntpid: $j, mntns: $ns}')
+  mv "$p/a" "$p/c"; mv "$p/b" "$p/a"
+  jo() { (cd "$p" && OMABOX_JAIL=$J "$CLI" "$@"); }
+  # A run looped while up checks: never in, never the hidden file.
+  jo up "$N" >"$d/up.out" 2>&1 & up=$!
+  out=""
+  while kill -0 "$up" 2>/dev/null; do out+=$(jo run -b "$N" -- cat "$p/c/.env" 2>&1); out+=$'\n'; done
+  wait "$up"
+  check_match "up refused: the hidden file is not covered where it went" "could not hide what this jail hides" "$(cat "$d/up.out")"
+  check_fails "...a run meanwhile never read it" grep -q SEKRIT <<<"$out"
+  check_match "...said why it waits instead" "still starting" "$out"
+  # The same up killed while its box is held: nothing enters it, and its reaper takes it down.
+  jo down "$N" >/dev/null 2>&1
+  (cd "$p" && OMABOX_JAIL=$J exec "$CLI" up "$N" >/dev/null 2>&1) & up=$!
+  until_ok 10 bash -c '[ -e "$1/covers-pending" ] && [ -s "$1/pid" ]' _ "$BD" >/dev/null
+  kill -KILL "$up"; wait "$up" 2>/dev/null
+  out=$(jo run -b "$N" -- cat "$p/c/.env" 2>&1)
+  check_match "up killed while its box waits: run refused" "still starting" "$out"
+  check_fails "...not the hidden file" grep -q SEKRIT <<<"$out"
+  check "...its reaper takes the box down" until_ok 20 bash -c '[ ! -d "$1" ]' _ "$BD"
+  jo down "$N" >/dev/null 2>&1
   kill "$jb" 2>/dev/null; wait "$jb" 2>/dev/null
 }
 
@@ -2286,6 +2359,9 @@ r seedenv \$O up $P-js --seed "$H/.env:.config/leak"
 r rob \$O up $P-jo --net isolated --no-shell --ro-bind "$TMP/jro:/mnt/jro"
 r robread \$O run -b $P-jo -- sh -c 'cat /mnt/jro/s; wc -c < /mnt/jro/s; cat /mnt/jro/ok'
 r robdown \$O down $P-jo
+r twice \$O up $P-jt --net isolated --no-shell --ro-bind "$H:/mnt/again"
+r twiceread \$O run -b $P-jt -- sh -c 'wc -c < /mnt/again/.env; wc -c < "$H/.env"; ls -A /mnt/again/secrets | wc -l; cat /mnt/again/README'
+r twicedown \$O down $P-jt
 r overlay \$O up $P-jv --overlay "$H"
 r plugin \$O up $P-jp --plugin "$H/plug"
 r seedplain \$O up $P-js --seed "$H/README:.config/r"
@@ -2330,6 +2406,8 @@ EOF
   check_match "...--seed of any from a project whose hidden paths can move refused" "does not go into the box.* rc=1" "$(sect seedplain)"
   check_match "--ro-bind DIR:DEST of a folder the jail hides a file in: the box comes up" "box '$P-jo' up .*rc=0" "$(sect rob)"
   check_eq "...that file empty at DEST, the rest there" "0 ok rc=0 " "$(sect robread)"
+  check_match "the project mounted twice (the repo, and --ro-bind PROJ:DEST): up" "box '$P-jt' up .*rc=0" "$(sect twice)"
+  check_eq "...hidden paths empty through both mounts" "0 0 0 hi rc=0 " "$(sect twiceread)"
   check_match "--overlay of a project the jail hides paths in: still refused (an overlay is not covered)" "is not .* rc=1" "$(sect overlay)"
   check_match "--plugin inside it: still refused (the host reads a plugin's files)" "is not .* rc=1" "$(sect plugin)"
   check_eq "renamed before up: covered where it is now" "rc=0 " "$(sect before)"
@@ -8918,7 +8996,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

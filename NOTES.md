@@ -5730,8 +5730,8 @@ from them.
     are checked on the mounts themselves before anything runs: bwrap holds the box's PID 1 on
     `--block-fd` (a FIFO in the box dir, opened again inside pasta, which closes what it inherits;
     bwrap closes it before the session starts), and `jail_verify` (python3 -I: an O_PATH walk with
-    O_NOFOLLOW, which bash has not) reads the jail's mountinfo through the caller (`mntpid`, its
-    mount namespace checked against `mntns`, recorded by broker_init) and walks to each hidden path
+    O_NOFOLLOW, which bash has not) reads the jail's mountinfo through `mntpid` (the jail's bwrap
+    init since 293; its mount namespace checked against `mntns`, recorded by broker_init) and walks to each hidden path
     through `/proc/PID/root` never following a link, checks what it reaches is that mount (fdinfo
     `mnt_id`), and names it by the folder holding it (device, inode) and its name; then the same for
     each place the box shows one of its empty files or folders, through its PID 1. A mount point is
@@ -5772,6 +5772,35 @@ from them.
     folder with a hidden file; `--overlay` and `--plugin` there refused; a worktree's common dir with
     `.git/config` hidden: in, empty, `git status` works; the swap loop: 6 ups, each refused or clean, and
     with jail_verify stubbed the real file was in a box).
+
+293. **#210's covers, tightened after review** (2026-10-13, #210; finding 292). (1) bwrap holds only the
+    box's PID 1, so any command entering the box from outside (`run`, `gdb`, what goes through
+    `on_box`) could look at its mounts while `jail_verify` was still deciding, and an `up` killed
+    then left the box held, and enterable, for good. Now `up` makes `covers-pending` in the box dir
+    before the launch and removes it only once the check passes; `covers_held` (in `need_box`,
+    `box_exec`, `on_box`, `gdb`, `restart-shell`'s kill) refuses a box that has it ("still
+    starting"); and the reaper, polling every 2 s while it is there, takes the box down once the
+    `up` that would check it is gone. (2) The jail's mounts were read through the caller's own
+    process, whose view of them is the caller's to narrow. broker_init now reads them,
+    and records `mntpid`, through the jail's bwrap init (the child of the jail's bwrap, PID 1 in the
+    jail, whose root is the jail's), and fails when there is none; `jail_verify` refuses a folder
+    the policy lists hidden paths in where the mounts show none. (3) A place was named by its
+    folder's inode and its name, the same through every mount of that folder, so a folder mounted
+    twice (the repo, and `--ro-bind PROJ:DEST`) passed with a cover on one mount; each box mount of
+    each folder is now found (its root's inode, the mount at the top there) and every hidden place
+    must be covered on each, keyed by the mount its folder is seen on. (4) `up --omarchy TREE --theme
+    NAME` listed TREE's themes before the jailed checks of `--omarchy` and `--hyprland`, which now run
+    first. (5) bwrap goes on, saying nothing, when the `--block-fd` read fails, and names its PID 1
+    before making its mounts: `up` now waits until PID 1 is blocked reading fd 4, the box's go pipe
+    (`box_held`: `/proc/PID/fd/4`, `wchan` in a pipe read, `syscall` on fd 4), at most 15 s, before
+    the check. (6) `jail_read` refuses a file the jail hides, whatever path led to it. A held PID 1
+    outlives its bwrap parent's kill (seen: t_unit_jail_covers' stand-in boxes stayed blocked once
+    their bwrap was killed); `kill_box` signals PID 1 itself, so a box is not left so. Checked:
+    t_unit_jail_covers (box_held; a folder mounted twice, covered once: refused, on both: passes; a
+    jail process shown no mounts: refused; covers_held; `--omarchy --theme` refused without theme
+    names; jail_read), t_jail_held (a stand-in jail: a `run` looped during a refused `up` never got
+    in, said "still starting"; an `up` SIGKILLed while its box is held: `run` refused, the reaper
+    took the box down), t_jail (the project mounted twice through a real ai-jail: empty on both).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
