@@ -3,7 +3,12 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.5.4 — 2026-10-13
+
+A security fix for agents inside ai-jail driving boxes through the broker: update if you use
+`omabox broker on`. A jailed agent's box now has its project even when the jail hides files in it.
+Also new: back and forward mouse buttons, and `up`, `ls`, `gpu` and `cpu` say when a box's apps
+render in software.
 
 ### Added
 
