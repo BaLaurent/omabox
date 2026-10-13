@@ -13,6 +13,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A 0x0 output on NVIDIA is said** (#213). In a box on NVIDIA an output the app makes itself
   (`hyprctl output create headless`) comes up 0x0 with no error. `monitor list` and `shot` now say
   so, why, and which box to test it in instead (one on your AMD/Intel GPU, `OMABOX_RENDER_NODE`).
+- **Apps rendering in software are said** (#204). In a box on NVIDIA, apps get Mesa's software
+  renderer (llvmpipe), so their CPU and frame cost there is not the GPU's. `up` now says so once,
+  with a box on your other GPU to use instead; `ls`, `gpu` and `cpu` show an `apps:` line, and
+  `ls --json` a `client_render` record (from `eglinfo`, when mesa-utils is installed).
 
 ### Fixed
 

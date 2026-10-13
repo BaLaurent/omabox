@@ -7624,8 +7624,20 @@ t_output_nvidia() {
 # output_on NODE BOX MAIN MONITOR: drop and back on a box on NODE with a monitor below the main screen.
 output_on() {
   local n=$1 B=$2 m0=$3 m1=$4 out rc ml before
-  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated --monitor 1280x800,scale=1.6,below >/dev/null 2>&1 ||
-    { no "up with a monitor" "failed"; return; }
+  out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated --monitor 1280x800,scale=1.6,below 2>&1) ||
+    { no "up with a monitor" "failed: $out"; return; }
+  # Its apps' renderer (#204, finding 290): llvmpipe on NVIDIA, up and ls saying so; a GPU elsewhere, nothing said.
+  if ! command -v eglinfo >/dev/null; then skip "apps' renderer said" "no eglinfo (mesa-utils) here"
+  elif [ "$m0" = WAYLAND-1 ]; then
+    check_match "up on NVIDIA: says its apps render in software, once" "^omabox: box '$B': its apps render on llvmpipe, in software" "$out"
+    check_eq "...once" 1 "$(grep -c 'in software' <<<"$out")"
+    check_eq "ls --json: client_render software" "true llvmpipe" "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .client_render | "\(.software) \(.renderer | sub(" .*"; ""))"')"
+    check_match "ls: an apps line under it" "^  apps: llvmpipe, in software" "$("$CLI" ls | awk -v b="$B" '$1 == b { on = 1; next } /^[^ ]/ { on = 0 } on && /apps:/')"
+  else
+    check_eq "up on $(lib render_driver "$n"): nothing said of its apps' renderer" "" "$(grep 'in software' <<<"$out")"
+    check_eq "...ls --json: client_render on the GPU" false "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .client_render.software')"
+    check_eq "...no apps line in ls" "" "$("$CLI" ls | awk -v b="$B" '$1 == b { on = 1; next } /^[^ ]/ { on = 0 } on && /apps:/')"
+  fi
   local list='map({name, mode, scale, x, y}) | sort_by(.name)'
   ml=$(ob monitor -b "$B" list --json | jq -c "$list")
   check_eq "two monitors, the second below at 1.6" "[{\"name\":\"$m0\",\"mode\":\"1280x720@60\",\"scale\":1,\"x\":0,\"y\":0},{\"name\":\"$m1\",\"mode\":\"1280x800@60\",\"scale\":1.6,\"x\":0,\"y\":720}]" "$ml"
@@ -7852,6 +7864,42 @@ t_unit_gpu() {
   check_match "ls with one usable GPU: a fallback box's GPU line, with why" \
     $'\nfb [^\n]*\n  GPU: amdgpu 0000:0a:00.0 \\(renderD128\\), a fallback: gpu nvidia was not usable \\(0000:01:00.0: bound to vfio-pci\\)' "$lsout"
   check_eq "...none for a box that is not one" "" "$(grep -A1 '^plain ' <<<"$lsout" | sed -n 2p | grep GPU)"
+  # Apps on a software renderer (#204, finding 290): eglinfo's verdict as up keeps it, and what up,
+  # ls and gpu say of it. Its output as seen in an NVIDIA box (warnings and all) and in an AMD one.
+  local eg_nv eg_amd
+  eg_nv=$'MESA-EGL: warning: egl: failed to create dri2 screen\nWayland platform:\nEGL vendor string: Mesa Project\nOpenGL core profile renderer: llvmpipe (LLVM 22.1.8, 256 bits)\nOpenGL ES profile vendor: Mesa\nOpenGL ES profile renderer: llvmpipe (LLVM 22.1.8, 256 bits)\nOpenGL ES profile version: OpenGL ES 3.2 Mesa 26.2.2'
+  eg_amd=$'Wayland platform:\nOpenGL core profile renderer: AMD Radeon (radeonsi, raphael_mendocino, ACO)\nOpenGL ES profile renderer: AMD Radeon (radeonsi, raphael_mendocino, ACO)'
+  check_eq "egl_render: llvmpipe is software" '{"renderer":"llvmpipe (LLVM 22.1.8, 256 bits)","software":true}' "$(lib egl_render <<<"$eg_nv")"
+  check_eq "...radeonsi is not" '{"renderer":"AMD Radeon (radeonsi, raphael_mendocino, ACO)","software":false}' "$(lib egl_render <<<"$eg_amd")"
+  check_eq "...the ES profile's first, else the first renderer named" "softpipe true" \
+    "$(lib egl_render <<<$'OpenGL core profile renderer: softpipe' | jq -r '"\(.renderer) \(.software)"')"
+  check_eq "...nothing when EGL did not initialise" "" "$(lib egl_render <<<'eglinfo: eglInitialize failed')"
+  check_eq "...nor from no output (no eglinfo)" "" "$(lib egl_render </dev/null)"
+  local soft='{"renderer":"llvmpipe (LLVM 22.1.8, 256 bits)","software":true}'
+  check_match "soft_note: llvmpipe in an NVIDIA box, why, and a box on the other GPU" \
+    "^its apps render on llvmpipe, in software \(NVIDIA's EGL does not initialise in a box.*omabox gpu counts none of their drawing; for GPU rendering, a box on another GPU: OMABOX_RENDER_NODE=/dev/dri/renderD128 omabox up --new \(renderD128 is amdgpu\)$" \
+    "$(lib soft_note "$soft" nvidia "renderD128 amdgpu")"
+  check_match "...no other GPU: a baseline in the same box" "this machine has no other GPU: compare against a baseline measured in this same box$" "$(lib soft_note "$soft" nvidia "")"
+  check_match "...an interactive box (no GPU of its own): a baseline" "omabox gpu counts none of their drawing; compare against a baseline" "$(lib soft_note "$soft" "")"
+  check_eq "...nothing for a GPU renderer" "" "$(lib soft_note '{"renderer":"AMD Radeon (radeonsi)","software":false}' amdgpu "")"
+  check_eq "...nor for no record" "" "$(lib soft_note "" nvidia "")"
+  # up's probe, box_exec stubbed: the record kept and said; without eglinfo neither.
+  local pb=$TMP/probe; mkdir -p "$pb"
+  probe() { jq -n '{render: {driver: "nvidia"}}' > "$pb/box.json"
+    lib eval "D='$pb' NAME=pb; other_gpu() { echo 'renderD128 amdgpu'; }; box_exec() { $1; }; client_render_check" 2>&1; }
+  local pout; pout=$(probe "printf '%s\n' '$eg_nv'")
+  check_match "client_render_check on llvmpipe: said once" "^omabox: box 'pb': its apps render on llvmpipe, in software" "$pout"
+  check_eq "...kept in box.json" "$soft" "$(jq -c .client_render "$pb/box.json")"
+  pout=$(probe "return 127")
+  check_eq "...no eglinfo (127): nothing said" "" "$pout"
+  check_eq "...nothing kept" null "$(jq -c .client_render "$pb/box.json")"
+  # ls: an apps line for a box on software only.
+  jq '.client_render = {renderer: "llvmpipe (LLVM 22.1.8, 256 bits)", software: true}' "$lb/fb/box.json" > "$lb/fb/b" && mv "$lb/fb/b" "$lb/fb/box.json"
+  jq '.client_render = {renderer: "AMD Radeon (radeonsi)", software: false}' "$lb/plain/box.json" > "$lb/plain/b" && mv "$lb/plain/b" "$lb/plain/box.json"
+  lsout=$(lib eval "BOXES='$lb' DRI='$f/dri' SYSDRM='$f/drm'; cmd_ls" 2>&1)
+  check_match "ls: apps on llvmpipe said under the box" $'\n  apps: llvmpipe, in software \\(cost measured here is software rendering\'s\\)' "$lsout"
+  check_eq "...not for a box on a GPU renderer" "" "$(grep -A2 '^plain ' <<<"$lsout" | grep 'apps:')"
+  check_eq "ls --json: the record" "true false" "$(lib eval "BOXES='$lb' DRI='$f/dri' SYSDRM='$f/drm'; cmd_ls --json" 2>/dev/null | jq -r 'map(.client_render.software | tostring) | join(" ")')"
   local rec; rec=$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' SYSPCI='$f/pci' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
     printf 'gpu=nvidia\n' > \$CONFIG; render_fallback '$f/dri/renderD128' && gpu_why_not nvidia" 2>&1)
   check_eq "gpu_why_not: the reason up records" "0000:01:00.0: bound to vfio-pci" "$rec"

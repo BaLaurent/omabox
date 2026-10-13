@@ -5682,6 +5682,26 @@ from them.
     through a restart, never hung; stopped, `ls` and `ls --json` hung, the box itself not, `windows`
     warns, restart-shell exit 0, says it killed it, under 10 s, a new pid, the bar back, running, no
     warning (5 checks fail on the old code).
+290. **Apps rendering in software are said: `up`, `ls`, `gpu`/`cpu`** (2026-10-13, #204's fallback;
+    the fix itself, binding `/dev/nvidia-modeset`, stays parked: 283). In a box on the RTX, Wayland
+    clients get llvmpipe (Mesa's `failed to create dri2 screen`; NVIDIA's EGL does not initialise), so
+    an app's CPU or frame cost measured there is software rendering's and `gpu` shows none of its
+    drawing, which nothing said. `up`, once the box is ready, runs `eglinfo -B -p wayland` in the
+    box's session (box_exec, as an app gets it; `timeout -k 1 5`) and keeps the verdict in box.json's
+    `client_render` (`renderer`: the OpenGL ES profile's, what Qt Quick, GTK and Chromium take on
+    Wayland, else the first named; `software`: llvmpipe, softpipe, swrast, "software rasterizer",
+    lavapipe). No eglinfo (mesa-utils) or no renderer named (EGL failing outright): nothing kept,
+    nothing said, no guess. A software verdict: `up` says it once, with why on NVIDIA and a box on the
+    first usable GPU of another driver (`OMABOX_RENDER_NODE=/dev/dri/renderD128 omabox up --new
+    (renderD128 is amdgpu)`), or, with none (or for an interactive box), a baseline in the same box;
+    `ls` puts `apps: llvmpipe, in software` under the box, `gpu`/`cpu` under their GPU line; `ls
+    --json`, `gpu --json` and `cpu --json` have `client_render`. Measured: eglinfo takes ~30-50 ms in
+    the box (~75 ms with `run`'s own start); `up` on the RTX 3.22-3.25 s before, 3.27-3.49 s after,
+    so run in line, not in the background; eglinfo opens no window (`windows` empty) and leaves no
+    process. In a box on the RTX (renderD129): llvmpipe, said by up, ls, gpu, cpu and the JSON; on the
+    AMD iGPU (renderD128): radeonsi, `software: false`, nothing said. Tests: t_unit_gpu (the parsing,
+    the note, the probe with box_exec stubbed with and without eglinfo, ls's line and JSON);
+    output_on's box in t_output_nvidia (said once, ls and ls --json) and t_output (nothing said).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

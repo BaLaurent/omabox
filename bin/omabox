@@ -2786,6 +2786,7 @@ cmd_up() {
   # Crashes said here are not said again by the next command (shell_note, #147).
   shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true
   [ -n "$crashed" ] || plugin_check
+  client_render_check
   trap - EXIT
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
@@ -6071,15 +6072,61 @@ dropped_rec() { dropped_file | awk -v n="$1" '$1 == n { print; exit }'; }
 # not given.
 zero_note() {
   [ "$2" = true ] || return 0
-  local z other n
+  local z other
   z=$(jq -r '[.[] | select((.disabled | not) and (.width == 0 or .height == 0)) | .name] | join(", ")' <<<"$1" 2>/dev/null) || z=""
   [ -n "$z" ] || return 0
-  if [ $# -ge 3 ]; then other=$3
-  else other=$(render_nodes | while read -r n; do [ "$(render_driver "$n")" = nvidia ] || echo "${n##*/} $(render_driver "$n")"; done | head -n 1); fi
+  if [ $# -ge 3 ]; then other=$3; else other=$(other_gpu nvidia); fi
   printf '%s listed 0x0: this box draws on NVIDIA, where a headless output (hyprctl output create headless) gets no mode (omabox log --grep REJECTED). omabox monitor add makes one that works; ' "$z"
   if [ -n "$other" ]; then
     printf 'for a program that makes its own, a box on another GPU: OMABOX_RENDER_NODE=/dev/dri/%s omabox up --new (%s is %s)\n' "${other%% *}" "${other%% *}" "${other#* }"
   else echo "for a program that makes its own, a machine with a GPU other than NVIDIA's (this one has none)"; fi
+}
+# The first usable render node on a driver other than DRIVER, as "renderD128 amdgpu"; nothing for none.
+other_gpu() {
+  local n d
+  for n in $(render_nodes); do
+    d=$(render_driver "$n"); [ "$d" = "$1" ] || { echo "${n##*/} $d"; return 0; }
+  done
+}
+
+# What renders a box's apps (#204, finding 290): `eglinfo -B -p wayland`'s output on stdin, as box.json's
+# client_render: {"renderer": NAME, "software": true|false}, or nothing when it names no renderer (EGL
+# did not initialise; not eglinfo's output). The OpenGL ES profile's renderer, what Qt Quick, GTK and
+# Chromium take on Wayland, else the first one it names.
+egl_render() {
+  local r
+  r=$(awk '/^OpenGL ES profile renderer: / { sub(/^[^:]*: /, ""); es = $0 }
+    /renderer: / && first == "" { first = $0; sub(/^[^:]*: /, "", first) }
+    END { print (es != "" ? es : first) }') || r=""
+  [ -n "$r" ] || return 0
+  jq -nc --arg r "$r" '{renderer: $r, software: ($r | test("llvmpipe|softpipe|swrast|software rasterizer|lavapipe"; "i"))}'
+}
+# soft_note RECORD DRIVER [OTHER]: what `up` says once when RECORD (client_render's) is software, nothing
+# else. DRIVER: the box's GPU's (box.json's render; "" for an interactive box, which renders where the
+# desktop does); OTHER as other_gpu gives it, looked up when not given.
+soft_note() {
+  local r other why=""
+  r=$(jq -r 'select(.software == true) | .renderer' <<<"$1" 2>/dev/null) || r=""
+  [ -n "$r" ] || return 0
+  [ "$2" != nvidia ] || why=" (NVIDIA's EGL does not initialise in a box, so Mesa falls back to software)"
+  printf 'its apps render on %s, in software%s: CPU and frame cost measured in it are software rendering'"'"'s, and omabox gpu counts none of their drawing; ' "${r%% (*}" "$why"
+  if [ -z "$2" ]; then echo "compare against a baseline measured in this same box"; return 0; fi
+  if [ $# -ge 3 ]; then other=$3; else other=$(other_gpu "$2"); fi
+  if [ -n "$other" ]; then
+    printf 'for GPU rendering, a box on another GPU: OMABOX_RENDER_NODE=/dev/dri/%s omabox up --new (%s is %s)\n' "${other%% *}" "${other%% *}" "${other#* }"
+  else echo "this machine has no other GPU: compare against a baseline measured in this same box"; fi
+}
+# up's probe, once the box is ready (#204): eglinfo in the box's session as an app gets it, with a
+# timeout, its verdict kept in box.json for `ls` and `gpu`, and said once when it is software. No
+# eglinfo (mesa-utils) or no renderer named: nothing kept, nothing said. ~0.1 s.
+client_render_check() {
+  local rec note
+  local out; out=$(box_exec /usr/bin/timeout -k 1 5 eglinfo -B -p wayland 2>/dev/null </dev/null) || true
+  rec=$(egl_render <<<"$out") || rec=""
+  [ -n "$rec" ] || return 0
+  jq --argjson r "$rec" '.client_render = $r' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  note=$(soft_note "$rec" "$(jq -r '.render.driver // empty' "$D/box.json")") || note=""
+  [ -z "$note" ] || say "box '$NAME': $note"
 }
 main_away() { dropped_file | awk '$1 == "HEADLESS-2" || $1 == "WAYLAND-1" { print; exit }'; }
 # dropped_set LINES: the record is LINES now (none: no file).
@@ -6940,13 +6987,15 @@ box_render_held() {
 
 # What `gpu` and `cpu` say about the box before their figures, into the caller's screen, aq and rj: its
 # main screen ("OUTPUT WxH@HZ"), the aquamarine it runs (as `up` recorded it: rendering cost can depend
-# on it) and its GPU (finding 237; none for an interactive box, the desktop's).
+# on it), its GPU (finding 237; none for an interactive box, the desktop's) and its apps' renderer (cr,
+# up's probe: #204).
 cost_context() {
   screen=$(box_screen)
   aq=$(jq -c '.aquamarine // null' "$D/box.json" 2>/dev/null) || aq=null
   rj=$(jq -c '.render // null' "$D/box.json" 2>/dev/null) || rj=null
+  cr=$(jq -c '.client_render // null' "$D/box.json" 2>/dev/null) || cr=null
 }
-# Their lines under the first: the aquamarine and the GPU.
+# Their lines under the first: the aquamarine, the GPU, and the apps' renderer when it is software.
 cost_lines() {
   [ "$aq" = null ] || jq -r '"aquamarine: " + (if .kind == "private" then "a private build, " else "the system\u0027s, " end)
     + .version + (if .fixed == false then ", without the fix for nested Wayland outputs" else "" end)
@@ -6954,6 +7003,8 @@ cost_lines() {
   if [ "$rj" != null ]; then render_line <<<"$rj" || true
   elif [ "$(meta mode)" = interactive ]; then echo "GPU: the desktop's (an interactive box renders where your compositor does)"
   fi
+  # Apps on a software renderer (#204): their drawing is CPU time here, which the GPU figures leave out.
+  [ "${cr:-null}" = null ] || jq -r 'select(.software == true) | "apps: \(.renderer | sub(" \\(.*"; "")), in software: their drawing is CPU time, not in the GPU figures"' <<<"$cr" || true
 }
 
 # GPU engine time of this box's processes, as % of wall time, by process name. Host-wide tools sum
@@ -6995,7 +7046,7 @@ cmd_gpu() {
   t0=$(date +%s%N); snap > "$tmp/a"
   sleep "$secs"
   t1=$(date +%s%N); snap > "$tmp/b"
-  local screen aq rj; cost_context
+  local screen aq rj cr; cost_context
   # A client first seen in the second sample started during the window: all its time counts. Every
   # process holding a client is listed, idle ones at 0.0.
   awk -v wall=$((t1 - t0)) '
@@ -7005,9 +7056,10 @@ cmd_gpu() {
     END { for (n in t) printf "proc %s %.1f\n", n, t[n] / wall * 100
           for (k in te) printf "engine %s %.1f\n", k, te[k] / wall * 100 }' "$tmp/a" "$tmp/b" > "$tmp/r"
   if [ $json = 1 ]; then
-    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson aq "$aq" --argjson render "$rj" '
+    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson aq "$aq" --argjson render "$rj" --argjson cr "$cr" '
       [inputs | split(" ")] as $r |
       { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, aquamarine: $aq, render: $render,
+        client_render: $cr,
         percent: ([$r[] | select(.[0] == "proc") | {(.[1]): (.[2] | tonumber)}] | add // {}),
         engines: (reduce ($r[] | select(.[0] == "engine")) as $e ({}; .[$e[1]][$e[2]] = ($e[3] | tonumber))) }' < "$tmp/r"
     return
@@ -7063,18 +7115,18 @@ cmd_cpu() {
   if ! grep -q '^p ' "$CPU_TMP/r"; then
     [ -z "$app" ] || die "cpu: box '$NAME' ran no process $app in the window (its name in omabox run -b $NAME -- ps -e)"
   fi
-  local screen aq rj cores; cost_context
+  local screen aq rj cr cores; cost_context
   cores=$(getconf _NPROCESSORS_ONLN) || cores=null
   if [ $json = 1 ]; then
     jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson settle "$settle" \
-      --argjson cores "$cores" --argjson aq "$aq" --argjson render "$rj" '
+      --argjson cores "$cores" --argjson aq "$aq" --argjson render "$rj" --argjson cr "$cr" '
       def n: if . == "-" then null else tonumber end;
       [inputs | split(" ")] as $r |
       [$r[] | select(.[0] == "p") | {pid: (.[2] | tonumber), host_pid: (.[1] | tonumber), name: .[3], cpu: (.[4] | tonumber),
         rss_kb: (.[5] | tonumber), pss_kb: (.[6] | n), started: (.[7] == "1"), exited: (.[8] == "1")}] as $p |
       first($r[] | select(.[0] == "total")) as $t |
       { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, settle: $settle,
-        cores: $cores, aquamarine: $aq, render: $render,
+        cores: $cores, aquamarine: $aq, render: $render, client_render: $cr,
         percent: (reduce $p[] as $x ({}; .[$x.name] += $x.cpu) | map_values(. * 10 | round / 10)),
         processes: $p, total: {cpu: ($t[1] | tonumber), rss_kb: ($t[2] | tonumber), pss_kb: ($t[3] | n)} }' < "$CPU_TMP/r"
     return
@@ -8247,6 +8299,7 @@ box_json() {
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
         | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
+      client_render: (.client_render // null),
       monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false}'
@@ -8304,6 +8357,9 @@ cmd_ls() {
     local r; r=$(jq -c --argjson many "$([ "$gpus" -ge 2 ] && echo true || echo false)" '.render // empty | select($many or .fallback)' \
       "$D/box.json" 2>/dev/null) || r=""
     [ -z "$r" ] || { printf '  '; render_line <<<"$r" || echo; }
+    # Apps on a software renderer (#204, up's probe): their cost is not the GPU's.
+    jq -r '.client_render // empty | select(.software == true) | "  apps: \(.renderer | sub(" \\(.*"; "")), in software (cost measured here is software rendering'"'"'s)"' \
+      "$D/box.json" 2>/dev/null || true
   done
 }
 
