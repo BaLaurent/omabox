@@ -391,7 +391,9 @@ peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box
 --print-log prints the log's path on stdout (first, before --wait's line). \`run -d --replace\`
 first stops what \`run -d\` started in that box with the same command and arguments (SIGTERM to its
 session, SIGKILL after 5 s) and waits for its windows to go: a rebuilt app in one step. Nothing
-else in the box is touched: an app started some other way stays.
+else in the box is touched: an app started some other way stays. A \`run -d --wait\` whose command
+ended before the screen settled, leaving nothing running, says so with its exit status and its
+log's last lines, and exits with that status (124 when it was 0: the screen is still the question).
 @ up run
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
@@ -3610,6 +3612,41 @@ job_replace() {
   [ "$quiet" = 1 ] || say "--replace: stopped the earlier job ($n window$([ "$n" = 1 ] || echo s)) in $(ms_s $(($(date +%s%3N) - t0)))$([ $sig = TERM ] || echo "; it ignored SIGTERM for 5 s: killed")"
 }
 
+# run -d --wait that did not settle (#215): whether job PID had ended by then, nothing of its session
+# left running. If so this says it, with its exit status (share/run-job.sh's EXIT_FILE, in the box) and
+# its log's last lines, instead of "started all the same", which sent agents to take shots of a screen
+# the command had left; and sets JOB_RC: that status when it is not 0 (as `run` passes a command's
+# through), 124 when it is (the screen is still the question), 1 when it was not kept. An argument
+# that is a path on the host but not in the box (/tmp, HOME outside the repo) is named: a command
+# that exits at once on a file it cannot see is the usual case. job_ended PID LOG EXIT_FILE ARGV...
+JOB_RC=0
+job_ended() {
+  local jpid=$1 log=$2 ex=$3 p; shift 3
+  [[ $jpid =~ ^[0-9]+$ ]] || return 1
+  # No record: job_record found it gone already.
+  if [ -f "$D/jobs/$jpid" ]; then p=$(job_live "$D/jobs/$jpid") || return 1; [ -z "$p" ] || return 1; fi
+  # The waiter writes the status once the job's process is reaped: a moment after it is gone.
+  local st="" i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    st=$(on_box cat -- "$ex" 2>/dev/null) || st=""
+    [[ $st =~ ^[0-9]+$ ]] && break
+    st=""; [ $i = 10 ] || sleep 0.1
+  done
+  local what sig
+  if [ -z "$st" ]; then what="exited (its exit status was not kept)" JOB_RC=1
+  elif [ "$st" -gt 128 ] && sig=$(kill -l "$((st - 128))" 2>/dev/null); then what="was killed by SIG$sig ($st)" JOB_RC=$st
+  else what="exited with status $st" JOB_RC=$st; [ "$st" != 0 ] || JOB_RC=124; fi
+  local a miss=()
+  for a; do
+    if [[ $a == /* ]] && [ -e "$a" ] && ! on_box test -e "$a"; then miss+=("$a"); fi
+  done
+  local tail; tail=$(on_box tail -n 5 -- "/home/sbx/$log" 2>/dev/null | cut -c1-300 | sed 's/^/  /') || tail=""
+  say "the command $what before the screen settled, and left nothing running$([ "$st" != 0 ] || echo ": what the screen shows is not its (124 is about the screen)")"
+  [ ${#miss[@]} = 0 ] || say "its arguments name host paths box '$NAME' does not have: ${miss[*]} (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME)"
+  if [ -n "$tail" ]; then say "its log ends (omabox log -b $NAME run):"; printf '%s\n' "$tail" >&2
+  else say "its log is empty"; fi
+}
+
 # A throwaway whose `up` failed: its logs, copied out of the box dir its `down` removes (finding 167),
 # into DIR=<state>/omabox/failed-runs/<name>-<date>, which is printed; 1 when there was none to copy
 # (an `up` that failed before box.json removed its dir). Its box is dead by now (up's trap killed it),
@@ -3704,17 +3741,25 @@ cmd_run() {
       # control ignores SIGINT and SIGQUIT: the job gets them back. Its log is opened in the box, as
       # a new file (finding 229): from the host, a link the box put at that name would be written
       # through; in the box it resolves to the box's own files. What fails before that is said here.
-      local jpid
+      # The job is started by share/run-job.sh (#215), a session of its own that waits for it and
+      # keeps its exit status in the box's runtime dir, for a --wait that does not settle to say. A box
+      # whose share has no run-job.sh (another omabox's) starts it as before, without a status.
+      local jpid ex=/run/user/$UID/omabox.${log%.log}.exit
       # shellcheck disable=SC2016 # $@ and $! belong to the inner bash
-      jpid=$(settle_act box_exec bash -c 'rm -f -- "$1" && set -C && exec >"$1" 2>&1 || exit 125; set +C; shift
-        (trap - INT QUIT; exec 3>&-; exec setsid -- "$@") & echo "$!" >&3' omabox-run "/home/sbx/$log" "$@" 3>&1 </dev/null >&2) ||
+      jpid=$(settle_act box_exec bash -c 'rm -f -- "$1" && set -C && exec >"$1" 2>&1 || exit 125; set +C; ex=$2; shift 2
+        [ ! -x /opt/omabox/share/run-job.sh ] || exec setsid -f /opt/omabox/share/run-job.sh "$ex" 4< <(printf "%s\0" "$@")
+        (trap - INT QUIT; exec 3>&-; exec setsid -- "$@") & echo "$!" >&3' omabox-run "/home/sbx/$log" "$ex" "$@" 3>&1 </dev/null >&2) ||
         die "run -d: could not start the command"
-      log=$D/home/$log
+      local lname=$log; log=$D/home/$log
       [[ $jpid =~ ^[0-9]+$ ]] && job_record "$jpid" "$log" "$@"
       [ $print_log = 0 ] || echo "$log"
       [ $quiet = 1 ] || say "started in box '$NAME' (log: $log)"
-      [ "$SETTLE_WAIT" = 0 ] || { settle_end settle "$SETTLE_JSON" "the command was started"; return; }
-      return 0
+      [ "$SETTLE_WAIT" = 1 ] || return 0
+      local rc=0; settle_end settle "$SETTLE_JSON" "" || rc=$?
+      # Not settled, and the job already over: that, not the screen, is the answer (#215).
+      if [ $rc = 124 ] && job_ended "$jpid" "$lname" "$ex" "$@"; then return "$JOB_RC"; fi
+      settle_sent "$rc" "the command was started"
+      return $rc
     fi
     local rc=0
     box_exec "$@" || rc=$?
@@ -5316,8 +5361,16 @@ settle_end() {
   fi
   case $res in
     satisfied) return 0 ;;
-    unsatisfied) [ -z "$sent" ] || say "$sent all the same (124 is about the screen): take a shot before sending anything again"; return 124 ;;
-    *) [ -z "$sent" ] || say "$sent before the screen could be watched to the end"; return 1 ;;
+    unsatisfied) [ -z "$sent" ] || settle_sent 124 "$sent"; return 124 ;;
+    *) [ -z "$sent" ] || settle_sent 1 "$sent"; return 1 ;;
+  esac
+}
+# What an action (SENT) did when settle_end's answer (RC) was not yes. settle_sent RC SENT
+settle_sent() {
+  case $1 in
+    0) ;;
+    124) say "$2 all the same (124 is about the screen): take a shot before sending anything again" ;;
+    *) say "$2 before the screen could be watched to the end" ;;
   esac
 }
 

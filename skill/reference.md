@@ -83,6 +83,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 |---|---|
 | After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
+| `run -d --wait`: "the command exited with status N … left nothing running" | It ended before drawing: read the log lines it printed (a file under `/tmp` or HOME the box does not have is named), fix that, run it again. No shot. |
 | `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
 | `unsatisfied: still changing` (124) | Something never stops moving (a spinner, a glow): the line names the region; `--ignore "X,Y WxH"` it, or `-g` the part under test. |
 | Context filling up with screenshots | Text checks first (`windows`, `wait`, `events`, `log --grep`); `shot --window`, `-g`, `--fit 1280`. |

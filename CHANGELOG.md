@@ -16,6 +16,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **CUDA works in a box on an NVIDIA GPU** (#149). The box had the GPU's node and `/dev/nvidiactl`
   but not `/dev/nvidia-uvm`, which CUDA allocates through, so `cuInit` failed (999). It is bound now
   when the driver has made it. Wayland EGL and Vulkan in an NVIDIA box are unchanged (#204).
+- **`run -d --wait` says when the command already exited** (#215). A command that ended at once
+  (say, on a file under `/tmp`, which a box does not mount) was reported as "started all the same"
+  with 124, pointing at the screen. Now it says the command exited with status N, names any argument
+  that is a host path the box does not have, shows its log's last lines, and exits with that status
+  (124 still when it was 0).
 
 ## 0.5.3 — 2026-10-10
 

@@ -5565,6 +5565,27 @@ from them.
     names too (a ring tagged "back" or "forward"); an older peek drops such a line whole, as junk.
     t_pointer: foot's reports for the four names and a `pointer down forward … up forward`;
     t_unit_pointer: the names parsed, junk still refused; t_peek: a `click back` mark draws its ring.
+285. **`run -d --wait` says when the command had already ended** (2026-10-13, #215). A command that
+    exits at once (a `qml` on a file under `/tmp`, which no box mounts) drew nothing, so `--wait` gave
+    up with 124 and "the command was started all the same: take a shot", sending agents to shots of
+    a screen the command had left; only `log run` said why. The job's exit status was lost: `run -d`
+    started it in the background of a shell that exited at once, so the box's PID 1 (bwrap) reaped
+    it. Now `share/run-job.sh` starts it: a session of its own (setsid -f, so nothing of the caller's
+    ends it) that starts the command as before (its own session, its pid the job's, for `--replace`),
+    waits for it and writes its status to `/run/user/$UID/omabox.run-<ns>.exit` in the box. The
+    command's words reach it on fd 4, not as arguments, so a `pgrep -f APP` in the box finds the app,
+    not the waiter. When `--wait` is about to say 124 and nothing of the job's session is left, run
+    says the command exited with status N (or was killed by SIGX), names an argument that is a path
+    on the host the box does not have, and prints the log's last 5 lines; it exits with that status,
+    as `run` passes a command's through. A status of 0 keeps 124 (the command did its job, the screen
+    is still the question; a window it asked another process for is not its), and one not kept (a box
+    whose share has no run-job.sh, a waiter killed) is 1. The host-path check runs only then, not on
+    every `run`: a path that exists on the host and not in the box can be a file the command is
+    about to write in the box, so a warning before the start would be wrong for those. Verified in a
+    box: the issue's `qml /tmp/…/probe.qml` exits 2 with qml's "No such file or directory" and the
+    path named. t_replace: exit 3 with `boom` from its log and the host path named, SIGTERM (143),
+    status 0 (124, said), a command still running (124, "started all the same" as before);
+    t_unit_run_job: the pid on fd 3, words whole, the status kept, 128+N for a signal.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

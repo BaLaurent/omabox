@@ -2176,6 +2176,18 @@ t_unit_registry() {
   check_eq "UNIT has only t_unit_*, BOX none" "" "$(printf '%s\n' "${UNIT[@]}" | grep -v '^t_unit_'; printf '%s\n' "${BOX[@]}" | grep '^t_unit_')"
 }
 
+# share/run-job.sh (#215), which starts a `run -d` job in the box and keeps its exit status: run here
+# on a plain command (it drives nothing). Its words from fd 4, whole; the pid on fd 3; the status kept.
+t_unit_run_job() {
+  local st=$TMP/rj.exit out
+  out=$(bash -c '"$1" "$2" 4< <(printf "%s\0" sh -c "echo \"\$1\" > \"\$2\"; exit 3" _ "a  b" "$3") 3>&1 >/dev/null' _ "$ROOT/share/run-job.sh" "$st" "$TMP/rj.out")
+  check_match "run-job.sh: says the job's pid" '^[0-9]+$' "$out"
+  check "...keeps its exit status" until_ok 5 grep -qx 3 "$st"
+  check_eq "...its words passed whole" "a  b" "$(cat "$TMP/rj.out" 2>&1)"
+  out=$(bash -c '"$1" "$2" 4< <(printf "%s\0" sh -c "kill -TERM \$\$") 3>&1 >/dev/null' _ "$ROOT/share/run-job.sh" "$TMP/rj2.exit")
+  check "...a signal's: 128+N" until_ok 5 grep -qx 143 "$TMP/rj2.exit"
+}
+
 t_unit_cli() {
   local dn0; dn0=$(cd "$ROOT" && lib default_name)
   check_match "default_name gives a name (#110: compared below)" '^[A-Za-z0-9]' "$dn0"
@@ -8376,6 +8388,25 @@ t_replace() {
   check_match "...killed, said" "ignored SIGTERM for 5 s: killed" "$err"
   check "...after about 5 s ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -ge 4 -a $((SECONDS - t0)) -le 9
   check_eq "...one sleep 603 left" 1 "$(ob run -b "$B" -- pgrep -cxf 'sleep 603')"
+  # #215: a command that ends before --wait gives up: said, with its status and its log, not as started
+  echo probe > "$TMP/rep-probe.qml"
+  out=$(ob run -b "$B" -d -q --wait --start 1s -- sh -c 'echo boom >&2; exit 3' "$TMP/rep-probe.qml" 2>"$TMP/rep.err"); rc=$?; err=$(cat "$TMP/rep.err")
+  check_eq "run -d --wait of a command that exits 3 at once: exit 3" 3 "$rc"
+  check_match "...the wait's line still on stdout" "^unsatisfied: " "$out"
+  check_match "...said: exited with status 3, nothing left running" "the command exited with status 3 before the screen settled, and left nothing running" "$err"
+  check_match "...with its log's last lines" "its log ends \(omabox log -b $B run\):"$'\n'"  boom" "$err"
+  check_match "...the host path the box does not have named" "host paths box '$B' does not have: $TMP/rep-probe.qml " "$err"
+  check_fails "...not 'started all the same'" grep -q 'all the same' <<<"$err"
+  err=$(ob run -b "$B" -d -q --wait --start 1s -- sh -c 'kill -TERM $$' 2>&1 >/dev/null); rc=$?
+  check_eq "a command killed by a signal: its status (143)" 143 "$rc"
+  check_match "...said" "was killed by SIGTERM \(143\) before the screen settled" "$err"
+  check_match "...an empty log said" "its log is empty" "$err"
+  err=$(ob run -b "$B" -d -q --wait --start 1s -- true 2>&1 >/dev/null); rc=$?
+  check_eq "a command that exits 0 at once: still 124 (the screen)" 124 "$rc"
+  check_match "...said" "exited with status 0 before the screen settled, and left nothing running: what the screen shows is not its" "$err"
+  err=$(ob run -b "$B" -d -q --wait --start 1s -- sleep 605 2>&1 >/dev/null); rc=$?
+  check_eq "a command still running that draws nothing: 124" 124 "$rc"
+  check_match "...started all the same, as before" "the command was started all the same \(124 is about the screen\)" "$err"
   # A missing command still says so in its log
   out=$(ob run -b "$B" -d -q --print-log -- omabox-no-such-command)
   check "a missing command: said in its log" until_ok 5 grep -q 'setsid: failed to execute omabox-no-such-command' "$out"
@@ -8560,7 +8591,7 @@ t_inspect() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
