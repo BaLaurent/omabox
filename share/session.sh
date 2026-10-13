@@ -133,8 +133,8 @@ if [ "${OMABOX_INTERACTIVE:-0}" = 1 ]; then
 fi
 
 # Headless: labwc is the invisible parent compositor (finding 2: aquamarine needs a parent that offers
-# wl_compositor v6 and xdg_wm_base v6). DISPLAY is dropped for Hyprland so nothing wakes labwc's lazy
-# Xwayland. -S: labwc ends when Hyprland does, and then so does the box, as in the interactive branch;
+# wl_compositor v6 and xdg_wm_base v6). labwc makes no Xwayland (below) and Hyprland gets no DISPLAY.
+# -S: labwc ends when Hyprland does, and then so does the box, as in the interactive branch;
 # otherwise a box whose Hyprland died reads `up` while nothing in it works (finding 63).
 # Started through a link named omabox-labwc (#128): a process's name (comm, what pkill -x matches) is
 # the name of the path it was started by, so a test's own `pkill -x labwc` no longer ends the box.
@@ -157,6 +157,13 @@ printf '%s\n' '<?xml version="1.0"?>' '<labwc_config>' '  <windowRules>' \
 export WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDER_DRM_DEVICE=$OMABOX_RENDER_NODE \
   WLR_SCENE_DISABLE_VISIBILITY=1
 ln -sf /usr/bin/labwc "$XDG_RUNTIME_DIR/omabox-labwc"
+# No X server from labwc (#211, finding 288). labwc 0.20 has no switch for its lazy Xwayland: it
+# listened on :0 (the box's /tmp/.X11-unix/X0 and the abstract socket in the box's network namespace),
+# so an X client with DISPLAY=:0 ran on labwc's screen, which nobody sees. wlroots takes the first
+# display whose /tmp/.X<n>-lock it can create or whose owner is gone, up to :32; with every one held by
+# this live script it finds none, and labwc goes on without Xwayland. start-hyprland.sh (labwc's -S,
+# started once labwc is set up) removes them, so `up --xwayland`'s Xwayland and an Xvfb get :0 again.
+for n in $(seq 0 32); do printf '%10d\n' "$$" > "/tmp/.X$n-lock"; done
 "$XDG_RUNTIME_DIR/omabox-labwc" -C "$lw" -S /opt/omabox/share/start-hyprland.sh > "$HOME/labwc.log" 2>&1
 kill -KILL -1
 exit 0

@@ -5634,6 +5634,24 @@ from them.
     none for a tilt or a finger; a QML probe: two `--source wheel` notches as -120, no pixels, no
     phase, from the touchpad device; a finger's updates with pixel deltas ending in phase 3; a
     default WheelHandler taking no wheel), the bind and finger checks failing with the old order.
+288. **No X server in a box without `--xwayland`; labwc's lazy one is held off** (2026-10-13, #211;
+    corrects 19). labwc 0.20.2 always creates a lazy Xwayland (src/xwayland.c; `xwaylandPersistence`
+    only makes it eager, and no switch or variable turns it off): it listened on :0, the box's
+    `/tmp/.X11-unix/X0` and the abstract socket in the box's network namespace. Hyprland had no
+    `DISPLAY`, but a client that set `DISPLAY=:0` itself (a sandbox forwarding the caller's) woke
+    labwc's Xwayland and drew on labwc's screen, which nobody sees: glxgears ran at 60 FPS, `omabox
+    windows` listed nothing, `wait window` timed out. Hiding the path would not do, as the abstract
+    socket is in the netns every box process shares. wlroots 0.20 (xwayland/sockets.c) takes the first
+    display from :0 to :32 whose `/tmp/.X<n>-lock` it can create or whose pid is gone, and labwc goes
+    on without Xwayland ("continuing without", unsetting `DISPLAY`) when there is none. So session.sh
+    writes all 33 locks (box `/tmp` is its own tmpfs) with its own pid, which lives as long as labwc,
+    and start-hyprland.sh, which labwc's `-S` starts once it is set up, removes them. labwc.log says
+    "No display available in the first 33" and "failed to create xwayland server", both expected. In
+    a box, on NVIDIA (renderD129: labwc's output is the box's screen) and AMD (renderD128):
+    `DISPLAY=:0 xprop -root` says "unable to open display", no X11 socket in the box's
+    `/proc/net/unix`, no `/tmp/.X11-unix`. With `--xwayland` Hyprland's Xwayland is :0 now (was :1)
+    and a GDK_BACKEND=x11 zenity is listed by `omabox windows` as xwayland. Checks: t_connected (no
+    socket, no lock left, the xprop), t_keys (`DISPLAY` is :0; its X11 zenity as before).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

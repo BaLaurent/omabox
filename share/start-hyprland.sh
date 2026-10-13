@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The X display locks session.sh held while labwc started, so it made no Xwayland (#211): the box's X
+# displays are free again, for Hyprland's Xwayland (`up --xwayland`) or an X server run in the box.
+rm -f /tmp/.X{0..32}-lock
+
 if [ "${OMABOX_WAYLAND_SCREEN:-0}" = 1 ]; then
   printf '%s\n' "$WAYLAND_DISPLAY" > "$XDG_RUNTIME_DIR/omabox-parent-display"
   /usr/bin/wlr-randr --output HEADLESS-1 --custom-mode "${OMABOX_SIZE}Hz"

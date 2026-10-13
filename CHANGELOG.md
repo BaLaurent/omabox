@@ -16,6 +16,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **No hidden X server in a box without `--xwayland`** (#211). The box's parent compositor kept a
+  lazy Xwayland on `:0`: an X client that set `DISPLAY=:0` itself ran, but its window was on a screen
+  nobody sees (`windows` never listed it, `wait window` timed out). Now there is no X server unless
+  `up --xwayland`, so such a client fails with "unable to open display", and `--xwayland`'s
+  `DISPLAY` is `:0` (it was `:1`).
 - **CUDA works in a box on an NVIDIA GPU** (#149). The box had the GPU's node and `/dev/nvidiactl`
   but not `/dev/nvidia-uvm`, which CUDA allocates through, so `cuInit` failed (999). It is bound now
   when the driver has made it. Wayland EGL and Vulkan in an NVIDIA box are unchanged (#204).

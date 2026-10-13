@@ -343,7 +343,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   top. Quit the app first for a clean save (the box is paused for the copy, so it is at least what a
   crash would leave). `omabox saves` lists them, `omabox saves rm NAME` deletes. Name saves after
   what they hold (`myapp-signed-in`); they stay until removed, so remove the ones you no longer need.
-- No Xwayland unless `omabox up --xwayland`. Omarchy's `uwsm-app` launching always goes through a
+- No Xwayland unless `omabox up --xwayland` (its `DISPLAY` is `:0`): without it there is no X server
+  at all, and an X client fails with "unable to open display", even one given `DISPLAY=:0`. Omarchy's `uwsm-app` launching always goes through a
   stand-in, `--systemd` or not: apps start as plain processes, not units (output in
   `<box dir>/home/apps.log`). Without `--systemd`, `systemd-run --user CMD` runs CMD the same way
   (`--wait`/`--pipe`/`--scope` in the foreground), but timers (`--on-active=...`) need `--systemd`;

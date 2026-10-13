@@ -3074,7 +3074,7 @@ new_x11() {
   done
 }
 
-# finding 89: a box's labwc binds the abstract @/tmp/.X11-unix/X0 (its lazy Xwayland) when it starts.
+# finding 89: a box's labwc bound the abstract @/tmp/.X11-unix/X0 (its lazy Xwayland; none since #211).
 # In the host's network namespace that was the host's :0 (or the next free one), and host X11 apps
 # opened in the box. A connected box still reaches the internet and host loopback, and the host its
 # servers, on any port. Read-only on the host: no X client, and ports nobody listens on; from the box,
@@ -3094,9 +3094,13 @@ t_connected() {
   # and would say so on every start.
   check_eq "pasta printed no warning (box.log is empty)" "" "$(cat "$D/box.log" 2>&1)"
   check_eq "no abstract X11 socket of the box's on the host" "" "$(new_x11 "$before" "$(jq -r .pidns "$D/box.json")")"
-  # Not the fix itself (on main the box's /proc/net/unix is the host's, and this passes too): labwc
-  # did bind one, so the check above had something to find.
-  check "labwc's abstract X11 socket is there, seen from the box" ob run -b "$B" -- grep -qE '@/tmp/\.X11-unix/X0$' /proc/net/unix
+  # #211 (finding 288): labwc makes no Xwayland now, so a box without --xwayland has no X server at
+  # all, in its network namespace or its /tmp; an X client that sets DISPLAY=:0 itself finds none.
+  check_fails "no abstract X11 socket in the box either (labwc made no Xwayland)" ob run -b "$B" -- grep -qE '@/tmp/\.X11-unix/X' /proc/net/unix
+  check_fails "...nor /tmp/.X11-unix, nor a display lock left behind" ob run -b "$B" -- sh -c 'ls -d /tmp/.X11-unix /tmp/.X*-lock 2>/dev/null | grep .'
+  if command -v xprop >/dev/null; then
+    check_match "...and an X client with DISPLAY=:0 cannot open it" "unable to open display" "$(ob run -b "$B" -- env DISPLAY=:0 xprop -root 2>&1)"
+  else skip "...and an X client with DISPLAY=:0 cannot open it" "no xprop"; fi
   ns=$(ob run -b "$B" -- readlink /proc/self/ns/net)
   if [[ $ns == net:* ]] && [ "$ns" != "$(readlink /proc/self/ns/net)" ]; then ok "the box has a network namespace of its own"
   else no "the box has a network namespace of its own" "box [$ns], host [$(readlink /proc/self/ns/net)]"; fi
@@ -4421,6 +4425,8 @@ t_keys() {
   local B=$P-keys
   ob up "$B" --no-shell --net isolated --xwayland >/dev/null 2>&1 || { no "up" "failed"; return; }
   check_box_safety "$B"
+  # #211: labwc holds no X display now, so Hyprland's Xwayland is :0 (it was :1, behind labwc's lazy one).
+  check_eq "--xwayland: run's DISPLAY is Hyprland's Xwayland on :0" ":0" "$(ob run -b "$B" -- printenv DISPLAY 2>&1)"
   ob hyprctl -b "$B" eval "hl.bind('SUPER + CTRL + ALT + J', hl.dsp.exec_cmd('touch /tmp/lower'))
     hl.bind('SUPER + CTRL + ALT + SHIFT + J', hl.dsp.exec_cmd('touch /tmp/upper'))
     hl.bind('SUPER + CTRL + ALT + slash', hl.dsp.exec_cmd('touch /tmp/slash'))" >/dev/null
