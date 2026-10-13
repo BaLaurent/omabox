@@ -5727,6 +5727,21 @@ monitors_on() {
     check_match "...labwc's config has each monitor's window size" "title=\"aquamarine - $m2\"><action name=\"ResizeTo\" width=\"2560\" height=\"1440\"/>" \
       "$(cat "$(ob path "$B")/run/labwc/rc.xml")"
   fi
+  # A headless output the program under test makes itself (#213): on NVIDIA it is listed 0x0, and
+  # monitor list and shot --monitor say why; elsewhere it takes its mode and nothing is said.
+  ob hyprctl -b "$B" output create headless ZTEST >/dev/null
+  ob lua -b "$B" 'hl.monitor({ output = "ZTEST", mode = "1280x720@60", position = "0x5000", scale = 1 })' >/dev/null 2>&1
+  if [ "$m0" = WAYLAND-1 ]; then
+    check "NVIDIA: a headless output of the program's own is listed 0x0" until_ok 5 bash -c \
+      "'$CLI' hyprctl -b '$B' -j monitors | jq -e 'any(.[]; .name == \"ZTEST\" and .width == 0)' >/dev/null"
+    check_match "...monitor list says why, and where to test it" "ZTEST listed 0x0: this box draws on NVIDIA.*monitor add makes one" "$(ob monitor -b "$B" list 2>&1 >/dev/null)"
+    check_match "...shot --monitor of it: the same, not grim's error" "^omabox: shot: ZTEST listed 0x0" "$(ob shot -b "$B" --monitor ZTEST 2>&1)"
+  else
+    check "elsewhere it takes its mode" until_ok 5 bash -c \
+      "'$CLI' hyprctl -b '$B' -j monitors | jq -e 'any(.[]; .name == \"ZTEST\" and .width == 1280 and .height == 720)' >/dev/null"
+    check_eq "...and monitor list says nothing of it" "" "$(ob monitor -b "$B" list 2>&1 >/dev/null)"
+  fi
+  ob hyprctl -b "$B" output remove ZTEST >/dev/null
   check_match "up again without them: already up, said" "is already up, without what you asked for: --monitor" "$(OMABOX_RENDER_NODE=$n ob up "$B" --monitor 800x600 2>&1)"
   ob down "$B" >/dev/null
 }
@@ -7226,6 +7241,16 @@ t_unit_monitors() {
     monitor_add_window 800x600; echo "went on"' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
   check_match "a monitor add failing in up: up's own EXIT trap runs (it takes the box down)" "a stub.*up-trap" "$(tr '\n' ' ' <<<"$out")"
   check_fails "...and up stops there" grep -q "went on" <<<"$out"
+  # An output listed 0x0 in an NVIDIA box (#213): one a program made with `output create headless`.
+  local zm='[{"name":"WAYLAND-1","width":1920,"height":1080,"disabled":false},{"name":"MINE","width":0,"height":0,"disabled":false},{"name":"OFF","width":0,"height":0,"disabled":true}]'
+  out=$(lib zero_note "$zm" true "renderD128 amdgpu")
+  check_match "zero_note: the 0x0 one named, why, and a box on the other GPU" \
+    "^MINE listed 0x0: this box draws on NVIDIA, .*output create headless.*monitor add makes one that works.*OMABOX_RENDER_NODE=/dev/dri/renderD128 omabox up --new \(renderD128 is amdgpu\)$" "$out"
+  check_fails "...a disabled one is not" grep -q OFF <<<"$out"
+  check_match "...no other GPU: said" "a machine with a GPU other than NVIDIA's \(this one has none\)" "$(lib zero_note "$zm" true "")"
+  check_eq "...nothing in a box not drawing on NVIDIA" "" "$(lib zero_note "$zm" false "renderD128 amdgpu")"
+  check_eq "...nothing when every output has a size" "" "$(lib zero_note '[{"name":"WAYLAND-1","width":1920,"height":1080,"disabled":false}]' true "")"
+  check_eq "...nothing (and no failure) for what is not a monitor list" "" "$(lib zero_note 'nope' true "")"
 }
 
 t_unit_pixel() {

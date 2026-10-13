@@ -10,6 +10,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **Back and forward mouse buttons** (#216). `click X Y back`, `forward` (also `side`, `extra`), in
   `drag` and `pointer -- click|down|up BTN` too: a mouse's thumb buttons, which apps take as back
   and forward.
+- **A 0x0 output on NVIDIA is said** (#213). In a box on NVIDIA an output the app makes itself
+  (`hyprctl output create headless`) comes up 0x0 with no error. `monitor list` and `shot` now say
+  so, why, and which box to test it in instead (one on your AMD/Intel GPU, `OMABOX_RENDER_NODE`).
 
 ### Fixed
 

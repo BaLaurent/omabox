@@ -147,7 +147,11 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   `shot --monitor NAME` (`--fit` for a mixed-scale layout, which comes out at the highest scale),
   `drag --shot F --shot-monitor NAME`; `peek --monitor NAME` for the user, one window per monitor
   (`shot` is the whole layout). Names: HEADLESS-2 (the first), HEADLESS-3, ...; on NVIDIA WAYLAND-1,
-  WAYLAND-2, ... (`monitor list`). In an interactive box (the user's) each monitor is a window on their
+  WAYLAND-2, ... (`monitor list`). An app that makes its own output (`hyprctl output create
+  headless`, a streaming helper's virtual screen) gets one listed **0x0 in a box on NVIDIA**, with no
+  error (`monitor list` and `shot` say so): test it in a box on the AMD/Intel GPU,
+  `OMABOX_RENDER_NODE=/dev/dri/renderDN omabox up --new` (`omabox config gpu` lists them); with no
+  other GPU it cannot be tested here. In an interactive box (the user's) each monitor is a window on their
   desktop, the box's layout scaled as a whole (each a view: the size asked for, at a scale below 1):
   only when they ask for it.
 - **Measuring rendering cost** (GPU time of an animation, a repaint loop): `omabox up --size host`,
@@ -591,6 +595,8 @@ login screen and the disk passphrase stay a VM's to test.
   modes, HDR, VRR, 10-bit, colour management or DPMS. The screen going and coming back (a monitor
   dropping off on wake, a KVM, a dock) can be tested: `omabox output drop [NAME] --for 300ms
   --cycles 20`, which stops at the first shell crash; an unplug for good: `omabox monitor remove NAME`.
+  On NVIDIA an output the app creates itself (`hyprctl output create headless`) comes up 0x0: a box
+  on the other GPU (`OMABOX_RENDER_NODE`, "Screen size and rendering cost").
 - No system bus: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit. No
   devices: no audio (PipeWire), no `/dev/i2c` (DDC/CI brightness), no backlight, no real keyboards,
   mice, touchpads, tablets, cameras, USB or printers. No systemd user manager unless `up --systemd`

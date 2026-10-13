@@ -5587,6 +5587,27 @@ from them.
     status 0 (124, said), a command still running (124, "started all the same" as before);
     t_unit_run_job: the pid on fd 3, words whole, the status kept, 128+N for a signal.
 
+286. **An output a program makes itself is 0x0 on NVIDIA, and omabox says so** (2026-10-13, #213). A
+    program under test that makes its own virtual output (`hyprctl output create headless NAME`, then
+    `hl.monitor` with a mode; a streaming helper's screen at the client's size) gets, in a box on
+    NVIDIA, an output listed 0x0 at the asked-for position and scale: `output create` says `ok`, and
+    only Hyprland's log has "REJECTED preferred mode ... NO FALLBACK MODES" (finding 226's GBM
+    failure: the box's screen there is labwc's Wayland output, finding 77). `monitor add` goes around
+    it with `output create wayland` (finding 234), the program does not. With one listed, a whole
+    `shot` fails too (grim: "failed to create buffer") and `shot --monitor NAME` took a 0x0 rectangle
+    (grim: "did not intersect with any outputs"). Now `monitor list` (and `--json`) says on stderr
+    which ones are 0x0, why, that `monitor add` makes one that works, and for a program's own a box on
+    another GPU (`OMABOX_RENDER_NODE=/dev/dri/renderD128 omabox up --new`, the first render node not on
+    the nvidia driver, or that the machine has none); `shot --monitor` of one says that instead of
+    grim's error, and a failed whole shot adds it. Only in a box drawing on NVIDIA (`wayland_screen`),
+    and asked only where omabox already reads the monitors or a shot already failed: no watcher. The
+    skill names it (When a box cannot test it, and the screens). Verified on the RTX 5070 Ti
+    (renderD129): `output create headless TESTOUT` and a 1920x1080 rule gave 0x0, the messages above;
+    the same on the AMD iGPU (renderD128) gave 1920x1080. t_monitors_nvidia: 0x0, `monitor list` and
+    `shot --monitor` say why; t_monitors: the same output takes 1280x720 and nothing is said;
+    t_unit_monitors: `zero_note` from canned monitor lists (a disabled one left out, no other GPU, a
+    box not on NVIDIA, a list that is not one).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -407,7 +407,9 @@ SPEC is WxH[@HZ][,scale=S][,right|below|X,Y]: placed right of the last one made 
 it, or at X,Y in the layout (which starts at 0,0 on the main screen: no left or above). Scale 1 to 4;
 Hyprland may round it to a whole-pixel size (2560x1440 at 1.5 becomes 1.6). The main screen (--size,
 \`mode\`) is HEADLESS-2; the others HEADLESS-3, -4, ... (or --name); on NVIDIA, where a box draws on
-Wayland outputs, WAYLAND-1 and WAYLAND-2, -3, ... (no --name). \`monitor remove NAME\` unplugs one:
+Wayland outputs, WAYLAND-1 and WAYLAND-2, -3, ... (no --name); there a headless output a program makes
+itself (\`hyprctl output create headless\`) is listed 0x0, which \`monitor list\` and \`shot\` say, naming a
+box on another GPU to test it in. \`monitor remove NAME\` unplugs one:
 Hyprland moves its workspaces to the others. They survive a config reload, and one placed right or
 below moves when the one before it changes size (\`mode\`, said) or goes; an X,Y one stays. Coordinates
 (click, drag, pointer, pixel, -g) are the layout's (\`pixel\` refuses a point in a gap between them);
@@ -4217,6 +4219,10 @@ cmd_shot() {
     g=$(jq -r --arg n "$monitor" 'first(.[] | select(.name == $n and (.disabled | not))) |
       "\(.x) \(.y) \(.width / .scale | floor) \(.height / .scale | floor)"' <<<"$mons")
     [ -n "$g" ] || die "shot: box '$NAME' has no monitor $monitor ($(jq -r 'map(.name) | join(", ")' <<<"$mons"))"
+    if [[ $g =~ ^[-0-9]+\ [-0-9]+\ (0\ |[0-9]+\ 0$) ]]; then
+      local zn; zn=$(zero_note "$(jq -c --arg n "$monitor" 'map(select(.name == $n))' <<<"$mons")" "$(meta wayland_screen)")
+      die "shot: ${zn:-monitor $monitor is listed 0x0: nothing to take}"
+    fi
   fi
   # --since FILE: a whole shot of this box, unchanged, to compare with; what it is of is the target
   # unless --window names one (which must be the same window).
@@ -4326,7 +4332,9 @@ cmd_shot() {
         die "shot: no frame from interactive box '$NAME': the user closed its window and kept the box running (confirm-close), and the new window is not drawn while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
       die "shot: no frame from interactive box '$NAME' ($(ws_text "$(meta workspace)")) in 10 s: ask the user; never switch the user's workspace or focus to get one"
     fi
-    die "shot: grim failed${why:+: $why}"
+    # A 0x0 output in an NVIDIA box (#213) fails a whole shot ("failed to create buffer"): said why.
+    local zn=""; [ "$(meta wayland_screen)" != true ] || zn=$(zero_note "$(on_box timeout 6 hyprctl -j monitors 2>/dev/null)" true) || zn=""
+    die "shot: grim failed${why:+: $why}${zn:+; $zn}"
   fi
   if [ $changed = 1 ]; then shot_changed; return; fi
   [ -n "$tofd" ] || { mv "$file" "$out"; file=$out; }
@@ -6030,6 +6038,24 @@ main_screen() {
 # screen's line while it is away (only a headless box drops one).
 dropped_file() { cat "$D/output.dropped" 2>/dev/null || true; }
 dropped_rec() { dropped_file | awk -v n="$1" '$1 == n { print; exit }'; }
+# zero_note MONITORS WAYLAND_SCREEN [OTHERS] (#213, finding 286): what to say of the outputs listed 0x0
+# in a box drawing on NVIDIA (WAYLAND_SCREEN true), nothing in any other box or with none. A program
+# under test that makes its own (`hyprctl output create headless`) gets one: a headless output there
+# cannot allocate (finding 226: "REJECTED preferred mode"), and Hyprland says nothing to the caller.
+# OTHER: the first render node on another driver, as "renderD128 amdgpu" ("" for none); looked up when
+# not given.
+zero_note() {
+  [ "$2" = true ] || return 0
+  local z other n
+  z=$(jq -r '[.[] | select((.disabled | not) and (.width == 0 or .height == 0)) | .name] | join(", ")' <<<"$1" 2>/dev/null) || z=""
+  [ -n "$z" ] || return 0
+  if [ $# -ge 3 ]; then other=$3
+  else other=$(render_nodes | while read -r n; do [ "$(render_driver "$n")" = nvidia ] || echo "${n##*/} $(render_driver "$n")"; done | head -n 1); fi
+  printf '%s listed 0x0: this box draws on NVIDIA, where a headless output (hyprctl output create headless) gets no mode (omabox log --grep REJECTED). omabox monitor add makes one that works; ' "$z"
+  if [ -n "$other" ]; then
+    printf 'for a program that makes its own, a box on another GPU: OMABOX_RENDER_NODE=/dev/dri/%s omabox up --new (%s is %s)\n' "${other%% *}" "${other%% *}" "${other#* }"
+  else echo "for a program that makes its own, a machine with a GPU other than NVIDIA's (this one has none)"; fi
+}
 main_away() { dropped_file | awk '$1 == "HEADLESS-2" || $1 == "WAYLAND-1" { print; exit }'; }
 # dropped_set LINES: the record is LINES now (none: no file).
 dropped_set() {
@@ -6522,6 +6548,8 @@ cmd_monitor() {
         ($dr[] | "\(.name) \(.mode) \(.scale) \(.x),\(.y) (dropped)")' <<<"$m" |
         while read -r a b c d ws; do printf '%-14s %-16s %-6s %-11s %s\n' "$a" "$b" "$c" "$d" "$ws"; done
     fi
+    local zn; zn=$(zero_note "$m" "$(meta wayland_screen)")
+    [ -z "$zn" ] || say "$zn"
     return
   fi
   if [ "$(meta mode)" = interactive ]; then

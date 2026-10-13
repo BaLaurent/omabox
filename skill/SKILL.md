@@ -164,7 +164,8 @@ A box has virtual screens only (`--monitor` for more, any size and scale; `omabo
 suspend, a lock screen with no real password, and a fresh HOME. A change touching `hl.monitor`,
 HDR/VRR/`cm`, `ddcutil`, backlight, `wpctl`, `nmcli`, `bluetoothctl`, `powerprofilesctl`,
 `journalctl`, `loginctl`, `/dev/…` or the user's real accounts and data cannot be verified in a box:
-do not report it as tested. (`systemctl --user`: `omabox up --systemd`.)
+do not report it as tested. (`systemctl --user`: `omabox up --systemd`.) On NVIDIA an
+output the app makes (`output create headless`) is 0x0: use the other GPU (ref: Screen size and rendering cost).
 
 - **Split the work**: the box for what it can show; name the part that needs the real machine.
 - **Ask once before touching the real desktop**: say exactly what will change ("your monitor at 120
