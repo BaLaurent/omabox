@@ -6161,6 +6161,28 @@ from them.
     on all three in the same frame give or take one; a mark before it in the composed clock; a
     3-tile sheet; `-- ACTION`; the m-folders gone; `all` with the main screen alone).
 
+311. **A turned monitor's size in the layout** (2026-10-14, found with #225). Hyprland lays a monitor
+    turned a quarter (transform 1, 3, 5, 7: 90 or 270 degrees, flipped or not) out with its sides
+    swapped: 1280x720 at transform 1 is 720x1280 in the layout, as grim and xdg-output have it. omabox
+    took each monitor's size as its mode over its scale, unturned, everywhere but `record --monitor
+    all` (finding 310): with a portrait monitor `extent` was wrong (a 2000x1280 layout read 2560x1080,
+    `shot` said "the screen's 2560x1080 (x0.64)" of grim's 4000x2560), so `click`/`pointer` mapped
+    absolute coordinates against the wrong size (off by the ratio, or refused below the old height),
+    `pixel` refused points there or named the wrong gap, and `shot --monitor` cropped the unturned
+    rect (partly black, part of the next monitor). Now one jq definition, `JQ_MON` (`lw`, `lh`: the
+    sides swapped for an odd transform), is the only place a monitor's logical sides are computed:
+    extent, shot --monitor, --fit's highest covered scale (finding 299), pixel's on-a-monitor check
+    and its message, record_layout, and an interactive box's free area on the host monitor
+    (desk_relay: a turned host monitor; not tested, this machine has none). Not touched: hyprland.lua's
+    placement of `right`/`below` monitors at a reload (omabox sets no transform itself: a `--monitor`
+    SPEC has none; one set by hand and a reload were not tried together) and its AQ_WAYLAND_LAYOUT
+    file (already swapped); peek and still take xdg-output's logical size. Tests: t_unit_record
+    (JQ_MON over transforms 0-7); t_monitors_turned / t_monitors_turned_nvidia (1280x720 main, a
+    second turned by transform 1, a third at scale 2 turned by 3: whole shot "4720x2560 image of the
+    screen's 2360x1280"; each `shot --monitor` against its crop of the whole shot in 6x10 cells;
+    `click --in` each monitor's shot focusing the terminal there; `pointer move` below 720; `pixel`
+    there; the gap message's sizes): 20 of their 29 checks failed on the code before.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

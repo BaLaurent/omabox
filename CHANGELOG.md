@@ -46,6 +46,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **Turned (portrait) monitors.** A monitor turned by its transform (`hl.monitor({ ..., transform =
+  1 })`) was taken at its unturned size: a 1280x720 one turned upright counted as 1280 wide and 720
+  high. The screen's size was wrong (`shot` said 2560x1080 of a 2000x1280 layout), so `click`,
+  `pointer move` and `pixel` were refused or landed elsewhere below its old height, and `shot
+  --monitor` of it took the wrong part, partly black. Every monitor's size in the layout now follows
+  its transform: `shot`, `shot --monitor`, `--fit`, `click --in`, `pointer`, `pixel` and an
+  interactive box's windows on a turned host monitor.
 - **A `run` killed while its throwaway box starts takes the box with it at once.** Killed outright
   (SIGKILL, a harness's timeout) before its box was ready, the box's `up` went on to the end, waiting
   for the bar, and the box went only once its reaper got the box's lock after that: seconds later

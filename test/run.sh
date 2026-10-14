@@ -590,6 +590,11 @@ t_unit_record() {
   check "...nine 4K: no more pixels than H.264's largest frame" awk -v l="$(lib record_layout <<<"[$mj]" | head -n 1)" \
     'BEGIN { split(l, a, " "); exit !(a[1] * a[2] <= 35651584 && a[1] * a[2] > 35000000 && a[4] < 1) }'
   check_eq "...no monitor: nothing" "" "$(lib record_layout <<<'[]')"
+  # JQ_MON (finding 311): a monitor's logical sides, swapped by a quarter turn (1, 3, 5, 7).
+  mj=""; for i in 0 1 2 3 4 5 6 7; do mj+="${mj:+,}{\"width\":2560,\"height\":1440,\"scale\":2,\"transform\":$i}"; done
+  check_eq "JQ_MON: transforms 1, 3, 5, 7 swap a monitor's sides, the others do not" \
+    "1280x720 720x1280 1280x720 720x1280 1280x720 720x1280 1280x720 720x1280" \
+    "$(lib eval 'jq -r "$JQ_MON"'\''map("\(lw)x\(lh)") | join(" ")'\''' <<<"[$mj]")"
 }
 
 t_unit_duration() {
@@ -6691,6 +6696,76 @@ record_layout_on() {
   check_eq "...at its pixels" "1280,720" "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
   ob down "$B" >/dev/null
 }
+# Turned monitors (finding 311): extent, shot --monitor, click --in and pixel took a monitor's mode over
+# its scale as its size in the layout, landscape for a portrait monitor.
+t_monitors_turned() {
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "turned monitors" "no render node here but NVIDIA's (t_monitors_turned_nvidia runs there)"; return; }
+  monitors_turned_on "$n" "$P-turn" HEADLESS-2 HEADLESS-3 HEADLESS-4
+}
+t_monitors_turned_nvidia() {
+  local n; n=$(nvidia_ready) || { skip "turned monitors on NVIDIA" "$n"; return; }
+  monitors_turned_on "$n" "$P-turnnv" WAYLAND-1 WAYLAND-2 WAYLAND-3
+}
+# monitors_turned_on NODE BOX MAIN SECOND THIRD: a 1280x720 main screen; the second 1280x720 turned by
+# transform 1 right of it (720x1280 at 1280,0); the third 1280x720 at scale 2 turned by transform 3
+# right of that (360x640 at 2000,0): the layout is 2360x1280, a whole shot 4720x2560 at scale 2.
+# A terminal of its own colour on the main and third, two on the second (green above, yellow below).
+monitors_turned_on() {
+  local n=$1 B=$2 m0=$3 m1=$4 m2=$5
+  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --size 1280x720 --monitor 1280x720 \
+    --monitor 1280x720,scale=2 >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
+  ob lua -b "$B" "hl.monitor({ output = \"$m1\", mode = \"1280x720@60\", position = \"1280x0\", scale = 1, transform = 1 })" >/dev/null 2>&1
+  ob lua -b "$B" "hl.monitor({ output = \"$m2\", mode = \"1280x720@60\", position = \"2000x0\", scale = 2, transform = 3 })" >/dev/null 2>&1
+  check "$m1 turned by transform 1, $m2 by 3, side by side" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j monitors |
+    jq -e 'any(.[]; .name == \"$m1\" and .transform == 1 and .x == 1280) and any(.[]; .name == \"$m2\" and .transform == 3 and .x == 2000)' >/dev/null"
+  local spec x y c i
+  for spec in "640 360 ff0000 1" "1640 300 00ff00 2" "1640 300 ffff00 3" "2180 320 0000ff 4"; do
+    read -r x y c i <<<"$spec"
+    ob pointer -b "$B" -- move "$x" "$y" >/dev/null
+    ob run -b "$B" -d --wait -- foot -T "L$i" sh -c "printf '\033]11;#$c\007'; sleep 600" >/dev/null 2>&1
+  done
+  check_eq "four terminals: one each on $m0 and $m2, two on $m1" "1 2 1" \
+    "$(ob hyprctl -b "$B" -j clients | jq -r --argjson m "$(ob hyprctl -b "$B" -j monitors)" --arg a "$m0" --arg b "$m1" --arg c "$m2" \
+      '. as $w | [$a, $b, $c] | map(. as $n | ($m[] | select(.name == $n) | .id) as $id | [$w[] | select(.monitor == $id)] | length) | join(" ")' 2>/dev/null)"
+  local f=$TMP/$B.png fa=$TMP/$B-a.png fb=$TMP/$B-b.png out
+  out=$(ob shot -b "$B" --no-pointer -o "$f" 2>&1 >/dev/null)
+  check_match "shot: the screen is 2360x1280, the portrait monitors upright" "4720x2560 image of the screen's 2360x1280 at 0,0 \(x0.5\)" "$out"
+  check_eq "...grim's image is that size" 4720x2560 "$(magick identify -format '%wx%h' "$f" 2>&1)"
+  out=$(ob shot -b "$B" --no-pointer --monitor "$m1" -o "$fa" 2>&1 >/dev/null)
+  check_match "shot --monitor $m1 (transform 1): 720x1280 at 1280,0" "screen's 720x1280 at 1280,0" "$out"
+  out=$(ob shot -b "$B" --no-pointer --monitor "$m2" -o "$fb" 2>&1 >/dev/null)
+  check_match "shot --monitor $m2 (transform 3, scale 2): 360x640 at 2000,0, a 720x1280 image" "720x1280 image of the screen's 360x640 at 2000,0" "$out"
+  # Each monitor's shot against its part of the whole one, in 6x10 cells' mean colours.
+  local a b sh
+  turned_cells() { magick "$@" -background black -alpha remove -alpha off -scale '6x10!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' '; }
+  for sh in "$m1 $fa 1440x2560+2560+0" "$m2 $fb 720x1280+4000+0"; do
+    read -r x a b <<<"$sh"
+    local w h; w=$(turned_cells "$a"); h=$(turned_cells "$f" -crop "$b" +repage)
+    check "...$x's shot is its part of the whole shot ($b): 60 cells within 24 of 255" \
+      awk -v a="$w" -v b="$h" 'BEGIN { na = split(a, x, "[ ,]"); nb = split(b, y, "[ ,]"); if (na != 180 || nb != 180) exit 1
+        for (i = 1; i <= na; i++) { d = x[i] - y[i]; if (d > 24 || d < -24) exit 1 } }'
+  done
+  # click --in a --monitor shot: the lower terminal on the portrait monitor, below the old 720 px.
+  ob pointer -b "$B" -- move 1640 300 >/dev/null
+  ob click -b "$B" --in "$fa" 360 960 >/dev/null 2>&1
+  check_eq "click --in $m1's shot at 360,960: 1640,960, the lower terminal focused" "1640, 960 L3" \
+    "$(ob hyprctl -b "$B" cursorpos) $(ob hyprctl -b "$B" -j activewindow | jq -r .title)"
+  ob click -b "$B" --in "$fb" 360 640 >/dev/null 2>&1
+  check_eq "click --in $m2's shot at 360,640: its middle, 2180,320, its terminal focused" "2180, 320 L4" \
+    "$(ob hyprctl -b "$B" cursorpos) $(ob hyprctl -b "$B" -j activewindow | jq -r .title)"
+  ob pointer -b "$B" -- move 1640 1200 >/dev/null
+  check_eq "pointer move 1640,1200: low on the portrait monitor" "1640, 1200" "$(ob hyprctl -b "$B" cursorpos)"
+  # pixel: yellow low on the portrait monitor, blue low on the other.
+  out=$(ob pixel -b "$B" 1640 1100 2200 600 2>&1)
+  check "pixel 1640,1100 (yellow) and 2200,600 (blue): read there ($(paste -sd ' ' <<<"$out"))" \
+    awk -v s="$out" 'BEGIN { if (split(s, l, "\n") != 2) exit 1
+      for (i = 1; i <= 2; i++) { split(l[i], p, " #"); r = strtonum("0x" substr(p[2], 1, 2)); g = strtonum("0x" substr(p[2], 3, 2)); b = strtonum("0x" substr(p[2], 5, 2))
+        if (i == 1 && !(r > 200 && g > 200 && b < 80)) exit 1; if (i == 2 && !(r < 80 && g < 80 && b > 200)) exit 1 } }'
+  check_match "pixel in the gap below the main screen: not on any monitor, the portrait one 720x1280" \
+    "640,1000 is not on any monitor \(.*$m1 1280,0 720x1280, $m2 2000,0 360x640" "$(ob pixel -b "$B" 640 1000 2>&1)"
+  ob down "$B" >/dev/null
+}
 # monitors_on NODE BOX MAIN SECOND THIRD: a box on NODE with two more monitors, by their names there.
 monitors_on() {
   local n=$1 B=$2 m0=$3 m1=$4 m2=$5
@@ -9943,7 +10018,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

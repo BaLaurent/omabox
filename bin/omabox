@@ -1222,6 +1222,12 @@ main_scale_live() {
   jq -r <<<"$m" "$(main_screen)"' // empty | .scale * 100 | round / 100'
 }
 
+# jq definitions: a monitor's sides in the layout (hyprctl monitors' JSON), `lw` and `lh`: its mode
+# over its scale, swapped when its transform turns it a quarter (1, 3, 5, 7: 90 or 270 degrees,
+# flipped or not), as Hyprland lays it out. Every logical rect of a monitor goes through these: without
+# the swap a portrait monitor was taken landscape (finding 311). Used as jq "$JQ_MON"'PROGRAM'.
+JQ_MON='def lw: if (.transform // 0) % 2 == 1 then .height / .scale else .width / .scale end;
+def lh: if (.transform // 0) % 2 == 1 then .width / .scale else .height / .scale end; '
 # The layout's size, for mapping absolute pointer coordinates.
 # (Under set -e a caller's `x=$(extent)` would end omabox without a word when the box's Hyprland
 # does not answer: extent says so and fails.)
@@ -1232,8 +1238,8 @@ on_screen() {
 }
 extent() {
   local m; m=$(hypr_json monitors) || exit $?
-  jq -er '[.[] | select(.disabled | not)] |
-    "\(map(.x + (.width / .scale)) | max | floor)x\(map(.y + (.height / .scale)) | max | floor)"' <<<"$m" 2>/dev/null ||
+  jq -er "$JQ_MON"'[.[] | select(.disabled | not)] |
+    "\(map(.x + lw) | max | floor)x\(map(.y + lh) | max | floor)"' <<<"$m" 2>/dev/null ||
     die "cannot read the screen size of box '$NAME' (it lists no monitor)"
 }
 
@@ -4745,10 +4751,8 @@ record_start() {
 # fit (said at start). From hyprctl monitors' JSON on stdin: "W H SCALE FIT" (FIT 1 or what it was
 # scaled by), then "NAME X Y W H" a monitor, in video pixels; nothing when there is no monitor.
 record_layout() {
-  jq -r '
-    [.[] | select((.disabled | not) and .width > 0 and .height > 0)
-      | . + (if .transform % 2 == 1 then {lw: (.height / .scale), lh: (.width / .scale)}
-             else {lw: (.width / .scale), lh: (.height / .scale)} end)] as $m
+  jq -r "$JQ_MON"'
+    [.[] | select((.disabled | not) and .width > 0 and .height > 0) | . + {lw: lw, lh: lh}] as $m
     | if ($m | length) == 0 then empty else
       ($m | map(.x) | min) as $x0 | ($m | map(.y) | min) as $y0
       | (($m | map(.x + .lw) | max) - $x0) as $w | (($m | map(.y + .lh) | max) - $y0) as $h
@@ -5117,8 +5121,8 @@ cmd_shot() {
   if [ -n "$monitor" ]; then
     [ -z "$g" ] && [ ${#sels[@]} = 0 ] || die "shot: --monitor, -g or --window: one of them"
     local mons; mons=$(hypr_json monitors)
-    g=$(jq -r --arg n "$monitor" 'first(.[] | select(.name == $n and (.disabled | not))) |
-      "\(.x) \(.y) \(.width / .scale | floor) \(.height / .scale | floor)"' <<<"$mons")
+    g=$(jq -r --arg n "$monitor" "$JQ_MON"'first(.[] | select(.name == $n and (.disabled | not))) |
+      "\(.x) \(.y) \(lw | floor) \(lh | floor)"' <<<"$mons")
     [ -n "$g" ] || die "shot: box '$NAME' has no monitor $monitor ($(jq -r 'map(.name) | join(", ")' <<<"$mons"))"
     if [[ $g =~ ^[-0-9]+\ [-0-9]+\ (0\ |[0-9]+\ 0$) ]]; then
       local zn; zn=$(zero_note "$(jq -c --arg n "$monitor" 'map(select(.name == $n))' <<<"$mons")" "$(meta wayland_screen)")
@@ -5198,7 +5202,7 @@ cmd_shot() {
       local mons sc rx=${gx:-0} ry=${gy:-0}
       mons=$(hypr_json monitors) || exit $?
       sc=$(jq -r --argjson x "$rx" --argjson y "$ry" --argjson w "$lw" --argjson h "$lh" \
-        '[.[] | select((.disabled | not) and .x < $x + $w and $x < .x + .width / .scale and .y < $y + $h and $y < .y + .height / .scale) | .scale]
+        "$JQ_MON"'[.[] | select((.disabled | not) and .x < $x + $w and $x < .x + lw and .y < $y + $h and $y < .y + lh) | .scale]
          | max // 1' <<<"$mons" 2>/dev/null) || sc=1
       [[ $sc =~ ^[0-9]+(\.[0-9]+)?$ ]] || sc=1
       native=$(awk -v l="$long" -v s="$sc" 'BEGIN { printf "%.6f", l * s }')
@@ -5472,11 +5476,11 @@ cmd_pixel() {
     local mons off
     mons=$(hypr_json monitors) || exit $?
     # (A point past the layout's extent is "outside the screen", below; one inside it is in a gap.)
-    off=$(jq -r --argjson p "$(printf '%s\n' "${pts[@]}" | jq -s .)" --argjson lw "$lim_w" --argjson lh "$lim_h" '[.[] | select(.disabled | not)] as $m |
+    off=$(jq -r --argjson p "$(printf '%s\n' "${pts[@]}" | jq -s .)" --argjson lw "$lim_w" --argjson lh "$lim_h" "$JQ_MON"'[.[] | select(.disabled | not)] as $m |
       [range(0; $p | length; 2) | [$p[.], $p[. + 1]] | select(. as [$x, $y] | $x < $lw and $y < $lh and ($m | all(.[];
-        $x < .x or $y < .y or $x >= .x + (.width / .scale | floor) or $y >= .y + (.height / .scale | floor))))] |
+        $x < .x or $y < .y or $x >= .x + (lw | floor) or $y >= .y + (lh | floor))))] |
       if length == 0 or ($m | length) == 0 then empty
-      else "\(.[0][0]),\(.[0][1]) is not on any monitor (\($m | map("\(.name) \(.x),\(.y) \(.width / .scale | floor)x\(.height / .scale | floor)") | join(", ")))" end' <<<"$mons") || off=""
+      else "\(.[0][0]),\(.[0][1]) is not on any monitor (\($m | map("\(.name) \(.x),\(.y) \(lw | floor)x\(lh | floor)") | join(", ")))" end' <<<"$mons") || off=""
     [ -z "$off" ] || die "pixel: $off"
   fi
   local x0=99999 y0=99999 x1=0 y1=0
@@ -7591,9 +7595,9 @@ desk_relay() {
   [[ $gap =~ ^[0-9]+$ ]] || gap=10
   [[ $bw =~ ^[0-9]+$ ]] || bw=2
   gap=$((gap + bw))
-  read -r mx my ax ay aw ah < <(jq -r --argjson g "$gap" '(.reserved // [0, 0, 0, 0]) as $r |
-    "\(.x) \(.y) \(.x + $r[0] + $g) \(.y + $r[1] + $g) \((.width / .scale | floor) - $r[0] - $r[2] - 2 * $g) \((.height / .scale | floor) - $r[1] - $r[3] - 2 * $g)"' <<<"$mon")
-  hw=$(jq -r '.width / .scale | floor' <<<"$mon"); hh=$(jq -r '.height / .scale | floor' <<<"$mon")
+  read -r mx my ax ay aw ah < <(jq -r --argjson g "$gap" "$JQ_MON"'(.reserved // [0, 0, 0, 0]) as $r |
+    "\(.x) \(.y) \(.x + $r[0] + $g) \(.y + $r[1] + $g) \((lw | floor) - $r[0] - $r[2] - 2 * $g) \((lh | floor) - $r[1] - $r[3] - 2 * $g)"' <<<"$mon")
+  hw=$(jq -r "$JQ_MON"'lw | floor' <<<"$mon"); hh=$(jq -r "$JQ_MON"'lh | floor' <<<"$mon")
   lay=$(box_layout "$new") ||
     die "monitor: box '$NAME' was started by an omabox before its windows were laid out as its layout (#174): start it again"
   pic=$(printf '%s\n' "$aw $ah $gap" "$lay" | desk_picture) || die "monitor: cannot lay out box '$NAME''s windows"
