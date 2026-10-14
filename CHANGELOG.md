@@ -7,6 +7,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **A video of every monitor at once.** `omabox record start --monitor all` (and `record --monitor
+  all -- ACTION`) records a box's whole layout as one video, laid out as `omabox shot` takes the
+  screen: each monitor at its place, a lower-scale or turned one as it is shown, the gaps black, the
+  video the size of the shot. The monitors are kept in step by their own frame times, so something
+  drawn on two of them at once shows in the same frame; marks and contact sheets work as for one
+  monitor. A layout too big for H.264 is scaled down to fit, and said (#225).
 - **Marks and contact sheets for `omabox record`.** `omabox record mark "scene 2"`, while a
   recording runs, notes the text at that moment in the video's own clock (milliseconds from its
   first frame, exact to a few ms), and `record stop` writes them beside the video: `demo.marks.tsv`

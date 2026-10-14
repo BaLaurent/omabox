@@ -92,8 +92,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
-  omabox record [-b NAME] (start [-o FILE] [--monitor NAME] [--fps 30] [--no-pointer] | mark TEXT | stop [SHEET] | status)   a video of the screen
-  omabox record [-b NAME] [-o FILE] [--monitor NAME] [--fps 30] [--hold 1s] [--no-pointer] [SHEET] -- ACTION...   one action, recorded
+  omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] | mark TEXT | stop [SHEET] | status)   a video of the screen
+  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--hold 1s] [--no-pointer] [SHEET] -- ACTION...   one action, recorded
   omabox record [-b NAME] sheet VIDEO [-o PNG] [--frames 15 | --every DURATION] [--fit N]   a contact sheet of a video
               SHEET: --sheet [--frames 15 | --every DURATION] [--fit N]   the recording's contact sheet, FILE.sheet.png
   omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb
@@ -305,6 +305,13 @@ a box at \`--size 3840x2160,scale=2\` gives a 4K video. \`record stop\` ends it 
 MP4 (H.264) at a steady --fps (30), -o FILE or a new one in \$TMPDIR. \`record -- ACTION\` (an omabox
 command: keys, click, run -d ...) records that one action and --hold (1s) after it. Needs wf-recorder
 and ffmpeg; both run in the box. One recording a box at a time; \`record status\` says if one runs.
+\`--monitor all\` records every monitor as one video of the whole layout, as \`shot\` takes it: each
+at its place, at the highest scale of them (a lower-scale one scaled up), turned as it is shown,
+black between them; the video the size of the screen's shot (one black edge more if a side is odd).
+A wf-recorder each, in step by their frames' own times: a change drawn on two monitors at once is in
+the same frame, give or take one (each monitor draws on its own clock), and marks and sheets work as
+for one. Past H.264's largest frame (8192x4352's pixels, 16384 a side) the whole is scaled down to
+fit, said at start; a big layout takes \`stop\` longer to put together.
 \`record mark TEXT\` (while one runs) notes TEXT at the time it is called, in the video's own clock: ms
 from its first frame, exact to a few ms (the screen's own frame times, not when start returned). Mark
 just before what it names (a scene, a key press: what is drawn after shows up from that time on).
@@ -4532,10 +4539,11 @@ shot_fit_default() {
 # box to a steady frame rate. Both run in the box, on its files (its HOME's .cache/omabox-record), and
 # the result comes out as the bytes of a `cat` there: the host never opens a path the box could have
 # made a link. The recording's record is $D/record (host side): "PID OUTPUT FPS START_US FILE", PID in
-# the box. Marks (#176, finding 306) go to $D/record.marks ("WALL_US TEXT", one a line) and are put in
+# the box (--monitor all, #225: a wf-recorder an output, "PID,PID... OUTPUT,OUTPUT...", composed at
+# stop by record_compose from $D/record.layout). Marks (#176, finding 306) go to $D/record.marks ("WALL_US TEXT", one a line) and are put in
 # the video's clock at `stop`, from the first frame's time (record_first_us).
-# record [-b NAME] start [-o FILE] [--monitor NAME] [--fps N] | mark TEXT | stop [SHEET] | status
-# record [-b NAME] [-o FILE] [--monitor NAME] [--fps N] [--hold DURATION] [SHEET] -- ACTION...
+# record [-b NAME] start [-o FILE] [--monitor NAME|all] [--fps N] | mark TEXT | stop [SHEET] | status
+# record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps N] [--hold DURATION] [SHEET] -- ACTION...
 # record [-b NAME] sheet VIDEO [-o PNG] [--frames N | --every DURATION] [--fit N]
 REC_DIR=/home/sbx/.cache/omabox-record
 cmd_record() {
@@ -4614,36 +4622,56 @@ cmd_record() {
 }
 
 # The recording running in this box, as $D/record has it: sets REC_PID REC_OUT REC_FPS REC_START
-# REC_FILE; fails when there is none, or its wf-recorder is gone (the record is dropped then).
+# REC_FILE, and REC_N, its wf-recorders (the whole layout's, #225: one an output, PIDs and OUTPUTs
+# comma-separated, its layout in $D/record.layout); fails when there is none, or a wf-recorder of it is
+# gone (the record is dropped then).
 record_running() {
+  REC_N=1
   [ -f "$D/record" ] || return 1
   read -r REC_PID REC_OUT REC_FPS REC_START REC_FILE < "$D/record" || { rm -f "$D/record"; return 1; }
-  [[ $REC_PID =~ ^[0-9]+$ ]] && [ "$(box_exec cat "/proc/$REC_PID/comm" 2>/dev/null)" = wf-recorder ] && return 0
-  return 1
+  [[ $REC_PID =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
+  local p=${REC_PID//[!,]/}; REC_N=$((${#p} + 1))
+  # shellcheck disable=SC2016,SC2086 # the inner sh's; the pids split
+  box_exec sh -c 'for p; do [ "$(cat "/proc/$p/comm" 2>/dev/null)" = wf-recorder ] || exit 1; done' omabox-record ${REC_PID//,/ } 2>/dev/null
+}
+# The folders in the box the recording's wf-recorders write to, one a line.
+rec_dirs() {
+  local i
+  if [ "${REC_N:-1}" -gt 1 ]; then for ((i = 1; i <= REC_N; i++)); do echo "$REC_DIR/m$i"; done
+  else echo "$REC_DIR"; fi
 }
 
 record_status() {
-  if record_running; then echo "recording $REC_OUT of box '$NAME' at $REC_FPS fps, to $REC_FILE (omabox record stop)"
+  if record_running; then
+    if [ "$REC_N" -gt 1 ] && [ -f "$D/record.layout" ]; then
+      echo "recording $(record_names "$REC_OUT") of box '$NAME' as one $(record_size) video at $REC_FPS fps, to $REC_FILE (omabox record stop)"
+    else echo "recording $REC_OUT of box '$NAME' at $REC_FPS fps, to $REC_FILE (omabox record stop)"; fi
   elif [ -f "$D/record" ]; then echo "box '$NAME': its recording stopped by itself (omabox record stop keeps what it has)"
   else echo "box '$NAME': not recording"; fi
 }
 
-# record_start FILE MONITOR FPS NOPOINTER
+# record_start FILE MONITOR FPS NOPOINTER (MONITOR all: the whole layout, #225)
 record_start() {
-  local file=$1 mon=$2 fps=$3 nopointer=${4:-0} mons
+  local file=$1 mon=$2 fps=$3 nopointer=${4:-0} mons layout="" names=() i
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then
     die "record: needs wf-recorder and ffmpeg (sudo pacman -S wf-recorder ffmpeg)"
   fi
   if record_running; then die "record: box '$NAME' is recording already, to $REC_FILE (omabox record stop)"; fi
-  rm -f "$D/record" "$D/record.marks"
+  rm -f "$D/record" "$D/record.marks" "$D/record.layout"
   mons=$(hypr_json monitors)
-  if [ -z "$mon" ]; then
+  if [ "$mon" = all ]; then
+    layout=$(record_layout <<<"$mons") && [ -n "$layout" ] || die "record: box '$NAME' has no monitor to record"
+    mapfile -t names < <(tail -n +2 <<<"$layout" | cut -d ' ' -f 1)
+    # One monitor (the others away or never added): its own recording, as --monitor NAME.
+    [ ${#names[@]} -gt 1 ] || { mon=${names[0]} layout=""; }
+  elif [ -z "$mon" ]; then
     mon=$(jq -r "$(main_screen) // empty | .name" <<<"$mons")
     [ -n "$mon" ] || die "record: box '$NAME''s main screen is away (omabox output back)"
   else
     jq -e --arg n "$mon" 'any(.[]; .name == $n and (.disabled | not))' <<<"$mons" >/dev/null ||
       die "record: box '$NAME' has no monitor $mon ($(jq -r 'map(.name) | join(", ")' <<<"$mons"))"
   fi
+  [ -n "$layout" ] || names=("$mon")
   [ -n "$file" ] || file=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S).mp4
   mkdir -p -- "$(dirname -- "$file")" || die "record: cannot make the directory $(dirname -- "$file")"
   file=$(readlink -f -- "$file")
@@ -4652,21 +4680,25 @@ record_start() {
   # --no-pointer (#228): hidden before the first frame; `record stop` shows it again (and this omabox,
   # should it fail before the recording runs).
   [ "$nopointer" = 0 ] || ptr_hold_until_exit "record $$"
-  local pid start=${EPOCHREALTIME//[!0-9]/}
-  # A session of its own, INT back to its default (a background job of a non-interactive shell ignores
-  # it), its pid said on fd 3 as `run -d` does.
+  local pids=() pairs=() start=${EPOCHREALTIME//[!0-9]/}
+  if [ -n "$layout" ]; then
+    for i in "${!names[@]}"; do pairs+=("$REC_DIR/m$((i + 1))" "${names[i]}"); done
+  else pairs=("$REC_DIR" "$mon"); fi
+  # One wf-recorder an output (the layout: one for each, started together, each in a folder of its
+  # own), each in a session of its own, INT back to its default (a background job of a
+  # non-interactive shell ignores it), its pid said on fd 3 as `run -d` does.
   # The first frame's time (#176, finding 306): the video's clock is wf-recorder's frames' screencopy
   # timestamps less the first one's, which Hyprland takes from CLOCK_MONOTONIC as it copies. With
   # WAYLAND_DEBUG its stderr has every event it gets, the first frame's `ready(SEC_HI, SEC_LO, NSEC)`
   # among them: that stamp, in µs, then the wall clock, the monotonic one and the wall clock again
   # (perl's, a part of Omarchy; the two wall readings around the monotonic one), go to first-frame,
-  # so a mark's wall-clock time becomes the video's. The rest of the debug lines are dropped (grep);
-  # wf-recorder's own lines go on to its log.
+  # so a mark's wall-clock time becomes the video's (and the layout's recordings, in one clock, are
+  # put in step by them, #225). The rest of the debug lines are dropped (grep); wf-recorder's own
+  # lines go on to its log.
   # shellcheck disable=SC2016 # the inner bash's
-  pid=$(box_exec bash -c 'mkdir -p "$1" && rm -f "$1"/raw.mkv "$1"/out.mp4 "$1"/first-frame && exec >"$1/wf-recorder.log" 2>&1 || exit 125
-    d=$1; shift
+  mapfile -t pids < <(box_exec bash -c '
     first() {
-      local l re="zwlr_screencopy_frame_v1[@#][0-9]+[.]ready[(]([0-9]+), ([0-9]+), ([0-9]+)[)]"
+      local d=$1 l re="zwlr_screencopy_frame_v1[@#][0-9]+[.]ready[(]([0-9]+), ([0-9]+), ([0-9]+)[)]"
       while IFS= read -r l; do
         if [[ $l =~ $re ]]; then
           { echo -n "$(( ((BASH_REMATCH[1] << 32) + BASH_REMATCH[2]) * 1000000 + BASH_REMATCH[3] / 1000 )) "
@@ -4678,27 +4710,89 @@ record_start() {
       done
       exec grep -v --line-buffered "^\["
     }
-    (trap - INT QUIT; exec 3>&-; export WAYLAND_DEBUG=client; exec setsid -- "$@" 2> >(first)) & echo "$!" >&3' omabox-record "$REC_DIR" \
-    wf-recorder -y -D -o "$mon" -c libx264 -p preset=ultrafast -p crf=14 -f "$REC_DIR/raw.mkv" 3>&1 </dev/null >&2) ||
-    die "record: could not start wf-recorder in box '$NAME'"
-  [[ $pid =~ ^[0-9]+$ ]] || die "record: could not start wf-recorder in box '$NAME' (no pid: $pid)"
-  echo "$pid $mon $fps $start $file" > "$D/record"
+    while [ $# -ge 2 ]; do
+      d=$1 o=$2; shift 2
+      case $d in */m[0-9]*) rm -rf "$d" ;; esac
+      mkdir -p "$d" && rm -f "$d"/raw.mkv "$d"/out.mp4 "$d"/first-frame || exit 125
+      (exec >"$d/wf-recorder.log" 2>&1 3>&-; trap - INT QUIT; export WAYLAND_DEBUG=client
+        exec setsid -- wf-recorder -y -D -o "$o" -c libx264 -p preset=ultrafast -p crf=14 -f "$d/raw.mkv" 2> >(first "$d")) &
+      echo "$!" >&3
+    done' omabox-record "${pairs[@]}" 3>&1 </dev/null >&2)
+  [ ${#pids[@]} = ${#names[@]} ] || die "record: could not start wf-recorder in box '$NAME'"
+  for i in "${pids[@]}"; do [[ $i =~ ^[0-9]+$ ]] || die "record: could not start wf-recorder in box '$NAME' (no pid: $i)"; done
+  echo "$(IFS=,; echo "${pids[*]}") $(IFS=,; echo "${names[*]}") $fps $start $file" > "$D/record"
+  [ -z "$layout" ] || echo "$layout" > "$D/record.layout"
   # Still running half a second on: not ended at once (a bad output or codec). Its file is written
-  # later (the muxer buffers it), but its frames are stamped from the first.
+  # later (the muxer buffers it), but its frames are stamped from the first. One of the layout's
+  # ended takes the others with it.
   # shellcheck disable=SC2016 # the inner sh's
-  box_exec sh -c 'for i in 1 2 3 4 5; do sleep 0.1; kill -0 "$1" 2>/dev/null || exit 1; done' omabox-record "$pid" || {
-    rm -f "$D/record"
-    die "record: wf-recorder ended at once: $(box_exec tail -n 3 "$REC_DIR/wf-recorder.log" 2>/dev/null | tr '\n' ' ')"; }
-  say "record: recording $mon of box '$NAME' to $file (omabox record stop)"
+  box_exec sh -c 'for i in 1 2 3 4 5; do sleep 0.1; for p; do kill -0 "$p" 2>/dev/null || exit 1; done; done' omabox-record "${pids[@]}" || {
+    rm -f "$D/record" "$D/record.layout"
+    [ ${#pids[@]} = 1 ] || box_exec kill -KILL "${pids[@]}" 2>/dev/null || true
+    local dirs=(); for ((i = 0; i < ${#pairs[@]}; i += 2)); do dirs+=("${pairs[i]}"); done
+    # shellcheck disable=SC2016 # the inner sh's
+    die "record: wf-recorder ended at once: $(box_exec sh -c 'for d; do tail -n 3 "$d/wf-recorder.log"; done' omabox-record "${dirs[@]}" 2>/dev/null | tr '\n' ' ')"; }
+  if [ -n "$layout" ]; then
+    say "record: recording $(record_names "${names[*]}") of box '$NAME' as one $(record_size) video ($(record_how)) to $file (omabox record stop)"
+  else say "record: recording $mon of box '$NAME' to $file (omabox record stop)"; fi
 }
 
-# The wall-clock time of the recording's first frame, in µs (#176): its screencopy stamp (monotonic)
-# moved to the wall clock by the two clocks' difference, read once beside it in the box. Fails when
-# the first frame has not come (or a box made it unreadable).
+# The whole layout in one video (#225): the monitors that are on and have pixels (not a 0x0 output a
+# program made on NVIDIA), each at its place, its size in the layout (turned with its transform) at
+# the layout's highest scale, the scale grim takes the whole screen at: so the video is the size a
+# `shot` of the screen is (its sides truncated as grim's), the gaps between monitors black. Larger
+# than H.264's largest frame (level 6.2: 35651584 px, and 16384 a side here), it is all scaled down to
+# fit (said at start). From hyprctl monitors' JSON on stdin: "W H SCALE FIT" (FIT 1 or what it was
+# scaled by), then "NAME X Y W H" a monitor, in video pixels; nothing when there is no monitor.
+record_layout() {
+  jq -r '
+    [.[] | select((.disabled | not) and .width > 0 and .height > 0)
+      | . + (if .transform % 2 == 1 then {lw: (.height / .scale), lh: (.width / .scale)}
+             else {lw: (.width / .scale), lh: (.height / .scale)} end)] as $m
+    | if ($m | length) == 0 then empty else
+      ($m | map(.x) | min) as $x0 | ($m | map(.y) | min) as $y0
+      | (($m | map(.x + .lw) | max) - $x0) as $w | (($m | map(.y + .lh) | max) - $y0) as $h
+      | ($m | map(.scale) | max) as $s
+      | ([1, (35651584 / ($w * $s * $h * $s) | sqrt), (16384 / ([$w, $h] | max) / $s)] | min) as $f
+      | ($s * $f) as $k
+      | "\($w * $k + 1e-6 | floor) \($h * $k + 1e-6 | floor) \($s) \($f * 1000 | floor / 1000)",
+        ($m[] | "\(.name) \((.x - $x0) * $k | round) \((.y - $y0) * $k | round) \([.lw * $k | round, 2] | max) \([.lh * $k | round, 2] | max)")
+      end'
+}
+# The monitors' names, "A, B, C", from "A,B,C" (a recording's) or "A B C".
+record_names() { local n=${1//,/ }; echo "${n// /, }"; }
+# The layout video's size (even: H.264's 4:2:0 takes no odd side, so one more black row or column),
+# and how it was laid out, from $D/record.layout.
+record_size() { local w h; read -r w h _ < "$D/record.layout"; echo "$((w + w % 2))x$((h + h % 2))"; }
+record_how() {
+  local w h s f; read -r w h s f < "$D/record.layout"
+  printf 'the layout at scale %s' "$s"
+  [ "$f" = 1 ] || printf ', scaled by %s to fit H.264'"'"'s largest frame' "$f"
+  [ $((w % 2 + h % 2)) = 0 ] || printf ', a black edge making %sx%s even' "$w" "$h"
+}
+
+# The first frame of each of the recording's wf-recorders (#176; the layout's, #225), a line each in
+# rec_dirs' order: "MONO_US WALL_US", its screencopy stamp (monotonic) and that moved to the wall clock
+# by the two clocks' difference, read once beside it in the box; "-" for one whose first frame has not
+# come (or a box made it unreadable).
+record_firsts() {
+  local a
+  # shellcheck disable=SC2016 # the inner sh's
+  while IFS= read -r a; do
+    if [[ $a =~ ^([0-9]{1,17})\ ([0-9]{1,17})\ ([0-9]{1,17})\ ([0-9]{1,17})$ ]]; then
+      echo "$((10#${BASH_REMATCH[1]})) $(( 10#${BASH_REMATCH[1]} + (10#${BASH_REMATCH[2]} + 10#${BASH_REMATCH[4]}) / 2 - 10#${BASH_REMATCH[3]} ))"
+    else echo -; fi
+  done < <(mapfile -t ds < <(rec_dirs); box_exec sh -c 'for d; do head -n 1 "$d/first-frame" 2>/dev/null || echo; done' omabox-record "${ds[@]}" 2>/dev/null)
+}
+# The wall-clock time of the video's first frame, in µs: the recording's first frame's; the layout's
+# (#225) starts once each monitor has given one, the latest of them. Fails when none has come.
 record_first_us() {
-  local a; a=$(box_exec cat "$REC_DIR/first-frame" 2>/dev/null) || return 1
-  [[ $a =~ ^([0-9]{1,17})\ ([0-9]{1,17})\ ([0-9]{1,17})\ ([0-9]{1,17})$ ]] || return 1
-  echo $(( 10#${BASH_REMATCH[1]} + (10#${BASH_REMATCH[2]} + 10#${BASH_REMATCH[4]}) / 2 - 10#${BASH_REMATCH[3]} ))
+  local m w best=""
+  while read -r m w; do
+    [ "$m" != - ] || continue
+    [ -n "$best" ] && [ "$w" -le "$best" ] || best=$w
+  done < <(record_firsts)
+  [ -n "$best" ] && echo "$best"
 }
 
 # A mark in the recording (#176): its text at the time this omabox was called (CALL_US), put in the
@@ -4721,11 +4815,16 @@ record_stop() {
   local sheet=${1:-0} frames=${2:-} every=${3:-} fit=${4:-} alive=0
   if record_running; then alive=1
   elif [ ! -f "$D/record" ]; then die "record stop: box '$NAME' is not recording"; fi
-  if [ $alive = 1 ]; then
-    box_exec kill -INT "$REC_PID" 2>/dev/null || true
-    local end=$((SECONDS + 15))
-    while box_exec kill -0 "$REC_PID" 2>/dev/null; do
-      [ $SECONDS -lt $end ] || { box_exec kill -KILL "$REC_PID" 2>/dev/null || true; say "record: wf-recorder did not finish in 15 s: killed (its file may lack its last frames)"; break; }
+  # Each wf-recorder still running (the layout's: one may have ended by itself) told to finish.
+  if [ $alive = 1 ] || [ "$REC_N" -gt 1 ]; then
+    local rpids=${REC_PID//,/ } end=$((SECONDS + 15))
+    # shellcheck disable=SC2016 # the inner sh's
+    local still='for p; do [ "$(cat "/proc/$p/comm" 2>/dev/null)" != wf-recorder ] || { [ -z "$S" ] || kill "-$S" "$p"; R=0; }; done; exit ${R:-1}'
+    # shellcheck disable=SC2086 # the pids split
+    box_exec env S=INT sh -c "$still" omabox-record $rpids 2>/dev/null || true
+    # shellcheck disable=SC2086 # the pids split
+    while box_exec env S= sh -c "$still" omabox-record $rpids 2>/dev/null; do
+      [ $SECONDS -lt $end ] || { box_exec env S=KILL sh -c "$still" omabox-record $rpids 2>/dev/null || true; say "record: wf-recorder did not finish in 15 s: killed (its file may lack its last frames)"; break; }
       sleep 0.1
     done
   fi
@@ -4734,12 +4833,17 @@ record_stop() {
   rm -f "$D/record.marks"
   # Its --no-pointer's hold given back (#228): the pointer as it was before.
   ! grep -qs '^hold record ' "$D/pointer" || ptr_change release record || ptr_fail "record stop"
-  # A steady REC_FPS (wf-recorder's frames come as the screen gives them), for any player and editor.
-  # The fps filter starts at the first frame and shows each from the output frame nearest its time:
-  # the video's clock stays wf-recorder's, so a mark's time is still its time (finding 306).
-  box_exec ffmpeg -v error -y -i "$REC_DIR/raw.mkv" -vf "fps=$REC_FPS" -c:v libx264 -preset medium -crf 18 \
-    -pix_fmt yuv420p -movflags +faststart "$REC_DIR/out.mp4" </dev/null >&2 ||
-    die "record: ffmpeg could not make the video ($REC_DIR/raw.mkv in box '$NAME' is kept)"
+  if [ "$REC_N" -gt 1 ]; then
+    record_compose || die "record: ffmpeg could not make the video (the monitors' raw.mkv in $REC_DIR/m1 to m$REC_N in box '$NAME' are kept)"
+    rm -f "$D/record.layout"
+  else
+    # A steady REC_FPS (wf-recorder's frames come as the screen gives them), for any player and editor.
+    # The fps filter starts at the first frame and shows each from the output frame nearest its time:
+    # the video's clock stays wf-recorder's, so a mark's time is still its time (finding 306).
+    box_exec ffmpeg -v error -y -i "$REC_DIR/raw.mkv" -vf "fps=$REC_FPS" -c:v libx264 -preset medium -crf 18 \
+      -pix_fmt yuv420p -movflags +faststart "$REC_DIR/out.mp4" </dev/null >&2 ||
+      die "record: ffmpeg could not make the video ($REC_DIR/raw.mkv in box '$NAME' is kept)"
+  fi
   # (ffprobe in the box too: its file, never read on the host but as bytes.)
   local info dur=""; info=$(box_exec ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | paste -sd ' ') || info=""
   [[ ! $info =~ \ ([0-9]+)(\.([0-9]{1,3}))?[0-9]*$ ]] || dur=$((10#${BASH_REMATCH[1]} * 1000 + 10#$(printf '%-3s' "${BASH_REMATCH[3]}" | tr ' ' 0)))
@@ -4753,11 +4857,58 @@ record_stop() {
   fi
   record_marks "$marks" "$first" "$dur" "$base"
   [ "$sheet" = 0 ] || sp=$(record_sheet "$REC_DIR/out.mp4" "$base.marks.tsv" "$base.sheet.png" "$frames" "$every" "$fit") || sp=""
-  box_exec rm -f "$REC_DIR/raw.mkv" "$REC_DIR/out.mp4" "$REC_DIR/first-frame" 2>/dev/null || true
+  local rmd=("$REC_DIR/raw.mkv" "$REC_DIR/out.mp4" "$REC_DIR/first-frame")
+  [ "$REC_N" = 1 ] || mapfile -t -O 3 rmd < <(rec_dirs)
+  box_exec rm -rf "${rmd[@]}" 2>/dev/null || true
   [[ ! $info =~ ^([0-9]+),([0-9]+)\  ]] || say "record: ${BASH_REMATCH[1]}x${BASH_REMATCH[2]}, $(ms_s "${dur:-0}") at $REC_FPS fps"
   echo "$REC_FILE"
   [ -z "$sp" ] || echo "$sp"
   [ "$sheet" = 0 ] || [ -n "$sp" ] || return 1
+}
+
+# The layout's recordings in one video (#225), $REC_DIR/out.mp4, by ffmpeg in the box: on a black
+# frame the size of $D/record.layout's, each monitor's at its place and size there, in step by their
+# first frames' screencopy stamps (one monotonic clock): the video starts at the latest first frame
+# (a monitor's frames before it are dropped), so a change drawn on two monitors at once is in the same
+# frame of it, and its clock is the one marks are put in (record_first_us). Each goes to a steady
+# REC_FPS as a single recording does (fps: the frame nearest each slot) before it is laid on, so every
+# slot takes each monitor's frame for that slot. The video lasts until the last monitor's ends (one
+# that ended before is black from then). A monitor that gave no frame is left out (said).
+record_compose() {
+  local ow oh n i k=0 m w x y tw th t0="" dirs=() firsts=() durs=() lay=() args=() fc="" last="0:v" end=0 off d left=""
+  read -r ow oh _ < "$D/record.layout" || return 1
+  mapfile -t lay < <(tail -n +2 "$D/record.layout")
+  mapfile -t dirs < <(rec_dirs)
+  mapfile -t firsts < <(record_firsts)
+  # shellcheck disable=SC2016 # the inner sh's
+  mapfile -t durs < <(box_exec sh -c 'for d; do ffprobe -v error -show_entries format=duration -of csv=p=0 "$d/raw.mkv" 2>/dev/null | head -n 1 | grep . || echo; done' omabox-record "${dirs[@]}" 2>/dev/null)
+  n=${#dirs[@]}
+  [ ${#lay[@]} = "$n" ] && [ ${#firsts[@]} = "$n" ] || { say "record: the layout's recordings do not match its record"; return 1; }
+  for ((i = 0; i < n; i++)); do
+    read -r m _ <<<"${firsts[i]}"
+    if [ "$m" != - ] && { [ -z "$t0" ] || [ "$m" -gt "$t0" ]; }; then t0=$m; fi
+  done
+  [ -n "$t0" ] || { say "record: no monitor gave a frame"; return 1; }
+  args=(-v error -y -f lavfi -i "color=c=black:s=$((ow + ow % 2))x$((oh + oh % 2)):r=$REC_FPS")
+  for ((i = 0; i < n; i++)); do
+    read -r m _ <<<"${firsts[i]}"
+    read -r w x y tw th <<<"${lay[i]}"
+    if [ "$m" = - ]; then left+="${left:+, }$w"; continue; fi
+    k=$((k + 1)) off=$((m - t0))
+    off=$(awk -v o="$off" 'BEGIN { printf "%.6f", o / 1e6 }')
+    d=${durs[i]:-}
+    [[ ! $d =~ ^[0-9]+(\.[0-9]+)?$ ]] || end=$(awk -v e="$end" -v o="$off" -v d="$d" 'BEGIN { x = o + d; printf "%.6f", (x > e ? x : e) }')
+    args+=(-i "${dirs[i]}/raw.mkv")
+    fc+="[$k:v]setpts=PTS-STARTPTS+($off)/TB,fps=$REC_FPS:start_time=0,scale=$tw:${th}[s$k];"
+    fc+="[$last][s$k]overlay=x=$x:y=$y:eof_action=pass[o$k];"
+    last=o$k
+  done
+  [ -z "$left" ] || say "record: no frame came from $left: black in the video"
+  # No length known (a wf-recorder killed): until the first to end.
+  if awk -v e="$end" 'BEGIN { exit !(e > 0) }'; then args+=(-t "$end")
+  else fc=${fc//eof_action=pass/shortest=1}; fi
+  args+=(-filter_complex "${fc%;}" -map "[$last]" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -movflags +faststart "$REC_DIR/out.mp4")
+  box_exec ffmpeg "${args[@]}" </dev/null >&2
 }
 
 # record_marks MARKS FIRST_US DURATION_MS BASE: the marks ("WALL_US TEXT" lines) in the video's clock

@@ -573,6 +573,23 @@ t_unit_record() {
     "$(paste -sd '|' "$rb.vtt")"
   lib record_marks "" "" 0 "$rb" 2>/dev/null
   check_fails "...no marks: an earlier take's files go" test -e "$rb.marks.tsv" -o -e "$rb.vtt"
+  # record_layout (#225): the layout at its highest scale, a turned monitor turned, the gaps left; one
+  # off or 0x0 left out; past H.264's largest frame scaled down (16384 a side, 35651584 px).
+  local mj='{"name":"A","width":1280,"height":720,"x":0,"y":0,"scale":1,"transform":0,"disabled":false}'
+  mj+=',{"name":"B","width":1280,"height":720,"x":1280,"y":0,"scale":1,"transform":1,"disabled":false}'
+  mj+=',{"name":"C","width":1280,"height":720,"x":0,"y":720,"scale":2,"transform":0,"disabled":false}'
+  mj+=',{"name":"D","width":800,"height":600,"x":5000,"y":0,"scale":1,"transform":0,"disabled":true}'
+  mj+=',{"name":"Z","width":0,"height":0,"x":0,"y":5000,"scale":1,"transform":0,"disabled":false}'
+  check_eq "record_layout: 2000x1280 at scale 2, B turned, C at its scale" "4000 2560 2 1|A 0 0 2560 1440|B 2560 0 1440 2560|C 0 1440 1280 720" \
+    "$(lib record_layout <<<"[$mj]" | paste -sd '|')"
+  check_eq "...2560x1440 at 1.6 beside a 1920x1080: 1600x900 at 1.6" "5632 1728 1.6 1|A 0 0 3072 1728|B 3072 0 2560 1440" \
+    "$(lib record_layout <<<'[{"name":"A","width":1920,"height":1080,"x":0,"y":0,"scale":1,"transform":0,"disabled":false},{"name":"B","width":2560,"height":1440,"x":1920,"y":0,"scale":1.6,"transform":0,"disabled":false}]' | paste -sd '|')"
+  mj=""; for i in 0 1 2 3 4; do mj+="${mj:+,}{\"name\":\"M$i\",\"width\":3840,\"height\":2160,\"x\":$((i * 3840)),\"y\":0,\"scale\":1,\"transform\":0,\"disabled\":false}"; done
+  check_eq "...five 4K in a row: 16384 wide at most" "16384 1843 1 0.853" "$(lib record_layout <<<"[$mj]" | head -n 1)"
+  mj=""; for i in 0 1 2; do for j in 0 1 2; do mj+="${mj:+,}{\"name\":\"M$i$j\",\"width\":3840,\"height\":2160,\"x\":$((i * 3840)),\"y\":$((j * 2160)),\"scale\":1,\"transform\":0,\"disabled\":false}"; done; done
+  check "...nine 4K: no more pixels than H.264's largest frame" awk -v l="$(lib record_layout <<<"[$mj]" | head -n 1)" \
+    'BEGIN { split(l, a, " "); exit !(a[1] * a[2] <= 35651584 && a[1] * a[2] > 35000000 && a[4] < 1) }'
+  check_eq "...no monitor: nothing" "" "$(lib record_layout <<<'[]')"
 }
 
 t_unit_duration() {
@@ -6595,6 +6612,85 @@ t_monitors_nvidia() {
   local n; n=$(nvidia_ready) || { skip "monitors on NVIDIA" "$n"; return; }
   monitors_on "$n" "$P-monnv" WAYLAND-1 WAYLAND-2 WAYLAND-3
 }
+# record --monitor all (#225): the whole layout as one video, on a GPU other than NVIDIA's (headless
+# outputs) and on NVIDIA's (Wayland outputs).
+t_record_layout() {
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "record --monitor all" "no render node here but NVIDIA's (t_record_layout_nvidia runs there)"; return; }
+  record_layout_on "$n" "$P-rl" HEADLESS-2 HEADLESS-3 HEADLESS-4
+}
+t_record_layout_nvidia() {
+  local n; n=$(nvidia_ready) || { skip "record --monitor all on NVIDIA" "$n"; return; }
+  record_layout_on "$n" "$P-rlnv" WAYLAND-1 WAYLAND-2 WAYLAND-3
+}
+# record_layout_on NODE BOX MAIN SECOND THIRD: a 1280x720 main screen, the second portrait by its
+# transform (720x1280 in the layout, right of it), the third at scale 2 below the main (640x360): the
+# layout is 2000x1280, at scale 2 a 4000x2560 shot and video. A terminal of its own colour on each (two
+# on the portrait one, tiled one above the other: turned wrong, they would not match), three of them
+# turning white on one trigger. Compared: the video's size with the shot's, its last frame with a shot
+# then (in 400x320 cells' mean colours: wf-recorder's colours are a little muted), and the frame each
+# monitor's white first shows in (one trigger: the same frame, give or take one, each monitor drawing
+# on its own clock; a recording out of step by the time its recorders started apart would be more).
+record_layout_on() {
+  local n=$1 B=$2 m0=$3 m1=$4 m2=$5
+  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --monitor all" "no wf-recorder or ffmpeg here"; return; fi
+  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --size 1280x720 --monitor 1280x720 \
+    --monitor 1280x720,scale=2,0,720 >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
+  ob lua -b "$B" "hl.monitor({ output = \"$m1\", mode = \"1280x720@60\", position = \"1280x0\", scale = 1, transform = 1 })" >/dev/null 2>&1
+  check "$m1 turned (transform 1)" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j monitors | jq -e 'any(.[]; .name == \"$m1\" and .transform == 1)' >/dev/null"
+  local spec x y c i
+  for spec in "640 360 ff0000 1" "1640 300 00ff00 2" "320 900 0000ff 3" "1640 900 ffff00 4"; do
+    read -r x y c i <<<"$spec"
+    ob pointer -b "$B" -- move "$x" "$y" >/dev/null
+    ob run -b "$B" -d --wait -- foot -T "L$i" sh -c "printf '\033]11;#$c\007'; rm -f /tmp/g$i; mkfifo /tmp/g$i; read -r _ < /tmp/g$i; printf '\033]11;#ffffff\007'; sleep 600" >/dev/null 2>&1
+  done
+  check_eq "four terminals: one each on $m0 and $m2, two on $m1" "1 2 1" \
+    "$(ob hyprctl -b "$B" -j clients | jq -r --argjson m "$(ob hyprctl -b "$B" -j monitors)" --arg a "$m0" --arg b "$m1" --arg c "$m2" \
+      '. as $w | [$a, $b, $c] | map(. as $n | ($m[] | select(.name == $n) | .id) as $id | [$w[] | select(.monitor == $id)] | length) | join(" ")' 2>/dev/null)"
+  local v=$TMP/$B.mp4 out f=$TMP/$B.png sz
+  out=$(ob record -b "$B" start --monitor all -o "$v" 2>&1)
+  check_match "record start --monitor all: one video of the three, at the layout's highest scale" \
+    "recording $m0, $m1, $m2 of box '$B' as one 4000x2560 video \(the layout at scale 2\)" "$out"
+  check_match "...status says so" "^recording $m0, $m1, $m2 of box '$B' as one 4000x2560 video at 30 fps, to $v" "$(ob record -b "$B" status)"
+  sleep 0.7
+  ob record -b "$B" mark "white" >/dev/null 2>&1
+  ob run -b "$B" -- sh -c 'echo > /tmp/g1 & echo > /tmp/g2 & echo > /tmp/g3; wait'
+  sleep 0.8
+  check_eq "record stop prints the video, then its sheet" "$v|${v%.mp4}.sheet.png" "$(ob record -b "$B" stop --sheet --frames 3 2>/dev/null | paste -sd '|')"
+  ob shot -b "$B" -o "$f" >/dev/null 2>&1
+  sz=$(magick identify -format '%wx%h' "$f" 2>&1)
+  check_eq "...an H.264 video at 30 fps, the size of a shot of the screen ($sz)" "h264,4000,2560,30/1 4000x2560" \
+    "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$v" 2>&1) $sz"
+  # Its last frame and the shot, 10x8 cells' mean colours (the gaps transparent in the shot: black).
+  local a b
+  a=$(magick "$f" -background black -alpha remove -alpha off -scale '10x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
+  b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '10x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
+  check "...its last frame is the shot's layout: 80 cells' colours within 48 of 255 ($(paste -d / <(tr ' ' '\n' <<<"$a" | head -n 12) <(tr ' ' '\n' <<<"$b" | head -n 12) | paste -sd ' ') ...)" \
+    awk -v a="$a" -v b="$b" 'BEGIN { na = split(a, x, "[ ,]"); nb = split(b, y, "[ ,]"); if (na != 240 || nb != 240) exit 1
+      for (i = 1; i <= na; i++) { d = x[i] - y[i]; if (d > 48 || d < -48) exit 1 } }'
+  # The trigger's white, in each of the three (the middles of L1 on m0, L3 on m2, L2 on m1).
+  local fr=() cr
+  for cr in 1180:620 540:1700 3180:500; do
+    fr+=("$(ffmpeg -v error -i "$v" -vf "crop=200:200:$cr,scale=1:1" -f rawvideo -pix_fmt rgb24 - 2>/dev/null |
+      od -An -tu1 -w3 -v | awk '$1 > 200 && $2 > 200 && $3 > 200 { print NR - 1; exit }')")
+  done
+  check "...one trigger on three monitors: white from the same frame, give or take one (frames ${fr[*]})" \
+    awk -v a="${fr[0]:--9}" -v b="${fr[1]:--99}" -v c="${fr[2]:--999}" 'BEGIN { mn = a; mx = a; if (b < mn) mn = b; if (c < mn) mn = c; if (b > mx) mx = b; if (c > mx) mx = c; exit !(mn >= 0 && mx - mn <= 1) }'
+  local m; m=$(awk -F '\t' 'NR == 2 { print $1 }' "${v%.mp4}.marks.tsv" 2>/dev/null)
+  check "...the mark just before it in the video's clock: the first white at most a frame before it, 500 ms after at most (mark ${m:-none} ms)" \
+    awk -v m="${m:--1}" -v f="${fr[0]:--1}" 'BEGIN { t = f * 1000 / 30; exit !(m >= 0 && f >= 0 && t >= m - 1000 / 30 && t <= m + 500) }'
+  check_eq "...the sheet: 3 tiles 320 px wide" 978 "$(magick identify -format '%w' "${v%.mp4}.sheet.png" 2>&1)"
+  check_eq "record --monitor all -- ACTION: the layout too" "$v 4000,2560" \
+    "$(ob record -b "$B" -o "$v" --monitor all --hold 300ms -- pointer -- move 100 100 2>/dev/null) $(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
+  check_eq "...and it stopped, its folders gone from the box" "box '$B': not recording|" \
+    "$(ob record -b "$B" status)|$(ob run -b "$B" -- sh -c 'ls -d /home/sbx/.cache/omabox-record/m* 2>/dev/null')"
+  ob monitor -b "$B" remove "$m1" >/dev/null 2>&1; ob monitor -b "$B" remove "$m2" >/dev/null 2>&1
+  out=$(ob record -b "$B" start --monitor all -o "$v" 2>&1)
+  check_match "--monitor all with the main screen alone: its own recording" "recording $m0 of box '$B' to $v" "$out"
+  ob record -b "$B" stop >/dev/null 2>&1
+  check_eq "...at its pixels" "1280,720" "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
+  ob down "$B" >/dev/null
+}
 # monitors_on NODE BOX MAIN SECOND THIRD: a box on NODE with two more monitors, by their names there.
 monitors_on() {
   local n=$1 B=$2 m0=$3 m1=$4 m2=$5
@@ -9847,7 +9943,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

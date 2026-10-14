@@ -6124,6 +6124,42 @@ from them.
       them into the evidence when the height is not 2. The deadline and the 2 px stay: without the
       frames, a 3rd row has no known legitimate cause (foot's underline is 2 px, the window does not
       move, the screen is at scale 1).
+310. **`record --monitor all`: the whole layout in one video** (2026-10-14, #225). wf-recorder captures
+    one output, so `record` took one monitor. Now `--monitor all` (start, or `-- ACTION`) starts a
+    wf-recorder an output from one `box_exec` (each in `REC_DIR/mN`, its own first-frame reader as in
+    finding 306), and `stop` lays them out with ffmpeg in the box: a black `color` source the size of
+    the layout as grim's whole-screen shot has it (the monitors' layout box, each side x the highest
+    scale, truncated), each recording at its place and size there (`overlay`, `scale` to its size in
+    the layout x that scale). Measured: wf-recorder's frames of a turned monitor are already as it is
+    shown (transform 1 on AMD and NVIDIA, the flipped 5 on AMD: as a `shot` of it has it), so
+    only scaling is needed. In step: the recorders' first-frame screencopy stamps are one
+    CLOCK_MONOTONIC, so each is shifted by its first frame less the latest one's (`setpts`), and the
+    video starts at that latest first frame (a monitor's frames before it dropped), which is also the
+    0 marks are put in (`record_first_us` takes the latest). Each then goes through `fps=N:start_time=0`
+    (the frame nearest each slot, as a single recording's pass) before it is laid on, so a slot takes
+    every monitor's frame for that slot; the video lasts until the last monitor's recording ends (`-t`
+    from ffprobe's durations; a monitor whose recording ended first goes black, `eof_action=pass`; no
+    duration known: until the first ends). Started together the first frames came 2-5 ms apart on AMD
+    and up to 34 ms on NVIDIA; with the starts made 0.4 s apart by hand (a `sleep` in the loop, taken
+    out again) a white flash on three monitors still came in frames 58, 59 and 58, where without the
+    shift they would be 12 and 24 frames apart. A change on several monitors at once is in the same
+    frame give or take one: each monitor draws on its own vblank, up to 16 ms apart. Even sides
+    (4:2:0): one black row or column more when one is odd. Past H.264's largest frame (level 6.2:
+    35651584 px; 16384 a side here) the whole is scaled down to fit, said at start with the size
+    (`as one 4000x2560 video (the layout at scale 2)`). A 2.5 s 4000x2560 layout took ~1 s at stop
+    (flat colours; busy content takes longer). The record is "PID,PID... OUT,OUT... FPS START FILE"
+    and the layout as composed `$D/record.layout` (host side); `status` and `stop` check every pid,
+    and `stop` INTs each still running. With one monitor left (the others off or 0x0), `all` is that
+    monitor's own recording. Decided: `--monitor all` (not a new option: the same place picks the
+    output; a monitor named `all` cannot be recorded alone); black gaps (as a shot's are transparent).
+    wf-recorder's colours are a little muted (white comes out ~#e7e7e7, the same in a single
+    recording): the comparisons allow 48 of 255. Tests: t_unit_record (record_layout: a turned
+    monitor, a scale-1.6 one, one off and a 0x0 one left out, five 4K at 16384 wide, nine 4K under the
+    frame limit); t_record_layout / t_record_layout_nvidia (main 1280x720, a second turned by
+    transform 1 with two terminals, a third at scale 2: start and status say 4000x2560; the video
+    4000x2560 H.264 30 fps as the shot; its last frame against the shot in 10x8 cells; a white flash
+    on all three in the same frame give or take one; a mark before it in the composed clock; a
+    3-tile sheet; `-- ACTION`; the m-folders gone; `all` with the main screen alone).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
