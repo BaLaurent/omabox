@@ -5871,6 +5871,31 @@ from them.
     refused as off the 1280x720 screen; a reload keeps it; a monitor added beside it at 1280,0; mode
     1920x1080,scale=1.5 kept over a reload; mode 1280x720 is 1; `up` at another scale refused; an
     interactive one refused before anything starts. t_unit_parse_mode: split_scale and size_text.
+297. **`omabox record`: a video of a box's screen** (2026-10-14). The README's video was wf-recorder
+    by hand in a stage box (finding 76), and the reference told agents to do the same: start it with
+    `run`, stop it with `pkill -INT`, nudge the pointer for a last frame, then ffmpeg. Now `record
+    start [-o FILE] [--monitor NAME] [--fps N]`, `record stop`, `record status`, and `record [-o FILE]
+    [--fps N] [--hold DUR] -- ACTION` (an omabox command that acts, as `shot --after` takes: start,
+    the action, --hold (1s), stop). wf-recorder runs in the box through box_exec (its pid namespace,
+    so `down` takes it: checked), a session of its own with INT back to its default, on one output
+    (the main screen, or --monitor), `-D`: every frame, not only damaged ones, so a still screen
+    still sends them and `stop` never waits for a change (finding 76's nudge is gone); libx264
+    ultrafast, CRF 14, into the box HOME's `.cache/omabox-record` (on disk, not the box's tmpfs: a 4K
+    minute is hundreds of MB). `stop` sends INT, waits (15 s, then KILL), and ffmpeg in the box makes
+    it a steady --fps (`fps=` filter; wf-recorder's frames come as the screen gives them), H.264
+    CRF 18, yuv420p, faststart. ffprobe reads it in the box too, and the file comes out as the
+    bytes of a `cat` there: the host never opens a path in a box-written folder (the box could make
+    it a link), nor parses the box's file. The record is `$D/record` (host side): "PID OUTPUT FPS
+    FILE", PID the box's; a wf-recorder gone is said by `status`, and `stop` keeps what it wrote.
+    -o is checked writable at `start`, as `shot -o` is. A jailed agent is refused for now (its files
+    are its own omabox's to write, as shot's `--to-fd`). Measured: `start` returned after 4 s when it
+    waited for the file's first bytes (the muxer buffers them; frames are stamped from the first all
+    the same, so the video began 3 s early): it now checks only that wf-recorder is still running
+    0.5 s on (0.56 s); 3 s of activity gave 3.5 s of video (stop's own ~0.5 s); stop ~0.9 s for a few
+    seconds at 2560x1440. A frame of it at scale 2 is as sharp as a shot. Tests: t_unit_record (the
+    refusals before any box), scale_on in t_scale and t_scale_nvidia (status, start, a second start
+    refused, stop's file 2560x1440 H.264 at 30 fps and about as long as it ran, the one-shot at 60
+    fps, --monitor of none refused, a down while recording takes its wf-recorder).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

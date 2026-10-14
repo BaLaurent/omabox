@@ -539,6 +539,17 @@ t_unit_parse_mode() {
     "$(lib size_text 1920x1080@60 1)|$(lib size_text 3840x2160@60 2)"
 }
 
+t_unit_record() {
+  # Refused before any box is looked at (finding 297).
+  check_match "record alone: what it takes" "start, stop, status, or -- ACTION" "$(ob record 2>&1)"
+  check_match "...--fps 0 refused" "--fps is 1 to 120, got 0" "$(ob record start --fps 0 2>&1)"
+  check_match "...an action that does not act" "an omabox command that acts .*got shot" "$(ob record -- shot 2>&1)"
+  check_match "...an action naming another box" "the action runs on the recorded box \(no -b\)" "$(ob record -- keys -b x Return 2>&1)"
+  check_match "...an action with start" "records one action .*not with start" "$(ob record start -- keys Return 2>&1)"
+  check_match "...--hold past 60s" "--hold takes a duration up to 60s" "$(ob record --hold 2m -- keys Return 2>&1)"
+  check_match "...an unknown word" "start, stop, status, or -- ACTION .*got go" "$(ob record go 2>&1)"
+}
+
 t_unit_duration() {
   check_eq "90s" 90 "$(lib duration 90s)"
   check_eq "30m" 1800 "$(lib duration 30m)"
@@ -6021,6 +6032,29 @@ scale_on() {
   check "click --in the shot: image pixels to the layout's" ob click -b "$B" --in "$f" 2000 1000
   check_eq "...the pointer at half of them" "1000, 500" "$(ob hyprctl -b "$B" cursorpos)"
   check_match "a point past the layout refused" "1300,100 is off the 1280x720 screen" "$(ob click -b "$B" 1300 100 2>&1)"
+  # record (finding 297): a video of the screen at its pixels, a steady frame rate, made in the box.
+  if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null; then
+    local v=$TMP/$B.mp4 t0
+    check_eq "record status: not recording" "box '$B': not recording" "$(ob record -b "$B" status)"
+    t0=$SECONDS
+    check "record start" ob record -b "$B" start -o "$v"
+    check_match "...status says so" "^recording $m0 of box '$B' at 30 fps, to $v" "$(ob record -b "$B" status)"
+    check_match "...a second start refused" "is recording already, to $v" "$(ob record -b "$B" start 2>&1)"
+    ob keys -b "$B" super+Return >/dev/null; sleep 1.5
+    check_eq "record stop prints the file" "$v" "$(ob record -b "$B" stop 2>/dev/null)"
+    check_eq "...an H.264 video at the screen's pixels, 30 fps" "h264,2560,1440,30/1" \
+      "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,r_frame_rate -of csv=p=0 "$v" 2>&1)"
+    check "...as long as it ran, about (1.5 s to the wall time)" awk -v d="$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$v")" \
+      -v w=$((SECONDS - t0 + 1)) 'BEGIN { exit !(d >= 1.5 && d <= w) }'
+    check_match "record stop again: not recording" "is not recording" "$(ob record -b "$B" stop 2>&1)"
+    check_eq "record -- ACTION: that action at --fps 60" "$v 60/1" \
+      "$(ob record -b "$B" -o "$v" --fps 60 --hold 300ms -- keys -t x 2>/dev/null) $(ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$v")"
+    check_eq "...and it stopped" "box '$B': not recording" "$(ob record -b "$B" status)"
+    check_match "record --monitor of one it does not have" "has no monitor NOPE \($m0\)" "$(ob record -b "$B" start --monitor NOPE 2>&1)"
+    check_eq "...nothing recording" "box '$B': not recording" "$(ob record -b "$B" status)"
+  else
+    skip "record" "no wf-recorder or ffmpeg here"
+  fi
   ob reload -b "$B" >/dev/null 2>&1
   check_eq "a reload keeps the scale" "$m0 2560x1440@60,scale=2" "$(ob mode -b "$B")"
   check "monitor add beside it" ob monitor -b "$B" add 800x600
@@ -6033,6 +6067,14 @@ scale_on() {
   check_eq "mode WxH without a scale is 1" "$m0 1280x720@60" "$(ob mode -b "$B" 1280x720)"
   check_eq "...box.json 1" 1 "$(jq -r .scale "$(ob path -b "$B")/box.json")"
   check_match "up of it at another scale: refused, said" "--size 1280x720@60,scale=2 \(it is 1280x720@60\)" "$(ob up "$B" --size 1280x720,scale=2 2>&1)"
+  # A down while it records takes its wf-recorder too: it runs in the box's pid namespace.
+  if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null && ob record -b "$B" start -o "$TMP/$B-down.mp4" >/dev/null 2>&1; then
+    local wp="" p; for p in $(lib eval "NAME='$B'; D='$(ob path -b "$B")'; box_pids"); do
+      [ "$(cat "/proc/$p/comm" 2>/dev/null)" != wf-recorder ] || wp=$p; done
+    check "a recording's wf-recorder is in the box's pid namespace" test -n "$wp"
+    ob down "$B" >/dev/null 2>&1 || true
+    check_fails "...gone with the box" test -n "$wp" -a -d "/proc/${wp:-0}"
+  fi
   ob down "$B" >/dev/null 2>&1 || true
   check_match "an interactive box takes no scale" "takes no scale there" "$(ob up "$B-i" --interactive --size 1920x1080,scale=2 2>&1)"
   check_fails "...and none is left" test -e "$XDG_RUNTIME_DIR/omabox/$B-i/box.json"
@@ -9085,7 +9127,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)

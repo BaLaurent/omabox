@@ -558,11 +558,11 @@ most people will. Then:
   sheet to read instead of twelve shots. `-o DIR` again clears the frames and sheet an earlier burst
   left there (nothing else); without `-o` each burst gets a folder of its own.
 - **A demo or README capture**: shots of a box are clean (a fresh HOME, no notifications of the
-  user's). Video: `omabox run -- sh -c 'setsid wf-recorder -y -f ~/demo.mp4 >~/wf.log 2>&1 &'`, act,
-  then `omabox run -- pkill -INT -x wf-recorder`. It finishes on its next frame, and a still screen
-  sends none: `omabox pointer -- move X Y`, then `omabox wait cmd -- sh -c '! pgrep -x wf-recorder'`.
-  The file is `$(omabox path)/home/demo.mp4`; frames come only when the screen changes, so `ffmpeg -i
-  demo.mp4 -vf fps=30 out.mp4` for a steady rate. Frames to compare instead (an animation's steps):
+  user's). Video: `omabox record start -o demo.mp4`, act, `omabox record stop` (prints the file: an
+  H.264 MP4 at a steady `--fps`, 30 by default), or `omabox record -o demo.mp4 -- keys super+space`
+  for one action (and `--hold 1s` after it). It records one output at its pixels (`--monitor NAME`;
+  the main screen by default): in a box at `--size 3840x2160,scale=2`, a sharp 4K video of a
+  1920x1080 layout. Needs wf-recorder and ffmpeg (they run in the box). Frames to compare instead (an animation's steps):
   `omabox shot --burst N --sheet` (above), never a loop of `grim` in the box.
 - **The package itself** (install, upgrade, removal, pacman hooks): not in a box (a read-only `/usr`,
   no pacman). A VM, or ask the user.

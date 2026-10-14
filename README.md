@@ -101,6 +101,7 @@ omabox shot --window myapp             # one window's own pixels, covered or on 
 omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … --zoom 8: 1 px detail
 omabox shot --changed --window myapp   # only what changed since its last shot, cropped
 omabox shot --burst 12 --sheet --after -- keys super+space   # a transition in frames
+omabox record start -o demo.mp4        # a video of the screen; omabox record stop prints the file
 omabox output drop [NAME] --for 300ms  # a screen gone and back, as a monitor waking up
 omabox gdb [--watch]                   # backtraces of the box's Hyprland: a hang, or a crash
 omabox keys super+space                # key combos reach Hyprland binds and the focused app
