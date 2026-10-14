@@ -46,6 +46,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`omabox record`'s colours.** Every video came out washed out: pure green as #0cea0d, white as
+  #e8e8e8, black as #101010. wf-recorder wrote its frames' values in TV range (16-235) but marked them
+  full range, and every player believed the mark. Videos now come out in the standard form players
+  and browsers all read the same (H.264 4:2:0, limited range, BT.709, and marked so), a pure colour
+  within 2 levels of the screen's; `--monitor all` and contact sheets alike. Videos made before keep
+  their muted colours.
 - **Turned (portrait) monitors.** A monitor turned by its transform (`hl.monitor({ ..., transform =
   1 })`) was taken at its unturned size: a 1280x720 one turned upright counted as 1280 wide and 720
   high. The screen's size was wrong (`shot` said 2560x1080 of a 2000x1280 layout), so `click`,

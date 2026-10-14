@@ -6529,6 +6529,7 @@ scale_on() {
     check_match "record --monitor of one it does not have" "has no monitor NOPE \($m0\)" "$(ob record -b "$B" start --monitor NOPE 2>&1)"
     check_eq "...nothing recording" "box '$B': not recording" "$(ob record -b "$B" status)"
     record_marks_on
+    record_colours_on
   else
     skip "record" "no wf-recorder or ffmpeg here"
   fi
@@ -6607,6 +6608,41 @@ record_marks_on() {
     "$so $(magick identify -format '%[fx:max(w,h)]' "$TMP/$B-s2.png" 2>&1)"
   ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
 }
+# A recording's colours (finding 312), in scale_on's box B (2560x1440 at scale 2): an opaque terminal
+# in four bands, #00ff00, #ffffff, #ff0000 and #000000, recorded a second; a frame from its middle,
+# decoded as ffmpeg reads its tags, has each band's colour within 3 levels a channel (wf-recorder's
+# limited-range values tagged full gave #0cea0d, #e8e8e8, #ea0d0e, #101010).
+record_colours_on() {
+  local cv=$TMP/$B-colours.mp4 g f dur y h i got="" want="" px tags
+  ob hyprctl -b "$B" eval 'hl.window_rule({ name = "t312", match = { class = "t312" }, opacity = "1 1" })' >/dev/null 2>&1
+  # shellcheck disable=SC2016 # the box's bash's
+  ob run -b "$B" -d --wait -- foot --app-id t312 bash -c 'd() { printf "\033[H\033[?25l"; r=$(tput lines)
+    for i in $(seq 1 "$r"); do case $(( (i - 1) * 4 / r )) in 0) c="0;255;0" ;; 1) c="255;255;255" ;; 2) c="255;0;0" ;; *) c="0;0;0" ;; esac
+      printf "\033[48;2;%sm\033[K" "$c"; [ "$i" -lt "$r" ] && printf "\n"; done; }; trap d WINCH; d; while :; do sleep 600 & wait; done' >/dev/null 2>&1
+  # The window's middle column and each band's middle row (an eighth of its height, three, five, seven).
+  g=$(ob windows -b "$B" --json | jq -r '.[] | select(.class == "t312") | "\(.at[0] + (.size[0] / 2 | floor)) \(.at[1]) \(.size[1])"')
+  if [ -z "$g" ] || ! ob wait -b "$B" still >/dev/null 2>&1 || ! ob record -b "$B" start -o "$cv" >/dev/null 2>&1; then
+    no "record: the colours" "no terminal t312, or record start failed"; return
+  fi
+  sleep 1
+  ob record -b "$B" stop >/dev/null 2>&1
+  tags=$(ffprobe -v error -select_streams v:0 -show_entries stream=pix_fmt,color_range,color_space,color_primaries,color_transfer -of csv=p=0 "$cv" 2>&1)
+  check_eq "record: a video players read alike: 4:2:0, limited range, BT.709, tagged so" "yuv420p,tv,bt709,bt709,bt709" "$tags"
+  dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$cv" 2>/dev/null) || dur=1
+  read -r f y h <<<"$g"
+  for i in 1 3 5 7; do
+    px=$(ob pixel -b "$B" "$f" $((y + i * h / 8)) 2>/dev/null | awk '{ print $NF }')
+    want+="${px:-?} "
+    got+=$(ffmpeg -v error -ss "$(awk -v d="$dur" 'BEGIN { printf "%.3f", d / 2 }')" -i "$cv" -frames:v 1 \
+      -vf "crop=2:2:$((2 * f)):$((2 * (y + i * h / 8)))" -f rawvideo -pix_fmt rgb24 - 2>/dev/null | od -An -tu1 -w3 -v | head -n 1 | awk '{ printf "%d,%d,%d ", $1, $2, $3 }')
+  done
+  check_eq "...the screen: #00ff00, #ffffff, #ff0000, #000000 bands" "#00ff00 #ffffff #ff0000 #000000 " "$want"
+  check "...a frame from its middle: each band within 3 a channel ($got)" awk -v g="$got" 'BEGIN {
+    split("0,255,0 255,255,255 255,0,0 0,0,0", w, " "); if (split(g, a, " ") != 4) exit 1
+    for (i = 1; i <= 4; i++) { split(a[i], x, ","); split(w[i], y, ",")
+      for (c = 1; c <= 3; c++) { d = x[c] - y[c]; if (d > 3 || d < -3) exit 1 } } }'
+  ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
+}
 t_monitors() {
   local n; n=$(gpu_node other)
   [ -n "$n" ] || { skip "monitors" "no render node here but NVIDIA's (t_monitors_nvidia runs there)"; return; }
@@ -6633,7 +6669,7 @@ t_record_layout_nvidia() {
 # layout is 2000x1280, at scale 2 a 4000x2560 shot and video. A terminal of its own colour on each (two
 # on the portrait one, tiled one above the other: turned wrong, they would not match), three of them
 # turning white on one trigger. Compared: the video's size with the shot's, its last frame with a shot
-# then (in 400x320 cells' mean colours: wf-recorder's colours are a little muted), and the frame each
+# then (in 400x320 cells' mean colours, within 8 of 255: H.264 blurs edges; finding 312), and the frame each
 # monitor's white first shows in (one trigger: the same frame, give or take one, each monitor drawing
 # on its own clock; a recording out of step by the time its recorders started apart would be more).
 record_layout_on() {
@@ -6670,9 +6706,9 @@ record_layout_on() {
   local a b
   a=$(magick "$f" -background black -alpha remove -alpha off -scale '10x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
   b=$(ffmpeg -v error -sseof -0.2 -i "$v" -frames:v 1 -f image2pipe -c:v png - 2>/dev/null | magick - -scale '10x8!' -depth 8 txt:- 2>/dev/null | awk 'NR > 1 { print $2 }' | tr -d '()' | paste -sd ' ')
-  check "...its last frame is the shot's layout: 80 cells' colours within 48 of 255 ($(paste -d / <(tr ' ' '\n' <<<"$a" | head -n 12) <(tr ' ' '\n' <<<"$b" | head -n 12) | paste -sd ' ') ...)" \
+  check "...its last frame is the shot's layout: 80 cells' colours within 8 of 255 ($(paste -d / <(tr ' ' '\n' <<<"$a" | head -n 12) <(tr ' ' '\n' <<<"$b" | head -n 12) | paste -sd ' ') ...)" \
     awk -v a="$a" -v b="$b" 'BEGIN { na = split(a, x, "[ ,]"); nb = split(b, y, "[ ,]"); if (na != 240 || nb != 240) exit 1
-      for (i = 1; i <= na; i++) { d = x[i] - y[i]; if (d > 48 || d < -48) exit 1 } }'
+      for (i = 1; i <= na; i++) { d = x[i] - y[i]; if (d > 8 || d < -8) exit 1 } }'
   # The trigger's white, in each of the three (the middles of L1 on m0, L3 on m2, L2 on m1).
   local fr=() cr
   for cr in 1180:620 540:1700 3180:500; do

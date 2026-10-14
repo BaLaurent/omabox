@@ -4552,6 +4552,17 @@ shot_fit_default() {
 # record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps N] [--hold DURATION] [SHEET] -- ACTION...
 # record [-b NAME] sheet VIDEO [-o PNG] [--frames N | --every DURATION] [--fit N]
 REC_DIR=/home/sbx/.cache/omabox-record
+# The colours (finding 312). wf-recorder 0.6.0 (on ffmpeg 9) left to its own pixel format writes
+# limited-range values (16-235) tagged full range, so every player read them as full: muted, white
+# ~#e8e8e8, black ~#101010. Asked for yuvj420p (-x) it writes full-range values, tagged so, in
+# BT.601 (swscale's matrix; the file names none). The video is made from them as players expect it:
+# 4:2:0 limited range, BT.709, and tagged so (an untagged one is read as BT.601 by some players, as
+# BT.709 by others; ffmpeg 9 takes primaries and transfer from the frames, not -color_primaries).
+# accurate_rnd+full_chroma_int: a pure colour within 2 levels of the screen's, not 4.
+REC_YUV_ARGS="in_range=full:in_color_matrix=bt601:out_range=limited:out_color_matrix=bt709:flags=accurate_rnd+full_chroma_int"
+REC_TAGS_F="setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
+REC_YUV="scale=$REC_YUV_ARGS,$REC_TAGS_F"
+REC_TAGS=(-pix_fmt yuv420p -color_range tv -colorspace bt709 -color_primaries bt709 -color_trc bt709)
 cmd_record() {
   local name="" sub="" out="" monitor="" fps=30 hold=1000 ract=() nopointer=0 text=() video=""
   local sheet=0 frames="" every="" fit="" w
@@ -4721,7 +4732,7 @@ record_start() {
       case $d in */m[0-9]*) rm -rf "$d" ;; esac
       mkdir -p "$d" && rm -f "$d"/raw.mkv "$d"/out.mp4 "$d"/first-frame || exit 125
       (exec >"$d/wf-recorder.log" 2>&1 3>&-; trap - INT QUIT; export WAYLAND_DEBUG=client
-        exec setsid -- wf-recorder -y -D -o "$o" -c libx264 -p preset=ultrafast -p crf=14 -f "$d/raw.mkv" 2> >(first "$d")) &
+        exec setsid -- wf-recorder -y -D -o "$o" -c libx264 -x yuvj420p -p preset=ultrafast -p crf=14 -f "$d/raw.mkv" 2> >(first "$d")) &
       echo "$!" >&3
     done' omabox-record "${pairs[@]}" 3>&1 </dev/null >&2)
   [ ${#pids[@]} = ${#names[@]} ] || die "record: could not start wf-recorder in box '$NAME'"
@@ -4844,8 +4855,8 @@ record_stop() {
     # A steady REC_FPS (wf-recorder's frames come as the screen gives them), for any player and editor.
     # The fps filter starts at the first frame and shows each from the output frame nearest its time:
     # the video's clock stays wf-recorder's, so a mark's time is still its time (finding 306).
-    box_exec ffmpeg -v error -y -i "$REC_DIR/raw.mkv" -vf "fps=$REC_FPS" -c:v libx264 -preset medium -crf 18 \
-      -pix_fmt yuv420p -movflags +faststart "$REC_DIR/out.mp4" </dev/null >&2 ||
+    box_exec ffmpeg -v error -y -i "$REC_DIR/raw.mkv" -vf "fps=$REC_FPS,$REC_YUV" -c:v libx264 -preset medium -crf 18 \
+      "${REC_TAGS[@]}" -movflags +faststart "$REC_DIR/out.mp4" </dev/null >&2 ||
       die "record: ffmpeg could not make the video ($REC_DIR/raw.mkv in box '$NAME' is kept)"
   fi
   # (ffprobe in the box too: its file, never read on the host but as bytes.)
@@ -4879,7 +4890,7 @@ record_stop() {
 # slot takes each monitor's frame for that slot. The video lasts until the last monitor's ends (one
 # that ended before is black from then). A monitor that gave no frame is left out (said).
 record_compose() {
-  local ow oh n i k=0 m w x y tw th t0="" dirs=() firsts=() durs=() lay=() args=() fc="" last="0:v" end=0 off d left=""
+  local ow oh n i k=0 m w x y tw th t0="" dirs=() firsts=() durs=() lay=() args=() fc="" last=bg end=0 off d left=""
   read -r ow oh _ < "$D/record.layout" || return 1
   mapfile -t lay < <(tail -n +2 "$D/record.layout")
   mapfile -t dirs < <(rec_dirs)
@@ -4894,6 +4905,9 @@ record_compose() {
   done
   [ -n "$t0" ] || { say "record: no monitor gave a frame"; return 1; }
   args=(-v error -y -f lavfi -i "color=c=black:s=$((ow + ow % 2))x$((oh + oh % 2)):r=$REC_FPS")
+  # The black in the video's colours too: overlay converts what it lays on to its main input's, and
+  # an untagged one is BT.601 (finding 312).
+  fc="[0:v]format=yuv420p,${REC_TAGS_F}[bg];"
   for ((i = 0; i < n; i++)); do
     read -r m _ <<<"${firsts[i]}"
     read -r w x y tw th <<<"${lay[i]}"
@@ -4903,7 +4917,7 @@ record_compose() {
     d=${durs[i]:-}
     [[ ! $d =~ ^[0-9]+(\.[0-9]+)?$ ]] || end=$(awk -v e="$end" -v o="$off" -v d="$d" 'BEGIN { x = o + d; printf "%.6f", (x > e ? x : e) }')
     args+=(-i "${dirs[i]}/raw.mkv")
-    fc+="[$k:v]setpts=PTS-STARTPTS+($off)/TB,fps=$REC_FPS:start_time=0,scale=$tw:${th}[s$k];"
+    fc+="[$k:v]setpts=PTS-STARTPTS+($off)/TB,fps=$REC_FPS:start_time=0,scale=$tw:$th:$REC_YUV_ARGS,${REC_TAGS_F}[s$k];"
     fc+="[$last][s$k]overlay=x=$x:y=$y:eof_action=pass[o$k];"
     last=o$k
   done
@@ -4911,7 +4925,8 @@ record_compose() {
   # No length known (a wf-recorder killed): until the first to end.
   if awk -v e="$end" 'BEGIN { exit !(e > 0) }'; then args+=(-t "$end")
   else fc=${fc//eof_action=pass/shortest=1}; fi
-  args+=(-filter_complex "${fc%;}" -map "[$last]" -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -movflags +faststart "$REC_DIR/out.mp4")
+  fc+="[$last]${REC_TAGS_F}[v]"
+  args+=(-filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf 18 "${REC_TAGS[@]}" -movflags +faststart "$REC_DIR/out.mp4")
   box_exec ffmpeg "${args[@]}" </dev/null >&2
 }
 

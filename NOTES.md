@@ -6153,7 +6153,7 @@ from them.
     monitor's own recording. Decided: `--monitor all` (not a new option: the same place picks the
     output; a monitor named `all` cannot be recorded alone); black gaps (as a shot's are transparent).
     wf-recorder's colours are a little muted (white comes out ~#e7e7e7, the same in a single
-    recording): the comparisons allow 48 of 255. Tests: t_unit_record (record_layout: a turned
+    recording): the comparisons allow 48 of 255 (fixed in finding 312: now 8). Tests: t_unit_record (record_layout: a turned
     monitor, a scale-1.6 one, one off and a 0x0 one left out, five 4K at 16384 wide, nine 4K under the
     frame limit); t_record_layout / t_record_layout_nvidia (main 1280x720, a second turned by
     transform 1 with two terminals, a third at scale 2: start and status say 4000x2560; the video
@@ -6182,6 +6182,34 @@ from them.
     screen's 2360x1280"; each `shot --monitor` against its crop of the whole shot in 6x10 cells;
     `click --in` each monitor's shot focusing the terminal there; `pointer move` below 720; `pixel`
     there; the gap message's sizes): 20 of their 29 checks failed on the code before.
+312. **`record`'s colours: wf-recorder's limited range tagged full** (2026-10-14, found with #225).
+    Every recording was muted: #00ff00 came out #0cea0d, white #e8e8e8, black #101010, red #ea0d0e,
+    and ffprobe said `yuvj420p` (full range), no matrix. Measured in a box (an opaque foot in four
+    bands, the shot exactly #00ff00/#ffffff/#ff0000/#000000): wf-recorder 0.6.0 on ffmpeg 9.0.1, left
+    to its own pixel format, logs `yuv420p(pc)` and writes Y 232 for white, 16 for black, green
+    143/55/35 (BT.601 *limited* values) in a stream tagged full range; the fps pass copied the tag and
+    values through (out.mp4 tagged the same), and everything that reads the tag (ffmpeg, players,
+    the contact sheet) took 16-235 as 0-255. Not the fps pass: raw.mkv decodes to the same colours.
+    `-F scale=out_range=limited` changes nothing; `-x yuvj420p` or `-F scale=out_range=full` makes it
+    write full-range values (white 251 of a #fbfbfb screen, black 0), still BT.601, still untagged
+    matrix. `-c libx264rgb` is exact but ~5x the bytes. Now: wf-recorder `-x yuvj420p` (raw.mkv
+    ~1.6x the bytes on flat colours), and the fps pass (and each monitor's `scale` in
+    record_compose) converts `in_range=full:in_color_matrix=bt601` to limited BT.709 with
+    `accurate_rnd+full_chroma_int` (without them red came out 251, with them 253), `setparams` tags
+    the frames bt709 (ffmpeg 9 takes primaries and transfer from the frames: `-color_primaries` alone
+    left them `unknown`), and the encoder is given the same tags: `yuv420p,tv,bt709,bt709,bt709`,
+    which browsers, mpv and ffmpeg read alike. record_compose's black `color` background is tagged
+    too: untagged, `overlay` converted each monitor to BT.601 for it and green came out 0,214,0. The
+    contact sheet's `scale` (its in_color_matrix `auto`) reads the tags: a sheet tile of the bands is
+    #00fe00/#fdfdfd/#fc0000/#000000. A decoded middle frame now: 0,254,0 / 255,255,255 / 253,0,0 /
+    0,0,0; a whole composed frame against a shot, 0.4-1% mean error. Videos made before keep their
+    wrong tag (re-tagging one with `setparams=range=tv` before a `scale` did not mend it in ffmpeg
+    9: not pursued). Tests: `record_colours_on` in
+    t_scale / t_scale_nvidia (the four bands at scale 2, recorded a second: the tags, the screen's
+    pixels, a middle frame within 3 a channel; on the code before: 13,237,13 235,235,235 238,14,13
+    16,16,16 and the tags `yuvj420p,pc,unknown,...`, 2 of its checks failed in each); t_record_layout's
+    last-frame cells now within 8 of 255, not 48. Upstream (wf-recorder or ffmpeg 9's buffersink
+    range negotiation): a yuv420p stream tagged pc with limited values.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
