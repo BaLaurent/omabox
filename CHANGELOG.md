@@ -3,24 +3,27 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.5.5 — 2026-10-14
+
+Sharp, high-resolution screenshots and videos of a box: a scale for the main screen (`--size
+3840x2160,scale=2`) and a new `omabox record`. On NVIDIA, apps in a box now draw on the GPU instead of
+in software, and `omabox gpu` gives per-process figures there.
 
 ### Added
-
-- **`omabox record`: a video of a box's screen.** `record start [-o FILE] [--monitor NAME] [--fps 30]`,
-  then `record stop`, which prints the file: an H.264 MP4 at a steady frame rate, at the screen's
-  own pixels (4K from a box at `--size 3840x2160,scale=2`). `record -o FILE -- ACTION` records one
-  action (`keys super+space`, `click X Y`, ...). Needs wf-recorder and ffmpeg.
 
 - **A scale for the main screen**: `up --size 3840x2160,scale=2` and `omabox mode 3840x2160,scale=2`.
   The box lays out as 1920x1080, with the bar and apps at their usual size drawn in twice the pixels,
   so a `shot` is 3840x2160 and stays sharp when you zoom or crop it. Scale 1 to 4, as `--monitor`'s;
   coordinates stay the layout's, and `click --in` maps a shot's. Headless boxes only.
-
-- **`omabox gpu` on NVIDIA** (finding 295). NVIDIA's driver reports no per-process DRM counters, so
-  `gpu` listed nothing there. It now takes the driver's own per-process sampling through
-  `nvidia-smi pmon`, for the box's processes only: whole seconds, each process's share of the GPU as
-  sampled once a second (`--json` has `source`).
+- **`omabox record`: a video of a box's screen.** `record start [-o FILE] [--monitor NAME] [--fps 30]`,
+  then `record stop`, which prints the file: an H.264 MP4 at a steady frame rate, at the screen's
+  own pixels (4K from a box at `--size 3840x2160,scale=2`). `record -o FILE -- ACTION` records one
+  action (`keys super+space`, `click X Y`, ...). Needs wf-recorder and ffmpeg. Not yet for agents
+  inside ai-jail (#224).
+- **`omabox gpu` on NVIDIA.** NVIDIA's driver reports no per-process DRM counters, so `gpu` listed
+  nothing there. It now takes the driver's own per-process sampling through `nvidia-smi pmon`, for
+  the box's processes only: whole seconds, each process's share of the GPU as sampled once a second
+  (`--json` has `source`).
 
 ### Fixed
 
