@@ -6210,6 +6210,59 @@ from them.
     16,16,16 and the tags `yuvj420p,pc,unknown,...`, 2 of its checks failed in each); t_record_layout's
     last-frame cells now within 8 of 255, not 48. Upstream (wf-recorder or ffmpeg 9's buffersink
     range negotiation): a yuv420p stream tagged pc with limited values.
+313. **Audio in a box: `up --audio`, `record --audio`, `omabox audio`** (2026-10-14, #226). A box had
+    no sound (PipeWire's sockets masked under `--systemd`, finding 61), so an app's sound went
+    nowhere and videos were silent. `up --audio` starts the box's own `pipewire`, `wireplumber` and
+    `pipewire-pulse` in share/session.sh (after the keyring, before Hyprland; wireplumber and the
+    pulse server once `pipewire-0` is there), logging to `~/audio.log` (`omabox log audio`), with
+    two drop-ins written into the box HOME each start (share/audio/): a null sink `omabox-speaker`
+    (`support.null-audio-sink`, Audio/Sink), the default output, and `omabox-mic` (Audio/Source/Virtual,
+    silent), the default input, so a pulse app that opens the default mic gets silence rather than the
+    speaker's monitor; WirePlumber's alsa, bluez, v4l2 and libcamera monitors disabled. `up` waits
+    (10 s) until the box's pulse server says those two are the defaults, else the box goes (as any
+    failed up). Packages: pipewire, wireplumber, pipewire-pulse, pactl (libpulse); missing ones are
+    named. Safety, checked: the box's `/run/user/$UID` is its own (its `pipewire-0` another inode than
+    the host's), no `/dev/snd` (bwrap's `--dev`), no system bus, the session starts from `env -i`, and
+    the host's PipeWire (`pw-cli ls Client`, a read-only query) had no client whose pid `omabox
+    which` puts in the box while one played and recorded. WirePlumber logs its missing system bus
+    and logind; pipewire its rtkit (no realtime: fine for a null sink). The box's bar (quickshell)
+    joins as a client, its volume widget on the null sink. With `--systemd` the masked sockets stay
+    masked and the three are started by hand all the same (checked: one of each, the defaults set).
+    `record --audio`: not wf-recorder's `-a`. Arch's wf-recorder 0.6.0 has only the Pulse backend
+    (no `--audio-backend=pipewire`), and it starts its audio reader after its first frame and stamps
+    the first samples 0, as that frame is, whenever they came. Instead an ffmpeg in the box reads
+    `omabox-speaker.monitor` through pipewire-pulse into REC_DIR/audio.mka (FLAC), started before the
+    wf-recorders (`record start` waits, 5 s at most, for its first samples), INT at stop with them.
+    ffmpeg's pulse input stamps packets with the wall clock less the stream's latency (`wallclock`,
+    on by default) and its log says the input's `start:`; `stop` takes the samples by their own count
+    (`asetpts=N/SR/TB`: the stamps themselves drift ~3% against the count early on, a time filter
+    settling), delays them by silence (`adelay`) or cuts them (`atrim`) by that start less the
+    video's first frame (record_first_us, finding 306), pads them (`apad`) and ends with the video
+    (`-shortest`); AAC 192k, in the fps pass or as the last input of record_compose (`--monitor all`;
+    its `-t` moved after that input: before it, it was the audio's input option and the video never
+    ended). Measured with a paced stream (perl writing 10 ms chunks on the clock into `pw-cat
+    --latency 480`, started before) that turns from silence to a 1 kHz tone as its terminal turns red,
+    the tone's first sample against that moment in the video's clock (a mark just before it):
+    +11 to +15 ms (pw-cat's own 10 ms buffer among them) over 4 takes by hand and 6 in the suite's,
+    one monitor and `--monitor all`; 30 s into a take, +8 ms as at its start (no drift). With ffmpeg's default fragment size it
+    was -21 to +19 ms (the first take of a fresh box early); `-fragment_size 1920` (10 ms) made it
+    steady. A tone from `pw-play` started at the change comes ~60 ms after it: the player's own start.
+    `omabox audio [SECONDS] [--json]` (3 s): ffmpeg in the box reads the monitor for SECONDS from now,
+    `astats` per 100 ms (peak, RMS, dBFS); the null sink gives exact zeros while nothing plays, so a
+    window above -70 dBFS is a sound. Text: "sound for 1.1s of 2.5s: peak -21.1 dBFS, RMS -24.5 dBFS
+    while it sounded; at 0.4-1.5s" or "silence for 3s"; `--json` adds every window. ffmpeg's `-t`
+    goes by the pulse stamps and let 7 windows through for 0.5 s: the windows are cut to SECONDS'
+    worth. Decided: a silent mic as the default input (not none, not the speaker's monitor); `audio`
+    exits 0 for silence too (the answer is in its text and `sound`); `--audio` is set at `up` (a box
+    without it is refused by `record --audio` and `audio`, and `up --audio` on it says so). A box
+    without `--audio` is as before (no PipeWire; t_main checks). Not tried: an interactive `--audio`
+    box (the same session.sh path), ScreenCast now that a box can have PipeWire (finding 148). Not
+    guarded: a box app pointed by hand at a host Pulse TCP server (`PULSE_SERVER=tcp:127.0.0.1:...`,
+    off by default) would reach it through a connected box's loopback, with or without `--audio`.
+    Tests: t_audio (the devices, no /dev/snd, its own socket, the host's PipeWire with no client from
+    it, `audio` silence and a 1 s tone, two takes: one monitor and `--monitor all`, H.264+AAC, the
+    tone within 50 ms of its moment and of the first red frame give or take one); t_main (no audio:
+    refusals, no pipewire); t_unit_record (`mark --audio`, `audio 0`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -6236,7 +6289,8 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   the system's; `/opt/omabox/lib` comes first now) are parked until a project needs them (→ #81). A
   `--hyprland` build whose RUNPATH points outside its own folder finds those libraries on the host
   (`ldd` passes) but not in the box.
-- Portals (findings 12, 148): ScreenCast needs PipeWire in the box (started by hand it worked); portal
+- Portals (findings 12, 148): ScreenCast needs PipeWire in the box (started by hand it worked; an
+  `up --audio` box has it now, finding 313, ScreenCast there not rechecked); portal
   errors are not logged (dbus-daemon drops an activated service's stderr).
 - AMD and Intel iGPUs, an RTX 4070 SUPER (finding 77) and an RTX 5070 Ti (finding 124: the full
   suite, nothing skipped, 2026-09-30) tested; other NVIDIA cards, multi-GPU and other setups: → #84.

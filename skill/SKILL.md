@@ -148,7 +148,7 @@ toolchains; nothing else of the user's HOME. Mounting HOME, `~/.config/omarchy`,
 stores or the runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`;
 `omabox path` → `<dir>/home` on the host). The box's /run/user/$UID is `<dir>/run` from the host
 (`omabox path --run`); the host's own /run/user/$UID is the real session's: never read app state
-there. Private session bus and keyring; no system bus, devices or audio; `/sys` is the host's.
+there. Private session bus and keyring; no system bus or devices; audio: `up --audio`; `/sys`: the host's.
 ref: Mounts, HOME and the session.
 
 ## Showing the user

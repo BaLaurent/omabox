@@ -293,7 +293,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - `omabox log [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]`: the box's logs, the last 100 lines
   of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors), `apps` (what the
   launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
-  `--systemd`), `events` (Hyprland's events, which `omabox events` reads), `box` (bwrap), `reap` (the
+  `--systemd`), `audio` (PipeWire's, with `--audio`), `events` (Hyprland's events, which `omabox events` reads), `box` (bwrap), `reap` (the
   reaper's: idle and agent checks, the down it did). A box that died keeps its logs until `down`: read them to see why.
   `-f` follows until the box goes down (exit 0). `-i` (ignore case) goes anywhere, `--grep -i RE`
   too. Hyprland writes its log in pieces: a line about what just happened can come a moment (or
@@ -581,7 +581,11 @@ most people will. Then:
   the first frame, exact to a few ms); `stop` writes demo.marks.tsv and demo.vtt (captions: `ffmpeg
   -i demo.mp4 -vf subtitles=demo.vtt out.mp4`; a cut: `ffmpeg -ss A -to B` with two marks' times), and
   the sheet shows each mark under the frame after it. A script's omabox calls take time of their own:
-  the marks show how far the scenes drift from its sleeps. Frames to compare instead (an animation's steps):
+  the marks show how far the scenes drift from its sleeps. Sound (an `up --audio` box): `record start
+  --audio` muxes the box's speaker into the MP4 (AAC), in step with the picture (a sound within ~15 ms
+  of a change drawn at the same moment; a player's own start adds its latency: pw-play ~60 ms);
+  `omabox audio 3 [--json]` listens for 3 s from now and says silence, or when and how loud (peak, RMS
+  in dBFS, the spans): start it, then make the sound. Frames to compare instead (an animation's steps):
   `omabox shot --burst N --sheet` (above), never a loop of `grim` in the box.
 - **The package itself** (install, upgrade, removal, pacman hooks): not in a box (a read-only `/usr`,
   no pacman). A VM, or ask the user.
@@ -638,7 +642,10 @@ login screen and the disk passphrase stay a VM's to test.
   On NVIDIA an output the app creates itself (`hyprctl output create headless`) comes up 0x0: a box
   on the other GPU (`OMABOX_RENDER_NODE`, "Screen size and rendering cost").
 - No system bus: no NetworkManager, bluetooth, UPower/power profiles, udisks, logind, polkit. No
-  devices: no audio (PipeWire), no `/dev/i2c` (DDC/CI brightness), no backlight, no real keyboards,
+  devices: no sound card (`up --audio` gives a box its own PipeWire, with a null sink, omabox-speaker,
+  as its only output and a silent mic, omabox-mic: apps play, nobody hears, `omabox audio` and
+  `record --audio` read it; real outputs, Bluetooth audio and `wpctl` on the user's devices stay
+  untestable), no `/dev/i2c` (DDC/CI brightness), no backlight, no real keyboards,
   mice, touchpads, tablets, cameras, USB or printers. No systemd user manager unless `up --systemd`
   (never journald or logind), no installed `.desktop` files or URL handlers, no idle or suspend; the
   lock screen locks but takes no real password ("Testing the lock screen").

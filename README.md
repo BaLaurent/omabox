@@ -105,6 +105,8 @@ omabox record start -o demo.mp4        # a video of the screen; omabox record st
 omabox record start --monitor all      # ...of every monitor, laid out in one video as shot takes them
 omabox record mark "scene 2"           # a mark in the video's clock: demo.marks.tsv and demo.vtt captions
 omabox record stop --sheet             # ...and demo.sheet.png: frames with their times, to check a take
+omabox audio 3                         # an up --audio box (sound nobody hears): did the app make one, how loud
+omabox record start --audio            # ...and the video with its sound, in step with the picture
 omabox shot --no-pointer               # a still for people (pointer hide: none until pointer show)
 omabox output drop [NAME] --for 300ms  # a screen gone and back, as a monitor waking up
 omabox gdb [--watch]                   # backtraces of the box's Hyprland: a hang, or a crash
@@ -142,7 +144,9 @@ omabox which 12345                     # the box a host pid is in, a bar like yo
   and `omabox down --orphans` takes those down. Nothing does by itself, and a box you start at a
   terminal is never one.
 - **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours), `--systemd` (a real
-  systemd user manager, for plugins that manage a service or schedule alarms), `--from SAVE` (start
+  systemd user manager, for plugins that manage a service or schedule alarms), `--audio` (the box's
+  own PipeWire with a speaker nobody hears and a silent mic: `omabox audio` and `record --audio` read
+  what played; never your speakers), `--from SAVE` (start
   with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for
   the whole box session), `--xwayland`, `--autoreload` (Hyprland reloads its config when a file it
   loaded changes, as on your desktop), `omabox gpu 10` (GPU time of one box's
@@ -420,7 +424,8 @@ blocks the network and every other socket, omabox's included), or see
 - **Its HOME** is fake, seeded with your theme and shell settings and nothing secret (no API keys,
   keyrings or tokens), and `omabox down` deletes it with whatever a plugin or app changed there.
 - **Its session**: a private session bus, its own accessibility (AT-SPI) bus and a throwaway keyring
-  (secrets stored and read without prompts), no system bus, no real input devices, no audio, no Xwayland unless `--xwayland`.
+  (secrets stored and read without prompts), no system bus, no real input devices, no audio unless `--audio` (then its own PipeWire, a
+  speaker nobody hears and a silent mic; never your audio server or `/dev/snd`), no Xwayland unless `--xwayland`.
   `/usr`, `/etc` and `/sys` are read-only, with no `sudo`, pacman or polkit, so nothing in a box can
   install packages, system config or rules. Your host's processes are not visible from it.
 - **Your seat**: a box never gets `/dev/dri/card*`, `/dev/input`, seatd, the system bus or your real
@@ -592,6 +597,7 @@ The longer comparison is on [omabox.app](https://omabox.app/compare).
 └ bwrap (pid/ipc/uts namespaces, fake HOME, private /run/user/$UID and /tmp)
   └ share/session.sh           the session: private bus (dbus-daemon), keyring, PATH, env
     ├ [systemd --user]         --systemd only (in its own delegated cgroup scope)
+    ├ [pipewire, wireplumber]  --audio only (and pipewire-pulse): a null sink, a silent mic
     └ labwc, headless          invisible parent compositor
       └ Hyprland, nested       Omarchy's default config; screen = a headless output of any size
         ├ quickshell           the Omarchy shell (not with --no-shell)

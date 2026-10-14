@@ -62,6 +62,24 @@ if [ ! -e "$HOME/.local/share/keyrings/login.keyring" ]; then
 fi
 without_host_fd gnome-keyring-daemon --daemonize --components=secrets > "$HOME/keyring.log" 2>&1
 
+# `up --audio` (#226): the box's own PipeWire, WirePlumber and pipewire-pulse, on its own runtime dir
+# (the host's sockets are never in a box, and a box has no /dev/snd). The only output is a null sink,
+# omabox-speaker, whose monitor `record --audio` and `omabox audio` read; the only input a silent
+# omabox-mic, so an app that wants a microphone gets one. WirePlumber's device monitors are off: it
+# would find no device anyway (no /dev/snd, no system bus), and none is ever opened should one show.
+# The two drop-ins are written each start, over whatever a save or --seed left at their names.
+if [ "${OMABOX_AUDIO:-0}" = 1 ]; then
+  mkdir -p "$HOME/.config/pipewire/pipewire.conf.d" "$HOME/.config/wireplumber/wireplumber.conf.d"
+  rm -f "$HOME/.config/pipewire/pipewire.conf.d/90-omabox.conf" "$HOME/.config/wireplumber/wireplumber.conf.d/90-omabox.conf"
+  cp /opt/omabox/share/audio/pipewire.conf "$HOME/.config/pipewire/pipewire.conf.d/90-omabox.conf"
+  cp /opt/omabox/share/audio/wireplumber.conf "$HOME/.config/wireplumber/wireplumber.conf.d/90-omabox.conf"
+  : > "$HOME/audio.log"
+  without_host_fd pipewire >> "$HOME/audio.log" 2>&1 &
+  for _ in $(seq 100); do [ -S "$XDG_RUNTIME_DIR/pipewire-0" ] && break; sleep 0.05; done
+  without_host_fd wireplumber >> "$HOME/audio.log" 2>&1 &
+  without_host_fd pipewire-pulse >> "$HOME/audio.log" 2>&1 &
+fi
+
 # The session's PATH (finding 57), so the bar, plugins and apps launched from binds find what `omabox
 # run` finds: omabox's stand-ins, the box HOME's ~/.local/bin (a test can drop a stub CLI there), then
 # the PATH `omabox up` ran with in its order, keeping only absolute dirs the box can see (mise's

@@ -551,6 +551,8 @@ t_unit_record() {
   check_match "...an unknown word" "start, stop, status, mark, sheet, or -- ACTION .*got go" "$(ob record go 2>&1)"
   check_match "...stop --no-pointer (#228)" "record stop: --no-pointer goes with start or -- ACTION" "$(ob record stop --no-pointer 2>&1)"
   check_match "...status --no-pointer" "record status: --no-pointer goes with start" "$(ob record status --no-pointer 2>&1)"
+  check_match "...mark --audio (#226)" "record mark: --audio goes with start or -- ACTION" "$(ob record mark --audio x 2>&1)"
+  check_match "audio SECONDS 0 refused" "audio: SECONDS is 0.1 to 600, got 0" "$(ob audio 0 2>&1)"
   # Marks and contact sheets (#176, finding 306).
   check_match "record mark without its text" "record mark: the mark's text" "$(ob record mark 2>&1)"
   check_match "...mark --no-pointer" "record mark: --no-pointer goes with start" "$(ob record mark --no-pointer x 2>&1)"
@@ -3274,6 +3276,12 @@ t_main() {
   check_eq "ls --json has the box's GPU, the node it renders on (#118)" "$(ob run -b "$B" -- printenv OMABOX_RENDER_NODE)" \
     "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .render.node')"
   check "ls --json lists it up" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\" and .state == \"up\")'"
+  # No --audio (#226): no PipeWire in the box, and what reads its sound refused.
+  check_eq "ls --json: no audio" false "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .audio')"
+  check_fails "...no pipewire in it" ob run -b "$B" -- pgrep -x pipewire
+  check_match "...record --audio refused" "record --audio: box '$B' has no audio" "$(ob record -b "$B" start --audio 2>&1)"
+  check_match "...audio refused" "audio: box '$B' has no audio" "$(ob audio -b "$B" 2>&1)"
+  check_match "...up --audio again refused" "without what you asked for: --audio \(it has no audio\)" "$(ob up "$B" --audio 2>&1)"
   # finding 62: up waits for the shell (bar layer + notification server) before returning
   check "bar is up when up returns" bash -c "'$CLI' hyprctl -b '$B' -j layers | grep -q omarchy-bar"
   check "notify-send works right after up" ob run -b "$B" -- notify-send omabox-test
@@ -6732,6 +6740,90 @@ record_layout_on() {
   check_eq "...at its pixels" "1280,720" "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
   ob down "$B" >/dev/null
 }
+# Audio in a box (#226, finding 313): up --audio's own PipeWire, its only devices a speaker nobody
+# hears and a silent mic, nothing of the host's audio in it (no /dev/snd, its own sockets; your
+# PipeWire, asked read-only, has no client from it); `audio` tells silence from a tone; `record
+# --audio` (one monitor, then --monitor all) muxes the sound in step with the picture: a paced stream
+# (pw-cat, started before) turns from silence to a tone as its terminal turns red, and the tone is in
+# the video within 50 ms of that moment in the video's clock (a mark just before it gives it) and of
+# the first red frame (give or take a frame). A tone from a player started then (pw-play) comes ~60
+# ms later than its terminal's red: the player's own start, not the recording's.
+# The paced stream: s16le 48 kHz stereo, silence for ARGV[0] s, then a 1 kHz tone for 1 s; as the
+# tone starts, the terminal's background red (its tty) and the time to /tmp/flip226.
+T226_GEN='use IO::Handle; use Time::HiRes qw(time sleep); my $s = shift; my ($r, $c, $n, $f) = (48000, 480, 0, 0);
+open(my $tty, ">", "/dev/tty"); $tty->autoflush(1); my $t0 = time;
+while (1) { my $t = $n * $c / $r; last if $t > $s + 1.2; my $w = $t0 + $t - time; sleep($w) if $w > 0;
+  if ($t >= $s && !$f) { print $tty "\033]11;#ff0000\007"; open(my $o, ">", "/tmp/flip226"); print $o time, "\n"; close $o; $f = 1 }
+  my $b = ""; for my $i (0 .. $c - 1) { my $v = ($t >= $s && $t < $s + 1) ? int(16000 * sin(6.2831853 * 1000 * ($n * $c + $i) / $r)) : 0; $b .= pack("s<s<", $v, $v) }
+  syswrite(STDOUT, $b); $n++ }'
+t_audio() {
+  local B=$P-audio b
+  for b in pipewire wireplumber pipewire-pulse pactl wf-recorder ffmpeg perl pw-cat; do
+    command -v "$b" >/dev/null || { skip "up --audio" "no $b here"; return; }
+  done
+  check "up --audio" "$CLI" up "$B" --audio --no-shell --net isolated --size 1280x720
+  check_eq "ls --json: audio" true "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .audio')"
+  check_match "...up again with it: already up" "box '$B' is already up$" "$(ob up "$B" --audio 2>&1)"
+  check_eq "its default output omabox-speaker, input omabox-mic, and no other device" "omabox-speaker omabox-mic|omabox-speaker|omabox-mic" \
+    "$(ob run -b "$B" -- sh -c 'echo "$(pactl get-default-sink) $(pactl get-default-source)"; pactl list short sinks | cut -f2; pactl list short sources | cut -f2 | grep -v "[.]monitor$"' | paste -sd '|')"
+  check_fails "...no /dev/snd in it" ob run -b "$B" -- test -e /dev/snd
+  local hs bs
+  hs=$(stat -c %d:%i "${XDG_RUNTIME_DIR:-/nonexistent}/pipewire-0" 2>/dev/null) || hs=none
+  # shellcheck disable=SC2016 # the box's sh's
+  bs=$(ob run -b "$B" -- sh -c 'stat -c %d:%i "$XDG_RUNTIME_DIR/pipewire-0"' 2>/dev/null) || bs=""
+  check "...its PipeWire socket its own (${bs:-none}; yours ${hs})" test -n "$bs" -a "$bs" != "$hs"
+  check_match "audio: silence while nothing plays" "^silence for 0.5s: nothing played to the speaker of box '$B'$" "$(ob audio -b "$B" 0.5 2>&1)"
+  ob run -b "$B" -- ffmpeg -v error -y -f lavfi -i "sine=f=1000:d=1:sample_rate=48000" -ac 2 /home/sbx/tone.wav
+  ob run -b "$B" -d -- sh -c 'sleep 0.3; pw-play ~/tone.wav' >/dev/null 2>&1
+  local aj; aj=$(ob audio -b "$B" 2 --json 2>&1)
+  check "audio 2 --json: a 1 s tone, -40 to -10 dBFS, heard 0.8 to 1.3 s, 20 windows" \
+    jq -e '.sound and .peak_db > -40 and .peak_db < -10 and .sound_s >= 0.8 and .sound_s <= 1.3 and (.levels | length) == 20 and (.spans | length) == 1' <<<"$aj"
+  audio_take_on "$B" ""
+  ob monitor -b "$B" add 1280x720,right >/dev/null 2>&1
+  audio_take_on "$B" all
+  check_match "record stop --audio refused" "record stop: --audio goes with start or -- ACTION" "$(ob record -b "$B" stop --audio 2>&1)"
+  ob down "$B" >/dev/null
+}
+# audio_take_on BOX MONITOR: one take of t_audio's paced tone and red terminal, recorded with --audio
+# (MONITOR all: the whole layout), checked in the video.
+audio_take_on() {
+  local B=$1 mon=$2 v=$TMP/$1-${2:-main}.mp4 out flip m mt cv on fr hp p inbox="" margs=()
+  [ -z "$mon" ] || margs=(--monitor "$mon")
+  ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
+  # shellcheck disable=SC2016 # the box's bash's
+  ob run -b "$B" -d --wait -- foot --app-id t226 bash -c '[ -p /tmp/go226 ] || mkfifo /tmp/go226; read -r _ < /tmp/go226
+    perl -e "$1" 1 | pw-cat -p --raw --format s16 --rate 48000 --channels 2 --latency 480 -; sleep 600' t226 "$T226_GEN" >/dev/null 2>&1
+  if ! ob wait -b "$B" window class:t226 >/dev/null 2>&1 || ! ob wait -b "$B" still >/dev/null 2>&1; then no "record --audio ${margs[*]}" "no terminal t226"; return; fi
+  out=$(ob record -b "$B" start --audio "${margs[@]}" -o "$v" 2>&1)
+  check_match "record start --audio ${margs[*]}: its sound too, said" "of box '$B' and its sound (as one|to $v)" "$out"
+  check_match "...status says so" "of box '$B' and its sound (as one|at 30 fps)" "$(ob record -b "$B" status 2>&1)"
+  sleep 0.5
+  ob record -b "$B" mark go >/dev/null 2>&1
+  ob run -b "$B" -- sh -c 'echo > /tmp/go226'
+  sleep 1
+  # Your PipeWire, asked once and only read (pw-cli ls Client): none of its clients is in the box.
+  if [ -z "$mon" ] && command -v pw-cli >/dev/null && [ -S "${XDG_RUNTIME_DIR:-/nonexistent}/pipewire-0" ]; then
+    hp=$(timeout 5 pw-cli ls Client 2>/dev/null | sed -n 's/.*pipewire.sec.pid = "\{0,1\}\([0-9]*\).*/\1/p' | sort -u) || hp=""
+    for p in $hp; do [ "$(ob which "$p" 2>/dev/null)" != "$B" ] || inbox+=" $p"; done
+    check "...your PipeWire has no client from the box while it plays (${hp//$'\n'/ })" test -n "$hp" -a -z "$inbox"
+  fi
+  sleep 1.5
+  out=$(ob record -b "$B" stop 2>&1 >/dev/null)
+  check_match "record stop: with sound, said" "at 30 fps, with sound$" "$out"
+  check_eq "...the MP4 has H.264 and AAC" "h264|aac" "$(ffprobe -v error -show_entries stream=codec_name -of csv=p=0 "$v" 2>&1 | paste -sd '|')"
+  flip=$(ob run -b "$B" -- cat /tmp/flip226 2>/dev/null | tr , .)
+  read -r m mt < <(awk -F '\t' 'NR == 2 { print $1, $2 }' "${v%.mp4}.marks.tsv" 2>/dev/null)
+  cv=$(awk -v m="${m:-0}" -v mt="${mt:-0}" -v c="${flip:-0}" 'BEGIN { printf "%d", m + (c - mt) * 1000 }')
+  # The tone's first sample above -40 dBFS, in ms; the first frame whose middle is red.
+  on=$(ffmpeg -v error -i "$v" -map 0:a:0 -ac 1 -ar 48000 -f s16le - 2>/dev/null | od -An -td2 -w2 -v |
+    awk '{ v = $1 < 0 ? -$1 : $1; if (v > 328) { printf "%d", (NR - 1) / 48; exit } }')
+  fr=$(ffmpeg -v error -i "$v" -vf "crop=100:100:200:200,scale=1:1" -f rawvideo -pix_fmt rgb24 - 2>/dev/null |
+    od -An -tu1 -w3 -v | awk '$1 > 200 && $2 < 80 && $3 < 80 { print NR - 1; exit }')
+  check "...the tone within 50 ms of when it started, in the video's clock (started at $cv ms, heard from ${on:-never} ms)" \
+    awk -v o="${on:--1}" -v c="$cv" 'BEGIN { exit !(o >= 0 && o - c <= 50 && c - o <= 50) }'
+  check "...and of the first red frame, give or take one (frame ${fr:-none} at 30 fps)" \
+    awk -v o="${on:--1}" -v f="${fr:--1}" 'BEGIN { t = f * 1000 / 30; exit !(o >= 0 && f >= 0 && o - t <= 84 && t - o <= 84) }'
+}
 # Turned monitors (finding 311): extent, shot --monitor, click --in and pixel took a monitor's mode over
 # its scale as its size in the layout, landscape for a portrait monitor.
 t_monitors_turned() {
@@ -10054,7 +10146,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

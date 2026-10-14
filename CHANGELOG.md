@@ -7,6 +7,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **Sound in a box, and in its videos.** `omabox up --audio` gives a box its own PipeWire (Pulse
+  apps too) with a speaker nobody hears as its only output and a silent microphone: an app's sounds
+  play, and never reach your speakers or your audio server. `omabox audio 3` listens for three
+  seconds and says whether the box made a sound, when and how loud (`--json` for every 100 ms), so
+  an agent can check a notification sound or a player without hearing it. `omabox record start
+  --audio` puts the sound in the video (AAC), in step with the picture to about 15 ms, with
+  `--monitor all` too (#226).
 - **A video of every monitor at once.** `omabox record start --monitor all` (and `record --monitor
   all -- ACTION`) records a box's whole layout as one video, laid out as `omabox shot` takes the
   screen: each monitor at its place, a lower-scale or turned one as it is shown, the gaps black, the
