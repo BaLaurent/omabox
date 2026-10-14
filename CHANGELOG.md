@@ -7,6 +7,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **Shots and videos without the pointer.** `shot --no-pointer` and `record --no-pointer` leave the
+  pointer out, for stills and videos meant for people: no arrow on the app, and none parked on
+  something with a hover state. It is shown again afterwards, as it was, also when the shot or
+  recording fails or is stopped (#228). `omabox pointer hide` (or `up --no-pointer`) hides it in a
+  box until `omabox pointer show`, and it stays hidden over config reloads and theme switches, so a
+  series of stills across themes needs it once. Hidden, the pointer still moves, clicks and gives
+  focus as before.
 - **`ls` tells a box nobody will take down.** A headless box at `--idle 0` with no agent session to
   go with has nothing to end it, and when the script or agent that started it was gone it stayed up
   for good, listed like any box in use (#220). `up` now records what started a box; `ls` says

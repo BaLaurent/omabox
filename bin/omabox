@@ -77,6 +77,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--theme NAME]                               start on that theme, not your desktop's current one
             [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
+            [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
@@ -84,11 +85,11 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--json]                                     the box as ls --json lists it, on stdout
   omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
              [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
-  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N]
+  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
-  omabox record [-b NAME] (start [-o FILE] [--monitor NAME] [--fps 30] | stop | status)   a video of the screen
-  omabox record [-b NAME] [-o FILE] [--monitor NAME] [--fps 30] [--hold 1s] -- ACTION...   one action, recorded
+  omabox record [-b NAME] (start [-o FILE] [--monitor NAME] [--fps 30] [--no-pointer] | stop | status)   a video of the screen
+  omabox record [-b NAME] [-o FILE] [--monitor NAME] [--fps 30] [--hold 1s] [--no-pointer] -- ACTION...   one action, recorded
   omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
@@ -100,6 +101,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- ARGS...
                  raw: move X Y [--steps N], click/down/up [BTN], scroll DY, hscroll DX,
                  source wheel|finger|continuous|tilt, sleep MS
+  omabox pointer [-b NAME] hide | show                   the pointer out of shots and recordings (it still moves), over reloads
   omabox scroll [-b NAME] [--window SEL | --in SHOT] [--wait] X Y DY [DX] [--source wheel|finger|continuous|tilt]
                 [--mod MODS]
                                                          scroll there (DX: sideways; 15 is a wheel notch)
@@ -245,7 +247,8 @@ a small crop as N x N, unblended: a 1 px border, a glyph's edge; \`click --in\` 
 -g "X,Y WxH" (or X,Y,W,H) crops: the screen's, or with --window the window's own coordinates.
 A cropped or scaled shot says so on stderr: \`click --in SHOT X Y\` (and \`drag\`, \`pointer --in\`)
 take that image's pixels (a window shot follows the window if it moved). Screen shots show the
-pointer; window shots never do. -o makes the file's folder if it is missing.
+pointer (--no-pointer: not this one; \`pointer hide\`: none until \`pointer show\`); window shots never
+do. -o makes the file's folder if it is missing.
 @ shot config drag
 \`omabox config shot-fit N\` makes --fit N every shot's default (\$OMABOX_SHOT_FIT overrides it; off
 or \`default\` clears it): for a model that reads points in the smaller image its API scales a big
@@ -293,6 +296,15 @@ a box at \`--size 3840x2160,scale=2\` gives a 4K video. \`record stop\` ends it 
 MP4 (H.264) at a steady --fps (30), -o FILE or a new one in \$TMPDIR. \`record -- ACTION\` (an omabox
 command: keys, click, run -d ...) records that one action and --hold (1s) after it. Needs wf-recorder
 and ffmpeg; both run in the box. One recording a box at a time; \`record status\` says if one runs.
+@ shot record pointer up
+\`shot --no-pointer\` (a screen shot, --burst too) and \`record --no-pointer\` leave the pointer out, for
+stills and videos meant for people (no arrow on the app, none parked on a hover state): it is hidden
+(Hyprland's cursor:invisible), a frame without it awaited (up to a second), and shown again after,
+as it was, also on a failure or Ctrl-C; a recording keeps it hidden until \`record stop\`.
+\`pointer hide\` (or \`up --no-pointer\`) hides it in the box until \`pointer show\`, over config reloads
+and theme switches (omarchy-theme-set reloads). Hidden, it still moves and clicks where it is told,
+focus still follows it, and peek's marks still show it; \`wait\` and \`--changed\` leave out where it
+is, as they do when it shows.
 @ shot
 \`shot --changed\` (or \`--window SEL --changed\`) is a crop of what changed since the last whole
 shot of the same screen or window (\`shot\` without -g, --fit, --zoom or --monitor, or --changed;
@@ -2236,6 +2248,7 @@ up_already() {
   case " $given " in *" stock-bar "*) [ "$(meta bar)" = stock ] || diff+=("--stock-bar (it has your bar)") ;; esac
   case " $given " in *" xwayland "*) [ "$(meta xwayland)" = true ] || diff+=("--xwayland (it has none)") ;; esac
   case " $given " in *" autoreload "*) [ "$(meta autoreload)" = true ] || diff+=("--autoreload (its autoreload is off)") ;; esac
+  case " $given " in *" no-pointer "*) grep -qsx hidden "$D/pointer" || diff+=("--no-pointer (its pointer shows: omabox pointer hide)") ;; esac
   case " $given " in *" no-shell "*) [ "$(jq -r '.shell | tostring' "$D/box.json" 2>/dev/null)" = false ] || diff+=("--no-shell (it has the shell)") ;; esac
   case " $given " in *" omarchy "*) [ "$(meta omarchy)" = "$omarchy" ] || diff+=("--omarchy ${omarchy:-/usr/share/omarchy} (it runs $(meta omarchy | grep . || echo /usr/share/omarchy))") ;; esac
   case " $given " in *" hyprland "*) [ "$(meta hyprland)" = "$hyprland" ] || diff+=("--hyprland $hyprland (it runs $(meta hyprland | grep . || echo "the installed one"))") ;; esac
@@ -2267,7 +2280,7 @@ cmd_up() {
   STOCK_BAR=0 THEME=""
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 owner=""
-  local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
+  local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 nopointer=0 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
   local overlays=() robinds=() plugin_args=() envs=() seeds=() monitors=() theme_dirs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local named=() g        # the host paths --ro-bind, --seed and --overlay name, as named (refuse_src)
@@ -2284,7 +2297,7 @@ cmd_up() {
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--seed|--monitor|--theme-dir|--theme)
+      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--monitor|--theme-dir|--theme)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -2333,6 +2346,7 @@ cmd_up() {
       --xwayland) xwayland=1 ;;
       --autoreload) autoreload=1 ;;
       --no-shell) shell=0 ;;
+      --no-pointer) nopointer=1 ;;
       -h|--help) usage up; return ;;
       -*) die "up: unknown option $1" ;;
       *) [ -z "$name" ] || die "up: one box name, got $name and $1"; name=$1 ;;
@@ -2723,6 +2737,11 @@ cmd_up() {
       + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from,
           drawn_hidden: true} else {} end)' > "$D/box.json"
   [ $interactive = 0 ] || write_confirm_flag "$D/run" "$confirm"
+  # --no-pointer (#228): as `pointer hide` keeps it, read by the box's config from its first load.
+  if [ $nopointer = 1 ]; then
+    printf 'hidden\nwas false\n' > "$D/pointer"
+    box_file "$D/run/omabox.pointer" hidden || die "up: could not write the box's pointer setting"
+  fi
 
   # /etc/omarchy.conf, which Omarchy's env-bootstrap sources in every bash (the box HOME's .bashrc
   # included) to set OMARCHY_PATH and put its bin first (finding 135): the host's `omarchy dev link`
@@ -3945,7 +3964,7 @@ cmd_run() {
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
       --size|--plugin|--ro-bind|--overlay|--seed|--theme-dir|--theme|--monitor|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
-      --xwayland|--autoreload|--no-shell|--stock-bar|--systemd) up_args+=("$1") ;;
+      --xwayland|--autoreload|--no-shell|--no-pointer|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
       -*) die "run: unknown option $1 (the command goes after --; --interactive is up's only)" ;;
@@ -4404,12 +4423,13 @@ shot_fit_default() {
 # record [-b NAME] [-o FILE] [--monitor NAME] [--fps N] [--hold DURATION] -- ACTION...
 REC_DIR=/home/sbx/.cache/omabox-record
 cmd_record() {
-  local name="" sub="" out="" monitor="" fps=30 hold=1000 ract=()
+  local name="" sub="" out="" monitor="" fps=30 hold=1000 ract=() nopointer=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
       --monitor) optarg "$@"; monitor=$2; shift ;;
+      --no-pointer) nopointer=1 ;;
       --fps) optarg "$@"; fps=$2; shift ;;
       --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "record: --hold takes a duration up to 60s, like 500ms or 2s, got $2"; shift ;;
       --) shift; ract=("$@"); break ;;
@@ -4432,13 +4452,15 @@ cmd_record() {
   else
     [ -n "$sub" ] || die "record: start, stop, status, or -- ACTION (omabox help record)"
   fi
+  case $sub in stop|status) [ $nopointer = 0 ] || die "record $sub: --no-pointer goes with start or -- ACTION" ;; esac
   select_box "$name"; need_box
   case $sub in
     status) record_status; return ;;
     stop) [ -z "$out$monitor" ] || die "record stop: -o and --monitor go with start"; record_stop; return ;;
   esac
-  record_start "$out" "$monitor" "$fps"
-  [ ${#ract[@]} -gt 0 ] || return 0
+  record_start "$out" "$monitor" "$fps" "$nopointer"
+  # A recording that goes on past this omabox keeps the pointer hidden until `record stop`.
+  [ ${#ract[@]} -gt 0 ] || { trap - EXIT INT TERM HUP; return 0; }
   local rc=0
   "$0" -b "$NAME" "${ract[@]}" >&2 || rc=$?
   sleep "$(awk -v ms="$hold" 'BEGIN { printf "%.3f", ms / 1000 }')"
@@ -4462,9 +4484,9 @@ record_status() {
   else echo "box '$NAME': not recording"; fi
 }
 
-# record_start FILE MONITOR FPS
+# record_start FILE MONITOR FPS NOPOINTER
 record_start() {
-  local file=$1 mon=$2 fps=$3 mons
+  local file=$1 mon=$2 fps=$3 nopointer=${4:-0} mons
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then
     die "record: needs wf-recorder and ffmpeg (sudo pacman -S wf-recorder ffmpeg)"
   fi
@@ -4483,6 +4505,9 @@ record_start() {
   file=$(readlink -f -- "$file")
   local err; err=$( { : > "$file.part"; } 2>&1 ) || die "record: cannot write $file: ${err##*: }"
   rm -f -- "$file.part"
+  # --no-pointer (#228): hidden before the first frame; `record stop` shows it again (and this omabox,
+  # should it fail before the recording runs).
+  [ "$nopointer" = 0 ] || ptr_hold_until_exit "record $$"
   local pid
   # shellcheck disable=SC2016 # the inner bash's
   # A session of its own, INT back to its default (a background job of a non-interactive shell ignores
@@ -4515,6 +4540,8 @@ record_stop() {
     done
   fi
   rm -f "$D/record"
+  # Its --no-pointer's hold given back (#228): the pointer as it was before.
+  ! grep -qs '^hold record ' "$D/pointer" || ptr_change release record || ptr_fail "record stop"
   # A steady REC_FPS (wf-recorder's frames come as the screen gives them), for any player and editor.
   box_exec ffmpeg -v error -y -i "$REC_DIR/raw.mkv" -vf "fps=$REC_FPS" -c:v libx264 -preset medium -crf 18 \
     -pix_fmt yuv420p -movflags +faststart "$REC_DIR/out.mp4" </dev/null >&2 ||
@@ -4530,11 +4557,12 @@ record_stop() {
 
 cmd_shot() {
   local name="" out="" geom="" sels=() fit="" tofd="" as="" zoom="" burst="" every="" sheet=0 bdiff=0 after=() monitor=""
-  local changed=0 since="" masks=()
+  local changed=0 since="" masks=() nopointer=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
+      --no-pointer) nopointer=1 ;;
       # A jailed caller's omabox (relay_shot): the image goes to its file, opened in the jail and
       # passed as fd N, and is named AS in what shot says. The broker opens no path of the caller's.
       --to-fd) optarg "$@"; [[ $2 =~ ^[3-9]$ ]] || die "shot: --to-fd takes 3-9, got $2"; tofd=$2; shift ;;
@@ -4705,6 +4733,9 @@ cmd_shot() {
       grim+=(-s "$(awk -v n="$fit" -v l="$base" 'BEGIN { printf "%.6f", int(n / l * 1e6 + 1) / 1e6 }')")
     fi
   fi
+  # --no-pointer (#228): hidden from the first frame on, shown again when this omabox ends. A window's
+  # own pixels never have it.
+  [ $nopointer = 0 ] || [ -n "$win" ] || ptr_hold_until_exit "shot $$"
   if [ -n "$burst" ]; then shot_burst "$burst" "${every:-100}" "$sheet" "$bdiff" "${after[@]}"; return; fi
   # --changed captures the whole of it beside the references, to compare; the crop is written after.
   if [ $changed = 1 ]; then
@@ -5466,6 +5497,24 @@ pointer_marks() {
 # pointer is (#38), `move X Y --steps N` one move (so `move A move B` is a path through A); --mod
 # holds modifiers down for the whole sequence. The tool's --hold is omabox's own (it never returns):
 # refused here.
+# omabox pointer hide|show (#228): the pointer out of the box's frames until `show`, over reloads (the
+# box's config reads omabox.pointer on every load); `hide` returns once a frame without it is drawn.
+# A box started before that config is said so.
+pointer_shown() {
+  ptr_change "$1" "" 1 || ptr_fail "pointer $1"
+  if [ "$1" = hide ]; then
+    say "pointer: hidden in box '$NAME' (shots, recordings, peek) until omabox pointer show; it still moves, and focus follows it"
+    [ "$(meta mode)" != interactive ] || say "pointer: the box is interactive: whoever drives its window sees no pointer over it either"
+    local cfg; cfg=$(run_read omabox-hyprland.lua 2>/dev/null) || cfg=""
+    [[ $cfg == *omabox.pointer* ]] ||
+      say "pointer: box '$NAME' runs a config from before this: a config reload shows it again (omabox reload -b $NAME takes this omabox's)"
+  elif [ "$PTR_HOLDS" -gt 0 ]; then
+    say "pointer: box '$NAME' shows it again once the shot or recording with --no-pointer ends"
+  else
+    say "pointer: shown in box '$NAME'"
+  fi
+}
+
 cmd_pointer() {
   local name="" in="" sels=() steps=1 mods=""
   while [ $# -gt 0 ]; do
@@ -5481,6 +5530,11 @@ cmd_pointer() {
   done
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "pointer: --in or --window, not both"
   local a; for a; do [ "$a" != --hold ] || die "pointer: --hold is omabox's own (it never returns); to keep a button down: down, move ..., up (or omabox drag)"; done
+  if [ "${1:-}" = hide ] || [ "${1:-}" = show ]; then
+    [ $# = 1 ] && [ -z "$in$mods" ] && [ ${#sels[@]} = 0 ] && [ "$steps" = 1 ] || die "pointer $1: nothing else with it"
+    select_box "$name"; need_box
+    pointer_shown "$1"; return
+  fi
   select_box "$name"; need_box
   # Moves to screen pixels (--in, --window), in steps from where the pointer was (--steps). The mark
   # has the moves as asked, in screen pixels: a step each would pass peek's 64 tokens.
@@ -5632,7 +5686,7 @@ ms_duration() {
 # Milliseconds as seconds, 2 decimals: 430 → 0.43s.
 ms_s() { awk -v m="$1" 'BEGIN { printf "%.2fs", m / 1000 }'; }
 
-# Where the software cursor is drawn (it is in every frame: finding 82), as an omabox-still rectangle
+# Where the software cursor is drawn (in every frame, unless hidden: findings 82, 305), as an omabox-still rectangle
 # around the point "X Y": the arrow is 16x27 from 1 px up and left of its hotspot; the text I-beam
 # (over a terminal or a field) is centred on it, ~10 px above and 5 left; the busy cursor shown while
 # the box starts reaches ~40 px down.
@@ -5658,6 +5712,141 @@ path_rects() {
 cursor_now() {
   local j; j=$(hypr_json cursorpos) || exit $?
   jq -r 'select((.x | type) == "number" and (.y | type) == "number") | "\(.x | floor) \(.y | floor)"' <<<"$j"
+}
+
+# The pointer hidden (#228, finding 305). Hyprland's cursor:invisible leaves it out of every frame
+# (shots, recordings, peek); it still moves, clicks where it is told, and focus still follows it. A
+# config reload sets the option back (omarchy-theme-set reloads), so the box's config hides it on every
+# load while its runtime dir's omabox.pointer says `hidden`. What omabox keeps is $D/pointer, in the box
+# dir the box cannot see, a line each: `hidden` (`pointer hide`, `up --no-pointer`); `hold shot PID` (a
+# `shot --no-pointer`, gone with omabox PID); `hold record PID` (`record --no-pointer`, until `record
+# stop`; PID the omabox that starts it, which keeps it until $D/record is written); `was true|false`,
+# cursor:invisible before omabox hid it, put back once nothing holds it. Changed under $D/.pointer.lock.
+
+# cursor:invisible in the box: `ptr_live` prints true or false, `ptr_live true|false` sets it. Fails
+# with what Hyprland said in PTR_ERR (ptr_fail says it).
+ptr_live() {
+  local out
+  if [ $# = 0 ]; then
+    out=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "error('omabox-ptr:' .. tostring(hl.get_config('cursor.invisible')), 0)" 2>&1) || true
+    case $out in "error: omabox-ptr:true"|"error: omabox-ptr:false") echo "${out#error: omabox-ptr:}"; return 0 ;; esac
+  else
+    out=$(on_box timeout "$HYPR_LIMIT" hyprctl eval "hl.config({ cursor = { invisible = $1 } })" 2>&1) || true
+    [ "$out" != ok ] || return 0
+  fi
+  PTR_ERR=$out; return 1
+}
+ptr_fail() {
+  box_alive || die "box '$NAME' went down (why: omabox log -b $NAME all)"
+  hypr_answers || die "$(hung_text)"
+  die "$1: the box's Hyprland did not answer as expected: ${PTR_ERR:-nothing}"
+}
+
+# Hide it (true) or show it (false) now, and wait for the frame that has it so: Hyprland draws the
+# next frame there 50-400 ms later (finding 305), and a capture before that is as it was. Seen as the
+# 64x64 around the pointer changing from what it was just before; a pointer not drawn either way
+# (hidden by a key press, Omarchy's cursor:hide_on_key_press, or off the screens) never changes it,
+# and 1 s is waited out. ptr_seen true|false
+ptr_seen() {
+  local v=$1 p ext x y w h out
+  p=$(cursor_now 2>/dev/null) && [ -n "$p" ] || { ptr_live "$v"; return; }
+  ext=$(extent 2>/dev/null) || { ptr_live "$v"; return; }
+  x=$((${p% *} - 16)) y=$((${p#* } - 16))
+  [ $x -ge 0 ] || x=0
+  [ $y -ge 0 ] || y=0
+  w=$((${ext%x*} - x)) h=$((${ext#*x} - y))
+  [ $w -le 64 ] || w=64
+  [ $h -le 64 ] || h=64
+  [ $w -gt 0 ] && [ $h -gt 0 ] || { ptr_live "$v"; return; }
+  # shellcheck disable=SC2016 # the inner sh's
+  out=$(on_box timeout 15 sh -c 'b=$(grim -g "$1" -t ppm - 2>/dev/null | cksum)
+    r=$(hyprctl eval "hl.config({ cursor = { invisible = $2 } })" 2>&1)
+    [ "$r" = ok ] || { printf "%s" "$r"; exit 1; }
+    case $b in *" 0") exit 0 ;; esac
+    end=$(($(date +%s%N) / 1000000 + 1000))
+    while [ $(($(date +%s%N) / 1000000)) -lt $end ]; do
+      [ "$(grim -g "$1" -t ppm - 2>/dev/null | cksum)" = "$b" ] || exit 0
+      sleep 0.02
+    done' sh "$x,$y ${w}x$h" "$v" 2>&1) || { PTR_ERR=$out; return 1; }
+}
+
+# Change what keeps the pointer hidden, and make the box match: the record first (a reload meanwhile
+# reads it), then cursor:invisible. ptr_change OP [TAG [WAIT]]: OP hide, show, hold TAG or release TAG
+# (TAG `shot PID` or `record PID`; `release record` takes any recording's). WAIT 1: a pointer it hides
+# or shows is waited for in the frame (ptr_seen). Holds whose omabox is gone are dropped (a recording's once
+# $D/record is gone too). PTR_HOLDS: the holds left. Fails as ptr_live does.
+ptr_change() {
+  local op=$1 tag=${2:-} wait=${3:-0} l pid hidden=0 was="" holds=() keep=() on0=0 on1=0 live rc=0
+  lock_file PTR_LOCK "$D/.pointer.lock" -w 10 || die "box '$NAME''s pointer is busy (another omabox is changing it)"
+  if [ -f "$D/pointer" ]; then
+    while IFS= read -r l; do
+      # Hidden by what it says, stale holds too: once nothing is left, it is shown as it was.
+      case $l in hidden|"hold "*) on0=1 ;; esac
+      case $l in
+        hidden) hidden=1 ;;
+        "was true"|"was false") was=${l#was } ;;
+        "hold shot "*) pid=${l#hold shot }
+          if [[ $pid =~ ^[0-9]+$ ]] && running "$pid"; then holds+=("$l"); fi ;;
+        "hold record "*) pid=${l#hold record }
+          if [[ $pid =~ ^[0-9]+$ ]] && { running "$pid" || [ -f "$D/record" ]; }; then holds+=("$l"); fi ;;
+      esac
+    done < "$D/pointer"
+  fi
+  case $op in
+    hide) hidden=1 ;;
+    show) hidden=0 was=false ;;
+    hold|release)
+      for l in ${holds[@]+"${holds[@]}"}; do
+        case $l in "hold $tag"|"hold $tag "*) ;; *) keep+=("$l") ;; esac
+      done
+      holds=(${keep[@]+"${keep[@]}"})
+      [ "$op" = release ] || holds+=("hold $tag") ;;
+  esac
+  [ $hidden = 0 ] && [ ${#holds[@]} = 0 ] || on1=1
+  PTR_HOLDS=${#holds[@]}
+  if [ $on1 = 1 ]; then
+    live=$(ptr_live) || { ptr_unlock; return 1; }
+    [ $on0 = 1 ] && [ -n "$was" ] || was=$live
+    if ! { { [ $hidden = 0 ] || echo hidden; [ ${#holds[@]} = 0 ] || printf '%s\n' "${holds[@]}"; echo "was $was"; } > "$D/pointer.new" &&
+      mv -f "$D/pointer.new" "$D/pointer" && box_file "$D/run/omabox.pointer" hidden; }; then
+      ptr_unlock; PTR_ERR="cannot write $D/pointer"; return 1
+    fi
+    if [ "$live" != true ]; then
+      if [ "$wait" = 1 ]; then ptr_seen true || rc=1; else ptr_live true || rc=1; fi
+    fi
+  else
+    rm -f "$D/pointer" "$D/run/omabox.pointer"
+    if [ $on0 = 1 ] || [ "$op" = show ]; then
+      # Shown only when it was hidden (a pointer already drawn leaves nothing to wait for).
+      live=$(ptr_live) || { ptr_unlock; return 1; }
+      if [ "$live" != "${was:-false}" ]; then
+        if [ "$wait" = 1 ]; then ptr_seen "${was:-false}" || rc=1; else ptr_live "${was:-false}" || rc=1; fi
+      fi
+    fi
+  fi
+  ptr_unlock
+  return $rc
+}
+
+# ptr_change's lock, global: a TERM during it ends this omabox with it held, and the release in the
+# exit trap (a subshell, which has the fd too) would wait on it.
+PTR_LOCK=""
+ptr_unlock() { [ -z "$PTR_LOCK" ] || exec {PTR_LOCK}>&-; PTR_LOCK=""; }
+
+# A one-off hold (shot, record --no-pointer) given back when this omabox ends however it ends: on an
+# exit, Ctrl-C or TERM. Quiet when the box went down meanwhile. ptr_hold_until_exit TAG
+ptr_hold_until_exit() {
+  PTR_TAG=$1
+  trap 'ptr_release_quiet "$PTR_TAG"' EXIT
+  trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+  ptr_change hold "$1" 1 || ptr_fail "--no-pointer"
+}
+# shellcheck disable=SC2329 # called from ptr_hold_until_exit's trap
+ptr_release_quiet() {
+  ptr_unlock
+  [ -f "$D/pointer" ] || return 0
+  ( ptr_change release "$1" 1 ) 2>/dev/null && return 0
+  ! box_alive 2>/dev/null || say "could not show box '$NAME''s pointer again (omabox pointer show -b $NAME)"
 }
 
 # omabox-still in the box, waiting on its first frame (the baseline). Its stdin is a pipe held here:

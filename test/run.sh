@@ -549,6 +549,8 @@ t_unit_record() {
   check_match "...an action with start" "records one action .*not with start" "$(ob record start -- keys Return 2>&1)"
   check_match "...--hold past 60s" "--hold takes a duration up to 60s" "$(ob record --hold 2m -- keys Return 2>&1)"
   check_match "...an unknown word" "start, stop, status, or -- ACTION .*got go" "$(ob record go 2>&1)"
+  check_match "...stop --no-pointer (#228)" "record stop: --no-pointer goes with start or -- ACTION" "$(ob record stop --no-pointer 2>&1)"
+  check_match "...status --no-pointer" "record status: --no-pointer goes with start" "$(ob record status --no-pointer 2>&1)"
 }
 
 t_unit_duration() {
@@ -8789,6 +8791,120 @@ t_unit_pointer() {
       --tmpfs /run --dir /run/dbus --ro-bind "$TMP/fakebus" /run/dbus/system_bus_socket --die-with-parent env -i "$ROOT/tools/$t/omabox-$t" 2>&1) || rc=$?
     check_eq "...and where the system bus is, a mount there or not" "2 yes" "$rc $(grep -q 'only runs inside' <<<"$out" && echo yes)"
   done
+  # pointer hide|show (#228, finding 305): alone, refused before any box is looked at.
+  check_match "pointer hide with a move refused" "pointer hide: nothing else with it" "$(ob pointer -b "$P-x" hide move 1 1 2>&1)"
+  check_match "...with --steps" "pointer show: nothing else with it" "$(ob pointer -b "$P-x" --steps 3 show 2>&1)"
+  check_match "...with --mod" "pointer hide: nothing else with it" "$(ob pointer -b "$P-x" --mod ctrl hide 2>&1)"
+}
+
+# The pointer out of shots and recordings (#228, finding 305), at scale 2: `shot --no-pointer` and
+# `record --no-pointer` (shown again after, also on Ctrl-C), `pointer hide` over a config reload and a
+# theme switch, focus still following it; on a GPU other than NVIDIA's and on NVIDIA's.
+t_no_pointer() {
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "the pointer hidden" "no render node here but NVIDIA's (t_no_pointer_nvidia runs there)"; return; }
+  no_pointer_on "$n" "$P-np"
+}
+t_no_pointer_nvidia() {
+  local n; n=$(nvidia_ready) || { skip "the pointer hidden on NVIDIA" "$n"; return; }
+  no_pointer_on "$n" "$P-npnv"
+}
+# The layout's 40x40 around 640,360 (80x80 image pixels at scale 2): np_crop BOX FILE [--no-pointer].
+np_crop() { ob shot -b "$1" -g "620,340 40x40" -o "$2" ${3:+"$3"} >/dev/null 2>&1; }
+# The share of two images' pixels that differ: np_diff A B [FUZZ%]; np_more A B SHARE [FUZZ] and np_less.
+np_diff() { magick "$1" "$2" -alpha off -fuzz "${3:-0}%" -metric AE -compare -format '%[distortion]' info: 2>&1; }
+np_more() { awk -v d="$(np_diff "$1" "$2" "${4:-0}")" -v s="$3" 'BEGIN { exit !(d + 0 > s) }'; }
+np_less() { awk -v d="$(np_diff "$1" "$2" "${4:-0}")" -v s="$3" 'BEGIN { exit !(d ~ /^[0-9.e+-]+$/ && d + 0 < s) }'; }
+np_live() { ob lua -b "$1" "return hl.get_config('cursor.invisible')" 2>&1; }
+np_gone() { [ ! -e "$1/pointer" ] && [ ! -e "$1/run/omabox.pointer" ]; }
+no_pointer_on() {
+  local n=$1 B=$2 out D f=$TMP/$2
+  out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 2560x1440,scale=2 --net isolated 2>&1) || { no "up for the pointer hidden" "failed: $out"; return; }
+  D=$(ob path -b "$B")
+  ob pointer -b "$B" move 640 360 >/dev/null 2>&1
+  ob wait -b "$B" still --timeout 10s >/dev/null 2>&1 || true
+  np_crop "$B" "$f-p1.png"; np_crop "$B" "$f-n1.png" --no-pointer
+  check "a shot has the pointer, shot --no-pointer not: they differ there" np_more "$f-p1.png" "$f-n1.png" 0.02
+  check_eq "...shown again after it (cursor:invisible)" false "$(np_live "$B")"
+  check "...nothing left that keeps it hidden" np_gone "$D"
+  np_crop "$B" "$f-p2.png"
+  check "...and drawn again: the next shot has it" np_more "$f-p2.png" "$f-n1.png" 0.02
+  # pointer hide: none in any shot until pointer show, over a reload and a theme switch.
+  out=$(ob pointer -b "$B" hide 2>&1)
+  check_match "pointer hide says until when" "hidden in box '$B' .* until omabox pointer show" "$out"
+  np_crop "$B" "$f-h1.png"
+  check_eq "...shots without it" 0 "$(np_diff "$f-h1.png" "$f-n1.png")"
+  ob hyprctl -b "$B" reload >/dev/null 2>&1; sleep 1
+  check_eq "...a config reload keeps it hidden" true "$(np_live "$B")"
+  np_crop "$B" "$f-h2.png"
+  check_eq "...and drawn nowhere after it" 0 "$(np_diff "$f-h2.png" "$f-n1.png")"
+  local cur t mark
+  cur=$(ob run -b "$B" -- omarchy-theme-current 2>/dev/null) || cur=""
+  t=$(ob run -b "$B" -- omarchy-theme-list 2>/dev/null | grep -vxF -- "$cur" | head -n 1) || t=""
+  if [ -n "$t" ]; then
+    mark=$(ob events -b "$B" --mark 2>/dev/null) || mark=0
+    ob run -b "$B" -- omarchy-theme-set "$t" >/dev/null 2>&1
+    check_match "omarchy-theme-set $t reloads the box's config" configreloaded "$(ob events -b "$B" --since "$mark" --grep configreloaded 2>&1)"
+    check_eq "...the pointer still hidden" true "$(np_live "$B")"
+    ob wait -b "$B" still --timeout 10s >/dev/null 2>&1 || true
+    np_crop "$B" "$f-t1.png"
+    ob pointer -b "$B" show >/dev/null 2>&1
+    np_crop "$B" "$f-t2.png"
+    check "...pointer show draws it there" np_more "$f-t2.png" "$f-t1.png" 0.02
+    ob pointer -b "$B" hide >/dev/null 2>&1
+    np_crop "$B" "$f-t3.png"
+    check_eq "...hidden again, the same pixels as before it showed" 0 "$(np_diff "$f-t3.png" "$f-t1.png")"
+  else no "a theme to switch to" "omarchy-theme-list gave none but ${cur:-?}"; fi
+  check_match "up --no-pointer of the box with it hidden: the box as it is" "is already up$" "$(ob up "$B" --no-pointer 2>&1)"
+  # Hidden, it still moves, and focus follows it: two terminals side by side.
+  ob run -b "$B" -d --wait -- foot --app-id np-left >/dev/null 2>&1
+  ob run -b "$B" -d --wait -- foot --app-id np-right >/dev/null 2>&1
+  ob pointer -b "$B" move 200 360 >/dev/null 2>&1
+  check "a hidden pointer moved over the left terminal focuses it" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j activewindow | jq -e '.class == \"np-left\"'"
+  ob pointer -b "$B" move 1100 360 >/dev/null 2>&1
+  check "...and over the right one, that" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j activewindow | jq -e '.class == \"np-right\"'"
+  check_eq "...where it was told" "1100, 360" "$(ob hyprctl -b "$B" cursorpos)"
+  ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
+  ob pointer -b "$B" show >/dev/null 2>&1
+  check_eq "pointer show: cursor:invisible false" false "$(np_live "$B")"
+  check "...nothing left that keeps it hidden" np_gone "$D"
+  check_match "up --no-pointer of the box with it shown: refused" "without what you asked for: --no-pointer \(its pointer shows: omabox pointer hide\)" \
+    "$(ob up "$B" --no-pointer 2>&1)"
+  # Stopped (TERM; a background job here ignores INT): shown again as the shot ends.
+  local bp rc
+  "$CLI" shot -b "$B" --no-pointer --burst 60 --every 200ms -o "$f-burst" >/dev/null 2>&1 & bp=$!
+  check "shot --no-pointer --burst: hidden while it runs" until_ok 10 test -e "$D/pointer"
+  kill -TERM "$bp"; wait "$bp"; rc=$?
+  check_eq "...a TERM ends it (143), shown again" "143 false" "$rc $(np_live "$B")"
+  check "...nothing left that keeps it hidden" np_gone "$D"
+  # record --no-pointer: no pointer in its frames; a plain recording's have it.
+  if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null; then
+    ob pointer -b "$B" move 640 360 >/dev/null 2>&1
+    ob wait -b "$B" still --timeout 10s >/dev/null 2>&1 || true
+    np_crop "$B" "$f-n2.png" --no-pointer
+    local v np
+    for v in np plain; do
+      np=(); [ "$v" = plain ] || np=(--no-pointer)
+      ob record -b "$B" -o "$f-$v.mp4" --hold 300ms ${np[@]+"${np[@]}"} -- pointer move 640 360 >/dev/null 2>&1
+      ffmpeg -v error -y -sseof -0.1 -i "$f-$v.mp4" -frames:v 1 -vf crop=80:80:1240:680 "$f-$v.png" 2>/dev/null
+    done
+    check "record --no-pointer: its last frame has no pointer (as a --no-pointer shot)" np_less "$f-np.png" "$f-n2.png" 0.005 10
+    check "...a plain recording's has it" np_more "$f-plain.png" "$f-n2.png" 0.01 10
+    check_eq "...shown again after it" false "$(np_live "$B")"
+    check "record start --no-pointer" ob record -b "$B" start --no-pointer -o "$f-rs.mp4"
+    ob hyprctl -b "$B" reload >/dev/null 2>&1; sleep 0.5
+    check_eq "...hidden past start, over a reload" true "$(np_live "$B")"
+    ob record -b "$B" stop >/dev/null 2>&1
+    check_eq "...record stop shows it again" false "$(np_live "$B")"
+    check "...nothing left that keeps it hidden" np_gone "$D"
+  else
+    skip "record --no-pointer" "no wf-recorder or ffmpeg here"
+  fi
+  ob down "$B" >/dev/null 2>&1
+  # up --no-pointer: hidden from its first frame.
+  out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-pointer --no-shell --net isolated 2>&1) || { no "up --no-pointer" "failed: $out"; return; }
+  check_eq "up --no-pointer: hidden from the start" true "$(np_live "$B")"
+  ob down "$B" >/dev/null 2>&1
 }
 
 # Travel and modifier clicks in a box (findings 111, 112): two floating terminals side by side on an
@@ -9455,7 +9571,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

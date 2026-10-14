@@ -36,7 +36,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   coordinates.
 - Coordinates are screenshot pixels. A cropped, scaled or zoomed shot says so on stderr: then `click
   --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image. Screen
-  shots show the pointer (hover evidence: a `-g` crop of the screen); window shots never do. A shot
+  shots show the pointer (hover evidence: a `-g` crop of the screen; `--no-pointer` leaves it out of
+  one); window shots never do. A shot
   right after a `click` or `keys` without `--wait` can show the frame before the redraw: `--wait`, or
   `omabox wait still`, first.
 - How a model reads points off a shot depends on the model. An image bigger than the model sees is
@@ -210,6 +211,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   one run: raw, it raises nothing (a `--window` must be on screen and uncovered). BTN is left (the default), right, middle, back or forward (a mouse's thumb buttons, also `side` and `extra`; `click X Y back` too). A button pressed with `down` stays
   down after the call, until an `up` (in a later call too): end every `down` with an `up`, or the
   box's next clicks are drags.
+- `omabox pointer hide` / `show`: the pointer out of every shot and recording of the box until `show`,
+  over reloads and theme switches. It still moves, clicks and gives focus (focus follows it).
 - `omabox scroll [--window SEL | --in SHOT] [--wait] [--mod MODS] X Y DY [DX] [--source wheel|finger]`:
   the pointer there, then a scroll; DY down, DX right (negative: up, left), 15 a wheel notch. `--source
   wheel` is a mouse's notches (one per frame: apps counting them see each; a DY that is not whole
@@ -558,7 +561,9 @@ most people will. Then:
   sheet to read instead of twelve shots. `-o DIR` again clears the frames and sheet an earlier burst
   left there (nothing else); without `-o` each burst gets a folder of its own.
 - **A demo or README capture**: shots of a box are clean (a fresh HOME, no notifications of the
-  user's). Video: `omabox record start -o demo.mp4`, act, `omabox record stop` (prints the file: an
+  user's). Without the pointer: `shot --no-pointer` and `record --no-pointer` (it comes back after),
+  or `omabox pointer hide` once for a series (kept over reloads and theme switches; it still moves
+  and gives focus) and `pointer show` after. Video: `omabox record start -o demo.mp4`, act, `omabox record stop` (prints the file: an
   H.264 MP4 at a steady `--fps`, 30 by default), or `omabox record -o demo.mp4 -- keys super+space`
   for one action (and `--hold 1s` after it). It records one output at its pixels (`--monitor NAME`;
   the main screen by default): in a box at `--size 3840x2160,scale=2`, a sharp 4K video of a

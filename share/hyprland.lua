@@ -276,6 +276,18 @@ hl.config({
 })
 omabox_place_monitors()
 
+-- The pointer hidden (#228, finding 305): `omabox pointer hide` (or `up --no-pointer`), and a shot or
+-- recording with --no-pointer while it runs, write omabox.pointer; read on every load, as a reload
+-- (`hyprctl reload`, omarchy-theme-set) sets cursor:invisible back. Hidden, it is in no frame, and
+-- still moves, and focus still follows it.
+do
+  local f = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.pointer")
+  if f then
+    local l = f:read("l"); f:close()
+    if l == "hidden" then hl.config({ cursor = { invisible = true } }) end
+  end
+end
+
 -- Quickshell's crash reporter (#126, NOTES finding 183): when the shell crashes, Quickshell writes a
 -- report under ~/.cache/quickshell/crashes, then opens a dialog that takes focus. Nobody reads it in a
 -- box, and it took the keys meant for the app under test (Return on it opened a browser). It is

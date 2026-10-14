@@ -3050,7 +3050,8 @@ from them.
     point of the path is ignored (`path_rects`: at most 30, consecutive points sharing one beyond
     that; `omabox-still` takes 32 `--ignore`, up from 8). Not the path's bounding box, which the issue
     proposed: a drop target or a selection inside it would not count. Hiding the cursor while
-    watching does not work: `cursor:invisible` is set but the box still draws it. A change wholly
+    watching was ruled out as not working (`cursor:invisible` set, the cursor still drawn); it does
+    work, in a frame drawn up to ~400 ms later (finding 305). A change wholly
     under the path may not count (said in `help drag`); a one-line foot selection still does, its
     row reaching above the rects. `t_wait`: across an empty screen 124 (fails on 0.4.8), selecting
     foot text 0; `t_unit_pointer`: `path_rects`.
@@ -5986,6 +5987,37 @@ from them.
     kept case, `down --orphans` with stubs), t_orphan (a starter that exits, one that stays then is
     killed, an idle limit, one under script(1)'s terminal; `down --orphans` skipped when the user has
     orphans of their own up, as it would take those too), t_widget_list's caption.
+305. **The pointer out of shots and recordings: `shot`/`record --no-pointer`, `pointer hide|show`,
+    `up --no-pointer`** (2026-10-14, #228). Screen shots always had the pointer (finding 82): on a
+    still for people it sits on the app, and parked elsewhere it lands on a hover state. Hyprland's
+    `cursor:invisible` does leave it out of every frame, on AMD and NVIDIA, at scale 1 and 2 (finding
+    172's "set but still drawn" corrected), but two things stood in the way. A config reload sets it
+    back (`hyprctl reload`; `omarchy-theme-set` reloads too, `configreloaded`), and the pointer is
+    drawn again ~200 ms later without moving. And the frame without it (or with it again) comes 50-400
+    ms after the option changes, not at once: a capture right after still has it; neither
+    `force_renderer_reload`, a warp to the same spot nor `setcursor` hurried it (a real move does).
+    So `ptr_seen` grabs the 64x64 around the pointer, sets the option, and waits (1 s at most) for
+    that grab to change; a pointer not drawn (Omarchy's `cursor:hide_on_key_press` after `keys`, or
+    off the screens) never changes it, and the second is waited out. `shot --no-pointer` (screen, -g,
+    --burst; a window's capture never has it) hides it so, shoots, and puts it back as it was,
+    waiting for it drawn (so the next plain shot has it), from an EXIT trap (INT, TERM, HUP exit);
+    `record --no-pointer` hides it before wf-recorder starts, until `record stop`. `pointer hide|show`
+    and `up --no-pointer` are a box setting (`hide` returns once a frame without it is drawn). What
+    keeps it hidden is `$D/pointer` (the box dir: `hidden`, `hold shot PID`, `hold record PID`, `was
+    true|false`), changed under a lock of its own: holds of an omabox that is gone are dropped (a
+    recording's once `$D/record` is gone too), and once nothing holds it, `cursor:invisible` goes
+    back to what it was. The box's config reads `omabox.pointer` (its runtime dir) on every load and
+    hides it while that says `hidden`; a box started on an older config is told so by `pointer hide`
+    (`omabox reload` takes the new one). Hidden, it still moves and clicks, and focus follows it;
+    `wait`, `--changed` and `drag --wait` still leave its rect out (harmless). Decided: `up
+    --no-pointer` on a box up and showing it is refused as other options are (`pointer hide` says how);
+    `pointer hide|show` on the existing command, not a new one. In tests: a backgrounded `ob` is a
+    subshell (signal `$CLI` itself), and a background job of a script starts with INT ignored, which no
+    trap undoes (TERM there). t_unit_pointer, t_unit_record (refusals); t_no_pointer and
+    t_no_pointer_nvidia, at scale 2 (a shot with and without; drawn again after; hidden over a reload
+    and omarchy-theme-set, then show and hide giving the same pixels; focus following a hidden pointer
+    between two terminals; TERM during a --no-pointer burst; record --no-pointer's last frame against
+    a plain recording's; record start --no-pointer over a reload until stop; up --no-pointer).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
