@@ -5941,6 +5941,13 @@ from them.
     the widget's ink at 1, 2, 3 and 12 boxes (mark size and place the same, the count after it),
     on `OMABOX_TEST_OMARCHY` when set (fails on the code before, on 4.0.4 and on a #15065 checkout);
     t_unit_omarchy_contract: a fitting shell's `componentPaintedWidth`.
+302. **A silent grim failure says how grim ended** (2026-10-14, #217). `shot`'s rare "grim failed"
+    under the full suite's load (a second `--monitor` shot, AMD and NVIDIA boxes) came with nothing
+    after it. grim's stderr was already kept and added to the message, so grim had said nothing:
+    either it ended non-zero silently (`timeout`, `on_box`, a screencopy that sent no buffer) or it
+    exited 0 with an empty image. The message now tells those apart ("it gave an empty image", "it
+    gave nothing in 10 s", "it ended with status N and said nothing"); grim's own reason is unchanged
+    when it gives one. The cause stays open on #217 until the next occurrence names the case.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

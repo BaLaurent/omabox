@@ -4703,6 +4703,14 @@ cmd_shot() {
     fi
     # A 0x0 output in an NVIDIA box (#213) fails a whole shot ("failed to create buffer"): said why.
     local zn=""; [ "$(meta wayland_screen)" != true ] || zn=$(zero_note "$(on_box timeout 6 hyprctl -j monitors 2>/dev/null)" true) || zn=""
+    # grim saying nothing (#217): how it ended, so a rare failure under load can be told apart.
+    if [ -z "$why" ]; then
+      case $grc in
+        0) why="it gave an empty image" ;;
+        124) why="it gave nothing in 10 s" ;;
+        *) why="it ended with status $grc and said nothing" ;;
+      esac
+    fi
     die "shot: grim failed${why:+: $why}${zn:+; $zn}"
   fi
   if [ $changed = 1 ]; then shot_changed; return; fi

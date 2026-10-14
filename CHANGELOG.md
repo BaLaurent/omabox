@@ -21,6 +21,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (after 4.0.4) the count was scaled down with the mark, and the mark shrank from 12 px to about
   7 px as soon as two boxes were up. The count is drawn beside the mark now; on 4.0.4 the widget
   looks as it did, except that the mark no longer moves up a pixel when the count shows.
+- **A bare "shot: grim failed" says how grim ended** when grim gives no reason of its own: an empty
+  image, nothing in 10 s, or the status it ended with.
 
 ## 0.5.5 — 2026-10-14
 
