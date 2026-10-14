@@ -17,6 +17,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   pixels as its own coordinates: at scale 2, `-g "10,10 300x200"` took the window's 150x100 at 5,5,
   `click --in` that shot missed by the scale, and `pixel --window X Y` read X/2,Y/2. Both take the
   window's own coordinates now, as the help says.
+- **The bar widget's mark keeps its size beside the box count.** On Omarchy with fitted bar icons
+  (after 4.0.4) the count was scaled down with the mark, and the mark shrank from 12 px to about
+  7 px as soon as two boxes were up. The count is drawn beside the mark now; on 4.0.4 the widget
+  looks as it did, except that the mark no longer moves up a pixel when the count shows.
 
 ## 0.5.5 — 2026-10-14
 

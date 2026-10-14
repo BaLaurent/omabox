@@ -11,8 +11,9 @@
 #   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd); a PATTERN
 #                            that matches no test exits 2
 #   --strict (or OMABOX_TEST_STRICT=1): a skipped check (a tool this machine lacks) fails
-#   OMABOX_TEST_OMARCHY=DIR: the Omarchy tree t_unit_omarchy_contract reads (default /usr/share/omarchy):
-#                            a checkout, to see what an Omarchy update moves before it is released
+#   OMABOX_TEST_OMARCHY=DIR: the Omarchy tree t_unit_omarchy_contract reads, and t_widget_mark's box
+#                            runs on (default /usr/share/omarchy): a checkout, to see what an Omarchy
+#                            update moves before it is released
 #   test/run.sh --installed [ARGS...]   the same against omabox installed as a package would be:
 #                            read-only at /usr/lib/omabox, /usr/bin/omabox (a throwaway namespace)
 #
@@ -1419,6 +1420,11 @@ omarchy_contract() {
   for e in disabledPlugins:services/PluginRegistry.qml centerAnchor:plugins/bar/Bar.qml screensaver:plugins/services/idle/Service.qml; do
     oc "shell.json ${e%%:*} (shell_json_filter)" "not read in shell/${e#*:}" oc_has "$s/${e#*:}" "${e%%:*}"
   done
+  # A shell that fits bar icons (Ui/BarIconContent.qml) says how wide it painted the widget's mark: the
+  # count goes beside it (plugin/Panel.qml, #219). Holds too in a shell without fitted icons.
+  oc "BarIconButton's componentPaintedWidth, where bar icons are fitted (the widget's count, #219)" \
+    "Ui/BarIconContent.qml there, but no componentPaintedWidth in Ui/BarIconButton.qml: the count would land on the mark" \
+    bash -c '[ ! -f "$1/BarIconContent.qml" ] || grep -qF "property real componentPaintedWidth" "$1/BarIconButton.qml"' _ "$s/Ui"
 }
 
 t_unit_omarchy_contract() {
@@ -5835,6 +5841,83 @@ t_widget() {
   ob down "$B" >/dev/null
 }
 
+# INK_RUNS PGM: the ink in a crop (pixels far from its top-left corner's grey), as runs of columns
+# with ink: one "x y w h" line per run, its bounding box. The widget's mark is the first, its count the
+# rest (#219).
+INK_RUNS='
+import sys
+parts = open(sys.argv[1], "rb").read().split(None, 4)
+w, h, px = int(parts[1]), int(parts[2]), parts[4]
+ink = [[abs(px[y * w + x] - px[0]) > 60 for x in range(w)] for y in range(h)]
+x = 0
+while x < w:
+    if not any(ink[y][x] for y in range(h)): x += 1; continue
+    x0 = x
+    while x < w and any(ink[y][x] for y in range(h)): x += 1
+    ys = [y for y in range(h) if any(ink[y][x0:x])]
+    print(x0, ys[0], x - x0, ys[-1] - ys[0] + 1)
+'
+
+# The bar mark beside the box count (#219): with 1, 2, 3 and 12 boxes listed, the mark is drawn the same
+# size in the same place and the count beside it. A shell that fits every bar icon to one size
+# (Omarchy's BarIconContent: omacom/omarchy#15065, after 4.0.4) scaled the count with the mark, and
+# the mark shrank to about 7x8 px. OMABOX_TEST_OMARCHY=DIR runs the box on that tree (`up --omarchy`).
+t_widget_mark() {
+  local B=$P-wm o=${OMABOX_TEST_OMARCHY:-} om=() fitted=no
+  [ -z "$o" ] || om=(--omarchy "$o")
+  [ ! -f "${o:-/usr/share/omarchy}/shell/Ui/BarIconContent.qml" ] || fitted=yes
+  note "Omarchy at ${o:-/usr/share/omarchy}, fitted bar icons: $fitted"
+  ob up "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" "${om[@]}" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  local H; H=$(ob path "$B")/home
+  printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  config) echo "{}" ;;\nesac\n' > "$H/.local/bin/omabox"
+  chmod +x "$H/.local/bin/omabox"
+  # shellcheck disable=SC2329 # called through until_ok
+  lines_over() { [ "$(grep -c . "$1" 2>/dev/null)" -gt "$2" ]; }
+  # shellcheck disable=SC2329 # called through until_ok
+  slot_is() { ob run -b "$B" -- omarchy-shell shell debugBarGeometry 2>/dev/null |
+    jq -e --argjson w "$1" '.[] | select(.id == "chaves.omabox") | .visible and .width == $w' >/dev/null; }
+  # runs N: N boxes listed, a poll that read them, then the ink runs in the widget's slot.
+  runs() {
+    local n=$1 p g
+    jq -n --argjson n "$n" '[range($n)] | map({name: "b\(.)", mode: "headless", size: "1920x1080@60",
+      created: "2026-09-24T02:00:00-03:00", plugins: [], net: "host", state: "up", peeking: false})' > "$H/list.json"
+    p=$(grep -c . "$H/polls" 2>/dev/null) || p=0
+    until_ok 15 lines_over "$H/polls" "$p" || return 1
+    until_ok 5 slot_is "$((n > 1 ? 54 : 27))" || return 1
+    ob wait -b "$B" still >/dev/null 2>&1
+    g=$(ob run -b "$B" -- omarchy-shell shell debugBarGeometry | jq -r '.[] | select(.id == "chaves.omabox") | "\(.x),\(.y) \(.width)x\(.height)"') || return 1
+    ob shot -b "$B" -g "$g" -o "$TMP/wm-$n.png" >/dev/null 2>&1 && magick "$TMP/wm-$n.png" -colorspace gray "$TMP/wm-$n.pgm" || return 1
+    python3 -c "$INK_RUNS" "$TMP/wm-$n.pgm"
+  }
+  local one n out first count last w
+  out=$(runs 1) || { no "the widget with one box" "not shown, or not shot"; ob down "$B" >/dev/null; return; }
+  one=$(head -1 <<<"$out")
+  check_eq "one box: the mark alone" 1 "$(grep -c . <<<"$out")"
+  read -r _ _ w _ <<<"$one"
+  if [ "$fitted" = yes ]; then
+    check_eq "...fitted to the shell's 12 px icon size" "12 12" "$(cut -d' ' -f3,4 <<<"$one")"
+  else
+    check_eq "...in the 16 px icon canvas" "16 16" "$(cut -d' ' -f3,4 <<<"$one")"
+  fi
+  for n in 2 3 12; do
+    out=$(runs "$n") || { no "the widget with $n boxes" "not shown, or not shot"; continue; }
+    first=$(head -1 <<<"$out"); count=$(sed -n '2,$p' <<<"$out"); last=$(tail -1 <<<"$out")
+    check_eq "$n boxes: the mark the same size, at the same height as alone" "$(cut -d' ' -f2- <<<"$one")" "$(cut -d' ' -f2- <<<"$first")"
+    check "...the count beside it, after a gap" test -n "$count" -a "$(awk '{print $1}' <<<"$count" | head -1)" -gt "$(awk '{print $1 + $3 + 1}' <<<"$first")"
+    check "...$n's digits ($(grep -c . <<<"$count") ink runs, within the slot)" test "$(grep -c . <<<"$count")" -eq "${#n}" -a "$(awk '{print $1 + $3}' <<<"$last")" -lt 54
+    if [ "$fitted" = yes ]; then
+      # The shell centres the icon in the slot: the mark is there, the count to its right.
+      check_eq "...the mark centred in the slot, as the shell puts it" "$(((54 - w) / 2))" "$(cut -d' ' -f1 <<<"$first")"
+    else
+      # Mark and count centred together, as before #219 (within a pixel: the count's ink is narrower
+      # than its advance).
+      local l r; l=$(cut -d' ' -f1 <<<"$first"); r=$((54 - $(awk '{print $1 + $3}' <<<"$last")))
+      check "...mark and count centred together in the slot (left $l, right $r)" test $((l - r)) -ge -2 -a $((l - r)) -le 2
+    fi
+  done
+  ob down "$B" >/dev/null
+}
+
 # The widget's box list with 20 made-up boxes (#117 the list held still under the pointer, #121 only
 # the rows scroll, #120 the same action slots on every row and a confirm that a double-click does not
 # give), read through the panel's inspect IPC: its rows, where each is on screen, their action slots.
@@ -9184,7 +9267,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

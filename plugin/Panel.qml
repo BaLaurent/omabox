@@ -543,14 +543,24 @@ Panel {
     id: button
     anchors.fill: parent
     bar: root.bar
-    slotSize: Style.bar.iconSlot * (root.boxes.length > 1 && !vertical ? 2 : 1)
-    // The mark in the 16 px icon canvas; the count, when there is one, hangs off
-    // it inside the doubled slot, the whole row centred like the glyph was.
+    // Every box, dead ones too: they are what keeps the icon in the bar.
+    readonly property bool counted: root.boxes.length > 1 && !vertical
+    readonly property real countGap: Style.space(4)
+    // Only the mark is in iconComponent, the count is drawn on the button beside it (#219): a shell
+    // that fits every bar icon to one size (Omarchy's BarIconContent) scales all iconComponent paints
+    // and centres it, so a count in there shrank the mark with it. There the mark is centred, as wide
+    // as that shell's componentPaintedWidth says; elsewhere it sits in the 16 px canvas, moved left by
+    // an empty spacer as wide as the count so the two are centred together as before (the Row's
+    // centring rounded to a pixel: the count lands on the pixels it did).
+    readonly property bool fitted: button.componentPaintedWidth !== undefined
+    readonly property real markRight: fitted ? width / 2 + button.componentPaintedWidth / 2
+      : width / 2 + Style.bar.iconCanvas / 2 + Math.round(-(counted ? countGap + count.implicitWidth : 0) / 2)
+    slotSize: Style.bar.iconSlot * (counted ? 2 : 1)
     iconComponent: Component {
       Item {
         Row {
           anchors.centerIn: parent
-          spacing: Style.space(4)
+          spacing: button.countGap
 
           Mark {
             small: true
@@ -559,17 +569,25 @@ Panel {
             color: button.active && button.useActiveColor ? button.activeColor : button.foreground
           }
 
-          Text {   // every box, dead ones too: they are what keeps the icon in the bar
-            visible: root.boxes.length > 1 && !button.vertical
-            anchors.verticalCenter: parent.verticalCenter
-            textFormat: Text.PlainText
-            text: root.boxes.length
-            color: button.active && button.useActiveColor ? button.activeColor : button.foreground
-            font.family: button.fontFamily
-            font.pixelSize: button.fontSize
+          Item {   // paints nothing: a fitting shell measures the mark alone
+            visible: button.counted
+            width: count.implicitWidth
+            height: 1
           }
         }
       }
+    }
+
+    Text {
+      id: count
+      visible: button.counted
+      x: button.markRight + button.countGap
+      anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
+      text: root.boxes.length
+      color: button.active && button.useActiveColor ? button.activeColor : button.foreground
+      font.family: button.fontFamily
+      font.pixelSize: button.fontSize
     }
     opacity: root.hasBoxes ? 1 : 0.5
     // Lit (the bar's attention colour, as the box window's border) while SUPER keys go to a box.

@@ -5924,6 +5924,23 @@ from them.
     t_scale / t_scale_nvidia: a terminal with a red band; `--window -g` against its whole shot's
     crop, `pixel --window` and `pixel --in` against its whole shot, `-g --fit` and `click --in` it
     (fail on the code before).
+301. **The box count shrank the bar mark on fitted bar icons** (2026-10-14, #219). Omarchy after 4.0.4
+    (omacom/omarchy#15065) fits every widget's `iconComponent` to one icon size: its `BarIconContent`
+    measures the union of what the component paints, scales it to `Style.bar.iconSize` (12 px) and
+    centres it. The widget's count `Text` sat in a `Row` with the `Mark` there, so with 2+ boxes both
+    were scaled: the mark fell from 12 px to 7x8 (1 px strokes), the count to 3x5. Now only the mark
+    paints in `iconComponent` (beside it an empty spacer as wide as the count, which a fitting shell
+    does not measure, and which keeps 4.0.4's Row centring as it was), and the count is a `Text` on
+    the button at the mark's painted right edge: the shell's `componentPaintedWidth` when it has one
+    (mark centred), else the 16 px canvas moved left by half the count, rounded as the Row's centring
+    rounds (the count on the same pixels as before). On 4.0.4 the mark no longer moves up a pixel
+    when the count shows (the Row took the taller text's height). On a fitted shell mark and count are
+    not centred together: that shell centres the icon in the button whatever is beside it (its own
+    `labelText` goes to the left of the icon). The 8-unit mark fitted to 12 px is 1.5 px a unit, so
+    its arms come out 2 and 1 px: whole pixels at 12 px need a glyph of 6 or 12 units. t_widget_mark:
+    the widget's ink at 1, 2, 3 and 12 boxes (mark size and place the same, the count after it),
+    on `OMABOX_TEST_OMARCHY` when set (fails on the code before, on 4.0.4 and on a #15065 checkout);
+    t_unit_omarchy_contract: a fitting shell's `componentPaintedWidth`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
