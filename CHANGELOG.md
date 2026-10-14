@@ -40,6 +40,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A `run` killed while its throwaway box starts takes the box with it at once.** Killed outright
+  (SIGKILL, a harness's timeout) before its box was ready, the box's `up` went on to the end, waiting
+  for the bar, and the box went only once its reaper got the box's lock after that: seconds later
+  under load. The `up` now notices its run is gone and ends the box itself (#222).
 - **`omabox gpu` exits 0 when no process has GPU figures.** On a GPU whose driver keeps no
   per-process counters (a VM's virtio GPU) it printed its header and ended with 1, before saying
   "(no GPU time)". It says so now, and exits 0.

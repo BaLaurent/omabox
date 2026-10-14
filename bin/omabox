@@ -1242,6 +1242,33 @@ box_home_file() {
   printf '%s\n' "$p"
 }
 
+# The selected box's reaper, unless that is us: nothing may be left running for a box that is gone. One
+# that exited since pgrep (it saw the box dead) is gone already: no failure (#115, finding 178).
+kill_reapers() {
+  local p
+  for p in $(pgrep -f "^(/usr/bin/)?bash $(re_quote "$ROOT/bin/omabox") _reap $(re_quote "$NAME") "); do
+    [ "$p" = $$ ] || [ "$p" = "$BASHPID" ] || kill "$p" 2>/dev/null || true
+  done
+}
+
+# Where `up` waits on its box: one that died, or a throwaway whose `omabox run` is gone, ends it now.
+starting_ok() { box_alive || died_starting; up_owner_check; }
+# A throwaway box's `up` whose `omabox run` (--owner) is gone (#222): the run was killed outright while
+# this up still waited on the box (its bar, slow under load). Nobody will use the box, and the up went on
+# to the end holding the box's lock, which the reaper's down then waited on. It ends the box itself, as
+# that down would; one whose PID 1 will not go stays, dead, for the reaper. UP_OWNER ("PID START", the
+# owner as box.json has it) is set by cmd_up only. Said last: the run read this up's stderr, and a write
+# to it may end this process (SIGPIPE).
+UP_OWNER=""
+up_owner_check() {
+  [ -n "$UP_OWNER" ] && ! owner_alive "${UP_OWNER%% *}" "${UP_OWNER#* }" || return 0
+  trap - EXIT; trap '' PIPE
+  local left=""
+  if kill_box 2>/dev/null; then kill_reapers; rm_box; rm -f "$BOXES/.lock-$NAME"; else left=" (left, dead, to its reaper)"; fi
+  say "box '$NAME': its omabox run (${UP_OWNER%% *}) is gone: not starting it$left"
+  exit 1
+}
+
 # A box that ended while `up` waited for it, with Hyprland's last line when it logged one (an interactive
 # box's: an abort such as finding 95's `CBackend::create() failed!`).
 died_starting() {
@@ -1266,7 +1293,7 @@ died_starting() {
 wait_hyprland() {
   local deadline=$((SECONDS + READY_TIMEOUT))
   until [ -s "$D/run/omabox.env" ]; do
-    box_alive || died_starting
+    starting_ok
     [ $SECONDS -lt $deadline ] || die "Hyprland not up after ${READY_TIMEOUT}s; logs: $D/home/*.log"
     sleep 0.1
   done
@@ -1409,7 +1436,7 @@ wait_ready() {
       die "could not set the NVIDIA box screen to $size"
     local screen
     until screen=$(box_screen 2>/dev/null) && [ "${screen#* }" = "$size" ]; do
-      box_alive || died_starting
+      starting_ok
       [ $SECONDS -lt $deadline ] || die "NVIDIA box screen stayed at ${screen#* }, asked for $size"
       sleep 0.1
     done
@@ -1423,7 +1450,7 @@ wait_ready() {
   local how
   until [ -n "$(on_box hyprctl -j layers 2>/dev/null | layer_at omarchy-bar 2>/dev/null)" ] &&
         { [ "$tray_expected" = 0 ] || box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
-    box_alive || died_starting
+    starting_ok
     # A shell that crashed (or quit) on its way up: said now, with its report, not after READY_TIMEOUT.
     if how=$(shell_crash "$(shell_pid)"); then die "$(shell_crash_text while "$how" | sed 's/^warning: //')"; fi
     [ $SECONDS -lt $deadline ] || die "shell not ready after ${READY_TIMEOUT}s; see $D/home/shell.log"
@@ -1437,7 +1464,7 @@ wait_ready() {
   # (NameHasOwner: `busctl status` exits 0 for a name nobody owns yet.)
   until [ "$(box_exec busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus \
            NameHasOwner s org.freedesktop.Notifications 2>/dev/null)" = "b true" ]; do
-    box_alive || died_starting
+    starting_ok
     [ $SECONDS -lt $nd ] || { say "no notification server on the box's bus yet; see $D/home/shell.log"; break; }
     sleep 0.1
   done
@@ -1455,7 +1482,7 @@ wait_ready() {
 bar_settle() {
   local geom=$1 deadline=$2 last="" now same=0
   while [ $same -lt 3 ] && [ $SECONDS -lt "$deadline" ]; do
-    box_alive || died_starting
+    starting_ok
     # A missed frame starts the count again: it is not the same as the last.
     now=$(on_box timeout 2 grim -g "$geom" - 2>/dev/null | md5sum) || { same=0; last=""; sleep 0.1; continue; }
     if [ "$now" = "$last" ]; then same=$((same + 1)); else same=0; last=$now; fi
@@ -2709,7 +2736,8 @@ cmd_up() {
   # rather than leave it running unseen, with no idle expiry. Once box.json is written the dir stays,
   # so the logs `die` points at can be read; `ls` shows it dead, `down` clears it. Before that it goes:
   # a half-made dir (no box.json) that only `down NAME` cleared (finding 163).
-  trap '[ $? = 0 ] || { kill_box || true; [ -f "$D/box.json" ] || rm_box; }' EXIT
+  # (A throwaway's up whose run is gone ends its box whole: up_owner_check.)
+  trap '[ $? = 0 ] || { up_owner_check; kill_box || true; [ -f "$D/box.json" ] || rm_box; }' EXIT
   rm_box; rm -f "$BOXES/.expired-$NAME"; mkdir -p "$D/run" "$HOMES/$NAME/home"; ln -s "$HOMES/$NAME/home" "$D/home"
   # The box's XDG_RUNTIME_DIR, 0700 as a session's (#153): a helper that checks its session bus
   # refuses a runtime dir others can read.
@@ -2754,6 +2782,9 @@ cmd_up() {
   fi
   # The owner's start time with its pid, as for an agent: a pid reused after a SIGKILLed run is not it.
   local owner_start=""; [ -z "$owner" ] || owner_start=$(proc_start "$owner") || owner_start=""
+  # Its stderr is a pipe to the run: a write to it once the run is gone, a SIGPIPE, ended this up on the
+  # spot (no EXIT trap), and the box was left to the reaper (#222).
+  if [ -n "$owner" ]; then UP_OWNER="$owner $owner_start"; trap up_owner_check PIPE; fi
   # Who started it (#220), for `ls` to tell an orphan: a box with no idle limit, owner or agent, whose
   # starter is gone. One started at a terminal outside any agent session is a person's, on purpose:
   # never an orphan (closing the terminal does not make it one).
@@ -3045,7 +3076,7 @@ cmd_up() {
     # Held: blocked reading the go pipe, its mounts all made (bwrap names its PID 1 before making them,
     # and would go on without a word were fd 4 not there).
     until bp=$(box_pid) && [ -n "$bp" ] && box_held "$bp"; do
-      box_alive || died_starting
+      starting_ok
       [ $SECONDS -lt $held ] || die "up: the box's start is not held for the check of what this jail hides: not started"
       sleep 0.05
     done
@@ -3068,6 +3099,7 @@ cmd_up() {
   shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true
   [ -n "$crashed" ] || plugin_check
   client_render_check
+  up_owner_check
   trap - EXIT
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
@@ -6151,7 +6183,14 @@ settle_begin() {
   on_box test -x "$BOX_STILL" || die "box '$NAME' has no $BOX_STILL (started by an older omabox): omabox down $NAME, then up again"
   local dir line; dir=$(mktemp -d)
   mkfifo "$dir/in" "$dir/out"
-  on_box "$BOX_STILL" "$@" --tied < "$dir/in" > "$dir/out" 2>&1 &
+  # OMABOX_STILL_DUMP=DIR (a path in the box; the suite's, for a flaky check: #222): the tool keeps the
+  # frames before and after the last significant change there.
+  local dump=()
+  if [ -n "${OMABOX_STILL_DUMP:-}" ]; then
+    [[ $OMABOX_STILL_DUMP =~ ^/[A-Za-z0-9._/-]+$ ]] || die "OMABOX_STILL_DUMP: a plain absolute path in the box, got $OMABOX_STILL_DUMP"
+    dump=(--dump "$OMABOX_STILL_DUMP")
+  fi
+  on_box "$BOX_STILL" "$@" "${dump[@]}" --tied < "$dir/in" > "$dir/out" 2>&1 &
   SETTLE_PID=$!
   exec {SETTLE_IN}>"$dir/in" {SETTLE_OUT}<"$dir/out"
   rm -rf "$dir"
@@ -9289,11 +9328,7 @@ cmd_down() {
     for p in $peeks; do kill "$p" 2>/dev/null || true; done
     local was_interactive=0; [ "$(meta mode)" != interactive ] || was_interactive=1
     if ! kill_box; then rc=1; exec {lock}>&-; continue; fi
-    # Its reaper, unless that is us: nothing may be left running for a box that is gone. One that
-    # exited since pgrep (it saw the box dead) is gone already: no failure (#115, finding 178).
-    for p in $(pgrep -f "^(/usr/bin/)?bash $(re_quote "$ROOT/bin/omabox") _reap $(re_quote "$NAME") "); do
-      [ "$p" = $$ ] || [ "$p" = "$BASHPID" ] || kill "$p" 2>/dev/null || true
-    done
+    kill_reapers
     rm_box; rm -f "$lk"
     exec {lock}>&-
     # (A subshell: a host that does not answer must not fail the down.)

@@ -6093,6 +6093,38 @@ from them.
     and ::1. Not tried with qBittorrent itself. The unshare recipe the issue used as a workaround is not
     in the skill: --addr covers it.
 
+309. **A throwaway's `up` ends its box once its `run` is gone; a flaky check keeps its frames** (2026-10-14,
+    #222). Two checks failed now and then under the full suite's load since NVIDIA boxes' apps draw on
+    the GPU: `t_throwaway_killed`'s box took 20-21 s to go (15 s allowed), and `t_wait`'s thin-line
+    checks got a last change 3 px high where the underline is 2. Neither reproduced here in 12 loaded
+    runs (eight box tests at a time with the throwaway and `t_wait` among them, three runs beside 14
+    busy loops, three NVIDIA boxes drawing gears; 180 thin-line waits run beside them, all 2 px).
+    What timestamps in `up`, the reaper and `down` showed in every run: the test kills the `run` while
+    its `up` is still starting (it looks as soon as `ls` lists the box), and that `up` goes on to the
+    end, ~1.5-2.5 s more here, holding the box's lock; the reaper's first look (5 s after the launch)
+    finds the run gone and its `down` takes that lock (box gone ~4.5 s after the kill). `down` itself:
+    0.2-0.4 s, 18 NVIDIA boxes six at a time beside the busy loops; ups 1-7 s there. So a 20 s case
+    needs an `up` ~15 s slower than here, or a PID 1 past `kill_box`'s 10 s (5 s poll + 10 s + the
+    retry's 5 s poll is 20 s, which the three 20-21 s failures fit); neither was caught. Some runs also
+    showed an `up` dying 0.15 s after the kill and its box left up for the reaper: its stderr is a pipe
+    to the dead run, and its first write there was a SIGPIPE, which ends bash with no EXIT trap.
+    - *Fixed*: an `up` with --owner checks its owner wherever it waits on the box (`starting_ok`, with
+      the box_alive checks of finding 216) and once more before it ends, and on a SIGPIPE (trapped):
+      with the run gone it kills the box, its reaper, its dir and its lock itself, then says so (last:
+      the say itself may meet the dead pipe); a PID 1 that will not go is left, dead, to the reaper.
+      By hand, eight runs killed 0.1-0.8 s after `ls` showed their box: each box gone 0.1-0.3 s later
+      (before the PIPE trap, two of eight took 4.8-4.9 s: their `up` had died of the SIGPIPE).
+      `t_unit_up_owner_gone` (fails on the old code, which waited out bar_settle's deadline).
+    - *To catch the rest next time*: `t_throwaway_killed` keeps, on a failure, a timeline from the kill
+      (every 0.25 s: the `starting` file, the reaper's last line in reap.log, which the box dir takes
+      with it); a `down` that gave up says `PID 1 (N) still exiting after 10 s (wchan)` there. The
+      still tool's `--dump DIR` (`OMABOX_STILL_DUMP`, a path in the box, for `omabox wait` and every
+      --wait) keeps the frames before and after the last significant change, cut to it and 4 px
+      around, as PPM with where they are in a comment; `t_wait`'s thin-line checks use it and copy
+      them into the evidence when the height is not 2. The deadline and the 2 px stay: without the
+      frames, a 3rd row has no known legitimate cause (foot's underline is 2 px, the window does not
+      move, the screen is at scale 1).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

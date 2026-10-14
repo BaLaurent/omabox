@@ -5016,8 +5016,39 @@ t_throwaway_killed() {
   local j=("$XDG_RUNTIME_DIR"/omabox/"$P"-tk-run*/box.json)
   check "its box.json records its owner's start time (a reused pid is not it)" \
     jq -e --arg s "$(lib proc_start "$r")" '.owner_start == $s and $s != ""' "${j[0]}"
+  # Where the time goes, kept for a failure (#222: 20 s under the full suite's load, 4-5 s otherwise):
+  # every 0.25 s from the kill, its up (`starting`) and the reaper's last word. The box dir goes with
+  # the box, its reap.log too.
+  local d=${j[0]%/box.json} tl=$TMP/tk-timeline
   kill -KILL "$r"
-  check "its box goes within 15 s" until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name | startswith(\"$P-tk-run\"))'"
+  (t0=$(date +%s%3N); while [ -d "$d" ]; do
+     printf '%s ms: starting=[%s] reap=[%s]\n' $(($(date +%s%3N) - t0)) "$(cat "$d/starting" 2>/dev/null)" "$(tail -n 1 "$d/reap.log" 2>/dev/null)"
+     sleep 0.25; done) > "$tl" 2>&1 & local tp=$!
+  if until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name | startswith(\"$P-tk-run\"))'" >/dev/null; then ok "its box goes within 15 s"
+  else no "its box goes within 15 s" "$(uniq -f 2 "$tl" | tail -n 30)"; fi
+  kill "$tp" 2>/dev/null; wait "$tp" 2>/dev/null
+}
+
+# An up whose `omabox run` is gone (#222, finding 309): killed outright while its throwaway box was still
+# starting, the up went on to the end, holding the box's lock while the reaper's down waited. It ends the
+# box itself at its next look, and says why.
+t_unit_up_owner_gone() {
+  local out rc=0 t0=$SECONDS
+  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2/uo BOXES=$2; UP_OWNER="$$ not-its-start"
+    box_alive() { return 0; }; on_box() { return 1; }; kill_box() { return 0; }; rm_box() { echo removed; }
+    bar_settle "0,0 10x10" $((SECONDS + 15))' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1) || rc=$?
+  check_eq "an up whose run is gone stops: exit 1" 1 "$rc"
+  check_match "...said" "box 'u': its omabox run \([0-9]+\) is gone: not starting it$" "$out"
+  check_match "...the box removed" "^removed" "$out"
+  check "...at once, not at the deadline ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -le 3
+  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2/uo BOXES=$2; UP_OWNER="$$ not-its-start"
+    box_alive() { return 0; }; on_box() { return 1; }; kill_box() { return 1; }; rm_box() { echo removed; }
+    wait_hyprland' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
+  check_match "...a PID 1 that will not go: the dead box left to the reaper" "^omabox: box 'u': its omabox run \([0-9]+\) is gone: not starting it \(left, dead, to its reaper\)$" "$out"
+  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2/uo BOXES=$2; UP_OWNER="$$ $(proc_start $$)"
+    box_alive() { return 0; }; on_box() { return 1; }; rm_box() { echo removed; }
+    bar_settle "0,0 10x10" $((SECONDS + 1)); echo rc $?' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
+  check_eq "...its run still there: up goes on" "rc 0" "$out"
 }
 
 # The keyboard and pointer tools (finding 64): keys named as binds name them, input checked before any
@@ -9417,6 +9448,17 @@ t_unit_wait() {
 
 # omabox wait and --wait (finding 82) in a box of their own: two terminals side by side, one of them
 # repainting 20 times a second.
+# t_wait's thin-line checks: 124, and a last change 2 px high (the underline). Under the full suite's
+# load they got 3 now and then (#222, not reproduced since): the frames before and after that change
+# (the still tool's --dump, through OMABOX_STILL_DUMP) go to the evidence, to see the third row.
+# thin_check DESC OUT RC DUMP (box $B)
+thin_check() {
+  local got; got="$3 $(jq -r '.change.h' <<<"$2" 2>/dev/null)"
+  [ "$got" != "124 2" ] || { ok "$1"; return; }
+  local e=$EVID/$CUR f; mkdir -p "$e"
+  for f in before after; do ob run -b "$B" -- cat "$4/$f.ppm" > "$e/${4##*/}-$f.ppm" 2>/dev/null; done
+  no "$1" "want [124 2] got [$got]; frames before and after the last change: $e/${4##*/}-{before,after}.ppm; ${2:0:400}"
+}
 t_wait() {
   local B=$P-wait out rc
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
@@ -9455,15 +9497,15 @@ t_wait() {
   # and a one-cell one stepping along its line (each step 2 cells: caret-sized), are changes.
   ob run -b "$B" -d -q --wait -- foot -T U -o underline-thickness=2px sh -c \
     'printf "\033[?25l"; while :; do printf "\r\033[4m%60s\033[0m" ""; sleep 0.1; printf "\r%60s" ""; sleep 0.1; done' >/dev/null 2>&1
-  out=$(ob wait -b "$B" still --timeout 1500ms --window 'title:^U$' --json); rc=$?
-  check_eq "a long thin line toggling: not a caret, still changing (124)" "124 2" "$rc $(jq -r '.change.h' <<<"$out")"
+  out=$(OMABOX_STILL_DUMP=/tmp/still-U ob wait -b "$B" still --timeout 1500ms --window 'title:^U$' --json); rc=$?
+  thin_check "a long thin line toggling: not a caret, still changing (124)" "$out" "$rc" /tmp/still-U
   check "...the change is that line (${out:0:300})" jq -e '.change.w > 100' <<<"$out"
   ob run -b "$B" -- pkill -f 'foot -T U' >/dev/null
   ob wait -b "$B" window 'title:^U$' --gone >/dev/null
   ob run -b "$B" -d -q --wait -- foot -T M -o underline-thickness=2px sh -c \
     'printf "\033[?25l"; i=0; while :; do printf "\r%*s\033[4m \033[0m%*s" $i "" $((30 - i)) ""; i=$(((i + 1) % 30)); sleep 0.08; done' >/dev/null 2>&1
-  out=$(ob wait -b "$B" still --timeout 1500ms --window 'title:^M$' --json); rc=$?
-  check_eq "a short thin segment moving: not a caret, still changing (124)" "124 2" "$rc $(jq -r '.change.h' <<<"$out")"
+  out=$(OMABOX_STILL_DUMP=/tmp/still-M ob wait -b "$B" still --timeout 1500ms --window 'title:^M$' --json); rc=$?
+  thin_check "a short thin segment moving: not a caret, still changing (124)" "$out" "$rc" /tmp/still-M
   check "...the change is caret-sized (${out:0:300})" jq -e '.change.w <= 40' <<<"$out"
   ob run -b "$B" -- pkill -f 'foot -T M' >/dev/null
   ob wait -b "$B" window 'title:^M$' --gone >/dev/null
@@ -9803,7 +9845,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)

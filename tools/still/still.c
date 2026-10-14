@@ -1,7 +1,7 @@
 // omabox-still: wait until the screen of the Wayland display in $WAYLAND_DISPLAY holds still, or changes.
 //
 //   omabox-still (still | change | settle) [--region X,Y,W,H] [--ignore X,Y,W,H]... [--mask X,Y,W,H]... [--quiet MS]
-//                [--start MS] [--timeout MS] [--first MS] [--strict] [--tied]
+//                [--start MS] [--timeout MS] [--first MS] [--strict] [--tied] [--dump DIR]
 //
 // still:  satisfied once nothing significant has changed for --quiet ms (default 300).
 // change: satisfied at the first significant change.
@@ -33,6 +33,9 @@
 // unknown: no first frame within --first ms (default 2000: an interactive box's hidden window is not
 // rendered), the compositor went away, it did not answer its first round trip within 10 s (`hung`: alive
 // but stopped or deadlocked, finding 181), or with --tied, stdin closed (the caller is gone).
+// --dump DIR (for a flaky check, #222): at each significant change, the frames before and after it,
+// cut to the change and 4 px around, as DIR/before.ppm and DIR/after.ppm (the last change's stay),
+// each with a comment saying where that cut is in the output's pixels and the change in the layout.
 #define _GNU_SOURCE
 #include <errno.h>
 #include <math.h>
@@ -42,6 +45,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include <wayland-client.h>
@@ -67,7 +71,7 @@ struct rect { int x, y, w, h; };
 static void usage(void) {
     fprintf(stderr, "usage: omabox-still (still|change|settle) [--region X,Y,W,H] [--ignore X,Y,W,H]... [--mask X,Y,W,H]...\n"
                     "                    [--quiet MS]\n"
-                    "                    [--start MS] [--timeout MS] [--first MS] [--strict] [--tied]\n");
+                    "                    [--start MS] [--timeout MS] [--first MS] [--strict] [--tied] [--dump DIR]\n");
     exit(2);
 }
 
@@ -108,6 +112,7 @@ static long quiet = 300, start = 2000, timeout = 10000, first = 2000;
 static int strict, tied, have_region;
 static struct rect region, ignore[MAX_IGNORE];   // layout coordinates
 static int nignore, masked[MAX_IGNORE];   // masked: a --mask, which --strict keeps
+static const char *dump_dir;              // --dump
 
 static int64_t t0 = -1;               // when `ready` was printed
 static int64_t first_sig = -1, last_sig = -1;   // ms since t0
@@ -378,6 +383,42 @@ static int is_caret(struct output *o, struct rect s) {
     return first;
 }
 
+// --dump: buffer B of output O, cut to C (its pixels), as a binary PPM at DIR/NAME (written whole, then
+// renamed: a reader never sees half of one). LAYOUT is the change, said in the comment.
+static void dump_ppm(const struct output *o, const struct shmbuf *b, struct rect c, struct rect layout, const char *name) {
+    char path[4096], tmp[4200];
+    snprintf(path, sizeof(path), "%s/%s", dump_dir, name);
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n# at %d,%d of the output's %dx%d pixels; change %d,%d %dx%d in the layout\n%d %d\n255\n",
+            c.x, c.y, o->width, o->height, layout.x, layout.y, layout.w, layout.h, c.w, c.h);
+    const int bgr = o->format == DRM_FORMAT_XBGR8888 || o->format == DRM_FORMAT_ABGR8888;
+    const int words = o->stride / 4;
+    for (int y = c.y; y < c.y + c.h; y++) {
+        int row = o->y_invert ? o->height - 1 - y : y;
+        const uint32_t *p = b->data + (size_t)row * (size_t)words;
+        for (int x = c.x; x < c.x + c.w; x++) {
+            uint32_t v = p[x];
+            unsigned char px[3] = {(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff};
+            if (bgr) { px[0] = v & 0xff; px[2] = (v >> 16) & 0xff; }
+            fwrite(px, 1, 3, f);
+        }
+    }
+    if (fclose(f) == 0) rename(tmp, path);
+    else unlink(tmp);
+}
+static void dump_change(const struct output *o, struct rect s, struct rect layout) {
+    int x0 = s.x - 4, y0 = s.y - 4, x1 = s.x + s.w + 4, y1 = s.y + s.h + 4;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > o->width) x1 = o->width;
+    if (y1 > o->height) y1 = o->height;
+    struct rect c = {x0, y0, x1 - x0, y1 - y0};
+    dump_ppm(o, &o->bufs[o->prev], c, layout, "before.ppm");
+    dump_ppm(o, &o->bufs[!o->prev], c, layout, "after.ppm");
+}
+
 // Compare the output's new frame (cur) with its prev inside the region. Returns 1 for a significant
 // change (its box in sig_box, in the layout), 0 otherwise (a smaller one goes to ign_box/ign_why).
 static int compare(struct output *o) {
@@ -419,9 +460,11 @@ static int compare(struct output *o) {
         if (ni[i]) { ign_box = to_layout(o, ig[i]); ign_why = masked[i] ? "mask" : "cursor"; }
     if (!ns) return 0;
     // Thin in the layout's pixels: a caret is as thin at scale 2 as at 1.
+    const struct rect px = s;
     s = to_layout(o, s);
     if (!strict && is_caret(o, s)) { ign_box = s; ign_why = "caret"; return 0; }
     sig_box = s;
+    if (dump_dir) dump_change(o, px, s);
     return 1;
 }
 
@@ -543,8 +586,10 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--start")) { start = num(v, 1, 600000); i++; }
         else if (!strcmp(a, "--timeout")) { timeout = num(v, 1, 600000); i++; }
         else if (!strcmp(a, "--first")) { first = num(v, 1, 600000); i++; }
+        else if (!strcmp(a, "--dump")) { dump_dir = v; i++; }
         else usage();
     }
+    if (dump_dir && mkdir(dump_dir, 0700) < 0 && errno != EEXIST) { perror(dump_dir); return 2; }
 
     display = wl_display_connect(NULL);
     if (!display) { fprintf(stderr, "omabox-still: cannot connect to $WAYLAND_DISPLAY\n"); return 1; }
