@@ -8347,6 +8347,10 @@ t_unit_gpu() {
   local out; out=$(rel nvidia | paste -sd '|'); wait "$holder"
   check_match "gpu release waits for an up in progress, said" "waiting for box 'f' \(an up or down in progress\)" "$out"
   check_match "...and takes its box down too" "\|down a d f$" "$out"
+  # gpu_rows (finding 298): no figures at all is a line saying so, exit 0 (it was 1, under pipefail).
+  : > "$TMP/$P-gpu-none"; printf 'proc a 1.0\nproc b 5.5\nengine b sm 5.5\n' > "$TMP/$P-gpu-two"
+  check_eq "gpu_rows: none, said, exit 0" "  (no GPU time) 0" "$(lib gpu_rows "$TMP/$P-gpu-none" | tr -d '\n'; echo " ${PIPESTATUS[0]}")"
+  check_eq "...rows most first, engines left out" "b 5.5%|a 1.0%" "$(lib gpu_rows "$TMP/$P-gpu-two" | awk '{ print $1, $2 }' | paste -sd '|')"
   # pmon_figures (finding 295): NVIDIA's own per-process sampling, the box's processes only.
   local pc=$TMP/$P-pmon-pids; printf '100 Hyprland\n101 quickshell\n102 heavy\n' > "$pc"
   local pm='# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command

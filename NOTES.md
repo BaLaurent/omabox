@@ -5896,6 +5896,12 @@ from them.
     refusals before any box), scale_on in t_scale and t_scale_nvidia (status, start, a second start
     refused, stop's file 2560x1440 H.264 at 30 fps and about as long as it ran, the one-shot at 60
     fps, --monitor of none refused, a down while recording takes its wf-recorder).
+298. **`gpu` ended with 1 when no process had figures** (2026-10-14, found by the 0.5.5 VM round:
+    virtio-pci, whose driver keeps no DRM fdinfo). Its rows were `grep '^proc ' | sort | awk`: with
+    no rows grep fails, pipefail makes the pipeline fail, and set -e ended `gpu` after its header,
+    before "(no GPU time)". So since `gpu` printed rows (finding 176) on any GPU with no per-process
+    counters. `gpu_rows` prints the rows or that line, exit 0. t_unit_gpu: none (said, 0) and two
+    rows, most first (fails on the code before: no gpu_rows).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

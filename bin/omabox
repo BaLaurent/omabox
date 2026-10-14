@@ -7421,9 +7421,16 @@ cmd_gpu() {
     echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of wall time on the GPU (all engines)"
   fi
   cost_lines
-  # Rows by kind (finding 176): a process whose comm is `engine` is a process.
-  grep '^proc ' "$tmp/r" | sort -k3 -rn | awk '{ printf "  %-20s %5.1f%%\n", $2, $3 }'
-  grep -q '^proc ' "$tmp/r" || echo "  (no GPU time)"
+  gpu_rows "$tmp/r"
+}
+
+# gpu's rows from its figures (FILE: "proc NAME %" lines), most first; none is "(no GPU time)", not a
+# failure (finding 298: a driver with no per-process counters, a VM's virtio, ended gpu with 1 there).
+# Rows by kind (finding 176): a process whose comm is `engine` is a process.
+gpu_rows() {
+  if grep -q '^proc ' "$1"; then
+    grep '^proc ' "$1" | sort -k3 -rn | awk '{ printf "  %-20s %5.1f%%\n", $2, $3 }'
+  else echo "  (no GPU time)"; fi
 }
 
 # CPU and memory of this box's processes (#205), gpu's twin: CPU as % of one core over SECONDS, RSS

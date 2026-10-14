@@ -3,6 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`omabox gpu` exits 0 when no process has GPU figures.** On a GPU whose driver keeps no
+  per-process counters (a VM's virtio GPU) it printed its header and ended with 1, before saying
+  "(no GPU time)". It says so now, and exits 0.
+
 ## 0.5.5 — 2026-10-14
 
 Sharp, high-resolution screenshots and videos of a box: a scale for the main screen (`--size
