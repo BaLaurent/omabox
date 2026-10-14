@@ -37,8 +37,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - Coordinates are screenshot pixels. A cropped, scaled or zoomed shot says so on stderr: then `click
   --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image. Screen
   shots show the pointer (hover evidence: a `-g` crop of the screen; `--no-pointer` leaves it out of
-  one); window shots never do. A shot
-  right after a `click` or `keys` without `--wait` can show the frame before the redraw: `--wait`, or
+  one), except after `keys`: Omarchy hides it on a key press until it moves; window shots never do.
+  A shot right after a `click` or `keys` without `--wait` can show the frame before the redraw: `--wait`, or
   `omabox wait still`, first.
 - How a model reads points off a shot depends on the model. An image bigger than the model sees is
   scaled down before it looks (Claude: 1568 px a side and about 1.2 MP, so 1920x1080 is seen at
