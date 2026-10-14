@@ -5902,6 +5902,19 @@ from them.
     before "(no GPU time)". So since `gpu` printed rows (finding 176) on any GPU with no per-process
     counters. `gpu_rows` prints the rows or that line, exit 0. t_unit_gpu: none (said, 0) and two
     rows, most first (fails on the code before: no gpu_rows).
+299. **`shot --fit` compared N with the layout, not the image** (2026-10-14, #227). grim writes the
+    screen or a region at the highest scale of the outputs it covers, so on a scale-2 screen the
+    image is twice the layout: `--fit 2000` of a 1280x720 layout passed no `-s` (1280 < 2000) and
+    gave 2560x1440. A window (`-T`) is its buffer, at its monitor's scale (rounded: 1576 px at 1.6 is
+    2522), and there `-s` multiplies that buffer instead of replacing the scale, so `--window --fit
+    1000` came out 2000 px long. `cmd_shot` now compares N with layout x scale (the most of the
+    monitors a screen shot or `-g` crosses; the window's monitor's) and gives `-s N/layout` (screen,
+    region) or `-s N/buffer` (window). `click --in` was right all along: the shot record keeps the
+    image's real size. Also seen: grim takes a window's `-g` in buffer pixels, so `shot --window -g`
+    on a scaled monitor crops the wrong part (300x200 of a scale-2 window is its 150x100 logical),
+    and `click --in` maps it as logical; left as it is (its `--fit` counts that crop at 1). t_scale /
+    t_scale_nvidia: `--fit` 2000 and 3000 of the screen, `-g --fit`, `--window --fit` above and below
+    the layout, `click --in` each, and a scale-2 + scale-1 layout (fail on the code before).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -239,7 +239,8 @@ coordinates and focuses it first when it is off screen or covered there (--no-ra
 keyboard against any window (Omarchy's launcher, a menu) it refuses, exit 1, before sending or
 focusing anything: close the layer first (Escape; twice in a launcher with text in its field).
 @ shot click drag pointer pixel
---fit N scales a shot's longest side down to N pixels. --zoom N (2-16, with -g) shows each pixel of
+--fit N scales a shot's image down to N pixels on its longest side (a scaled screen's image is its
+layout times the scale: 2560 px for a 1280 px layout at 2). --zoom N (2-16, with -g) shows each pixel of
 a small crop as N x N, unblended: a 1 px border, a glyph's edge; \`click --in\` maps it back.
 -g "X,Y WxH" (or X,Y,W,H) crops: the screen's, or with --window the window's own coordinates.
 A cropped or scaled shot says so on stderr: \`click --in SHOT X Y\` (and \`drag\`, \`pointer --in\`)
@@ -4588,12 +4589,34 @@ cmd_shot() {
     local ext; ext=$(extent)
     where="screen 0,0" lw=${ext%x*} lh=${ext#*x}
   fi
-  # --fit: grim scales the capture (-s); it truncates the size, so the factor is rounded up.
+  # --fit: grim scales the capture (-s); it truncates the size, so the factor is rounded up. What is
+  # compared with N is the image grim writes without -s (#227): the layout's size times the highest
+  # scale of the outputs captured (a scale-2 screen's 1280 px is a 2560 px image). -s replaces that
+  # scale for the screen or a region, so it is N / the layout's side; a window's capture is its
+  # buffer, at its monitor's scale, which -s multiplies, so there it is N / the buffer's side.
   local long=$((lw > lh ? lw : lh))
   local scaled=0
-  if [ -n "$fit" ] && [ "$long" -gt "$fit" ]; then
-    scaled=1
-    grim+=(-s "$(awk -v n="$fit" -v l="$long" 'BEGIN { printf "%.6f", int(n / l * 1e6 + 1) / 1e6 }')")
+  if [ -n "$fit" ]; then
+    local mons sc base
+    mons=$(hypr_json monitors) || exit $?
+    # A -g of a window grim takes in its buffer's pixels (finding 299): that crop is the image, at 1.
+    if [ -n "$win" ] && [ -n "$g" ]; then sc=1
+    elif [ -n "$win" ]; then
+      local cl; cl=$(hypr_json clients) || exit $?
+      sc=$(jq -r --arg a "$(jq -r .address <<<"$win")" --argjson m "$mons" \
+        'first(.[] | select(.address == $a) | .monitor) as $id | first($m[] | select(.id == $id) | .scale) // 1' <<<"$cl" 2>/dev/null) || sc=1
+    else
+      local rx=${gx:-0} ry=${gy:-0}
+      sc=$(jq -r --argjson x "$rx" --argjson y "$ry" --argjson w "$lw" --argjson h "$lh" \
+        '[.[] | select((.disabled | not) and .x < $x + $w and $x < .x + .width / .scale and .y < $y + $h and $y < .y + .height / .scale) | .scale]
+         | max // 1' <<<"$mons" 2>/dev/null) || sc=1
+    fi
+    [[ $sc =~ ^[0-9]+(\.[0-9]+)?$ ]] || sc=1
+    base=$long; [ -z "$win" ] || base=$(awk -v l="$long" -v s="$sc" 'BEGIN { printf "%d", l * s + 0.5 }')
+    if awk -v l="$long" -v s="$sc" -v n="$fit" 'BEGIN { exit !(l * s > n + 1e-9) }'; then
+      scaled=1
+      grim+=(-s "$(awk -v n="$fit" -v l="$base" 'BEGIN { printf "%.6f", int(n / l * 1e6 + 1) / 1e6 }')")
+    fi
   fi
   if [ -n "$burst" ]; then shot_burst "$burst" "${every:-100}" "$sheet" "$bdiff" "${after[@]}"; return; fi
   # --changed captures the whole of it beside the references, to compare; the crop is written after.

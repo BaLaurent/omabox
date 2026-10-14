@@ -10,6 +10,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox gpu` exits 0 when no process has GPU figures.** On a GPU whose driver keeps no
   per-process counters (a VM's virtio GPU) it printed its header and ended with 1, before saying
   "(no GPU time)". It says so now, and exits 0.
+- **`shot --fit N` on a scaled screen.** It compared N with the layout's size, not the image's: at
+  `--size 2560x1440,scale=2`, `--fit 2000` gave the full 2560x1440, and a window's shot came out at
+  twice N. The longest side is N now on any screen, window, region or mix of scales.
 
 ## 0.5.5 — 2026-10-14
 

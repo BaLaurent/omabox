@@ -6032,6 +6032,33 @@ scale_on() {
   check "click --in the shot: image pixels to the layout's" ob click -b "$B" --in "$f" 2000 1000
   check_eq "...the pointer at half of them" "1000, 500" "$(ob hyprctl -b "$B" cursorpos)"
   check_match "a point past the layout refused" "1300,100 is off the 1280x720 screen" "$(ob click -b "$B" 1300 100 2>&1)"
+  # --fit against the image grim writes, not the layout (#227, finding 299): 2000 is above the
+  # layout's 1280 and below the image's 2560.
+  local ff=$TMP/$B-fit.png
+  err=$(ob shot -b "$B" --fit 2000 -o "$ff" 2>&1 >/dev/null)
+  check_eq "shot --fit 2000 of a scale-2 screen: 2000 px long" 2000x1125 "$(magick identify -format '%wx%h' "$ff" 2>&1)"
+  check_match "...said: an image of the 1280x720 layout" "2000x1125 image of the screen's 1280x720 at 0,0 \(x0.64\)" "$err"
+  check "...click --in it" ob click -b "$B" --in "$ff" 1000 500
+  check_eq "...the pointer at the layout's point" "640, 320" "$(ob hyprctl -b "$B" cursorpos)"
+  ob shot -b "$B" --fit 3000 -o "$ff" >/dev/null 2>&1
+  check_eq "shot --fit 3000, above the image: full size" 2560x1440 "$(magick identify -format '%wx%h' "$ff" 2>&1)"
+  ob shot -b "$B" -g "100,100 400x300" --fit 600 -o "$ff" >/dev/null 2>&1
+  check_eq "shot -g 400x300 --fit 600 (an 800x600 image): 600 px long" 600x450 "$(magick identify -format '%wx%h' "$ff" 2>&1)"
+  check "...click --in it" ob click -b "$B" --in "$ff" 300 225
+  check_eq "...the pointer in the region's layout" "300, 250" "$(ob hyprctl -b "$B" cursorpos)"
+  ob run -b "$B" -d --wait -- foot --app-id t227 >/dev/null 2>&1
+  local wl; wl=$(ob windows -b "$B" --json | jq -r '.[] | select(.class == "t227") | "\(.size[0]) \(.size[1]) \(.at[0]) \(.at[1])"')
+  if [ -n "$wl" ]; then
+    local ww wh wx wy iw ih wlong fn; read -r ww wh wx wy <<<"$wl"; wlong=$((ww > wh ? ww : wh))
+    for fn in 2000 1000; do
+      ob shot -b "$B" --window class:t227 --fit "$fn" -o "$ff" >/dev/null 2>&1
+      check_eq "shot --window --fit $fn of a ${wlong} px window at scale 2: $fn px long" "$fn" "$(magick identify -format '%[fx:max(w,h)]' "$ff" 2>&1)"
+    done
+    read -r iw ih < <(magick identify -format '%w %h\n' "$ff" 2>/dev/null) || iw=1 ih=1
+    check "...click --in it" ob click -b "$B" --in "$ff" 100 50
+    check_eq "...the pointer at the window's point" "$((wx + 201 * ww / (2 * iw))), $((wy + 101 * wh / (2 * ih)))" "$(ob hyprctl -b "$B" cursorpos)"
+    ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
+  else no "a foot window for shot --window --fit" "none listed"; fi
   # record (finding 297): a video of the screen at its pixels, a steady frame rate, made in the box.
   if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null; then
     local v=$TMP/$B.mp4 t0
@@ -6060,6 +6087,11 @@ scale_on() {
   check "monitor add beside it" ob monitor -b "$B" add 800x600
   check_eq "...placed right of the layout's 1280, not the mode's 2560" "1280,0" \
     "$(ob monitor -b "$B" list --json | jq -r --arg m "$m1" '.[] | select(.name == $m) | "\(.x),\(.y)"')"
+  # A layout of scale 2 and 1 (#227): grim writes the whole at 2, a region of the scale-1 one at 1.
+  ob shot -b "$B" --fit 3000 -o "$ff" >/dev/null 2>&1
+  check_eq "shot --fit 3000 of 2080x720 at scale 2 and 1: 3000 px long" 3000x1038 "$(magick identify -format '%wx%h' "$ff" 2>&1)"
+  ob shot -b "$B" -g "1280,0 800x600" --fit 1000 -o "$ff" >/dev/null 2>&1
+  check_eq "shot -g of the scale-1 monitor --fit 1000: its 800x600, as it is" 800x600 "$(magick identify -format '%wx%h' "$ff" 2>&1)"
   check "monitor remove" ob monitor -b "$B" remove "$m1"
   check_eq "mode WxH,scale=1.5" "$m0 1920x1080@60,scale=1.5" "$(ob mode -b "$B" 1920x1080,scale=1.5)"
   ob reload -b "$B" >/dev/null 2>&1
