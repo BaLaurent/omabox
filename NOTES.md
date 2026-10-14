@@ -6070,6 +6070,29 @@ from them.
     `$(on_box pkill …)`, `nsenter -U -m -- kill`) it finds each at its kill's line and nothing else.
     No allowlist: no caller has a legitimate kill in on_box.
 
+308. **`--net isolated --addr ADDR`: documentation addresses on the box's loopback** (2026-10-14,
+    #229). Some apps judge their network by where a connection comes from: libtorrent (qBittorrent)
+    reads "firewalled" until a peer connects from a non-local address, and in an isolated box every
+    peer is on 127.0.0.1, so the app shows a warning a real setup would not. Nothing in the box can
+    add an address (`ip addr add`: Operation not permitted): pasta makes the user and network
+    namespaces, and its child is root there with CAP_NET_ADMIN, but bwrap's own user namespace maps
+    the box back to our uid with no capabilities. So `up` adds them in pasta's child, the `sh` that
+    opens bwrap's info fd, before it execs bwrap (`ip addr add A/32 dev lo`; IPv6 `/128 nodad`); a
+    failure there stops the box, said in box.log. Only RFC 5737's three /24s and RFC 3849's
+    2001:db8::/32: no real host has one, so an address on the loopback never hides a real one, and they
+    are non-local to libtorrent (it counts 10/8, 172.16/12, 192.168/16, 169.254/16 and 127/8 local;
+    Python's `ipaddress.is_private` counts the documentation ranges private, so an app judging that way
+    is not helped). Given in canonical form (`box_addr`: 203.0.113.010 is .10, IPv6 shortened), sorted
+    and each once, so `up` on a box that is up compares them as it does --allow. Isolated only: a
+    connected box's addresses are pasta's copy of the host's, and a nested connected one has no pasta to
+    add them; the --allow forwards are unchanged (pasta splices them to 127.0.0.1/::1, so a server bound
+    only to an --addr address is not reached through them). In box.json and `ls --json` as `addrs`, and
+    under the box's line in `ls`. Verified in a box (`t_isolated_addr`): a server on 203.0.113.10 sees a
+    client bound to 203.0.113.11 come from .11 (and 2001:db8::a over IPv6), the box still cannot add
+    one, the --allow port is forwarded; `t_isolated` checks a box without --addr has only 127.0.0.1/8
+    and ::1. Not tried with qBittorrent itself. The unshare recipe the issue used as a workaround is not
+    in the skill: --addr covers it.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

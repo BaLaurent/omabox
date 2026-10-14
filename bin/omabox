@@ -75,7 +75,8 @@ usage_text() {
 omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
   omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
-            [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
+            [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...]
+            [--env KEY=VAL]...
             [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/
             [--theme NAME]                               start on that theme, not your desktop's current one
             [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
@@ -176,7 +177,10 @@ Every box has its own network (pasta): by default the internet, the LAN and your
 the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
 second after they listen, one box per port (a box server on a port the host or another box has
 fails to start, address in use; of two started within a second, only one gets it there:
-\`omabox ports\` names the holders). --net isolated: a loopback and the --allow ports only.
+\`omabox ports\` names the holders). --net isolated: a loopback and the --allow ports only;
+--addr ADDR (repeatable) puts an address on that loopback, for an app that wants a peer from a
+non-local address: one in a documentation range (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
+2001:db8::/32). A server on 203.0.113.10 sees a client bound to 203.0.113.11 come from there.
 @ ports
 ON 127.0.0.1:PORT HERE, by its --json host.state: this (this box); this-resets (this box's pasta
 holds it, but the server is on ::1 or a 127.x other than 127.0.0.1 only, so connections are reset);
@@ -2252,6 +2256,38 @@ allow_ports() {
   printf '%s\n' "${ps[@]}" | awk '{ print $1 + 0 }' | sort -nu | paste -sd,
 }
 
+# --addr's address (#229) as the box has it (203.0.113.010 is 203.0.113.10; IPv6 in its short form,
+# RFC 5952), or a failure for one outside the documentation ranges: RFC 5737's 192.0.2.0/24,
+# 198.51.100.0/24 and 203.0.113.0/24, RFC 3849's 2001:db8::/32. No real host has one, so an address
+# on the box's loopback never hides a real one from its apps. box_addr ADDR
+box_addr() {
+  local a=${1,,} o i run=0 best=0 bl=0; local -a os g hs ts
+  if [[ $a =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+    IFS=. read -ra os <<<"$a"
+    for o in "${os[@]}"; do ((10#$o <= 255)) || return 1; done
+    a="$((10#${os[0]})).$((10#${os[1]})).$((10#${os[2]})).$((10#${os[3]}))"
+    case $a in 192.0.2.*|198.51.100.*|203.0.113.*) echo "$a"; return 0 ;; *) return 1 ;; esac
+  fi
+  [[ $a =~ ^[0-9a-f:]+$ && $a != *:::* ]] || return 1
+  if [[ $a == *::* ]]; then
+    [[ ${a#*::} != *::* ]] || return 1
+    IFS=: read -ra hs <<<"${a%%::*}"; IFS=: read -ra ts <<<"${a#*::}"
+    ((${#hs[@]} + ${#ts[@]} <= 7)) || return 1
+    g=(${hs[@]+"${hs[@]}"}); for ((i = ${#hs[@]} + ${#ts[@]}; i < 8; i++)); do g+=(0); done; g+=(${ts[@]+"${ts[@]}"})
+  else
+    [[ $a != :* && $a != *: ]] || return 1
+    IFS=: read -ra g <<<"$a"; [ ${#g[@]} = 8 ] || return 1
+  fi
+  for i in "${!g[@]}"; do [[ ${g[i]} =~ ^[0-9a-f]{1,4}$ ]] || return 1; printf -v 'g[i]' %x "$((16#${g[i]}))"; done
+  [ "${g[0]}:${g[1]}" = 2001:db8 ] || return 1
+  # The longest run of zero groups (the first of two as long), two or more, is ::.
+  for ((i = 0; i < 8; i++)); do
+    if [ "${g[i]}" = 0 ]; then run=$((run + 1)); ((run <= bl)) || { bl=$run; best=$((i - run + 1)); }; else run=0; fi
+  done
+  local IFS=:
+  if ((bl >= 2)); then echo "${g[*]:0:best}::${g[*]:best+bl}"; else echo "${g[*]}"; fi
+}
+
 # What `up` says of a box that is up already, which counts as use. The options given that the box
 # does not have are refused (finding 134): an agent asking for a plugin, isolation or a size would
 # otherwise go on without it. Only those given: a bare `up` takes the box as it is. Mounts, --env and
@@ -2267,6 +2303,9 @@ up_already() {
     if [ "$net" = isolated ]; then [ "$(meta net)" = isolated ] || diff+=("--net isolated (it is $(meta net))")
     elif [ "$(meta net)" = isolated ]; then diff+=("--net connected (it is isolated)"); fi ;; esac
   case " $given " in *" allow "*) [ "$(allow_ports "$(meta allow)")" = "$allow" ] || diff+=("--allow $allow (it allows $(meta allow | grep . || echo none))") ;; esac
+  case " $given " in *" addr "*)
+    [ "$(printf '%s\n' "${net_addrs[@]}" | jq -R . | jq -sc .)" = "$(jq -c '.addrs // []' "$D/box.json" 2>/dev/null)" ] ||
+      diff+=("--addr ${net_addrs[*]} (it has $(jq -r '.addrs // [] | if length == 0 then "none" else join(" ") end' "$D/box.json" 2>/dev/null))") ;; esac
   case " $given " in *" systemd "*) [ "$(meta systemd)" = true ] || diff+=("--systemd (it has no user manager)") ;; esac
   case " $given " in *" stock-bar "*) [ "$(meta bar)" = stock ] || diff+=("--stock-bar (it has your bar)") ;; esac
   case " $given " in *" xwayland "*) [ "$(meta xwayland)" = true ] || diff+=("--xwayland (it has none)") ;; esac
@@ -2304,6 +2343,7 @@ cmd_up() {
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 owner=""
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 nopointer=0 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
+  local net_addrs=()      # --addr (#229): addresses on an isolated box's loopback, as box_addr has them
   local overlays=() robinds=() plugin_args=() envs=() seeds=() monitors=() theme_dirs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local named=() g        # the host paths --ro-bind, --seed and --overlay name, as named (refuse_src)
@@ -2320,7 +2360,7 @@ cmd_up() {
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--monitor|--theme-dir|--theme)
+      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--stock-bar|--systemd|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--monitor|--theme-dir|--theme)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -2350,6 +2390,9 @@ cmd_up() {
       --theme) optarg "$@"; THEME=$2; shift ;;
       --net) optarg "$@"; net=$2; net_set=1; shift ;;
       --allow) optarg "$@"; allow=$2; shift ;;
+      --addr) optarg "$@"; g=$(box_addr "$2") || die "up: --addr takes an address in a documentation range, which no real host has" \
+          "(192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 or 2001:db8::/32; one address, no /prefix), got $2"
+        net_addrs+=("$g"); shift ;;
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "up: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=(--setenv "${2%%=*}" "${2#*=}"); shift ;;
@@ -2493,6 +2536,10 @@ cmd_up() {
   # its network is none: an empty namespace of its own.
   case $net in host|connected) net=connected ;; isolated) ;; *) die "up: --net is connected (the default) or isolated" ;; esac
   [ -z "$allow" ] || [ "$net" = isolated ] || die "up: --allow needs --net isolated"
+  # --addr (#229): only on an isolated box's loopback, which no other network shares. A connected box's
+  # addresses are pasta's copy of the host's, and a nested connected one has no pasta to add them.
+  [ ${#net_addrs[@]} = 0 ] || [ "$net" = isolated ] || die "up: --addr needs --net isolated"
+  [ ${#net_addrs[@]} = 0 ] || mapfile -t net_addrs < <(printf '%s\n' "${net_addrs[@]}" | LC_ALL=C sort -u)
   [ "$net" = connected ] && [ -f /opt/omabox/share/session.sh ] && net=none
   [[ -z $allow || $allow =~ ^[0-9]+(,[0-9]+)*$ ]] || die "up: --allow takes ports: 8081,8082"
   local ports; ports=$(allow_ports "$allow") || die "up: --allow takes ports from 1 to 65535, got $allow"
@@ -2526,6 +2573,7 @@ cmd_up() {
   # pasta cannot make without /dev/net/tun (it would fail inside the box, where only box.log says why).
   # Before check_install: no box starts without them, whatever is built.
   command -v pasta >/dev/null || die "a box's network needs pasta: sudo pacman -S passt"
+  [ ${#net_addrs[@]} = 0 ] || command -v ip >/dev/null || die "up: --addr needs ip: sudo pacman -S iproute2"
   # A sandbox that refuses new namespaces (ai-jail's seccomp filter) cannot start a box: say what does.
   in_jail || unshare -U true 2>/dev/null ||
     die "cannot start a box here: this sandbox refuses new namespaces. Inside ai-jail, omabox goes through the broker: run 'omabox broker on' outside the jail and add the lines it prints to ~/.ai-jail"
@@ -2724,7 +2772,7 @@ cmd_up() {
       + (if $fallback then {wanted: $wanted, why: $why} else {} end)')
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --argjson scale "$scale" --arg created "$(date -Is)" \
-    --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
+    --arg net "$net" --arg allow "$allow" --argjson net_addrs "$(printf '%s\n' ${net_addrs[@]+"${net_addrs[@]}"} | jq -R 'select(. != "")' | jq -sc .)" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
     --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" --arg owner_start "$owner_start" --arg agent "$agent" \
     --arg starter "$starter" --argjson at_term "$at_term" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
@@ -2745,6 +2793,7 @@ cmd_up() {
       aquamarine: ({kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed} + (if $aq_main != "" then {main_checkout: $aq_main} else {} end))}
       + (if $render != null then {render: $render} else {} end)
       + (if ($seeds | length) > 0 then {seeds: $seeds} else {} end)
+      + (if ($net_addrs | length) > 0 then {addrs: $net_addrs} else {} end)
       + (if ($themes | length) > 0 then {theme_dirs: $themes} else {} end)
       + (if $theme != "" then {theme: $theme} else {} end)
       + (if ($mspecs | length) > 0 then {monitor_specs: $mspecs} else {} end)
@@ -2902,6 +2951,15 @@ cmd_up() {
     local wrap='exec 3>"$0"; exec "$@"'
     # shellcheck disable=SC2016 # the inner sh's
     [ ${#cover_srcs[@]} = 0 ] || wrap='exec 3>"$0" 4<>"${0%/*}/go"; exec "$@"'
+    # --addr (#229) goes on the loopback here, the one place that can: this sh is pasta's root, with
+    # CAP_NET_ADMIN in the network namespace pasta made; bwrap's user namespace, below, maps the box
+    # back to our uid with none, so nothing in the box can add (or remove) an address. Checked by
+    # box_addr: a plain address, safe in the line. Failing, the box does not start (box.log says why).
+    local a add=""
+    for a in ${net_addrs[@]+"${net_addrs[@]}"}; do
+      if [[ $a == *:* ]]; then add+="ip -6 addr add $a/128 dev lo nodad && "; else add+="ip addr add $a/32 dev lo && "; fi
+    done
+    [ -z "$add" ] || wrap="{ ${add}:; } || { echo 'omabox: could not add the --addr addresses to the box loopback' >&2; exit 1; }; $wrap"
     launch=(pasta "${pasta_args[@]}" --
       sh -c "$wrap" "$D/info.json" "${launch[@]}" --unshare-user --uid "$UID" --gid "$(id -g)"
       --die-with-parent)
@@ -3986,7 +4044,7 @@ cmd_run() {
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "run: --env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--seed|--theme-dir|--theme|--monitor|--net|--allow|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--seed|--theme-dir|--theme|--monitor|--net|--allow|--addr|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--no-pointer|--stock-bar|--systemd) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
@@ -9308,7 +9366,7 @@ box_json() {
   local orphan=false; [ "$state" != up ] || ! box_orphan || orphan=true
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" --argjson hung "$hung" \
     --arg sh "$sh" --argjson crashes "$crashes" --argjson orphan "$orphan" \
-    '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
+    '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), addrs: (.addrs // []), idle: (.idle // 0),
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
         | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
@@ -9363,6 +9421,9 @@ cmd_ls() {
     local nm; nm=$(jq -r '.monitors // [] | length' "$D/box.json" 2>/dev/null) || nm=0
     printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$([ "${nm:-0}" -le 1 ] && size_text "$(meta size)" "$(meta_scale)" || echo "$nm monitors")" "$state" "$sh" "$(meta net)" "$idle" \
       "$(jq -r '.plugins | join(",")' "$D/box.json" 2>/dev/null)"
+    # Its --addr addresses (#229), under its line: an isolated box with more than a loopback.
+    local al; al=$(jq -r '.addrs // [] | join(" ")' "$D/box.json" 2>/dev/null) || al=""
+    [ -z "$al" ] || printf '  addresses: %s (on its loopback)\n' "$al"
     # A box on a Hyprland build of its own (finding 116), under its line: never taken for a stock one.
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
     # keys-to-box (finding 117), when on: SUPER keys follow focus into it.

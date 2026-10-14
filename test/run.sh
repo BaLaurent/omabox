@@ -749,9 +749,19 @@ t_unit_refusals() {
   check_match "...--env-file's too, by line" "line 2 sets HOME: it is the box session's own" "$(ob run -b "$P-x" --env-file "$TMP/reserved.env" -- true 2>&1)"
   check_eq "allow_ports: sorted, each once" "22,8081,8082" "$(lib allow_ports 8082,22,8081,08081)"
   check_eq "...none for none" "" "$(lib allow_ports "")"
+  # --addr (#229): documentation ranges only, as the box has them.
+  check_eq "box_addr: leading zeros dropped" 203.0.113.10 "$(lib box_addr 203.0.113.010)"
+  check_eq "...each IPv4 documentation range" "192.0.2.1 198.51.100.255" "$(lib box_addr 192.0.2.1) $(lib box_addr 198.51.100.255)"
+  check_eq "...IPv6 in its short form" "2001:db8::1:0:0:1 2001:db8:0:1::a" \
+    "$(lib box_addr 2001:DB8:0:0:1:0:0:1) $(lib box_addr 2001:0db8:0:1:0:0:0:a)"
+  local a; for a in 10.0.0.1 127.0.0.2 203.0.114.1 203.0.113.256 203.0.113.10/32 2001:db9::1 ::1 2001:db8::1::2 2001:db8:1:2:3:4:5 2001:db8: ""; do
+    check_fails "...'$a' refused" lib box_addr "$a"
+  done
+  check_match "--addr outside the documentation ranges refused" "documentation range.*got 10.1.2.3" "$(ob up "$P-r28" --net isolated --addr 10.1.2.3 2>&1)"
+  check_match "--addr needs --net isolated" "--addr needs --net isolated" "$(ob up "$P-r29" --addr 203.0.113.10 2>&1)"
   check_match "a box name with characters it cannot have: said as written (#107)" "note: box name '$P-r27 x!' written as '$P-r27-x-'" \
     "$(ob up "$P-r27 x!" --net isolated --allow 0 2>&1)"
-  local r; for r in 21 22 23 24 25 26 27-x-; do check_fails "...no box dir or lock for $P-r$r" test -e "$XDG_RUNTIME_DIR/omabox/$P-r$r" -o -e "$XDG_RUNTIME_DIR/omabox/.lock-$P-r$r"; done
+  local r; for r in 21 22 23 24 25 26 27-x- 28 29; do check_fails "...no box dir or lock for $P-r$r" test -e "$XDG_RUNTIME_DIR/omabox/$P-r$r" -o -e "$XDG_RUNTIME_DIR/omabox/.lock-$P-r$r"; done
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-r" || true)
   check_eq "refusals left no box behind" 0 "$left"
 }
@@ -3532,6 +3542,45 @@ t_isolated() {
   check_fails "other host port unreachable" ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$other/"
   check_fails "no internet" ob run -b "$B" -- curl -s --max-time 3 -o /dev/null https://archlinux.org
   check_eq "hostname is the host's (finding 54)" "$(uname -n)" "$(ob run -b "$B" -- uname -n)"
+  check_eq "without --addr, only the loopback's own addresses (#229)" "127.0.0.1/8 ::1/128" \
+    "$(ob run -b "$B" -- ip -o addr show | awk '{ print $4 }' | LC_ALL=C sort | paste -sd' ')"
+  check "down" ob down "$B"
+}
+
+# #229: --addr puts documentation-range addresses on an isolated box's loopback, where only up (pasta's
+# root) can: a server on one sees a client bound to another come from there, not from 127.0.0.1. The
+# --allow port is forwarded as before, and nothing in the box can add an address of its own.
+t_isolated_addr() {
+  local B=$P-isoaddr tok=isoaddr-$P-$RANDOM allowed out
+  mkdir -p "$TMP/www-addr" && echo "$tok" > "$TMP/www-addr/index.html"
+  allowed=$(free_port)
+  python3 -m http.server "$allowed" --bind 127.0.0.1 --directory "$TMP/www-addr" >/dev/null 2>&1 & SERVERS+=($!)
+  check "the host reaches its server" until_ok 5 bash -c "curl -fsS --max-time 2 http://127.0.0.1:$allowed/ | grep -qx '$tok'"
+  check "up --net isolated --allow $allowed --addr 203.0.113.11 --addr 203.0.113.010 --addr 2001:DB8::a" \
+    ob up "$B" --no-shell --net isolated --allow "$allowed" --addr 203.0.113.11 --addr 203.0.113.010 --addr 2001:DB8::a
+  check_box_safety "$B"
+  check_eq "the addresses are on its loopback" "127.0.0.1/8 2001:db8::a/128 203.0.113.10/32 203.0.113.11/32 ::1/128" \
+    "$(ob run -b "$B" -- ip -o addr show | awk '$2 == "lo" { print $4 }' | LC_ALL=C sort | paste -sd' ')"
+  check_eq "...and on no other link" "lo" "$(ob run -b "$B" -- ip -o addr show | awk '{ print $2 }' | sort -u | paste -sd' ')"
+  out=$(ob run -b "$B" -- python3 -c '
+import socket
+s = socket.socket(); s.bind(("203.0.113.10", 0)); s.listen()
+c = socket.socket(); c.bind(("203.0.113.11", 0)); c.connect(s.getsockname())
+print(s.accept()[1][0])
+s6 = socket.socket(socket.AF_INET6); s6.bind(("2001:db8::a", 0)); s6.listen()
+c6 = socket.socket(socket.AF_INET6); c6.connect(s6.getsockname()[:2])
+print(s6.accept()[1][0])' 2>&1)
+  check_eq "a server on .10 sees the client bound to .11 come from .11" 203.0.113.11 "$(sed -n 1p <<<"$out")"
+  check_eq "...and IPv6 on 2001:db8::a" 2001:db8::a "$(sed -n 2p <<<"$out")"
+  check_fails "nothing in the box can add an address" ob run -b "$B" -- ip addr add 203.0.113.99/32 dev lo
+  check_eq "the --allow port is still forwarded" "$tok" "$(ob run -b "$B" -- curl -s --max-time 3 "http://127.0.0.1:$allowed/")"
+  check_eq "ls --json has them" '["2001:db8::a","203.0.113.10","203.0.113.11"]' \
+    "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | .addrs')"
+  check_match "ls says them under the box" "addresses: 2001:db8::a 203.0.113.10 203.0.113.11" "$(ob ls)"
+  check_match "up with the same addresses, in another order: already up" "box '$B' is already up" \
+    "$(ob up "$B" --net isolated --addr 2001:db8::a --addr 203.0.113.11 --addr 203.0.113.10 2>&1)"
+  check_match "...with another: refused, naming the ones it has" "--addr 203.0.113.12 \\(it has 2001:db8::a 203.0.113.10 203.0.113.11\\)" \
+    "$(ob up "$B" --net isolated --addr 203.0.113.12 2>&1)"
   check "down" ob down "$B"
 }
 
@@ -9756,7 +9805,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

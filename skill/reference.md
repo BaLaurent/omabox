@@ -411,6 +411,12 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   inside its box (`omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/`), never from the host.
   Inside a box the host's LAN address is the box itself. A connected box started inside a box has
   no network.
+- An app that judges its network by where a peer comes from (a BitTorrent client reads
+  "firewalled" while every peer is on 127.0.0.1): `omabox up --net isolated --addr 203.0.113.10
+  --addr 203.0.113.11` puts those on the box's loopback; bind the server to one and the peer
+  (client) to the other, and the server sees it come from there. Documentation ranges only
+  (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32); `ip addr add` in the box is refused,
+  so give them at `up`. The `--allow` ports still arrive on 127.0.0.1, not on these.
 
 ## Box lifetime
 

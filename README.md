@@ -428,7 +428,8 @@ blocks the network and every other socket, omabox's included), or see
   windows on your desktop. Keys go the other way: what you type into its window, the box reads.
 - **The network**: every box has one of its own. By default (`--net connected`) it reaches the
   internet, your LAN and your host's servers, and you reach its servers; with `--net isolated` it has
-  only a loopback and the host ports you `--allow` (`omabox up --net isolated --allow 8081,8082`).
+  only a loopback and the host ports you `--allow` (`omabox up --net isolated --allow 8081,8082`),
+  and any `--addr` you give it on that loopback (below).
   What reaches outside (API calls, uploads, changes to a server) is real, and `down` does not undo it.
 - **Not a security boundary**: a box shares your kernel and GPU (a runaway app can load or hang it)
   and, by default, your network. Commands you run on the host, a project's `sudo ./setup` or
@@ -444,6 +445,12 @@ blocks the network and every other socket, omabox's included), or see
   the server listens on IPv4 only, as most dev servers do, and from one box to another it never
   works. A server in a box that listens on `::1` only cannot be reached from outside it, though its
   port is still taken on your `127.0.0.1`, where connections to it are reset.
+- An isolated box can have more addresses on its loopback, for apps that judge their network by
+  where a peer comes from (a BitTorrent client reads "firewalled" while every peer is on
+  127.0.0.1): `omabox up --net isolated --addr 203.0.113.10 --addr 203.0.113.11`. A server on .10
+  sees a client bound to .11 come from .11. Only documentation ranges (192.0.2.0/24,
+  198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32), which no real host has; nothing in the box can
+  add one itself.
 - A box's ports are forwarded to your host's `127.0.0.1` only (never your LAN address), usually
   within a second of its server listening, the ephemeral range included; other boxes reach them
   there too. A TCP port there also takes the UDP port of the same number. So while a connected box

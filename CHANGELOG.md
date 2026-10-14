@@ -29,6 +29,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   widget says it on the box's row, and `omabox down --orphans` takes those down, naming each. Nothing
   takes one down by itself, and a box you start at a terminal is never one. `up --idle 0` says, to a
   caller that is not a terminal, that nothing will take the box down but `omabox down`.
+- **Addresses of its own for an isolated box.** `up --net isolated --addr 203.0.113.10 --addr
+  203.0.113.11` puts those addresses on the box's loopback, for apps that judge their network by
+  where a peer comes from: a BitTorrent client reads "firewalled" until a peer connects from a
+  non-local address, and in an isolated box every peer was on 127.0.0.1. A server on one sees a
+  client bound to another come from there. Nothing in the box could add one itself. Documentation
+  ranges only (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32), so they never stand for
+  a real host; `--allow` forwards are unchanged. `ls` lists them under the box, `ls --json` as
+  `addrs` (#229).
 
 ### Fixed
 
