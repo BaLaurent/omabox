@@ -5828,7 +5828,12 @@ cmd_shot() {
   # a Hyprland that stopped answering, where grim waited out its 10 s and said only "grim failed".
   # Then the box is asked once: no answer is said in words, and the capture stopped.
   local capfd cap grc=""
-  exec {capfd}< <(rc=0; { { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } && put; } || rc=$?; echo "$rc")
+  # Under load grim now and then ends 0 with no image at all (#217, finding 318): taken once more.
+  exec {capfd}< <(rc=0; { { [ -z "$win" ] || { grab >/dev/null && sleep 0.1; }; } && put; } || rc=$?
+    if [ "$rc" = 0 ] && { [ -z "$tofd" ] || [ $changed = 1 ]; } && [ ! -s "$file" ]; then
+      sleep 0.1; put || rc=$?
+    fi
+    echo "$rc")
   cap=$!
   if ! read -r -t 2 -u "$capfd" grc; then
     if ! hypr_answers; then

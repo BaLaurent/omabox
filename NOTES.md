@@ -6400,6 +6400,15 @@ from them.
     list, `--find`'s path, `--json`, the click, a `--find` matching nothing; foot: no tree, exit 1;
     a missing window), t_unit_pointer's loop (`omabox-tree` refuses outside a box), the broker
     lets a jailed agent run it.
+318. **A shot grim gives no image for is taken once more** (2026-10-14, #217; finding 302 made the
+    message say how grim ended). The next occurrence, in the batch-3 full suite (t_monitors, AMD
+    box, the second `shot --monitor HEADLESS-3` right after one that worked), said "grim failed: it
+    gave an empty image": grim ended 0 having written nothing. t_monitors passed alone twice after.
+    So a shot whose grim ends 0 with an empty file now waits 0.1 s and captures once more; a second
+    empty image fails as before. Not for a jailed caller's `--to-fd` shot (its fd cannot be checked
+    for size here). Why grim writes nothing is not known (Hyprland's log shows screencopy binding
+    normally); not reproducible on demand, so the retry has no test of its own.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

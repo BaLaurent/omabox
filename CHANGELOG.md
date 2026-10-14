@@ -114,7 +114,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   7 px as soon as two boxes were up. The count is drawn beside the mark now; on 4.0.4 the widget
   looks as it did, except that the mark no longer moves up a pixel when the count shows.
 - **A bare "shot: grim failed" says how grim ended** when grim gives no reason of its own: an empty
-  image, nothing in 10 s, or the status it ended with.
+  image, nothing in 10 s, or the status it ended with. A shot grim gives an empty image for, which
+  happens now and then under load, is taken once more.
 - **The Codex guard works with your own `shell_environment_policy.set`.** `guard on` refused a
   `~/.codex/config.toml` that already had one, and told you to add its keys by hand, after which
   `omabox guard` said `outdated` forever. It now adds its keys to your table between its markers, and
