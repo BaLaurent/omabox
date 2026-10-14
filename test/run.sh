@@ -816,6 +816,122 @@ t_unit_box_gone() {
   kill "$zp" 2>/dev/null; wait "$zp" 2>/dev/null
 }
 
+# #218, finding 307: on_box enters the box's user and mount namespaces, not its pid namespace, so a
+# kill there takes a pid read from the box's /proc as the host's (finding 289: it signalled four host
+# pids once). on_box_kills FILE|DIR...: each on_box call, and each nsenter without -p, whose command
+# (quoted scripts and heredocs included) runs kill, pkill or killall, as FILE:LINE CALL; then "N calls",
+# how many it read. Comments are skipped, and a kill after the call ends (`on_box x; kill $p`) is the
+# host's own, about a host pid.
+ON_BOX_KILLS='
+import os, re, sys
+SQ, DQ = chr(39), chr(34)
+call = re.compile(r"(?<![\w$./^-])(on_box|nsenter)(?![\w-])")
+kill = re.compile(r"(?<![\w$.-])(kill|pkill|killall)(?![\w-])")
+defn = re.compile(r"[ \t]*\(")
+heredoc = re.compile(r"<<-?\s*[" + SQ + DQ + r"]?(\w+)")
+def where(line, end):
+    # The line read up to END: code, string or comment there (quotes, $( in quotes, # comments).
+    stack, i = ["c"], 0
+    while i < end:
+        c, top = line[i], stack[-1]
+        if top == SQ:
+            if c == SQ: stack.pop()
+        elif top == DQ:
+            if c == "\\": i += 1
+            elif c == DQ: stack.pop()
+            elif line.startswith("$(", i): stack.append("c"); i += 1
+        else:
+            if c == "\\": i += 1
+            elif c in SQ + DQ: stack.append(c)
+            elif c == "#" and (i == 0 or line[i - 1] in " \t;("): return "comment"
+            elif c == "(": stack.append("c")
+            elif c == ")" and len(stack) > 1: stack.pop()
+        i += 1
+    return "code" if stack[-1] == "c" else "string"
+def text(s, i):
+    # The simple command from I: up to an unquoted ; & | ) or newline, quotes and heredocs kept.
+    q, depth, j = None, 0, i
+    while j < len(s):
+        c = s[j]
+        if q == SQ:
+            if c == SQ: q = None
+        elif q == DQ:
+            if c == "\\": j += 1
+            elif c == DQ: q = None
+        elif c == "\\": j += 1
+        elif c in SQ + DQ: q = c
+        elif c == "#" and s[j - 1] in " \t": break
+        elif c == "(": depth += 1
+        elif c == ")":
+            if depth == 0: break
+            depth -= 1
+        elif c == "&" and (s[j - 1] in "<>" or s[j + 1:j + 2] == ">"): pass
+        elif depth == 0 and c in ";&|\n": break
+        j += 1
+    t = s[i:j]
+    for m in heredoc.finditer(t):
+        e = re.compile(r"^\s*" + m.group(1) + r"\s*$", re.M).search(s, j)
+        if e: t += s[j:e.end()]
+    return t
+files = []
+for a in sys.argv[1:]:
+    if os.path.isdir(a): files += sorted(os.path.join(d, f) for d, _, fs in os.walk(a) for f in fs)
+    else: files.append(a)
+calls = 0
+for path in files:
+    s = open(path, errors="replace").read()
+    starts = [0] + [m.end() for m in re.finditer(r"\n", s)]
+    for m in call.finditer(s):
+        n = s.count("\n", 0, m.start())
+        line = s[starts[n]:s.find("\n", m.start()) % (len(s) + 1)]
+        if where(line, m.start() - starts[n]) != "code": continue
+        if defn.match(s, m.end()): continue   # its definition
+        t = text(s, m.end())
+        if m.group(1) == "nsenter" and (re.search(r"\s(-p|--pid)\b", t) or "[@]" in t): continue
+        calls += 1
+        k = kill.search(t)
+        if k:
+            print("%s:%d: %s %s" % (path, n + 1 + t.count("\n", 0, k.start()), m.group(1), " ".join(t.split())[:100]))
+print("%d calls" % calls)
+'
+on_box_kills() { python3 -c "$ON_BOX_KILLS" "$@"; }
+t_unit_on_box_kill() {
+  local out calls base
+  out=$(on_box_kills "$ROOT/bin/omabox" "$ROOT/share" 2>&1)
+  calls=${out##*$'\n'}; out=${out%"$calls"}
+  check_match "on_box_kills read bin/omabox's calls (else it would pass on nothing)" '^([6-9][0-9]|[1-9][0-9]{2,}) calls$' "$calls"
+  check_eq "no on_box call (nor nsenter without -p) signals: a box's pid there is the host's; kill from box_exec or nsenter -p (finding 289, #218)" "" "$out"
+  # The check itself, on a copy with calls planted: the seven kills found, at their lines; a kill after
+  # the call, Hyprland's window.kill, kill_box, a comment, nsenter -p and timeout -k are not.
+  local t=$TMP/obk; mkdir -p "$t"; cp "$ROOT/bin/omabox" "$t/omabox"; base=$(wc -l < "$t/omabox")
+  cat >> "$t/omabox" <<'PLANTED'
+planted() {
+  on_box kill "$p"
+  x=$(on_box pkill -f shell)
+  on_box timeout 2 /usr/bin/killall quickshell || true
+  on_box sh -c 'p=$(cat "$XDG_RUNTIME_DIR/x.pid")
+    [ -z "$p" ] || kill -TERM "$p"' sh
+  with_mods "$mods" on_box sh <<'END'
+echo x
+kill 5
+END
+  y="$(on_box sh -c "kill -0 $p")"
+  nsenter -t "$bp" -U -m -- kill 7
+  on_box true; kill "$x"
+  on_box tail --pid="$p" -F -- f & kill $!
+  on_box hyprctl dispatch "hl.dsp.window.kill()" 2>&1 | kill_box
+  # on_box kill 1
+  nsenter -t "$bp" -U -m -p -- kill 9
+  on_box timeout -k 1 2 hyprctl version 2>&1
+}
+PLANTED
+  out=$(on_box_kills "$t/omabox" 2>&1 | while IFS=: read -r f l _; do
+    if [ "$f" = "$t/omabox" ]; then echo "$((l - base))"; else echo "$f"; fi; done | paste -sd' ')
+  check_eq "...planted kills through on_box and nsenter -U -m: each found, at its kill's line; the rest not" \
+    "2 3 4 6 9 11 12 $((${calls%% *} + 11)) calls" "$out"
+  rm -rf "$t"
+}
+
 # #158: the runtime dir kept a .lock- per box name ever used and a .down- per down that found none.
 # down removes the lock it holds once the box is gone; lock_file opens again a lock file removed
 # while it waited, so it and a newcomer never both hold one; a down sweeps markers past 10 min.
@@ -9638,7 +9754,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)

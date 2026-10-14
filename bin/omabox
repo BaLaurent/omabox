@@ -928,7 +928,12 @@ BOX_EVENTS=/opt/omabox/bin/omabox-events
 # path resolves in the box's own view, where only the box is. (Also short enough for Hyprland's
 # socket path, which from the host dir is past the 108-byte limit, finding 7.) stdin/stdout pass
 # through: `grim -` writes the host's file. Not the box's pid namespace: its /proc shows the box's
-# pids, but a `kill` here takes a pid as the host's (finding 289): signal from box_exec or nsenter -p.
+# pids, but a `kill` here takes a pid as the host's (finding 289): signal from box_exec or nsenter -p
+# (t_unit_on_box_kill fails on a kill, pkill or killall given to on_box). Kept out on purpose (finding
+# 307): in it, the box's processes would see the tool and reopen its host fds through /proc/PID/fd
+# (grim's output file, the keyboard's --pass pipe); nsenter -p forks, so a caller's kill of $! or
+# `pkill -P` (follow_start) would leave the command running; `tail --pid` takes the box's PID 1 as
+# the host numbers it.
 on_box() {
   local pid wd sig rc=0
   pid=$(box_pid); [ -n "$pid" ] || die "box '$NAME' is not up"

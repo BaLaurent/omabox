@@ -6053,6 +6053,22 @@ from them.
     escaping, stale files gone); record_marks_on in t_scale and t_scale_nvidia (a mark and a red
     terminal: its first red frame at most a frame early, at most 250 ms late; the TSV, the VTT; a
     6-tile sheet's width and tiles; `record sheet --every 500ms --fit 800` at 800 px).
+307. **`on_box` stays out of the box's pid namespace; a kill given to it fails the suite** (2026-10-14,
+    #218; the trap: finding 289). `on_box` enters the box's user and mount namespaces only, so a pid
+    read from the box's /proc there and handed to `kill` names a host process. Entering the pid
+    namespace too (`nsenter -p`) was looked at and kept out, for three reasons: (1) the box's
+    processes would see the tool in their /proc and could reach its host fds through `/proc/PID/fd`
+    (same uid): `shot`'s grim writes the host's file and `keys --pass` feeds the keyboard a pipe; (2) `nsenter -p` forks, so the
+    pid a caller holds (`$!`, `follow_start`'s `pkill -P`) is nsenter's, and killing it would leave the
+    command running in the box; (3) `log -f` and `events -f` run `tail --pid=<box PID 1>` with the
+    host's number for it. Instead `t_unit_on_box_kill` reads every `on_box` call (and every `nsenter`
+    without `-p`) in bin/omabox and share/, with the scripts quoted in it and the heredocs fed to it,
+    and fails on `kill`, `pkill` or `killall` there, naming box_exec or `nsenter -p`; a kill after the
+    call (`on_box x; kill $p`), a comment, `hl.dsp.window.kill` and `timeout -k` do not count. It
+    found none today (74 calls read; under 60 fails, so a broken reader cannot pass on nothing), and
+    on a copy with seven kills planted (each form above, `on_box timeout 2 /usr/bin/killall`,
+    `$(on_box pkill …)`, `nsenter -U -m -- kill`) it finds each at its kill's line and nothing else.
+    No allowlist: no caller has a legitimate kill in on_box.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
