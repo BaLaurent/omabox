@@ -140,6 +140,11 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 
 - `omabox up --size 3440x1440` for another screen size (@60), `--size 3440x1440@144` for a refresh
   rate, `--size host` for the user's own monitor; `omabox mode` shows or changes it on a running box.
+- **Crisp, high-resolution screenshots** (docs, a README, a zoomed-in detail): `omabox up --size
+  3840x2160,scale=2` (or `omabox mode 3840x2160,scale=2`), a 4K screen laid out as 1920x1080: the bar
+  and apps at their usual size in twice the pixels, so `shot` is 3840x2160 and stays sharp when
+  zoomed or cropped. Coordinates are still the layout's (1920x1080); `click --in SHOT` maps a shot's.
+  Scale 1 to 4 (`7680x4320,scale=4` for 8K), headless boxes only; `mode WxH` without one is scale 1.
 - **More monitors** (a bar on each, windows between them, portrait, ultrawide, mixed scale, an
   unplug): `omabox up --monitor 1080x1920 --monitor 2560x1440,scale=1.6,below` (SPEC
   `WxH[@HZ][,scale=S][,right|below|X,Y]`, right of the last made by default, moving with it), or

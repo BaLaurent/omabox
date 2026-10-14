@@ -43,6 +43,19 @@ local interactive = os.getenv("OMABOX_INTERACTIVE") == "1"
 -- changes its view's scale, not the monitor's place; along a side whose aspect changed the monitor
 -- gets smaller (the whole of it stays in the window).
 local main_screen, main_mode -- set below: the main screen's name (nil: the first other), its mode before it exists
+-- A headless box's main screen as asked for: OMABOX_SIZE (WxH@HZ) at OMABOX_SCALE (finding 296), or a
+-- later `omabox mode`'s, which omabox.mode keeps ("WxH@HZ SCALE"; a line without a scale is 1).
+local function asked_mode()
+  local mode, scale = os.getenv("OMABOX_SIZE") or "1920x1080@60", tonumber(os.getenv("OMABOX_SCALE") or "") or 1
+  local f = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.mode")
+  if f then
+    local l = f:read("l"); f:close()
+    local m, sc = (l or ""):match("^(%S+)%s*(%S*)$")
+    if m then mode, scale = m, tonumber(sc) or 1 end
+  end
+  if not mode:find("@") then mode = mode .. "@60" end
+  return mode, scale
+end
 -- The monitors as placed, in logical pixels as Hyprland lays them out: the main screen first ({ name,
 -- x, y, w, h, m = the live monitor }), then each line's ({ ..., l = the line }); whether the box has
 -- views, their scale (the main window's), and the function that gives a window's.
@@ -72,11 +85,10 @@ local function omabox_layout(more)
     -- Views: the size asked for. A headless box with no main screen yet, or dropped (`omabox output
     -- drop`, #163): its mode as the config sets it, omabox.mode read again (an `omabox mode` since
     -- this load set it live, and the next load reads it).
-    local mode = main_mode
-    local f = not interactive and io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.mode")
-    if f then mode = f:read("l") or mode; f:close() end
+    local mode, scale = main_mode, 1
+    if not interactive then mode, scale = asked_mode() end
     local w, h = mode:match("^(%d+)x(%d+)")
-    if w then prev = { x = 0, y = 0, w = tonumber(w), h = tonumber(h) } end
+    if w then prev = { x = 0, y = 0, w = math.floor(tonumber(w) / scale), h = math.floor(tonumber(h) / scale) } end
   end
   -- A view's scale: its window's pixels over the size asked for, with the whole of it in the window.
   local function view(m, w, h) return math.floor(math.max(m.width / w, m.height / h) * 100000 + 0.5) / 100000 end
@@ -246,13 +258,10 @@ else
   -- headless output. Use the private labwc Wayland output as the screen on that driver.
   local waylandScreen = os.getenv("OMABOX_WAYLAND_SCREEN") == "1"
   if not waylandScreen then hl.monitor({ output = "WAYLAND-1", disabled = true }) end
-  -- OMABOX_SIZE is WxH@HZ; `omabox mode` writes a later choice to omabox.mode so a reload keeps it.
-  local mode = os.getenv("OMABOX_SIZE") or "1920x1080@60"
-  local f = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.mode")
-  if f then mode = f:read("l") or mode; f:close() end
-  if not mode:find("@") then mode = mode .. "@60" end
+  -- `omabox mode` writes a later choice to omabox.mode so a reload keeps it.
+  local mode, scale = asked_mode()
   main_screen, main_mode = waylandScreen and "WAYLAND-1" or "HEADLESS-2", mode
-  hl.monitor({ output = main_screen, mode = mode, position = "0x0", scale = 1 })
+  hl.monitor({ output = main_screen, mode = mode, position = "0x0", scale = scale })
 end
 hl.config({
   -- An interactive box's views (#174) are at any scale, a window's pixels over the size asked for,

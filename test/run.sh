@@ -528,6 +528,15 @@ t_unit_parse_mode() {
   check_fails "0 Hz refused" lib parse_mode 1x1@0
   check_fails "zero width refused" lib parse_mode 0x1080
   check_match "host = the focused monitor" '^[0-9]+x[0-9]+@[0-9.]+$' "$(lib parse_mode host)"
+  # The main screen's scale (finding 296): WxH[@HZ][,scale=S], S 1 to 4 as a monitor's.
+  check_eq "split_scale: none is 1" "1920x1080 1" "$(lib split_scale --size 1920x1080)"
+  check_eq "...scale=2 (2.0 is 2), the rate left to parse_mode" "3840x2160@120 2" "$(lib split_scale --size 3840x2160@120,scale=2.0)"
+  check_eq "...two decimals, and host" "host 1.25" "$(lib split_scale --size host,scale=1.25)"
+  check_match "...below 1 refused, said" "scale is 1 to 4, up to 2 decimals, got 0.5" "$(lib split_scale --size 1920x1080,scale=0.5 2>&1)"
+  check_match "...above 4 refused" "scale is 1 to 4" "$(lib split_scale mode 1920x1080,scale=5 2>&1)"
+  check_match "...anything but scale=S refused" "a size is WxH\[@HZ\]\[,scale=S\]" "$(lib split_scale --size 1920x1080,right 2>&1)"
+  check_eq "size_text: scale 1 is the size alone, else ,scale=S" "1920x1080@60|3840x2160@60,scale=2" \
+    "$(lib size_text 1920x1080@60 1)|$(lib size_text 3840x2160@60 2)"
 }
 
 t_unit_duration() {
@@ -5987,6 +5996,47 @@ nvidia_ready() {
   ! aq_unfixed "$CLI" || { echo "a headless box on NVIDIA needs aquamarine's fix (omabox setup --aquamarine)"; return 1; }
   echo "$n"
 }
+# The main screen at a scale (finding 296): --size WxH,scale=S, mode, shot, click --in, a reload, a
+# monitor beside it; on a GPU other than NVIDIA's (HEADLESS-2) and on NVIDIA's (WAYLAND-1).
+t_scale() {
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "a scaled main screen" "no render node here but NVIDIA's (t_scale_nvidia runs there)"; return; }
+  scale_on "$n" "$P-sc" HEADLESS-2 HEADLESS-3
+}
+t_scale_nvidia() {
+  local n; n=$(nvidia_ready) || { skip "a scaled main screen on NVIDIA" "$n"; return; }
+  scale_on "$n" "$P-scnv" WAYLAND-1 WAYLAND-2
+}
+scale_on() {
+  local n=$1 B=$2 m0=$3 m1=$4 out
+  out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 2560x1440,scale=2 --net isolated 2>&1) || { no "up --size 2560x1440,scale=2" "failed: $out"; return; }
+  check_match "up says the size with its scale" "box '$B' up \(2560x1440@60,scale=2\)" "$out"
+  check_eq "mode: the main screen at scale 2" "$m0 2560x1440@60,scale=2" "$(ob mode -b "$B")"
+  check_eq "...box.json keeps it" "2560x1440@60 2" "$(jq -r '"\(.size) \(.scale)"' "$(ob path -b "$B")/box.json")"
+  check_match "...and ls" "^$B +headless +2560x1440@60,scale=2 " "$(ob ls | grep "^$B ")"
+  local f=$TMP/$B.png err
+  err=$(ob shot -b "$B" -o "$f" 2>&1 >/dev/null)
+  check_eq "shot: the screen's pixels, 2560x1440" 2560x1440 "$(magick identify -format '%wx%h' "$f" 2>&1)"
+  check_match "...said: an image of the 1280x720 layout" "2560x1440 image of the screen's 1280x720 at 0,0 \(x0.5\)" "$err"
+  check "click --in the shot: image pixels to the layout's" ob click -b "$B" --in "$f" 2000 1000
+  check_eq "...the pointer at half of them" "1000, 500" "$(ob hyprctl -b "$B" cursorpos)"
+  check_match "a point past the layout refused" "1300,100 is off the 1280x720 screen" "$(ob click -b "$B" 1300 100 2>&1)"
+  ob reload -b "$B" >/dev/null 2>&1
+  check_eq "a reload keeps the scale" "$m0 2560x1440@60,scale=2" "$(ob mode -b "$B")"
+  check "monitor add beside it" ob monitor -b "$B" add 800x600
+  check_eq "...placed right of the layout's 1280, not the mode's 2560" "1280,0" \
+    "$(ob monitor -b "$B" list --json | jq -r --arg m "$m1" '.[] | select(.name == $m) | "\(.x),\(.y)"')"
+  check "monitor remove" ob monitor -b "$B" remove "$m1"
+  check_eq "mode WxH,scale=1.5" "$m0 1920x1080@60,scale=1.5" "$(ob mode -b "$B" 1920x1080,scale=1.5)"
+  ob reload -b "$B" >/dev/null 2>&1
+  check_eq "...kept over a reload" "$m0 1920x1080@60,scale=1.5" "$(ob mode -b "$B")"
+  check_eq "mode WxH without a scale is 1" "$m0 1280x720@60" "$(ob mode -b "$B" 1280x720)"
+  check_eq "...box.json 1" 1 "$(jq -r .scale "$(ob path -b "$B")/box.json")"
+  check_match "up of it at another scale: refused, said" "--size 1280x720@60,scale=2 \(it is 1280x720@60\)" "$(ob up "$B" --size 1280x720,scale=2 2>&1)"
+  ob down "$B" >/dev/null 2>&1 || true
+  check_match "an interactive box takes no scale" "takes no scale there" "$(ob up "$B-i" --interactive --size 1920x1080,scale=2 2>&1)"
+  check_fails "...and none is left" test -e "$XDG_RUNTIME_DIR/omabox/$B-i/box.json"
+}
 t_monitors() {
   local n; n=$(gpu_node other)
   [ -n "$n" ] || { skip "monitors" "no render node here but NVIDIA's (t_monitors_nvidia runs there)"; return; }
@@ -9037,7 +9087,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

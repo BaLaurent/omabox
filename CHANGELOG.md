@@ -7,6 +7,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **A scale for the main screen**: `up --size 3840x2160,scale=2` and `omabox mode 3840x2160,scale=2`.
+  The box lays out as 1920x1080, with the bar and apps at their usual size drawn in twice the pixels,
+  so a `shot` is 3840x2160 and stays sharp when you zoom or crop it. Scale 1 to 4, as `--monitor`'s;
+  coordinates stay the layout's, and `click --in` maps a shot's. Headless boxes only.
+
 - **`omabox gpu` on NVIDIA** (finding 295). NVIDIA's driver reports no per-process DRM counters, so
   `gpu` listed nothing there. It now takes the driver's own per-process sampling through
   `nvidia-smi pmon`, for the box's processes only: whole seconds, each process's share of the GPU as

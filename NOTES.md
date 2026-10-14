@@ -5851,6 +5851,26 @@ from them.
     nvidia-smi: `gpu` says so and fails. Tests: t_unit_gpu (`pmon_figures` on a canned output: the
     second before dropped, `-` as 0, mem not counted, a host process left out, two GPUs), t_main's
     NVIDIA branch (`source`, the box's Hyprland listed, only names of the box's processes).
+296. **The main screen at a scale: `--size WxH,scale=S`, `mode WxH,scale=S`** (2026-10-14). Asked
+    for: crisp, high-resolution screenshots of the bar and apps at their usual size. A monitor of
+    `--monitor` already took a scale (finding 226's SPEC), and a shot of one comes out at its pixels
+    (a 3840x2160 monitor at 2: a 3840x2160 image), but the main screen was always 1 (`up`, `mode`,
+    the config and the NVIDIA screen's re-apply all set `scale = 1`). Now `--size` and `mode` take
+    `,scale=S` (`split_scale`: 1 to 4, up to 2 decimals, as a SPEC's; none is 1, so `mode WxH` goes
+    back to 1). `up` passes it as OMABOX_SCALE; `mode` writes "WxH@HZ SCALE" to omabox.mode (a line
+    without one, from before, is 1), which share/hyprland.lua reads (`asked_mode`) for the main
+    screen's rule and for the layout while it is away (its size there is the mode over the scale).
+    Hyprland may round a scale to whole pixels (2560x1440 at 1.5 is 1.6): `mode` waits for the scale
+    asked within 0.2, says when it was rounded, and keeps what the box has. box.json has `scale`; `up`,
+    `mode` and `ls` print `WxH@HZ,scale=S` when it is not 1, and `up` of a running box at another scale
+    is refused as another size is. An interactive box refuses one (its window is its screen, at the
+    desktop's scale). The NVIDIA path's labwc output keeps the mode in pixels; only Hyprland's rule
+    has the scale. Checked on both (t_scale on the AMD iGPU's HEADLESS-2, t_scale_nvidia on the RTX's
+    WAYLAND-1): up at 2560x1440,scale=2 said, `mode`, box.json, `ls`; a shot 2560x1440 said as an
+    image of the 1280x720 layout; `click --in` at 2000,1000 put the pointer at 1000,500; 1300,100
+    refused as off the 1280x720 screen; a reload keeps it; a monitor added beside it at 1280,0; mode
+    1920x1080,scale=1.5 kept over a reload; mode 1280x720 is 1; `up` at another scale refused; an
+    interactive one refused before anything starts. t_unit_parse_mode: split_scale and size_text.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

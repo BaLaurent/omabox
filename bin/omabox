@@ -71,7 +71,7 @@ usage_text() {
   cat <<EOF
 omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
 
-  omabox up [NAME] [--size WxH[@HZ]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
+  omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...]] [--env KEY=VAL]...
             [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/
             [--theme NAME]                               start on that theme, not your desktop's current one
@@ -111,7 +111,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys to the box while focused, pointer on it
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
   omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox
-  omabox mode [-b NAME] [WxH[@HZ]|host]                  show or change a headless box's screen mode
+  omabox mode [-b NAME] [WxH[@HZ][,scale=S]|host]        show or change a headless box's screen mode
   omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
@@ -404,6 +404,10 @@ At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box
 (-b NAME) stays.
 @ up mode gpu cpu run
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
+\`,scale=S\` (1 to 4, as a monitor's) gives the main screen a scale, headless only: \`--size 3840x2160,scale=2\`
+is a 4K screen laid out as 1920x1080, the bar and apps their usual size in twice the pixels, so a
+\`shot\` of it is 3840x2160 (coordinates stay the layout's: \`click --in\` maps a shot's). \`mode WxH\`
+without one is scale 1. Hyprland may round a scale to whole pixels (\`mode\` says so).
 Measure rendering cost with \`omabox gpu\` (and \`omabox cpu\`) in a box whose mode matches your monitor.
 @ up monitor shot peek
 More monitors: \`up --monitor SPEC\` (repeatable) or \`monitor add SPEC\` on a running box.
@@ -1105,6 +1109,32 @@ parse_mode() {
   echo "${m%@*}@$hz"
 }
 
+# The main screen's scale (finding 296): --size and `mode` take WxH[@HZ][,scale=S] (or host,scale=S),
+# S 1 to 4 with up to 2 decimals, as a monitor's SPEC does; none is 1. Prints "SIZE SCALE", SIZE not
+# yet parsed (parse_mode), SCALE as a number (2.0 is 2). split_scale WHO SPEC
+split_scale() {
+  local m=${2%%,*} sc=1 rest
+  if [[ $2 == *,* ]]; then
+    rest=${2#*,}
+    [[ $rest == scale=* && $rest != *,* ]] || die "$1: a size is WxH[@HZ][,scale=S] or host[,scale=S], got $2"
+    sc=${rest#scale=}
+    { [[ $sc =~ ^[1-4](\.[0-9]{1,2})?$ ]] && awk -v s="$sc" 'BEGIN { exit !(s >= 1 && s <= 4) }'; } ||
+      die "$1: scale is 1 to 4, up to 2 decimals, got $sc"
+    sc=$(awk -v s="$sc" 'BEGIN { printf "%g", s }')
+  fi
+  echo "$m $sc"
+}
+# A box's main screen scale as box.json keeps it (1 for a box from before it did).
+meta_scale() { local sc; sc=$(meta scale); echo "${sc:-1}"; }
+# SIZE as `ls` and `mode` print it: ",scale=S" after it when S is not 1.
+size_text() { if [ "$2" = 1 ]; then echo "$1"; else echo "$1,scale=$2"; fi; }
+# The main screen's scale as the box's Hyprland has it (it may round one asked for: 1.5 on 2560x1440
+# is 1.6), or nothing while it is away.
+main_scale_live() {
+  local m; m=$(hypr_json monitors) || exit $?
+  jq -r <<<"$m" "$(main_screen)"' // empty | .scale * 100 | round / 100'
+}
+
 # The layout's size, for mapping absolute pointer coordinates.
 # (Under set -e a caller's `x=$(extent)` would end omabox without a word when the box's Hyprland
 # does not answer: extent says so and fails.)
@@ -1295,7 +1325,7 @@ wait_ready() {
     # labwc's initial xdg configure can replace the requested mode with 1280x720. Reapply it
     # after Hyprland starts, when the parent headless output already has the requested size.
     local size; size=$(meta size)
-    on_box hyprctl eval "hl.monitor({ output = 'WAYLAND-1', mode = '$size', position = '0x0', scale = 1 })" >/dev/null ||
+    on_box hyprctl eval "hl.monitor({ output = 'WAYLAND-1', mode = '$size', position = '0x0', scale = $(meta_scale) })" >/dev/null ||
       die "could not set the NVIDIA box screen to $size"
     local screen
     until screen=$(box_screen 2>/dev/null) && [ "${screen#* }" = "$size" ]; do
@@ -2155,7 +2185,8 @@ up_already() {
   local diff=() p id ids
   case " $given " in *" interactive "*) [ "$(meta mode)" = interactive ] || diff+=("--interactive (it is $(meta mode))") ;; esac
   case " $given " in *" size "*)
-    [ $interactive = 1 ] || [ "$(meta size)" = "$size" ] || diff+=("--size $size (it is $(meta size))") ;; esac
+    [ $interactive = 1 ] || { [ "$(meta size)" = "$size" ] && [ "$(meta_scale)" = "$scale" ]; } ||
+      diff+=("--size $(size_text "$size" "$scale") (it is $(size_text "$(meta size)" "$(meta_scale)"))") ;; esac
   case " $given " in *" net "*)
     if [ "$net" = isolated ]; then [ "$(meta net)" = isolated ] || diff+=("--net isolated (it is $(meta net))")
     elif [ "$(meta net)" = isolated ]; then diff+=("--net connected (it is isolated)"); fi ;; esac
@@ -2368,6 +2399,8 @@ cmd_up() {
   fi
   # --omarchy (finding 135): the tree, read-only at its own path, refused as --ro-bind's are.
   [ -z "$omarchy" ] || [ "$omarchy_bind" = 0 ] || robinds+=("$omarchy"$'\t'"$omarchy")
+  local scale; read -r size scale < <(split_scale --size "$size")
+  [ $interactive = 0 ] || [ "$scale" = 1 ] || die "up: an interactive box's screen is its window, at your desktop's scale: --size takes no scale there"
   size=$(parse_mode "$size")
   local idle_s; idle_s=$(duration "$idle") || die "--idle wants 30m, 2h, 90s or 0 (never), got $idle"
   [ $interactive = 0 ] || idle_s=0
@@ -2607,7 +2640,7 @@ cmd_up() {
     '{node: $node, pci: $pci, driver: $driver, fallback: $fallback}
       + (if $fallback then {wanted: $wanted, why: $why} else {} end)')
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
-    --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --arg created "$(date -Is)" \
+    --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --argjson scale "$scale" --arg created "$(date -Is)" \
     --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
     --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" --arg owner_start "$owner_start" --arg agent "$agent" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
@@ -2621,7 +2654,7 @@ cmd_up() {
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --arg aq_main "${AQ_MAIN:-}" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
     --argjson themes "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R 'select(. != "")' | jq -s .)" --arg theme "$THEME" \
     --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
-    '{name: $name, mode: $mode, size: $size, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs,
+    '{name: $name, mode: $mode, size: $size, scale: $scale, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs,
       plugin_via: (reduce $plugins[] as $i ({}; .[$i] = (if $linked | index($i) then "linked" else "mounted" end))), net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
       xwayland: ($xwayland == 1), autoreload: ($autoreload == 1), shell: ($shell == 1), omarchy_version: $omarchy_version,
@@ -2724,7 +2757,7 @@ cmd_up() {
     --setenv QT_FORCE_STDERR_LOGGING 1 --setenv ATSPI_DBUS_IMPLEMENTATION dbus-daemon
     --setenv OMABOX_RENDER_NODE "$render" --setenv OMABOX_CALLER_PATH "$(caller_path box)"
     --setenv OMABOX_WAYLAND_SCREEN "$wayland_screen"
-    --setenv OMABOX_SIZE "$size" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
+    --setenv OMABOX_SIZE "$size" --setenv OMABOX_SCALE "$scale" --setenv OMABOX_INTERACTIVE "$interactive" --setenv OMABOX_XWAYLAND "$xwayland"
     --setenv OMABOX_AUTORELOAD "$autoreload"
     --setenv OMABOX_SYSTEMD "$systemd" --setenv OMABOX_SHELL "$shell" --setenv OMABOX_OMARCHY_VERSION "$(omarchy_version)"
     --setenv OMABOX_BOX "$NAME"
@@ -2890,7 +2923,8 @@ cmd_up() {
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
   rm -f "$D/starting"; touch "$D/used"
-  local screen; screen=$(box_screen); say "box '$NAME' up (${screen#* }) in $D"
+  local screen live_sc; screen=$(box_screen); live_sc=$(main_scale_live) || live_sc=""
+  say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")) in $D"
   if [ $json = 1 ]; then box_json
   elif [ $new = 1 ]; then echo "$NAME"; fi
   [ -z "$crashed" ] || { say "$crashed"; exit 1; }
@@ -6276,9 +6310,11 @@ cmd_mode() {
   local away; away=$(main_away)
   [ -z "$away" ] || { read -r away _ <<<"$away"
     die "mode: box '$NAME''s main screen ($away) is away (omabox output drop): omabox output back $away -b $NAME"; }
-  local screen; screen=$(box_screen)
-  [ -n "$want" ] || { echo "$screen"; return; }
+  local screen sc; screen=$(box_screen)
+  [ -n "$want" ] || { sc=$(main_scale_live) || exit $?; size_text "$screen" "${sc:-1}"; return; }
   [ "$(meta mode)" = headless ] || die "mode: box '$NAME' is interactive: its window's size is its mode"
+  # No scale given is 1, as for up (finding 296).
+  read -r want sc < <(split_scale mode "$want")
   want=$(parse_mode "$want")
   # On NVIDIA labwc's output first: the main window, maximized there, follows it (finding 234).
   if [ "$(meta wayland_screen)" = true ]; then
@@ -6286,20 +6322,24 @@ cmd_mode() {
     on_box env WAYLAND_DISPLAY="$parent" /usr/bin/wlr-randr --output HEADLESS-1 --custom-mode "${want}Hz" ||
       die "mode: could not resize the private parent output to $want"
   fi
-  local out; out=$(on_box hyprctl eval "hl.monitor({ output = '${screen%% *}', mode = '$want', position = '0x0', scale = 1 })" 2>&1) || true
+  local out; out=$(on_box hyprctl eval "hl.monitor({ output = '${screen%% *}', mode = '$want', position = '0x0', scale = $sc })" 2>&1) || true
   [ "$out" = ok ] || die "mode: hyprctl eval failed: $out"
-  local deadline=$((SECONDS + 5))
-  until { screen=$(box_screen) || exit $?; } && [ "${screen#* }" = "$want" ]; do
-    [ $SECONDS -lt $deadline ] || die "mode: asked for $want, box reports ${screen#* }"
+  local deadline=$((SECONDS + 5)) live=""
+  until { screen=$(box_screen) || exit $?; } && [ "${screen#* }" = "$want" ] && { live=$(main_scale_live) || exit $?; } &&
+    awk -v a="$live" -v b="$sc" 'BEGIN { d = a - b; exit !(d < 0.2 && d > -0.2) }'; do
+    [ $SECONDS -lt $deadline ] || die "mode: asked for $(size_text "$want" "$sc"), box reports $(size_text "${screen#* }" "${live:-?}")"
     sleep 0.1
   done
+  # As Hyprland made it: it may round a scale to one that divides the screen into whole pixels.
+  [ "$live" = "$sc" ] || say "mode: scale $sc is $live in the box (Hyprland rounds it to whole pixels)"
+  sc=$live
   # Kept only once the box has it: omabox.mode for a config reload, box.json for `ls`. box.json under
   # the box's lock, as take_over writes it: a takeover between this read and write would be undone
   # (the agent that exited put back, and the box taken down under the new one; finding 93).
-  box_file "$D/run/omabox.mode" "$want" || die "mode: could not record $want for the box's config reloads"
+  box_file "$D/run/omabox.mode" "$want $sc" || die "mode: could not record $want for the box's config reloads"
   local lock; lock_file lock "$BOXES/.lock-$NAME" -w 60 || die "mode: box '$NAME' is busy (an up or down); $want is set, but ls will not show it"
   box_alive || die "mode: box '$NAME' went down meanwhile"
-  jq --arg s "$want" '.size = $s' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  jq --arg s "$want" --argjson sc "$sc" '.size = $s | .scale = $sc' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
   exec {lock}>&-
   # Its other monitors placed right of or below it move with its new size (#161); an X,Y one stays.
   if [ -n "$(monitors_file | grep . || true)" ]; then
@@ -6308,7 +6348,7 @@ cmd_mode() {
     [ -z "$moved" ] || say "mode: moved the monitors placed next to it: $moved"
     monitors_record
   fi
-  echo "$screen"
+  size_text "$screen" "$sc"
 }
 
 # More monitors in a headless box (#122): `up --monitor SPEC` and `monitor add/remove/list`. A monitor
@@ -8520,7 +8560,7 @@ cmd_ls() {
       sh=$(shell_state "$(grep -qFx -- "shell $n" <<<"$hung" && echo hung || echo ok)"); c=$(shell_crashes); [ "$c" = 0 ] || sh+="+$c"
     fi
     local nm; nm=$(jq -r '.monitors // [] | length' "$D/box.json" 2>/dev/null) || nm=0
-    printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$([ "${nm:-0}" -le 1 ] && meta size || echo "$nm monitors")" "$state" "$sh" "$(meta net)" "$idle" \
+    printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' "$NAME" "$(meta mode)" "$([ "${nm:-0}" -le 1 ] && size_text "$(meta size)" "$(meta_scale)" || echo "$nm monitors")" "$state" "$sh" "$(meta net)" "$idle" \
       "$(jq -r '.plugins | join(",")' "$D/box.json" 2>/dev/null)"
     # A box on a Hyprland build of its own (finding 116), under its line: never taken for a stock one.
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
