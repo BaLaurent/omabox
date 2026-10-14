@@ -542,15 +542,37 @@ t_unit_parse_mode() {
 
 t_unit_record() {
   # Refused before any box is looked at (finding 297).
-  check_match "record alone: what it takes" "start, stop, status, or -- ACTION" "$(ob record 2>&1)"
+  check_match "record alone: what it takes" "start, stop, status, mark, sheet, or -- ACTION" "$(ob record 2>&1)"
   check_match "...--fps 0 refused" "--fps is 1 to 120, got 0" "$(ob record start --fps 0 2>&1)"
   check_match "...an action that does not act" "an omabox command that acts .*got shot" "$(ob record -- shot 2>&1)"
   check_match "...an action naming another box" "the action runs on the recorded box \(no -b\)" "$(ob record -- keys -b x Return 2>&1)"
   check_match "...an action with start" "records one action .*not with start" "$(ob record start -- keys Return 2>&1)"
   check_match "...--hold past 60s" "--hold takes a duration up to 60s" "$(ob record --hold 2m -- keys Return 2>&1)"
-  check_match "...an unknown word" "start, stop, status, or -- ACTION .*got go" "$(ob record go 2>&1)"
+  check_match "...an unknown word" "start, stop, status, mark, sheet, or -- ACTION .*got go" "$(ob record go 2>&1)"
   check_match "...stop --no-pointer (#228)" "record stop: --no-pointer goes with start or -- ACTION" "$(ob record stop --no-pointer 2>&1)"
   check_match "...status --no-pointer" "record status: --no-pointer goes with start" "$(ob record status --no-pointer 2>&1)"
+  # Marks and contact sheets (#176, finding 306).
+  check_match "record mark without its text" "record mark: the mark's text" "$(ob record mark 2>&1)"
+  check_match "...mark --no-pointer" "record mark: --no-pointer goes with start" "$(ob record mark --no-pointer x 2>&1)"
+  check_match "...start --sheet" "record start: --sheet, --frames, --every and --fit go with stop, sheet or -- ACTION" "$(ob record start --sheet 2>&1)"
+  check_match "...--frames and --every" "--frames or --every, not both" "$(ob record stop --frames 3 --every 1s 2>&1)"
+  check_match "...--frames 0" "--frames is 1 to 100, got 0" "$(ob record stop --frames 0 2>&1)"
+  check_match "...--fit 50" "--fit is 0 \(off\) or the sheet's longest side in pixels \(100-99999\), got 50" "$(ob record stop --fit 50 2>&1)"
+  check_match "record sheet without a video" "record sheet: the video, like" "$(ob record sheet 2>&1)"
+  check_match "...of no file" "record sheet: no video $TMP/none.mp4" "$(ob record sheet "$TMP/none.mp4" 2>&1)"
+  check_match "...two videos" "record sheet: unexpected b.mp4" "$(ob record sheet a.mp4 b.mp4 2>&1)"
+  # record_marks: wall-clock µs to ms from the first frame (in order; one before it at 0), the
+  # wall-clock time as events has it, WebVTT cues from each to the next (the last to the end), its
+  # text escaped; none, and an earlier take's files go.
+  local rb=$TMP/rmarks/take
+  mkdir -p "$TMP/rmarks"
+  lib record_marks $'1000002500000\tscene two\n1000000500400\tscene <one> & more\n999999900000\tearly' 1000000000000 4000 "$rb" 2>/dev/null
+  check_eq "record_marks: the TSV" "ms time text|0 999999.900 early|500 1000000.500 scene <one> & more|2500 1000002.500 scene two" \
+    "$(tr '\t' ' ' < "$rb.marks.tsv" | paste -sd '|')"
+  check_eq "...the WebVTT" "WEBVTT||1|00:00:00.000 --> 00:00:00.500|early||2|00:00:00.500 --> 00:00:02.500|scene &lt;one&gt; &amp; more||3|00:00:02.500 --> 00:00:04.000|scene two" \
+    "$(paste -sd '|' "$rb.vtt")"
+  lib record_marks "" "" 0 "$rb" 2>/dev/null
+  check_fails "...no marks: an earlier take's files go" test -e "$rb.marks.tsv" -o -e "$rb.vtt"
 }
 
 t_unit_duration() {
@@ -6288,6 +6310,7 @@ scale_on() {
     check_eq "...and it stopped" "box '$B': not recording" "$(ob record -b "$B" status)"
     check_match "record --monitor of one it does not have" "has no monitor NOPE \($m0\)" "$(ob record -b "$B" start --monitor NOPE 2>&1)"
     check_eq "...nothing recording" "box '$B': not recording" "$(ob record -b "$B" status)"
+    record_marks_on
   else
     skip "record" "no wf-recorder or ffmpeg here"
   fi
@@ -6319,6 +6342,52 @@ scale_on() {
   ob down "$B" >/dev/null 2>&1 || true
   check_match "an interactive box takes no scale" "takes no scale there" "$(ob up "$B-i" --interactive --size 1920x1080,scale=2 2>&1)"
   check_fails "...and none is left" test -e "$XDG_RUNTIME_DIR/omabox/$B-i/box.json"
+}
+# record mark and record sheet (#176, finding 306), in scale_on's box B (2560x1440 at scale 2): a
+# terminal turns red at a time it notes, right after a mark. In the video, the first red frame is no
+# more than a frame before that time (the fps pass shows a frame from the slot nearest its time),
+# and within 250 ms after it (the terminal's drawing and Hyprland's).
+record_marks_on() {
+  local mv=$TMP/$B-marks.mp4 mo so flip m mt cv fr sh h px c
+  check_match "record mark: not recording" "box '$B' is not recording" "$(ob record -b "$B" mark x 2>&1)"
+  ob run -b "$B" -d --wait -- foot --app-id t176 bash -c \
+    'rm -f /tmp/go176; mkfifo /tmp/go176; read -r _ < /tmp/go176; t=$EPOCHREALTIME; printf "\033]11;#ff0000\007"; echo "$t" > /tmp/flip176; sleep 600' >/dev/null 2>&1
+  if ! ob wait -b "$B" window class:t176 >/dev/null 2>&1 || ! ob record -b "$B" start -o "$mv" >/dev/null 2>&1; then
+    no "record mark" "no terminal t176, or record start failed"; return
+  fi
+  # 200x200 image pixels at its middle (scale 2; the terminal super+Return opened is beside it).
+  c=$(ob windows -b "$B" --json | jq -r '.[] | select(.class == "t176") | "\(2 * (.at[0] + .size[0] / 2 | floor) - 100):\(2 * (.at[1] + .size[1] / 2 | floor) - 100)"')
+  sleep 0.5
+  mo=$(ob record -b "$B" mark "turns red" 2>&1)
+  ob run -b "$B" -- sh -c 'echo > /tmp/go176'
+  sleep 1
+  ob record -b "$B" mark -- "-after, 100% <done>" >/dev/null 2>&1
+  so=$(ob record -b "$B" stop --sheet --frames 6 2>"$TMP/$B-stop.err")
+  check_match "record mark prints its time in the video" "^[0-9]+\.[0-9]{3}s turns red$" "$mo"
+  check_eq "record stop --sheet prints the video, then its sheet" "$mv|${mv%.mp4}.sheet.png" "$(paste -sd '|' <<<"$so")"
+  check_match "...says where the marks are" "2 marks in ${mv%.mp4}\.marks\.tsv .*and ${mv%.mp4}\.vtt \(captions\)" "$(cat "$TMP/$B-stop.err")"
+  check_eq "...the marks' texts, after a header" "text|turns red|-after, 100% <done>" "$(cut -f3 "${mv%.mp4}.marks.tsv" | paste -sd '|')"
+  check_eq "...WebVTT captions of them" "WEBVTT 2 &lt;done&gt;" \
+    "$(head -n 1 "${mv%.mp4}.vtt") $(grep -c ' --> ' "${mv%.mp4}.vtt") $(grep -o '&lt;done&gt;' "${mv%.mp4}.vtt")"
+  flip=$(ob run -b "$B" -- cat /tmp/flip176 | tr , .)
+  read -r m mt < <(awk -F '\t' 'NR == 2 { print $1, $2 }' "${mv%.mp4}.marks.tsv")
+  cv=$(awk -v m="$m" -v mt="$mt" -v c="$flip" 'BEGIN { printf "%d", m + (c - mt) * 1000 }')
+  fr=$(ffmpeg -v error -i "$mv" -vf "crop=200:200:${c:-1180:620},scale=1:1" -f rawvideo -pix_fmt rgb24 - |
+    od -An -tu1 -w3 -v | awk '$1 > 200 && $2 < 80 && $3 < 80 { print NR - 1; exit }')
+  check "...a change right after a mark: its first frame no more than a frame early, at most 250 ms late (mark at $m ms, the change at $cv ms, first red frame ${fr:-none} at 30 fps)" \
+    awk -v f="${fr:--1}" -v cv="$cv" 'BEGIN { t = f * 1000 / 30; exit !(f >= 0 && t >= cv - 1000 / 30 && t <= cv + 250) }'
+  # The sheet: 6 tiles 320 px wide (2560x1440: 180 high), 5 a row, each cell 3 px around; frame 6 in
+  # the second row, nothing beside it; text under the first.
+  sh=${mv%.mp4}.sheet.png
+  h=$(magick identify -format '%h' "$sh" 2>/dev/null) || h=0
+  px=$(magick "$sh" -alpha off -format '%[hex:p{163,93}] %[hex:p{163,'$((h / 2 + 93))'}] %[hex:p{489,'$((h / 2 + 93))'}]' info: 2>/dev/null) || px=""
+  check_match "...the sheet: 1630 wide, tiles 1 and 6 there, no 7th (white)" "^1630 [0-9A-F]{6} [0-9A-F]{6} FFFFFF$" "$(magick identify -format '%w' "$sh" 2>&1) $px"
+  check_fails "...tiles 1 and 6 not white" grep -q FFFFFF <<<"${px% *}"
+  check "...a label under tile 1" awk -v v="$(magick "$sh" -crop "326x$((h / 2 - 189))+0+186" -format '%[fx:minima]' info: 2>/dev/null)" 'BEGIN { exit !(v != "" && v < 0.5) }'
+  so=$(ob record -b "$B" sheet "$mv" --every 500ms --fit 800 -o "$TMP/$B-s2.png" 2>/dev/null)
+  check_eq "record sheet VIDEO --every 500ms --fit 800: the sheet, 800 px at most" "$TMP/$B-s2.png 800" \
+    "$so $(magick identify -format '%[fx:max(w,h)]' "$TMP/$B-s2.png" 2>&1)"
+  ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
 }
 t_monitors() {
   local n; n=$(gpu_node other)

@@ -2,6 +2,9 @@
 # omabox: a contained, invisible Hyprland + Omarchy desktop ("box") for agents.
 # Architecture, findings and safety rules: NOTES.md. Usage: omabox help.
 set -euo pipefail
+# When this omabox was called, in µs of the wall clock: `record mark`'s time (#176), taken before the
+# rest of this script is read.
+CALL_US=${EPOCHREALTIME//[!0-9]/}
 
 ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 BOXES=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/omabox
@@ -88,8 +91,10 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
-  omabox record [-b NAME] (start [-o FILE] [--monitor NAME] [--fps 30] [--no-pointer] | stop | status)   a video of the screen
-  omabox record [-b NAME] [-o FILE] [--monitor NAME] [--fps 30] [--hold 1s] [--no-pointer] -- ACTION...   one action, recorded
+  omabox record [-b NAME] (start [-o FILE] [--monitor NAME] [--fps 30] [--no-pointer] | mark TEXT | stop [SHEET] | status)   a video of the screen
+  omabox record [-b NAME] [-o FILE] [--monitor NAME] [--fps 30] [--hold 1s] [--no-pointer] [SHEET] -- ACTION...   one action, recorded
+  omabox record [-b NAME] sheet VIDEO [-o PNG] [--frames 15 | --every DURATION] [--fit N]   a contact sheet of a video
+              SHEET: --sheet [--frames 15 | --every DURATION] [--fit N]   the recording's contact sheet, FILE.sheet.png
   omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
@@ -296,6 +301,19 @@ a box at \`--size 3840x2160,scale=2\` gives a 4K video. \`record stop\` ends it 
 MP4 (H.264) at a steady --fps (30), -o FILE or a new one in \$TMPDIR. \`record -- ACTION\` (an omabox
 command: keys, click, run -d ...) records that one action and --hold (1s) after it. Needs wf-recorder
 and ffmpeg; both run in the box. One recording a box at a time; \`record status\` says if one runs.
+\`record mark TEXT\` (while one runs) notes TEXT at the time it is called, in the video's own clock: ms
+from its first frame, exact to a few ms (the screen's own frame times, not when start returned). Mark
+just before what it names (a scene, a key press: what is drawn after shows up from that time on).
+\`record stop\` writes them beside the video, FILE.marks.tsv (ms, wall-clock time as \`events\` has it,
+text) and FILE.vtt (captions, each mark until the next), and says where. Captions burnt in: \`ffmpeg -i
+demo.mp4 -vf subtitles=demo.vtt out.mp4\` (players load demo.vtt beside demo.mp4 by themselves); a cut
+at two marks' ms: \`ffmpeg -ss 4.200 -to 9.850 -i demo.mp4 -c:v libx264 cut.mp4\`. A script of omabox
+calls and sleeps runs longer than its sleeps (each call takes its time): marks show where it drifts.
+\`record stop --sheet\` (or \`record --sheet -- ACTION\`) adds FILE.sheet.png, and \`record sheet VIDEO\` makes
+one of any video (ffmpeg reads it in the box: a box must be up): a contact sheet to read instead of
+watching, --frames N (15) from the first to the last or one each --every DURATION, each labelled with
+its time and the marks since the frame before it ("> 4.20s TEXT"), 5 a row, 320 px tiles or --fit N
+(shot-fit's by default) for the whole sheet. An agent checks a take from it and fixes its script.
 @ shot record pointer up
 \`shot --no-pointer\` (a screen shot, --burst too) and \`record --no-pointer\` leave the pointer out, for
 stills and videos meant for people (no arrow on the app, none parked on a hover state): it is hidden
@@ -4418,12 +4436,16 @@ shot_fit_default() {
 # still screen still sends them, so a stop never waits for a change, finding 76), then ffmpeg in the
 # box to a steady frame rate. Both run in the box, on its files (its HOME's .cache/omabox-record), and
 # the result comes out as the bytes of a `cat` there: the host never opens a path the box could have
-# made a link. The recording's record is $D/record (host side): "PID OUTPUT FPS FILE", PID in the box.
-# record [-b NAME] start [-o FILE] [--monitor NAME] [--fps N] | stop | status
-# record [-b NAME] [-o FILE] [--monitor NAME] [--fps N] [--hold DURATION] -- ACTION...
+# made a link. The recording's record is $D/record (host side): "PID OUTPUT FPS START_US FILE", PID in
+# the box. Marks (#176, finding 306) go to $D/record.marks ("WALL_US TEXT", one a line) and are put in
+# the video's clock at `stop`, from the first frame's time (record_first_us).
+# record [-b NAME] start [-o FILE] [--monitor NAME] [--fps N] | mark TEXT | stop [SHEET] | status
+# record [-b NAME] [-o FILE] [--monitor NAME] [--fps N] [--hold DURATION] [SHEET] -- ACTION...
+# record [-b NAME] sheet VIDEO [-o PNG] [--frames N | --every DURATION] [--fit N]
 REC_DIR=/home/sbx/.cache/omabox-record
 cmd_record() {
-  local name="" sub="" out="" monitor="" fps=30 hold=1000 ract=() nopointer=0
+  local name="" sub="" out="" monitor="" fps=30 hold=1000 ract=() nopointer=0 text=() video=""
+  local sheet=0 frames="" every="" fit="" w
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -4432,10 +4454,21 @@ cmd_record() {
       --no-pointer) nopointer=1 ;;
       --fps) optarg "$@"; fps=$2; shift ;;
       --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "record: --hold takes a duration up to 60s, like 500ms or 2s, got $2"; shift ;;
-      --) shift; ract=("$@"); break ;;
-      start|stop|status) [ -z "$sub" ] || die "record: one of start, stop, status"; sub=$1 ;;
+      --sheet) sheet=1 ;;
+      --frames) optarg "$@"; [[ $2 =~ ^[0-9]{1,3}$ ]] && [ "$2" -ge 1 ] && [ "$2" -le 100 ] || die "record: --frames is 1 to 100, got $2"
+        frames=$2 sheet=1; shift ;;
+      --every) optarg "$@"; every=$(ms_duration "$2") || die "record: --every takes a duration, like 500ms or 2s, got $2"; sheet=1; shift ;;
+      --fit) optarg "$@"; [[ $2 =~ ^(0|[1-9][0-9]{2,4})$ ]] || die "record: --fit is 0 (off) or the sheet's longest side in pixels (100-99999), got $2"
+        fit=$2 sheet=1; shift ;;
+      # A mark's text may start with a dash after --.
+      --) shift; if [ "$sub" = mark ]; then text+=("$@"); else ract=("$@"); fi; break ;;
       -*) die "record: unknown option $1" ;;
-      *) die "record: start, stop, status, or -- ACTION (an omabox command), got $1" ;;
+      *)
+        if [ "$sub" = mark ]; then text+=("$1")
+        elif [ "$sub" = sheet ] && [ -z "$video" ]; then video=$1
+        elif [ -z "$sub" ]; then
+          case $1 in start|stop|status|mark|sheet) sub=$1 ;; *) die "record: start, stop, status, mark, sheet, or -- ACTION (an omabox command), got $1" ;; esac
+        else die "record $sub: unexpected $1"; fi ;;
     esac
     shift
   done
@@ -4447,16 +4480,32 @@ cmd_record() {
       keys|click|scroll|drag|pointer|run|hyprctl|lua|output|monitor|mode|restart-shell|wait) ;;
       *) die "record -- ACTION: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, restart-shell, wait), got ${ract[0]}" ;;
     esac
-    local rown=() w; for w in "${ract[@]}"; do [ "$w" != -- ] || break; rown+=("$w"); done
+    local rown=(); for w in "${ract[@]}"; do [ "$w" != -- ] || break; rown+=("$w"); done
     [[ " ${rown[*]} " != *" -b "* && " ${rown[*]} " != *" --box "* ]] || die "record -- ACTION: the action runs on the recorded box (no -b)"
   else
-    [ -n "$sub" ] || die "record: start, stop, status, or -- ACTION (omabox help record)"
+    [ -n "$sub" ] || die "record: start, stop, status, mark, sheet, or -- ACTION (omabox help record)"
   fi
-  case $sub in stop|status) [ $nopointer = 0 ] || die "record $sub: --no-pointer goes with start or -- ACTION" ;; esac
+  case $sub in stop|status|mark|sheet) [ $nopointer = 0 ] || die "record $sub: --no-pointer goes with start or -- ACTION" ;; esac
+  case $sub in start|status|mark) [ $sheet = 0 ] || die "record $sub: --sheet, --frames, --every and --fit go with stop, sheet or -- ACTION" ;; esac
+  [ -z "$frames" ] || [ -z "$every" ] || die "record: --frames or --every, not both"
+  case $sub in
+    mark) [ ${#text[@]} -gt 0 ] || die "record mark: the mark's text, like: omabox record mark \"scene 2\""
+      [ -z "$out$monitor" ] || die "record mark: -o and --monitor go with start" ;;
+    sheet) [ -n "$video" ] || die "record sheet: the video, like: omabox record sheet demo.mp4"
+      [ -f "$video" ] || die "record sheet: no video $video"
+      [ -z "$monitor" ] || die "record sheet: --monitor goes with start" ;;
+  esac
+  if [ $sheet = 1 ] || [ "$sub" = sheet ]; then
+    command -v magick >/dev/null || die "record: a contact sheet needs ImageMagick's magick (package imagemagick, part of Omarchy)"
+    [ -n "$fit" ] || fit=$(shot_fit_default) || exit 1
+    [ "$fit" != 0 ] || fit=""
+  fi
   select_box "$name"; need_box
   case $sub in
     status) record_status; return ;;
-    stop) [ -z "$out$monitor" ] || die "record stop: -o and --monitor go with start"; record_stop; return ;;
+    mark) record_mark "${text[*]}"; return ;;
+    sheet) record_sheet_file "$video" "$out" "$frames" "$every" "$fit"; return ;;
+    stop) [ -z "$out$monitor" ] || die "record stop: -o and --monitor go with start"; record_stop "$sheet" "$frames" "$every" "$fit"; return ;;
   esac
   record_start "$out" "$monitor" "$fps" "$nopointer"
   # A recording that goes on past this omabox keeps the pointer hidden until `record stop`.
@@ -4464,16 +4513,16 @@ cmd_record() {
   local rc=0
   "$0" -b "$NAME" "${ract[@]}" >&2 || rc=$?
   sleep "$(awk -v ms="$hold" 'BEGIN { printf "%.3f", ms / 1000 }')"
-  record_stop || return $?
+  record_stop "$sheet" "$frames" "$every" "$fit" || return $?
   [ $rc = 0 ] || say "record: the action ended $rc (the recording is kept)"
   return $rc
 }
 
-# The recording running in this box, as $D/record has it: sets REC_PID REC_OUT REC_FPS REC_FILE; fails
-# when there is none, or its wf-recorder is gone (the record is dropped then).
+# The recording running in this box, as $D/record has it: sets REC_PID REC_OUT REC_FPS REC_START
+# REC_FILE; fails when there is none, or its wf-recorder is gone (the record is dropped then).
 record_running() {
   [ -f "$D/record" ] || return 1
-  read -r REC_PID REC_OUT REC_FPS REC_FILE < "$D/record" || { rm -f "$D/record"; return 1; }
+  read -r REC_PID REC_OUT REC_FPS REC_START REC_FILE < "$D/record" || { rm -f "$D/record"; return 1; }
   [[ $REC_PID =~ ^[0-9]+$ ]] && [ "$(box_exec cat "/proc/$REC_PID/comm" 2>/dev/null)" = wf-recorder ] && return 0
   return 1
 }
@@ -4491,7 +4540,7 @@ record_start() {
     die "record: needs wf-recorder and ffmpeg (sudo pacman -S wf-recorder ffmpeg)"
   fi
   if record_running; then die "record: box '$NAME' is recording already, to $REC_FILE (omabox record stop)"; fi
-  rm -f "$D/record"
+  rm -f "$D/record" "$D/record.marks"
   mons=$(hypr_json monitors)
   if [ -z "$mon" ]; then
     mon=$(jq -r "$(main_screen) // empty | .name" <<<"$mons")
@@ -4508,16 +4557,37 @@ record_start() {
   # --no-pointer (#228): hidden before the first frame; `record stop` shows it again (and this omabox,
   # should it fail before the recording runs).
   [ "$nopointer" = 0 ] || ptr_hold_until_exit "record $$"
-  local pid
-  # shellcheck disable=SC2016 # the inner bash's
+  local pid start=${EPOCHREALTIME//[!0-9]/}
   # A session of its own, INT back to its default (a background job of a non-interactive shell ignores
   # it), its pid said on fd 3 as `run -d` does.
-  pid=$(box_exec bash -c 'mkdir -p "$1" && rm -f "$1"/raw.mkv "$1"/out.mp4 && exec >"$1/wf-recorder.log" 2>&1 || exit 125
-    d=$1; shift; (trap - INT QUIT; exec 3>&-; exec setsid -- "$@") & echo "$!" >&3' omabox-record "$REC_DIR" \
+  # The first frame's time (#176, finding 306): the video's clock is wf-recorder's frames' screencopy
+  # timestamps less the first one's, which Hyprland takes from CLOCK_MONOTONIC as it copies. With
+  # WAYLAND_DEBUG its stderr has every event it gets, the first frame's `ready(SEC_HI, SEC_LO, NSEC)`
+  # among them: that stamp, in µs, then the wall clock, the monotonic one and the wall clock again
+  # (perl's, a part of Omarchy; the two wall readings around the monotonic one), go to first-frame,
+  # so a mark's wall-clock time becomes the video's. The rest of the debug lines are dropped (grep);
+  # wf-recorder's own lines go on to its log.
+  # shellcheck disable=SC2016 # the inner bash's
+  pid=$(box_exec bash -c 'mkdir -p "$1" && rm -f "$1"/raw.mkv "$1"/out.mp4 "$1"/first-frame && exec >"$1/wf-recorder.log" 2>&1 || exit 125
+    d=$1; shift
+    first() {
+      local l re="zwlr_screencopy_frame_v1[@#][0-9]+[.]ready[(]([0-9]+), ([0-9]+), ([0-9]+)[)]"
+      while IFS= read -r l; do
+        if [[ $l =~ $re ]]; then
+          { echo -n "$(( ((BASH_REMATCH[1] << 32) + BASH_REMATCH[2]) * 1000000 + BASH_REMATCH[3] / 1000 )) "
+            perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC,CLOCK_REALTIME -e "my @t = map { int(1e6 * clock_gettime(\$_)) } (CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_REALTIME); print qq(@t\n)"
+          } > "$d/first-frame.part" && mv -f "$d/first-frame.part" "$d/first-frame"
+          break
+        fi
+        [[ $l == "["* ]] || printf "%s\n" "$l"
+      done
+      exec grep -v --line-buffered "^\["
+    }
+    (trap - INT QUIT; exec 3>&-; export WAYLAND_DEBUG=client; exec setsid -- "$@" 2> >(first)) & echo "$!" >&3' omabox-record "$REC_DIR" \
     wf-recorder -y -D -o "$mon" -c libx264 -p preset=ultrafast -p crf=14 -f "$REC_DIR/raw.mkv" 3>&1 </dev/null >&2) ||
     die "record: could not start wf-recorder in box '$NAME'"
   [[ $pid =~ ^[0-9]+$ ]] || die "record: could not start wf-recorder in box '$NAME' (no pid: $pid)"
-  echo "$pid $mon $fps $file" > "$D/record"
+  echo "$pid $mon $fps $start $file" > "$D/record"
   # Still running half a second on: not ended at once (a bad output or codec). Its file is written
   # later (the muxer buffers it), but its frames are stamped from the first.
   # shellcheck disable=SC2016 # the inner sh's
@@ -4527,8 +4597,33 @@ record_start() {
   say "record: recording $mon of box '$NAME' to $file (omabox record stop)"
 }
 
+# The wall-clock time of the recording's first frame, in µs (#176): its screencopy stamp (monotonic)
+# moved to the wall clock by the two clocks' difference, read once beside it in the box. Fails when
+# the first frame has not come (or a box made it unreadable).
+record_first_us() {
+  local a; a=$(box_exec cat "$REC_DIR/first-frame" 2>/dev/null) || return 1
+  [[ $a =~ ^([0-9]{1,17})\ ([0-9]{1,17})\ ([0-9]{1,17})\ ([0-9]{1,17})$ ]] || return 1
+  echo $(( 10#${BASH_REMATCH[1]} + (10#${BASH_REMATCH[2]} + 10#${BASH_REMATCH[4]}) / 2 - 10#${BASH_REMATCH[3]} ))
+}
+
+# A mark in the recording (#176): its text at the time this omabox was called (CALL_US), put in the
+# video's clock at stop. Prints its time in the video, once the first frame has come.
+record_mark() {
+  local mtext=${1//[[:cntrl:]]/ } first ms
+  if ! record_running; then
+    [ ! -f "$D/record" ] || die "record mark: box '$NAME''s recording stopped by itself (omabox record stop keeps what it has)"
+    die "record mark: box '$NAME' is not recording (omabox record start)"
+  fi
+  printf '%s\t%s\n' "$CALL_US" "$mtext" >> "$D/record.marks" || die "record mark: cannot write $D/record.marks"
+  if first=$(record_first_us); then
+    ms=$(( (CALL_US - first + 500) / 1000 )); [ $ms -ge 0 ] || ms=0
+    printf '%d.%03ds %s\n' $((ms / 1000)) $((ms % 1000)) "$mtext"
+  else echo "before the first frame: $mtext"; fi
+}
+
+# record_stop SHEET FRAMES EVERY_MS FIT: the video, its marks beside it, and with SHEET its contact sheet.
 record_stop() {
-  local alive=0
+  local sheet=${1:-0} frames=${2:-} every=${3:-} fit=${4:-} alive=0
   if record_running; then alive=1
   elif [ ! -f "$D/record" ]; then die "record stop: box '$NAME' is not recording"; fi
   if [ $alive = 1 ]; then
@@ -4540,19 +4635,154 @@ record_stop() {
     done
   fi
   rm -f "$D/record"
+  local marks=""; [ ! -f "$D/record.marks" ] || marks=$(cat "$D/record.marks") || marks=""
+  rm -f "$D/record.marks"
   # Its --no-pointer's hold given back (#228): the pointer as it was before.
   ! grep -qs '^hold record ' "$D/pointer" || ptr_change release record || ptr_fail "record stop"
   # A steady REC_FPS (wf-recorder's frames come as the screen gives them), for any player and editor.
+  # The fps filter starts at the first frame and shows each from the output frame nearest its time:
+  # the video's clock stays wf-recorder's, so a mark's time is still its time (finding 306).
   box_exec ffmpeg -v error -y -i "$REC_DIR/raw.mkv" -vf "fps=$REC_FPS" -c:v libx264 -preset medium -crf 18 \
     -pix_fmt yuv420p -movflags +faststart "$REC_DIR/out.mp4" </dev/null >&2 ||
     die "record: ffmpeg could not make the video ($REC_DIR/raw.mkv in box '$NAME' is kept)"
   # (ffprobe in the box too: its file, never read on the host but as bytes.)
-  local info; info=$(box_exec ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | paste -sd ' ') || info=""
+  local info dur=""; info=$(box_exec ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | paste -sd ' ') || info=""
+  [[ ! $info =~ \ ([0-9]+)(\.([0-9]{1,3}))?[0-9]*$ ]] || dur=$((10#${BASH_REMATCH[1]} * 1000 + 10#$(printf '%-3s' "${BASH_REMATCH[3]}" | tr ' ' 0)))
   box_exec cat "$REC_DIR/out.mp4" > "$REC_FILE.part" || { rm -f -- "$REC_FILE.part"; die "record: could not copy the video out of box '$NAME'"; }
   mv -f -- "$REC_FILE.part" "$REC_FILE"
-  box_exec rm -f "$REC_DIR/raw.mkv" "$REC_DIR/out.mp4" 2>/dev/null || true
-  [[ ! $info =~ ^([0-9]+),([0-9]+)\ ([0-9.]+)$ ]] || say "record: ${BASH_REMATCH[1]}x${BASH_REMATCH[2]}, $(ms_s "$(awk -v d="${BASH_REMATCH[3]}" 'BEGIN { printf "%d", d * 1000 }')") at $REC_FPS fps"
+  local first="" base=${REC_FILE%.mp4} sp=""
+  if [ -n "$marks" ]; then
+    first=$(record_first_us) || {
+      first=$REC_START
+      say "record: could not tell when the first frame came: the marks are timed from record start (late by up to a few tenths of a second)"; }
+  fi
+  record_marks "$marks" "$first" "$dur" "$base"
+  [ "$sheet" = 0 ] || sp=$(record_sheet "$REC_DIR/out.mp4" "$base.marks.tsv" "$base.sheet.png" "$frames" "$every" "$fit") || sp=""
+  box_exec rm -f "$REC_DIR/raw.mkv" "$REC_DIR/out.mp4" "$REC_DIR/first-frame" 2>/dev/null || true
+  [[ ! $info =~ ^([0-9]+),([0-9]+)\  ]] || say "record: ${BASH_REMATCH[1]}x${BASH_REMATCH[2]}, $(ms_s "${dur:-0}") at $REC_FPS fps"
   echo "$REC_FILE"
+  [ -z "$sp" ] || echo "$sp"
+  [ "$sheet" = 0 ] || [ -n "$sp" ] || return 1
+}
+
+# record_marks MARKS FIRST_US DURATION_MS BASE: the marks ("WALL_US TEXT" lines) in the video's clock
+# (ms from its first frame, at FIRST_US) as BASE.marks.tsv (ms, the wall-clock time as `events` has
+# it, the text) and BASE.vtt (WebVTT captions: each mark until the next, the last until the end). No
+# marks: no files, and an earlier take's at those names go, so they are never read as this one's.
+record_marks() {
+  local marks=$1 first=$2 dur=${3:-0} base=$4 tsv vtt n
+  tsv=$base.marks.tsv vtt=$base.vtt
+  if [ -z "$marks" ]; then rm -f -- "$tsv" "$vtt"; return 0; fi
+  # shellcheck disable=SC2016 # awk's
+  { printf 'ms\ttime\ttext\n'
+    sort -t "$(printf '\t')" -k1,1n <<<"$marks" | awk -F '\t' -v t0="$first" '
+      $1 ~ /^[0-9]+$/ { ms = int(($1 - t0 + 500) / 1000); if (ms < 0) ms = 0
+        t = $1; sub(/^[^\t]*\t/, ""); printf "%d\t%d.%03d\t%s\n", ms, int(t / 1000000), int(t / 1000) % 1000, $0 }'
+  } > "$tsv.part" || { rm -f -- "$tsv.part"; die "record: cannot write $tsv"; }
+  mv -f -- "$tsv.part" "$tsv" || die "record: cannot write $tsv"
+  # shellcheck disable=SC2016 # awk's
+  awk -F '\t' -v dur="$dur" '
+    function ts(m) { return sprintf("%02d:%02d:%02d.%03d", int(m / 3600000), int(m / 60000) % 60, int(m / 1000) % 60, m % 1000) }
+    NR > 1 { n++; ms[n] = $1; sub(/^[^\t]*\t[^\t]*\t/, ""); gsub(/&/, "\\&amp;"); gsub(/</, "\\&lt;"); gsub(/>/, "\\&gt;"); tx[n] = $0 }
+    END { print "WEBVTT"
+      for (i = 1; i <= n; i++) {
+        e = i < n ? ms[i + 1] : dur; if (e <= ms[i]) e = ms[i] + 1000
+        printf "\n%d\n%s --> %s\n%s\n", i, ts(ms[i]), ts(e), tx[i] } }' "$tsv" > "$vtt.part" ||
+    { rm -f -- "$vtt.part"; die "record: cannot write $vtt"; }
+  mv -f -- "$vtt.part" "$vtt" || die "record: cannot write $vtt"
+  n=$(($(wc -l < "$tsv") - 1))
+  say "record: $n mark$([ "$n" = 1 ] || echo s) in $tsv (ms in the video), and $vtt (captions)"
+}
+
+# record sheet VIDEO (#176): the video copied into the box (ffmpeg reads it there, as stop's), its sheet
+# beside it (or -o), with VIDEO's marks (VIDEO less .mp4, .marks.tsv) when there are some.
+# record_sheet_file VIDEO OUT FRAMES EVERY_MS FIT
+record_sheet_file() {
+  local video=$1 out=$2 base=${1%.mp4} bv rc=0 sp
+  [ -n "$out" ] || out=$base.sheet.png
+  bv=$REC_DIR/sheet-$$.mp4
+  # shellcheck disable=SC2016 # the inner bash's
+  box_exec bash -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$bv" < "$video" ||
+    die "record sheet: could not copy $video into box '$NAME'"
+  sp=$(record_sheet "$bv" "$base.marks.tsv" "$out" "$3" "$4" "$5") || rc=$?
+  box_exec rm -f "$bv" 2>/dev/null || true
+  [ $rc = 0 ] || return $rc
+  echo "$sp"
+}
+
+# record_sheet VIDEO_IN_BOX MARKS_TSV OUT FRAMES EVERY_MS FIT (#176): a contact sheet of the video,
+# for an agent that cannot watch it: FRAMES (15) from the first to the last, or one each EVERY_MS;
+# each tile labelled with its number and time in the video, and below it the marks since the tile
+# before ("> 4.20s TEXT": what led to it). Frames picked and scaled by ffmpeg in the box (select by
+# number, so times are exact to a frame), copied out as bytes, put together by magick as shot --burst's
+# sheet; 5 a row, tiles 320 px wide, or FIT / 5 with a FIT, which the whole sheet then fits. Prints OUT.
+record_sheet() {
+  local v=$1 tsv=$2 png=$3 n=${4:-15} every=${5:-} fit=${6:-} j nb num den vw vh
+  j=$(box_exec ffprobe -v error -select_streams v:0 -count_packets \
+    -show_entries stream=nb_read_packets,r_frame_rate,width,height -of json "$v" 2>/dev/null) || j=""
+  read -r nb num den vw vh < <(jq -r '.streams[0] | "\(.nb_read_packets) \(.r_frame_rate | sub("/"; " ")) \(.width) \(.height)"' <<<"$j" 2>/dev/null) || nb=""
+  [[ "$nb $num $den $vw $vh" =~ ^[1-9][0-9]{0,8}\ [1-9][0-9]{0,6}\ [1-9][0-9]{0,6}\ [1-9][0-9]{0,5}\ [1-9][0-9]{0,5}$ ]] || {
+    say "record: the contact sheet: ffprobe could not read the video's frames"; return 1; }
+  local ks=() k i last=-1
+  if [ -n "$every" ]; then
+    for ((i = 0; ; i++)); do
+      k=$(( (2 * i * every * num + 1000 * den) / (2000 * den) ))
+      [ "$k" -lt "$nb" ] || break
+      [ "$k" = "$last" ] || ks+=("$k"); last=$k
+      [ ${#ks[@]} -le 100 ] || { say "record: the contact sheet: --every $(ms_s "$every") gives more than 100 frames: a longer one, or --frames N"; return 1; }
+    done
+  else
+    [ "$n" -le "$nb" ] || n=$nb
+    if [ "$n" = 1 ]; then ks=(0)
+    else for ((i = 0; i < n; i++)); do ks+=($(( (2 * i * (nb - 1) + n - 1) / (2 * (n - 1)) ))); done; fi
+  fi
+  local cnt=${#ks[@]} cols tw sel="" bd=$REC_DIR/sheet-$$
+  cols=$((cnt < 5 ? cnt : 5)) tw=320
+  [ -z "$fit" ] || tw=$((fit / cols - 6))
+  [ "$tw" -le "$vw" ] || tw=$vw
+  tw=$((tw / 2 * 2)); [ "$tw" -ge 16 ] || tw=16
+  for k in "${ks[@]}"; do sel+="${sel:++}eq(n,$k)"; done
+  # shellcheck disable=SC2016 # the inner bash's
+  if ! box_exec bash -c 'rm -rf "$1" && mkdir -p "$1"' omabox-record "$bd" ||
+    ! box_exec ffmpeg -v error -i "$v" -vf "select='$sel',scale=$tw:-2" -fps_mode passthrough "$bd/t-%03d.png" </dev/null >&2; then
+    box_exec rm -rf "$bd" 2>/dev/null || true; say "record: the contact sheet: ffmpeg could not take the frames"; return 1
+  fi
+  local tmp f ms=() lab=() args=() line m t
+  tmp=$(mktemp -d) || return 1
+  for ((i = 0; i < cnt; i++)); do
+    f=$(printf '%s/%03d.png' "$tmp" $((i + 1)))
+    if ! box_exec cat "$(printf '%s/t-%03d.png' "$bd" $((i + 1)))" > "$f" 2>/dev/null || ! png_size "$f" >/dev/null 2>&1; then
+      box_exec rm -rf "$bd" 2>/dev/null || true; rm -rf -- "$tmp"; say "record: the contact sheet: frame $((i + 1)) did not come out"; return 1
+    fi
+    ms+=($(( (ks[i] * 1000 * den + num / 2) / num )))
+    lab+=("$((i + 1)): $(printf '%d.%02ds' $((ms[i] / 1000)) $((ms[i] % 1000 / 10)))")
+  done
+  box_exec rm -rf "$bd" 2>/dev/null || true
+  # The marks, each under the first tile at or after it (the last tile for any after that).
+  if [ -f "$tsv" ]; then
+    while IFS=$'\t' read -r m t line; do
+      [[ $m =~ ^[0-9]{1,9}$ ]] || continue
+      for ((i = 0; i < cnt - 1; i++)); do [ "${ms[i]}" -lt "$m" ] || break; done
+      [ ${#line} -le 40 ] || line="${line:0:37}..."
+      lab[i]+=$'\n'"> $(printf '%d.%02ds' $((m / 1000)) $((m % 1000 / 10))) $line"
+    done < <(tail -n +2 -- "$tsv")
+  fi
+  # magick reads % and \ in a label as escapes.
+  for ((i = 0; i < cnt; i++)); do
+    line=${lab[i]//\\/\\\\}; line=${line//%/%%}
+    args+=(-label "$line" "$(printf '%s/%03d.png' "$tmp" $((i + 1)))")
+  done
+  local err=0
+  mkdir -p -- "$(dirname -- "$png")" &&
+    magick montage "${args[@]}" -tile "${cols}x" -geometry '+3+3' -pointsize 16 -background white -alpha off -depth 8 "PNG:$png.part" 2>/dev/null || err=1
+  [ $err = 1 ] || [ -z "$fit" ] || magick "PNG:$png.part" -resize "${fit}x$fit>" -depth 8 "PNG:$png.part" 2>/dev/null || err=1
+  rm -rf -- "$tmp"
+  if [ $err = 1 ]; then rm -f -- "$png.part"; say "record: the contact sheet failed (magick montage, to $png)"; return 1; fi
+  mv -f -- "$png.part" "$png"
+  png=$(readlink -f -- "$png")
+  local sz; sz=$(png_size "$png" | tr ' ' x) || sz=""
+  say "record: a $sz contact sheet of $cnt frames ($(printf '%d.%02ds' $((ms[cnt - 1] / 1000)) $((ms[cnt - 1] % 1000 / 10))) of video), each labelled with its time$([ ! -f "$tsv" ] || echo ", the marks under the frame after them"): $png"
+  echo "$png"
 }
 
 cmd_shot() {

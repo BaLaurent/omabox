@@ -6018,6 +6018,41 @@ from them.
     and omarchy-theme-set, then show and hide giving the same pixels; focus following a hidden pointer
     between two terminals; TERM during a --no-pointer burst; record --no-pointer's last frame against
     a plain recording's; record start --no-pointer over a reload until stop; up --no-pointer).
+306. **`record mark` in the video's own clock; `record stop --sheet` and `record sheet`** (2026-10-14,
+    #176). Diogo's 45 s demo (0.5.5) needed a timeline for captions, kept by hand in ms since `record
+    start` returned, and five takes, checked through ffmpeg frames, to tune a script whose ~40 omabox
+    calls ran ~12 s past its sleeps. The video's clock: wf-recorder (0.6.0) stamps each frame with
+    its screencopy `ready` time (Hyprland's `steadyNow()`, CLOCK_MONOTONIC, taken as it copies) less
+    the first frame's; the fps pass at `stop` starts at that first frame and shows each frame from
+    the output slot nearest its time (so up to half a frame early, never later than its slot).
+    Nothing wf-recorder says tells the first frame's time, so it runs with `WAYLAND_DEBUG=client`: a
+    reader on its stderr (a process substitution, so the recorded pid stays wf-recorder's) takes the
+    first `zwlr_screencopy_frame_v1.ready(HI, LO, NSEC)`, writes it with the wall clock, the
+    monotonic clock and the wall clock again (perl's Time::HiRes, which the omarchy package pulls in)
+    to `first-frame` in the box, and then hands the rest to `grep -v '^\['` (wf-recorder's own lines
+    go on to its log; ~10 debug lines a frame, dropped). `record mark TEXT` appends "WALL_US TEXT" to
+    `$D/record.marks`, WALL_US from `$EPOCHREALTIME` at the top of the script (`CALL_US`, before the
+    rest is parsed: the moment it was called), and prints its time in the video; `stop` makes them
+    ms from the first frame (one before it at 0) into FILE.marks.tsv (ms, wall time as `events` has
+    it, text) and FILE.vtt (WebVTT, each cue until the next mark, the last until the end; ffmpeg's
+    `subtitles=` filter (libass) burns it in, mpv loads FILE.vtt beside FILE.mp4); no marks removes an
+    earlier take's two files. Measured in a scale-2 box on AMD, from the raw frames (before the fps
+    pass): a terminal turning red at a time it noted came in the first frame stamped 4, 4 and 19 ms
+    after that time, and the frame before it (2 to 12 ms before or after) was never red. So a mark is
+    exact to the frame; what lags is the app's drawing. `record mark` itself takes ~55 ms. The sheet:
+    ffprobe counts the frames (-count_packets), ffmpeg selects them by number (`select=eq(n,K)+...`,
+    times K/fps exact) and scales them in the box, each PNG comes out as bytes, magick montage (as
+    `shot --burst --sheet`) labels each "N: T" with, under it, the marks since the tile before ("> T
+    TEXT", 37 characters); 15 frames from the first to the last, or one each --every (100 at most), 5
+    a row, 320 px tiles, or tiles of --fit/5 and the sheet then fitted (shot-fit by default). `record
+    sheet VIDEO` copies the video into the box for that (a box must be up); its marks are VIDEO's
+    .marks.tsv. Decided: marks always work (no `start --marks`); the files are named after the video
+    (demo.mp4: demo.marks.tsv, demo.vtt, demo.sheet.png), the marks' paths said on stderr so `stop`'s
+    stdout stays the video (then the sheet, with --sheet). Still refused for a jailed agent (#224).
+    Tests: t_unit_record (refusals; record_marks' TSV and WebVTT, a mark before the first frame,
+    escaping, stale files gone); record_marks_on in t_scale and t_scale_nvidia (a mark and a red
+    terminal: its first red frame at most a frame early, at most 250 ms late; the TSV, the VTT; a
+    6-tile sheet's width and tiles; `record sheet --every 500ms --fit 800` at 800 px).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

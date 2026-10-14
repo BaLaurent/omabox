@@ -102,6 +102,8 @@ omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … 
 omabox shot --changed --window myapp   # only what changed since its last shot, cropped
 omabox shot --burst 12 --sheet --after -- keys super+space   # a transition in frames
 omabox record start -o demo.mp4        # a video of the screen; omabox record stop prints the file
+omabox record mark "scene 2"           # a mark in the video's clock: demo.marks.tsv and demo.vtt captions
+omabox record stop --sheet             # ...and demo.sheet.png: frames with their times, to check a take
 omabox shot --no-pointer               # a still for people (pointer hide: none until pointer show)
 omabox output drop [NAME] --for 300ms  # a screen gone and back, as a monitor waking up
 omabox gdb [--watch]                   # backtraces of the box's Hyprland: a hang, or a crash

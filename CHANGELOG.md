@@ -7,6 +7,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **Marks and contact sheets for `omabox record`.** `omabox record mark "scene 2"`, while a
+  recording runs, notes the text at that moment in the video's own clock (milliseconds from its
+  first frame, exact to a few ms), and `record stop` writes them beside the video: `demo.marks.tsv`
+  and `demo.vtt`, captions any player loads or `ffmpeg -vf subtitles=demo.vtt` burns in. They also
+  show where a script of omabox calls and sleeps drifts from its plan. `record stop --sheet` (or
+  `omabox record sheet demo.mp4`) makes `demo.sheet.png`, a contact sheet of the video's frames with
+  their times and the marks under them (`--frames N`, `--every 2s`, `--fit N`), so an agent can check
+  a take without watching it (#176).
 - **Shots and videos without the pointer.** `shot --no-pointer` and `record --no-pointer` leave the
   pointer out, for stills and videos meant for people: no arrow on the app, and none parked on
   something with a hover state. It is shown again afterwards, as it was, also when the shot or

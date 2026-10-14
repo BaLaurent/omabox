@@ -567,7 +567,14 @@ most people will. Then:
   H.264 MP4 at a steady `--fps`, 30 by default), or `omabox record -o demo.mp4 -- keys super+space`
   for one action (and `--hold 1s` after it). It records one output at its pixels (`--monitor NAME`;
   the main screen by default): in a box at `--size 3840x2160,scale=2`, a sharp 4K video of a
-  1920x1080 layout. Needs wf-recorder and ffmpeg (they run in the box). Frames to compare instead (an animation's steps):
+  1920x1080 layout. Needs wf-recorder and ffmpeg (they run in the box). You cannot watch it: `record
+  stop --sheet` (or `record sheet demo.mp4 [--frames N | --every 2s] [--fit N]`) prints a contact
+  sheet, demo.sheet.png, frames labelled with their times: Read it, fix the script, record again.
+  `omabox record mark "scene 2"` just before each scene notes it in the video's own clock (ms from
+  the first frame, exact to a few ms); `stop` writes demo.marks.tsv and demo.vtt (captions: `ffmpeg
+  -i demo.mp4 -vf subtitles=demo.vtt out.mp4`; a cut: `ffmpeg -ss A -to B` with two marks' times), and
+  the sheet shows each mark under the frame after it. A script's omabox calls take time of their own:
+  the marks show how far the scenes drift from its sleeps. Frames to compare instead (an animation's steps):
   `omabox shot --burst N --sheet` (above), never a loop of `grim` in the box.
 - **The package itself** (install, upgrade, removal, pacman hooks): not in a box (a read-only `/usr`,
   no pacman). A VM, or ask the user.
