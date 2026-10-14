@@ -162,9 +162,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   anything that repaints per frame costs ~2.4x more at 144 Hz than at the default 60. NVIDIA driver
   615.71.09 does not expose the per-process DRM counters `gpu` needs; on that driver it reports no
   percentages.
-- **Apps in a box on NVIDIA render in software** (llvmpipe: NVIDIA's EGL does not initialise in a
-  box). Their CPU and frame cost measured there is software rendering's, and `gpu` counts none of
-  their drawing. `up` says so once, `ls` and `gpu`/`cpu` show an `apps: llvmpipe, in software` line,
+- **Apps in a box that render in software** (llvmpipe; on NVIDIA they draw on the GPU, but Vulkan
+  there still fails). Their CPU and frame cost measured there is software rendering's, and `gpu`
+  counts none of their drawing. `up` says so once, `ls` and `gpu`/`cpu` show an `apps: llvmpipe, in software` line,
   `ls --json` has each box's `client_render` (`renderer`, `software`; from `eglinfo`, absent without
   mesa-utils). For GPU rendering use a box on another GPU (`OMABOX_RENDER_NODE=/dev/dri/renderD128
   omabox up --new`, the node `up` names); with no other GPU, compare against a baseline measured in

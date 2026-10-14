@@ -5683,7 +5683,8 @@ from them.
     warns, restart-shell exit 0, says it killed it, under 10 s, a new pid, the bar back, running, no
     warning (5 checks fail on the old code).
 290. **Apps rendering in software are said: `up`, `ls`, `gpu`/`cpu`** (2026-10-13, #204's fallback;
-    the fix itself, binding `/dev/nvidia-modeset`, stays parked: 283). In a box on the RTX, Wayland
+    the fix itself, binding `/dev/nvidia-modeset`, stays parked: 283; the cause was elsewhere, and
+    NVIDIA boxes' apps draw on the GPU since finding 294). In a box on the RTX, Wayland
     clients get llvmpipe (Mesa's `failed to create dri2 screen`; NVIDIA's EGL does not initialise), so
     an app's CPU or frame cost measured there is software rendering's and `gpu` shows none of its
     drawing, which nothing said. `up`, once the box is ready, runs `eglinfo -B -p wayland` in the
@@ -5803,6 +5804,32 @@ from them.
     took the box down), t_jail (the project mounted twice through a real ai-jail: empty on both).
     A second review: a box mount the verifier cannot walk now fails the check (it was skipped, so a
     mount of a hidden folder that could not be placed went unchecked); none was found to trigger it.
+294. **NVIDIA boxes: apps draw on the GPU, through an empty file at the card's path** (2026-10-14,
+    #204; finding 290 said they did not). NVIDIA's EGL initialises in a box: `eglinfo -B -p gbm` and
+    `-p surfaceless` named the RTX 5070 Ti, with no `nvidia-modeset`. Only the Wayland platform
+    failed (`eglGetPlatformDisplay` gave `EGL_NO_DISPLAY`, an `EGL_KHR_debug` callback an
+    `EGL_BAD_ACCESS` from `eglQueryDeviceStringEXT`, its backtrace in `libnvidia-egl-wayland2`).
+    That library's `LookupDeviceIds` (egl-wayland2 1.0.2, `src/wayland/wayland-display.c`) `stat()`s
+    each node the device names, `EGL_DRM_DEVICE_FILE_EXT` (`/dev/dri/card0`) first, and on the first
+    that fails returns no ids, never reaching the render node, which is the one the box's Hyprland
+    advertises (dmabuf feedback's main device, `wl_drm.device("/dev/dri/renderD129")`). It never
+    opens the card node (an `open` logger saw only the render node and `/dev/nvidia*`). egl-wayland
+    1.1.22 alone failed the same way (not traced to a line). So `up` binds an empty read-only file of
+    the box dir (`card-placeholder`) at the card's path of each NVIDIA render node it binds (from
+    `/sys/class/drm/renderDN/device/drm/cardM`; `nvidia_card`), headless and interactive (an
+    interactive box's apps on NVIDIA not measured). Not the
+    device: the safety invariant holds (no `/dev/dri/card*` device in a box; `check_box_safety` now
+    checks for a character device, not any path). Measured in a box on the RTX (renderD129, driver
+    610.57.04): `eglinfo -p wayland` names the RTX (egl-wayland2, and egl-wayland 1 alone), the box's
+    quickshell after `restart-shell` is a graphics process in `nvidia-smi`, and `up` says nothing of
+    software rendering. Vulkan is unchanged: `vulkaninfo --summary` still segfaults after
+    `vkGetPhysicalDeviceDisplayPropertiesKHR failed with ERROR_UNKNOWN`. The bug is egl-wayland2's,
+    recorded for upstream separately. Since this change two timing checks flake under the full
+    suite's load (`t_throwaway_killed`'s 15 s, `t_wait`'s 2 px caret line measured 3 px): see the
+    issue for them (#222). Tests: t_unit_nvidia (`nvidia_card` from a stand-in sysfs),
+    t_main's NVIDIA branch (the card path an empty read-only regular file; `eglinfo -p wayland` on
+    NVIDIA: fails on the code before), t_output_nvidia (nothing said of software rendering), and
+    every `check_box_safety`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

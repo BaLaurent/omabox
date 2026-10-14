@@ -3,6 +3,16 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **Apps in a box on an NVIDIA GPU draw on the GPU** (#204). They fell back to Mesa's software
+  renderer (llvmpipe): NVIDIA's Wayland EGL looks for the GPU's card node, which a box never has,
+  and gave up without trying the render node the box does have. An NVIDIA box now has an empty
+  read-only file at that path (never the device), and its apps and bar render on the GPU. Vulkan in
+  an NVIDIA box is unchanged (`vulkaninfo` still crashes).
+
 ## 0.5.4 — 2026-10-13
 
 A security fix for agents inside ai-jail driving boxes through the broker: update if you use

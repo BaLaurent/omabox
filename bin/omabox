@@ -1531,6 +1531,17 @@ nvidia_node() {
 # (nvidiactl).
 nvidia_missing() { [ -c "$1/nvidia$2" ] || echo "$2"; [ -c "$1/nvidiactl" ] || echo 255; }
 
+# nvidia_card RENDER [SYS]: the name (cardN) of the primary node of RENDER's GPU, the path NVIDIA's EGL
+# gives as its device file (EGL_DRM_DEVICE_FILE_EXT); nothing when sysfs names none. SYS stands in for
+# /sys/class/drm in t_unit_nvidia.
+nvidia_card() {
+  local c
+  for c in "${2:-/sys/class/drm}/${1##*/}/device/drm/"card*; do
+    [[ ${c##*/} =~ ^card[0-9]+$ ]] && { echo "${c##*/}"; return 0; }
+  done
+  return 0
+}
+
 # Resolve --plugin PATH|ID to "id<TAB>realpath".
 resolve_plugin() {
   local p=$1 dir id
@@ -2563,18 +2574,19 @@ cmd_up() {
     confirm=off
     say "confirm-close is on in your settings, but it needs $(aq_lacks): off for this box (closing its window ends it). $AQ_HOWTO"
   fi
-  local renders nvidia_devs=() dev n wayland_screen=0 run=/run/user/$UID
+  local renders nvidia_devs=() nvidia_cards=() dev n wayland_screen=0 run=/run/user/$UID
   if [ $interactive = 1 ]; then
     mapfile -t renders < <(render_nodes)
     # An NVIDIA node whose userspace nodes are missing is left out: the desktop is not rendering on it
     # (so nothing is created for it either).
     for n in "${renders[@]}"; do
-      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 0 2>/dev/null) || nvidia_devs+=("$dev")
+      [ "$(render_driver "$n")" != nvidia ] || ! dev=$(nvidia_device "$n" 0 2>/dev/null) || {
+        nvidia_devs+=("$dev"); nvidia_cards+=("$(nvidia_card "$n")"); }
     done
   elif [ "$(render_driver "$render")" = nvidia ]; then
     renders=("$render")
     dev=$(nvidia_device "$render") || die "cannot use NVIDIA render node $render"
-    nvidia_devs=("$dev") wayland_screen=1
+    nvidia_devs=("$dev") nvidia_cards=("$(nvidia_card "$render")") wayland_screen=1
   else
     renders=("$render")
   fi
@@ -2641,7 +2653,8 @@ cmd_up() {
     etc_args=(--overlay-src /etc --overlay-src "$D/etc" --ro-overlay /etc)
   fi
   # Safety invariant (finding 5): Hyprland tries DRM first. Never bind /dev/dri/card*, /dev/input,
-  # /run/seatd.sock, the system bus or the real XDG_RUNTIME_DIR: only a render node goes in.
+  # /run/seatd.sock, the system bus or the real XDG_RUNTIME_DIR: only a render node goes in (on NVIDIA,
+  # an empty file at the card's path, never the device: finding 294).
   # The host's name in both network modes (finding 54): pasta's own UTS namespace would otherwise
   # name an isolated box pasta-HOST.
   local args=(--info-fd 3 --unshare-pid --unshare-ipc --unshare-uts --hostname "$(uname -n)"
@@ -2659,6 +2672,13 @@ cmd_up() {
   # display. There when the driver made it (nvidia-modprobe -u, on first CUDA use on the host).
   [ ${#nvidia_devs[@]} = 0 ] || [ ! -c /dev/nvidia-uvm ] || args+=(--dev-bind /dev/nvidia-uvm /dev/nvidia-uvm)
   for n in "${nvidia_devs[@]}"; do args+=(--dev-bind "$n" "$n"); done
+  # NVIDIA's Wayland EGL (egl-wayland2's LookupDeviceIds) stats the GPU's primary node before its render
+  # node and gives up when it is missing, so apps fell back to llvmpipe (#204, finding 294). It never
+  # opens it: an empty read-only file at that path, not the device, is all it needs.
+  if [ ${#nvidia_cards[@]} -gt 0 ]; then
+    : > "$D/card-placeholder"
+    for n in "${nvidia_cards[@]}"; do [ -z "$n" ] || args+=(--ro-bind "$D/card-placeholder" "/dev/dri/$n"); done
+  fi
   args+=("${ro_args[@]}")
   # A real user manager (finding 61): the box's own cgroup (the delegated scope it is launched in,
   # below) writable as its whole /sys/fs/cgroup under a cgroup namespace, and the marker systemd
@@ -6201,7 +6221,7 @@ soft_note() {
   local r other why=""
   r=$(jq -r 'select(.software == true) | .renderer' <<<"$1" 2>/dev/null) || r=""
   [ -n "$r" ] || return 0
-  [ "$2" != nvidia ] || why=" (NVIDIA's EGL does not initialise in a box, so Mesa falls back to software)"
+  [ "$2" != nvidia ] || why=" (NVIDIA's EGL did not initialise in it, so Mesa fell back to software)"
   printf 'its apps render on %s, in software%s: CPU and frame cost measured in it are software rendering'"'"'s, and omabox gpu counts none of their drawing; ' "${r%% (*}" "$why"
   if [ -z "$2" ]; then echo "compare against a baseline measured in this same box"; return 0; fi
   if [ $# -ge 3 ]; then other=$3; else other=$(other_gpu "$2"); fi

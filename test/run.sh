@@ -210,7 +210,8 @@ check_box_safety() {
   local b=$1; shift
   local via=("$@"); [ ${#via[@]} -gt 0 ] || via=("$CLI")
   check_fails "$b: no /dev/input" "${via[@]}" run -b "$b" -- test -e /dev/input
-  check_fails "$b: no DRM card node" "${via[@]}" run -b "$b" -- sh -c 'ls /dev/dri/card* >/dev/null 2>&1'
+  # A card node as a device (finding 294: an NVIDIA box's card path is an empty file, never the device).
+  check_fails "$b: no DRM card node" "${via[@]}" run -b "$b" -- sh -c 'for f in /dev/dri/card*; do [ ! -c "$f" ] || exit 0; done; exit 1'
   check_fails "$b: no seatd socket" "${via[@]}" run -b "$b" -- test -e /run/seatd.sock
   check_fails "$b: no system bus" "${via[@]}" run -b "$b" -- test -e /run/dbus/system_bus_socket
   [ $# = 0 ] || return 0
@@ -3107,6 +3108,17 @@ t_main() {
     # #149: CUDA's memory node goes in when the driver made it (cuInit 999 without it); never
     # nvidia-modeset, NVIDIA's mode-setting node, which reaches the GPU's displays.
     check_fails "...never nvidia-modeset (the GPU's displays)" ob run -b "$B" -- test -e /dev/nvidia-modeset
+    # Finding 294 (#204): the GPU's card path is an empty read-only file, never the device, so NVIDIA's
+    # Wayland EGL finds the GPU and apps draw on it, not llvmpipe.
+    local card; card=$(lib nvidia_card "$(jq -r .render.node "$D/box.json")")
+    if [ -z "$card" ]; then skip "the NVIDIA card placeholder" "sysfs names no card for the box's render node"
+    else
+      check_eq "...its card path an empty regular file, read-only (finding 294)" "regular empty file 0 1" \
+        "$(ob run -b "$B" -- sh -c "stat -c '%F %s' /dev/dri/$card; echo \$( [ -w /dev/dri/$card ] && echo 0 || echo 1)" 2>&1 | tr '\n' ' ' | sed 's/ $//')"
+    fi
+    if command -v eglinfo >/dev/null; then
+      check_match "...apps' EGL on Wayland is NVIDIA's, not llvmpipe" "OpenGL ES profile renderer: NVIDIA" "$(ob run -b "$B" -- eglinfo -B -p wayland 2>&1)"
+    else skip "apps' EGL on NVIDIA" "no eglinfo (mesa-utils) here"; fi
     if [ -c /dev/nvidia-uvm ]; then
       check "...CUDA's memory node, nvidia-uvm, too (#149)" ob run -b "$B" -- test -c /dev/nvidia-uvm
       if [ -e /usr/lib/libcuda.so.1 ]; then
@@ -4041,6 +4053,12 @@ t_unit_nvidia() {
     "$(printf 'Model: x\n' > "$d/proc/gpus/$slot/information"; nv "$d/none" 1)"
   check_match "a GPU the driver does not list" "has no $d/proc/gpus/0000:02:00.0/information" \
     "$(PATH=$d/none:$PATH lib nvidia_node 0000:02:00.0 1 "$d/proc" "$d/dev" 2>&1)"
+  # nvidia_card (finding 294): the render node's card from sysfs, its placeholder's path in a box.
+  mkdir -p "$d/drm/renderD129/device/drm/card0" "$d/drm/renderD129/device/drm/renderD129" "$d/drm/renderD130/device/drm/renderD130"
+  ln -s card0 "$d/drm/renderD129/device/drm/controlD64"
+  check_eq "nvidia_card: the render node's card, not its control or render entries" card0 "$(lib nvidia_card /dev/dri/renderD129 "$d/drm")"
+  check_eq "...none named: nothing (no placeholder)" "" "$(lib nvidia_card /dev/dri/renderD130 "$d/drm")"
+  check_eq "...a node sysfs does not have: nothing" "" "$(lib nvidia_card /dev/dri/renderD131 "$d/drm")"
 }
 
 # finding 126 (issue #49): omabox setup makes a user's links, settings dir and guard; --remove undoes
@@ -7883,13 +7901,9 @@ output_on() {
   local n=$1 B=$2 m0=$3 m1=$4 out rc ml before
   out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated --monitor 1280x800,scale=1.6,below 2>&1) ||
     { no "up with a monitor" "failed: $out"; return; }
-  # Its apps' renderer (#204, finding 290): llvmpipe on NVIDIA, up and ls saying so; a GPU elsewhere, nothing said.
+  # Its apps' renderer (#204, findings 290, 294): on the GPU, NVIDIA's too since its card placeholder;
+  # nothing said.
   if ! command -v eglinfo >/dev/null; then skip "apps' renderer said" "no eglinfo (mesa-utils) here"
-  elif [ "$m0" = WAYLAND-1 ]; then
-    check_match "up on NVIDIA: says its apps render in software, once" "^omabox: box '$B': its apps render on llvmpipe, in software" "$out"
-    check_eq "...once" 1 "$(grep -c 'in software' <<<"$out")"
-    check_eq "ls --json: client_render software" "true llvmpipe" "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .client_render | "\(.software) \(.renderer | sub(" .*"; ""))"')"
-    check_match "ls: an apps line under it" "^  apps: llvmpipe, in software" "$("$CLI" ls | awk -v b="$B" '$1 == b { on = 1; next } /^[^ ]/ { on = 0 } on && /apps:/')"
   else
     check_eq "up on $(lib render_driver "$n"): nothing said of its apps' renderer" "" "$(grep 'in software' <<<"$out")"
     check_eq "...ls --json: client_render on the GPU" false "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .client_render.software')"
@@ -8134,7 +8148,7 @@ t_unit_gpu() {
   check_eq "...nor from no output (no eglinfo)" "" "$(lib egl_render </dev/null)"
   local soft='{"renderer":"llvmpipe (LLVM 22.1.8, 256 bits)","software":true}'
   check_match "soft_note: llvmpipe in an NVIDIA box, why, and a box on the other GPU" \
-    "^its apps render on llvmpipe, in software \(NVIDIA's EGL does not initialise in a box.*omabox gpu counts none of their drawing; for GPU rendering, a box on another GPU: OMABOX_RENDER_NODE=/dev/dri/renderD128 omabox up --new \(renderD128 is amdgpu\)$" \
+    "^its apps render on llvmpipe, in software \(NVIDIA's EGL did not initialise in it.*omabox gpu counts none of their drawing; for GPU rendering, a box on another GPU: OMABOX_RENDER_NODE=/dev/dri/renderD128 omabox up --new \(renderD128 is amdgpu\)$" \
     "$(lib soft_note "$soft" nvidia "renderD128 amdgpu")"
   check_match "...no other GPU: a baseline in the same box" "this machine has no other GPU: compare against a baseline measured in this same box$" "$(lib soft_note "$soft" nvidia "")"
   check_match "...an interactive box (no GPU of its own): a baseline" "omabox gpu counts none of their drawing; compare against a baseline" "$(lib soft_note "$soft" "")"
