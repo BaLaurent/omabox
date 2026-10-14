@@ -78,8 +78,8 @@ ref: Screen size and rendering cost.
 ## Driving an app
 
 1. **Look, act once, look again; with text when text can tell.** Exit 0 from `keys`/`click` means
-   sent, not landed. `--wait`'s line, `windows`, `wait`, `events`, `log --grep` answer what needs no
-   pixels; a shot for what does.
+   sent, not landed. `tree --find TEXT` (a label, a checked box), `--wait`'s line, `windows`, `wait`,
+   `events`, `log --grep` answer what needs no pixels; a shot for what does.
 2. **Never resend input you have not seen land.** Sending again types twice or toggles back. 124
    after `--wait` means it WAS sent and the screen did not settle as expected: shot first.
 3. **Type only into a field you have seen focused**, or `keys --window SEL`.
@@ -92,10 +92,10 @@ No `sleep`: `--wait` and `omabox wait` (0 yes, 124 not in time, 1 cannot tell). 
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
 discard it) click with `--in THAT.png X Y`, never your own arithmetic. A shot bigger than the model
 sees is scaled down for it, and some models read points in that smaller image (Haiku 4.5: 0.76x):
-to click off a whole screen or a big window, `shot --fit 1456` (16:9 on Claude) and `click --in` it,
+to click off a whole screen or a big window, `shot --fit 1456` and `click --in` it,
 whatever the model; still missing: `omabox calibrate`. **Shots are most of a session's context**:
 the smallest that shows it (`--window`, `-g`, `--fit 1280`), text first; what an action changed
-`shot --changed` (nothing changed: no image); a colour `omabox pixel`, a transition `shot --burst N --sheet`.
+`shot --changed`; a colour `omabox pixel`, a transition `shot --burst N --sheet`.
 ref: Shots. **The pointer is test state**
 (focus follows it; it stays where the last command left it): ref: Pointer, in detail.
 

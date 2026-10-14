@@ -74,7 +74,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
 
 1. Packages (`PKGS` in install.sh): labwc, wlr-randr, bubblewrap, util-linux, iproute2, passt, jq,
    grim, gnome-keyring, libsecret, python (the guard's Codex check), the tools' build deps (wayland,
-   libxkbcommon, base-devel, pkgconf), aquamarine's build deps, and what the box runs that Omarchy
+   libxkbcommon, base-devel, pkgconf, libpng; at-spi2-core and glib2 for tools/tree, finding 317),
+   aquamarine's build deps, and what the box runs that Omarchy
    already has (quickshell, gtk3, xdg-terminal-exec, dbus). `sudo pacman -S --needed` only for the
    missing ones.
 2. aquamarine's fix into a private prefix, `omabox setup --aquamarine` (only headless NVIDIA boxes
@@ -89,7 +90,7 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    (installed beside the old one, then swapped in). It must provide the soname the installed Hyprland
    links (`ldd $(command -v Hyprland)`), or `up` skips it for the system's; only the nested Hyprland
    loads it. Outside a checkout it goes to `~/.local/share/omabox/aquamarine`.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `relay`, `events`
+3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `burst`, `tree`, `relay`, `events`
    (need `wayland-scanner`; protocol XML is vendored).
 4. `omabox setup` (finding 126): links `~/.local/bin/omabox` → `bin/omabox`; `skill/` as
    `skills/omabox` in `~/.agents` and `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when
@@ -6364,6 +6365,41 @@ from them.
     noise within and beyond the tolerance, a swapped pair, x and y apart, above 1; the answer's forms
     and refusals; the command's verdicts and exit codes, nothing set); scale_on (t_scale,
     t_scale_nvidia): the card is the size of a scale-2 box's shot, and of a scale-2 + scale-1 layout's.
+317. **`omabox tree`: a window's accessibility tree as text, query-first** (2026-10-14, #178; the
+    build finding 244 decided, on the a11y bus finding 264 starts). **A C helper, not python-gobject**:
+    `tools/tree` (`omabox-tree`, bound read-only at `/opt/omabox/bin` like tools/burst, refusing
+    outside a box) against libatspi and GIO. libatspi comes with at-spi2-core, which gtk3 and gtk4
+    pull in (Omarchy has both), so it adds no runtime package; python-gobject is only there through
+    other packages (nautilus-python, udiskie...), not Omarchy's own. Build deps: at-spi2-core (its
+    headers), glib2, pkgconf (install.sh's PKGS). `tree` runs it by `box_exec` (the box's session bus
+    and pid numbering): the window is `--window SEL` (default the active one), its pid as Hyprland has
+    it is the AT-SPI application's (finding 244), the frame is the one named as the window's title
+    (else one whose name and the title hold each other, else the application's only one); the
+    applications of that pid with nothing under them are skipped (Qt's empty first registration).
+    Before reading, the helper asks `org.a11y.Bus.GetAddress` (no bus: exit 4, "down and up again",
+    so an AT-SPI client never aborts on a missing bus, finding 244's `dbind-ERROR`) and sets
+    `org.a11y.Status.IsEnabled` when it is off, then waits up to 3 s for the pid's application to
+    register again: a Qt Quick app started before the first `tree` answered on the first call. Set by
+    `tree`, not at `up`: a box nobody asks keeps Qt (the shell too) with accessibility off. Output as
+    the spike's compact form (role, "name", 'text', =value, [states], @X,Y WxH in window coordinates,
+    anonymous containers, hidden nodes, a control's own label and nodes wholly outside the window's
+    size left out; `--all` keeps them; at most 4000 nodes, 500 children a node). `--find TEXT`: only
+    the lines whose role, name, text, value or states hold TEXT (any case; the bounds are not
+    searched), each after its printed ancestors joined by ` > ` (the window itself left out); exit 1
+    when none. `--json`: an array of the printed nodes (with `path` under --find). No tree: "no
+    accessibility tree" with the reason (not on the bus: foot; on it with no window: Quickshell) and
+    which apps have one, exit 1; a Chromium/Electron window that shows only its frame gets the
+    `--force-renderer-accessibility` note. **Checked in boxes** (NVIDIA, renderD129): the GTK4
+    and Qt Quick demos of the spike, Chromium with and without the flag, foot; a GTK4 window in a
+    scale-2 box (bounds and `click --window` both in logical pixels: the click checked the box).
+    ~0.1-0.25 s a call. **Left**: `click --name TEXT` (#178's item 4; with the dock-widget check);
+    an unnamed control beside its label (a GTK4 switch after "Wi-Fi") is found by its role, not the
+    label's text (no labelled-by relation in the demo to follow). t_tree (Qt Quick before any `tree`:
+    IsEnabled off, then on, `--find` a check box's and a switch's state and an entry's text, a click
+    at the bounds' middle checks it; GTK4: the whole tree's frame at 0,0 and a selected row under its
+    list, `--find`'s path, `--json`, the click, a `--find` matching nothing; foot: no tree, exit 1;
+    a missing window), t_unit_pointer's loop (`omabox-tree` refuses outside a box), the broker
+    lets a jailed agent run it.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

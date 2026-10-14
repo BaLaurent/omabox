@@ -99,6 +99,7 @@ omabox shot                            # screenshot; prints the PNG path (--fit 
 omabox windows                         # the box's windows, where they are, what covers them
 omabox shot --window myapp             # one window's own pixels, covered or on another workspace too
 omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … --zoom 8: 1 px detail
+omabox tree --find 'dark mode'         # text, not a shot: check box "Dark mode" [checked] @12,148 1872x26
 omabox shot --changed --window myapp   # only what changed since its last shot, cropped
 omabox shot --burst 12 --sheet --after -- keys super+space   # a transition in frames
 omabox record start -o demo.mp4        # a video of the screen; omabox record stop prints the file
@@ -623,6 +624,7 @@ Wayland connection.
 | `tools/peek` | the live view-only window (`omabox peek`) |
 | `tools/still` | waits in a box until its screen holds still or changes (`omabox wait`, `--wait`) |
 | `tools/burst` | takes a `shot --burst`'s frames through one capture client (Hyprland's screencast events once a burst) |
+| `tools/tree` | reads a window's accessibility (AT-SPI) tree in a box, as text (`omabox tree`) |
 | `tools/events` | records a box's Hyprland events, stamped, from its start (`omabox events`) |
 | `tools/relay` | carries an omabox command from inside ai-jail to the broker outside (`omabox broker`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |

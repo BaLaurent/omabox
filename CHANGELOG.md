@@ -7,6 +7,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **Text instead of a shot: `omabox tree`.** A window's accessibility tree as compact text: each
+  control's role, name, text, value and state (checked, focused, selected...) with its bounds in the
+  coordinates `click --window` takes. Ask first: `omabox tree --find 'dark mode'` prints the one
+  line that answers "is Dark mode checked?" (~17 tokens against a shot's ~1.5k), and the middle of
+  its bounds is where to click. For GTK and Qt apps (`tree` turns Qt's tree on), and Chromium or
+  Electron started with `--force-renderer-accessibility`; a terminal or the Omarchy shell says "no
+  accessibility tree" (#178).
 - **`omabox calibrate`: does this model need `--fit` to click right?** It draws a test card the size
   of a full shot of the box, six lettered crosses at random points; the agent reads it as it reads a
   shot and answers where it sees them (`omabox calibrate --answer "A X,Y B X,Y ..."`). omabox fits the

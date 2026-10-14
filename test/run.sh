@@ -4329,6 +4329,106 @@ t_dbus_user_app() {
   check "down" ob down "$B"
 }
 
+# omabox tree (#178, finding 317): a window's accessibility tree as text, query-first. A Qt Quick and a
+# GTK4 window answer a state question with --find, and the bounds the line gives, handed to `click
+# --window`, land on that control (the tree then says it changed); foot has no tree, and says so.
+# The middle of a tree line's bounds (`@X,Y WxH`), as "X Y".
+tree_mid() {
+  [[ $1 =~ @(-?[0-9]+),(-?[0-9]+)\ ([0-9]+)x([0-9]+)$ ]] || return 1
+  echo "$((BASH_REMATCH[1] + BASH_REMATCH[3] / 2)) $((BASH_REMATCH[2] + BASH_REMATCH[4] / 2))"
+}
+t_tree() {
+  local B=$P-tree H out rc mid
+  check "up" ob up "$B" --no-shell
+  H=$(ob path -b "$B")/home
+  check_eq "IsEnabled is off at up (Qt apps export nothing yet)" "b false" \
+    "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled 2>&1)"
+  # Qt Quick first, started before any tree: `tree` turns IsEnabled on and waits for it to register.
+  if ob run -b "$B" -- sh -c 'command -v qml6' >/dev/null 2>&1; then
+    cat > "$H/tree-demo.qml" <<'QML'
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+ApplicationWindow {
+    width: 480; height: 300; visible: true; title: "Tree demo QML"
+    ColumnLayout {
+        anchors.fill: parent; anchors.margins: 12
+        TextField { text: "hello qt"; Layout.fillWidth: true }
+        CheckBox { text: "Enable sync"; checked: true }
+        CheckBox { text: "Dark mode" }
+        Switch { text: "Wi-Fi"; checked: true }
+    }
+}
+QML
+    ob run -b "$B" -d -- qml6 /home/sbx/tree-demo.qml >/dev/null 2>&1
+    ob wait -b "$B" --timeout 20s window 'title:^Tree demo QML$' >/dev/null
+    out=$(ob tree -b "$B" --window 'Tree demo QML' --find 'dark mode' 2>&1)
+    check_match "Qt: tree --find answers 'is Dark mode checked?' in one line" '^check box "Dark mode" \[unchecked\] @[0-9]+,[0-9]+ [0-9]+x[0-9]+$' "$out"
+    check_eq "...IsEnabled is on now" "b true" \
+      "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled 2>&1)"
+    check_match "...a switch's state" '^check box "Wi-Fi" \[checked\]' "$(ob tree -b "$B" --window 'Tree demo QML' --find wi-fi 2>&1)"
+    check_match "...an entry's text" "^text 'hello qt' \\[editable\\]" "$(ob tree -b "$B" --window 'Tree demo QML' --find 'hello' 2>&1)"
+    if mid=$(tree_mid "$out"); then
+      # shellcheck disable=SC2086 # X Y
+      ob click -b "$B" --window 'Tree demo QML' --wait $mid >/dev/null 2>&1
+      check "...a click at its bounds' middle (click --window $mid) checks it" until_ok 5 \
+        bash -c "'$CLI' tree -b '$B' --window 'Tree demo QML' --find 'dark mode' | grep -q '^check box \"Dark mode\" \[focused checked\]'"
+    else no "...a click at its bounds' middle checks it" "no bounds in [$out]"; fi
+  else
+    skip "tree of a Qt Quick window" "no qml6 (qt6-declarative)"
+  fi
+  if ob run -b "$B" -- python3 -c 'import gi; gi.require_version("Gtk", "4.0")' >/dev/null 2>&1; then
+    cat > "$H/tree-demo.py" <<'PY'
+import gi
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gtk
+def build(app):
+    win = Gtk.ApplicationWindow(application=app, title="Tree demo GTK4")
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=12, margin_start=12, margin_end=12)
+    box.append(Gtk.Entry(text="hello gtk"))
+    box.append(Gtk.CheckButton(label="Dark mode", active=False))
+    lb = Gtk.ListBox()
+    for t in ("Alpha", "Beta", "Gamma"):
+        lb.append(Gtk.Label(label=t, xalign=0))
+    lb.select_row(lb.get_row_at_index(1))
+    box.append(lb)
+    win.set_child(box)
+    win.present()
+app = Gtk.Application(application_id="org.omabox.TreeDemo")
+app.connect("activate", build)
+app.run(None)
+PY
+    ob run -b "$B" -d -- python3 /home/sbx/tree-demo.py >/dev/null 2>&1
+    ob wait -b "$B" --timeout 20s window 'title:^Tree demo GTK4$' >/dev/null
+    out=$(ob tree -b "$B" --window 'Tree demo GTK4' 2>&1)
+    check_match "GTK4: the whole tree starts with its window, at 0,0" '^frame "Tree demo GTK4" \[[a-z ]*\] @0,0 ' "$out"
+    check_match "...a selected row, under its list" $'\n  list @[^\n]*\n    list item "Alpha" [^\n]*\n    list item "Beta" \\[selected\\]' "$out"
+    check_match "...--find prints a match after its ancestors" '^list > list item "Beta" \[selected\] @' \
+      "$(ob tree -b "$B" --window 'Tree demo GTK4' --find beta 2>&1)"
+    check_eq "...--json: the entry's text, as jq reads it" "hello gtk" \
+      "$(ob tree -b "$B" --window 'Tree demo GTK4' --find hello --json 2>&1 | jq -r '.[0].text' 2>&1)"
+    out=$(ob tree -b "$B" --window 'Tree demo GTK4' --find 'dark mode' 2>&1)
+    check_match "...--find answers 'is Dark mode checked?'" '^check box "Dark mode" \[unchecked\] @' "$out"
+    if mid=$(tree_mid "$out"); then
+      # shellcheck disable=SC2086 # X Y
+      ob click -b "$B" --window 'Tree demo GTK4' --wait $mid >/dev/null 2>&1
+      check "...a click at its bounds' middle (click --window $mid) checks it" until_ok 5 \
+        bash -c "'$CLI' tree -b '$B' --window 'Tree demo GTK4' --find 'dark mode' | grep -q '^check box \"Dark mode\" \[focused checked\]'"
+    else no "...a click at its bounds' middle checks it" "no bounds in [$out]"; fi
+    rc=0; out=$(ob tree -b "$B" --window 'Tree demo GTK4' --find 'no such words' 2>&1) || rc=$?
+    check_eq "...--find with nothing matching: 1, and says so" "1 yes" "$rc $(grep -q 'nothing in the window holds "no such words"' <<<"$out" && echo yes)"
+  else
+    skip "tree of a GTK4 window" "no GTK4 or python-gobject"
+  fi
+  ob run -b "$B" -d -- foot --app-id=omabox.tree >/dev/null 2>&1
+  ob wait -b "$B" --timeout 20s window omabox.tree >/dev/null
+  rc=0; out=$(ob tree -b "$B" --window omabox.tree 2>&1) || rc=$?
+  check_eq "foot: no accessibility tree, said, exit 1" "1 yes" "$rc $(grep -q 'no accessibility tree' <<<"$out" && echo yes)"
+  check_match "...and where one is to be had" "force-renderer-accessibility.*terminals" "$out"
+  check_match "a window that is not there: the box's windows listed" "no window matches nosuchwindow" "$(ob tree -b "$B" --window nosuchwindow 2>&1)"
+  check "down" ob down "$B"
+}
+
 t_systemd() {
   local B=$P-sd
   check "up --systemd --net isolated" ob up "$B" --systemd --net isolated
@@ -8837,6 +8937,7 @@ t_unit_pixel() {
   check_match "pixel: --in or --window" "not both" "$(ob pixel -b "$P-x" --in a.png -w x 1 1 2>&1)"
   check_match "pixel: at most 32 points" "at most 32" "$(ob pixel -b "$P-x" $(seq 66) 2>&1)"
   check "pixel is a jailed agent's" lib broker_check pixel
+  check "tree is a jailed agent's (#178)" lib broker_check tree
   check_match "shot --zoom needs -g" "goes with -g" "$(ob shot -b "$P-x" --zoom 4 2>&1)"
   check_match "shot --zoom 2-16" "takes 2-16" "$(ob shot -b "$P-x" -g "0,0 9x9" --zoom 17 2>&1)"
   check_match "shot --zoom or --fit" "not both" "$(ob shot -b "$P-x" -g "0,0 9x9" --zoom 4 --fit 100 2>&1)"
@@ -9625,7 +9726,7 @@ t_unit_pointer() {
   # would drive the real desktop. Checked in a sandbox with no /opt/omabox, no runtime dir, no display.
   local t out rc
   local arg
-  for t in keyboard pointer still events; do
+  for t in keyboard pointer still events tree; do
     arg=(); [ "$t" != events ] || arg=(/dev/null)   # (events wants its file first, or it says its usage)
     rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /run \
       --die-with-parent env -i "$ROOT/tools/$t/omabox-$t" "${arg[@]}" 2>&1) || rc=$?
@@ -10438,7 +10539,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

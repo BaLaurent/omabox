@@ -20,6 +20,7 @@ KEYBOARD=$ROOT/tools/keyboard/omabox-keyboard
 PEEK=$ROOT/tools/peek/omabox-peek
 STILL=$ROOT/tools/still/omabox-still
 BURST=$ROOT/tools/burst/omabox-burst
+TREE=$ROOT/tools/tree/omabox-tree
 EVENTS=$ROOT/tools/events/omabox-events
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
 RELAY=$ROOT/tools/relay/omabox-relay
@@ -103,6 +104,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..."    where you see each mark: 1:1, or the --fit N that maps it
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
+  omabox tree [-b NAME] [--window SEL] [--find TEXT] [--json] [--all]   a window's accessibility tree as text
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
                [--steps N] [--mod MODS]                  --steps: travel there; --mod ctrl: ctrl-click
@@ -394,6 +396,17 @@ last \`calibrate\` here drew (one per session or repo), or CARD.
 by eye, is not the one drawn. Several points in one call print "X,Y #rrggbb" each. The screen's pixels
 are what is shown: the pointer drawn over them, a window through Omarchy's opacity; --window reads
 that window's own pixels (its coordinates, covered or not). --in SHOT maps that image's pixels.
+@ tree
+\`tree\` prints a window's accessibility tree as text (--window SEL; none: the active window): a
+line a node, \`role "name" 'text' =value [states] @X,Y WxH\`, indented by level; anonymous containers,
+hidden nodes and what lies outside the window are left out (--all keeps them). The bounds are the
+window's own coordinates: \`click --window SEL\` at their middle lands on that node. Ask first, read
+whole later: --find TEXT prints only the lines holding TEXT (any case, not in the bounds), each after
+its ancestors (\`list > list item "Beta" [selected] @12,354 1872x22\`); exit 1 when none does.
+--json: an array, one object a node printed. GTK and Qt apps have a tree (\`tree\` sets
+org.a11y.Status.IsEnabled, which Qt waits for); Chromium and Electron only when started with
+--force-renderer-accessibility; terminals, the Omarchy shell and its plugins have none: "no
+accessibility tree", exit 1.
 @ drag
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
@@ -976,6 +989,7 @@ BOX_KEYBOARD=/opt/omabox/bin/omabox-keyboard
 BOX_POINTER=/opt/omabox/bin/omabox-pointer
 BOX_STILL=/opt/omabox/bin/omabox-still
 BOX_BURST=/opt/omabox/bin/omabox-burst
+BOX_TREE=/opt/omabox/bin/omabox-tree
 BOX_EVENTS=/opt/omabox/bin/omabox-events
 
 # Run a tool against the box's compositor (grim, hyprctl, the keyboard and pointer), inside the box's
@@ -3110,6 +3124,8 @@ cmd_up() {
   # shot --burst's one capture client (#196); without it (an install from before) a burst takes a grim
   # a frame, as it did.
   [ ! -x "$BURST" ] || args+=(--ro-bind "$BURST" "$BOX_BURST")
+  # `tree`'s reader of the box's accessibility bus (#178); without it, `tree` says to start the box again.
+  [ ! -x "$TREE" ] || args+=(--ro-bind "$TREE" "$BOX_TREE")
   # A private aquamarine (finding 125), which share/start-hyprland.sh puts first; none: the system's.
   [ -z "$AQ_LIB" ] || args+=(--ro-bind "$AQ_LIB" /opt/omabox/lib)
   for n in "${renders[@]}"; do args+=(--dev-bind "$n" "$n"); done
@@ -6097,6 +6113,56 @@ cmd_pixel() {
     else echo "${xy[i]},${xy[i + 1]} $hex"; fi
   done
   rm -f "$f"
+}
+
+# --- tree (#178, finding 317) -------------------------------------------------------------------
+# A window's accessibility tree as text, read by tools/tree in the box (its session bus, its pids):
+# the app by the pid Hyprland has for the window (the AT-SPI application's, finding 244), the window
+# by its title, only what is inside it, in the coordinates `click --window` takes. Query-first: a
+# dense window's whole tree costs more than its shot; `--find TEXT` is the line that answers.
+cmd_tree() {
+  local name="" sels=() find="" json=0 all=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --active) sels+=(active) ;;
+      --find) optarg "$@"; find=$2; shift ;;
+      --json) json=1 ;;
+      --all) all=1 ;;
+      -h|--help) usage tree; return ;;
+      -*) die "tree: unknown option $1" ;;
+      *) die "tree: unexpected $1 (the window is --window SEL; text to look for, --find TEXT)" ;;
+    esac
+    shift
+  done
+  select_box "$name"; need_box; shell_note
+  local wins w pid title size
+  wins=$(box_windows) || exit $?
+  [ ${#sels[@]} -gt 0 ] || sels=(active)
+  w=$(win_select "$wins" "${sels[@]}")
+  pid=$(jq -r .pid <<<"$w") title=$(jq -r .title <<<"$w") size=$(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w")
+  [[ $pid =~ ^[1-9][0-9]*$ ]] || die "tree: window $(win_desc "$w") has no pid to find its app by ($pid)"
+  on_box test -x "$BOX_TREE" 2>/dev/null ||
+    die "box '$NAME' has no $BOX_TREE (started by an omabox without it): omabox down $NAME, then up again"
+  local args=(--pid "$pid" --title "$title" --size "$size") err rc=0
+  [ -z "$find" ] || args+=(--find "$find")
+  [ $json = 0 ] || args+=(--json)
+  [ $all = 0 ] || args+=(--all)
+  err=$(mktemp)
+  box_exec timeout 30 "$BOX_TREE" "${args[@]}" 2>"$err" || rc=$?
+  local why; why=$(sed 's/^omabox-tree: //' "$err"); rm -f "$err"
+  case $rc in
+    0) [ -z "$why" ] || say "tree: $why" ;;
+    1) say "tree: $why"; exit 1 ;;
+    3) say "tree: $(win_desc "$w"): $why"
+       say "GTK and Qt apps have one; Chromium and Electron only when started with --force-renderer-accessibility; terminals (foot), the Omarchy shell and its plugins have none: look with a shot (shot --window SEL)"
+       exit 1 ;;
+    4) die "tree: ${why:-no accessibility bus} (a box started by an omabox before 0.5.3, or with --env ATSPI_DBUS_IMPLEMENTATION=dbus-broker: omabox down $NAME, then up again)" ;;
+    124) die "tree: $(win_desc "$w") did not answer in 30 s (busy or hung?)" ;;
+    *) box_alive || die "tree: box '$NAME' went down"
+       die "tree: reading the tree failed${why:+: $why} (status $rc)" ;;
+  esac
 }
 
 # shot --burst N (#132, finding 212): N frames of the same capture, 100 ms or --every apart (0: back
@@ -10911,7 +10977,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|pixel|windows|keys|click|scroll|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|monitor|gpu|cpu|audio|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|pixel|windows|tree|keys|click|scroll|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|monitor|gpu|cpu|audio|env|path|down|ls|list) ;;
     # ports (#93): the jail's own boxes (list_names), with the host side named by state only (cmd_ports).
     ports) ;;
     help|-h|--help|version|-V|--version) ;;
@@ -11193,7 +11259,7 @@ cmd_saves() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot record pixel calibrate windows keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip "
+BOX_CMDS=" up run shot screenshot record pixel calibrate windows tree keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box) ;; *) return 0 ;; esac
@@ -11243,6 +11309,7 @@ main() {
     pixel) cmd_pixel "$@" ;;
     calibrate) cmd_calibrate "$@" ;;
     windows) cmd_windows "$@" ;;
+    tree) cmd_tree "$@" ;;
     keys) cmd_keys "$@" ;;
     keys-to-box) cmd_keys_to_box "$@" ;;
     click) cmd_click "$@" ;;

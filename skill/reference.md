@@ -30,6 +30,19 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 
 ## Shots
 
+- Text before a shot, when the question is a label, an entry's text or a state: `omabox tree --find
+  TEXT [--window SEL]` prints the lines of the window's accessibility tree that hold TEXT (any case),
+  each after its ancestors: `check box "Dark mode" [checked] @12,148 1872x26` (~17 tokens against a
+  shot's ~1.5k). A line is role, "name", 'text', =value (slider, spin button, combo choice), [states]
+  (checked/unchecked, focused, selected, editable, disabled...) and @X,Y WxH in the window's own
+  coordinates: `click --window SEL` at the middle of those bounds lands on it (a control in a Qt dock
+  widget is placed relative to the dock: check with a shot). `tree` alone prints the whole window
+  (no SEL: the active one); a dense one (an editor, a long page) costs more than its shot, so ask
+  with `--find`. `--json` for a script; exit 1 when nothing holds TEXT. GTK and Qt apps have a tree
+  (`tree` turns Qt's on); Chromium and Electron only when started with `--force-renderer-accessibility`
+  (start them so when you will ask); terminals (foot), the Omarchy shell, its plugins and bar widgets
+  have none and say "no accessibility tree": shots for those. An unnamed control (a switch beside its
+  label) matches by its role (`--find switch`), or read the whole tree.
 - `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a
   title; `title:RE`, `class:RE`, `pid:N` or an address (`0x…`) narrow it; `wait window SEL` is
   satisfied by any window it matches. `shot --window SEL -g "X,Y WxH"` crops the window in its own
