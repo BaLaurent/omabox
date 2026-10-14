@@ -55,6 +55,11 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   Whoever runs a small model sets it once: `omabox config shot-fit 1456` (or `OMABOX_SHOT_FIT=1456`)
   makes every shot `--fit 1456` unless one is given (stderr says so, `click --in` maps it); `--fit 0`
   is one full-size shot (small text, or a baseline for `--changed`). The setting is the user's.
+  For the model at hand, measure it: `omabox calibrate` draws a test card the size of a full shot
+  (no box needed) with six lettered crosses; Read it as you read a shot and answer where each cross's
+  centre is, `omabox calibrate --answer "A X,Y B X,Y …"`. It says whether full size reads 1:1, else
+  the `--fit N` that maps your readings back within a few pixels and the `config shot-fit N` to
+  suggest to the user (never set it), or that no one scale fits (read a new card again).
 - One image outweighs anything omabox prints as text. Take the smallest that shows it: `shot --window
   SEL` for one app, `-g "X,Y WxH"` for the part under test (a menu, a field, a bar widget), `--fit
   1280` for a whole screen's layout (full size to read small text). `--wait`'s `at X,Y WxH` is the
@@ -89,7 +94,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 | Context filling up with screenshots | Text checks first (`windows`, `wait`, `events`, `log --grep`); `shot --window`, `-g`, `--fit 1280`. |
 | Text went to the wrong window | `keys --window SEL`, or click the field and see it focused. `keys --window` refusing with "a layer (NAME) has the keyboard": a launcher or menu is open and would take the keys: Escape it (twice if its field has text) or close it, then again. |
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
-| Clicks land up and to the left of what you read, more so further from 0,0 | You read points in the scaled-down image you were shown: `shot --fit 1456` and `click --in` it (Shots). |
+| Clicks land up and to the left of what you read, more so further from 0,0 | You read points in the scaled-down image you were shown: `shot --fit 1456` and `click --in` it; `omabox calibrate` measures the size for you (Shots). |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
 | `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
 | `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new` with those options (it starts the box), then `-b box-N` as it printed. |

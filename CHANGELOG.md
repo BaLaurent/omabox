@@ -7,6 +7,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **`omabox calibrate`: does this model need `--fit` to click right?** It draws a test card the size
+  of a full shot of the box, six lettered crosses at random points; the agent reads it as it reads a
+  shot and answers where it sees them (`omabox calibrate --answer "A X,Y B X,Y ..."`). omabox fits the
+  readings and says whether full-size shots read 1:1, else the `--fit N` whose shots, with `click
+  --in`, land within a few pixels, and the `omabox config shot-fit N` to suggest to you (it never sets
+  it), or that no one scale fits (read again). For any model and harness, without knowing either
+  (#188).
 - **Your desk's whole shell in a box: `omabox up --desk-shell`.** Every plugin in
   `~/.config/omarchy/plugins` (read-only, as `--plugin` mounts one; a `--plugin` of the same id wins,
   for your working copy), your `shell.json` as it is (only idle held off), and the other files in

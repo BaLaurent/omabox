@@ -6334,6 +6334,36 @@ from them.
     `shell.json` has them, the off one off unsaid; its `shell.json` key kept, idle held off; the
     plugin's JSON and folder in the box; no secret, link target, hook or git dir; plugins
     read-only). Not run on the real desk (26 plugins): the selection is said at `up`, to check there.
+316. **`omabox calibrate`: the shot size a model reads click points at** (2026-10-14, #188; the last
+    part finding 251 left). Whether `click X Y` off a full-size shot lands depends on the model and
+    its harness (Haiku 4.5 read points 0.76x), and neither omabox nor the agent knows which it runs
+    under. `calibrate` draws a test card the size of a full shot of the box (layout x the highest
+    scale, as `shot` takes it, finding 299; asked through omabox's own `hyprctl`, so a jailed agent's
+    goes by its broker; 1920x1080 with no box up, `--size WxH` for another): six red crosses in rings,
+    A-F, one in each cell of a 3 x 2 grid at a random point of its middle, letters shuffled, on plain
+    grey. Drawn on the host with magick (no box, ~0.15 s): a box's card window would have been a shot
+    of the same pixels, slower. The marks go in the PNG's comment, which the model is not shown; the
+    card goes to `$TMPDIR/omabox-calibrate-<default name>.png` (or CARD), so `calibrate --answer "A
+    X,Y ..."` finds it without being told. The answer (lenient: case, colons, brackets, decimals; at
+    least 3 marks) is fitted by least squares through the origin (a harness scales, it does not
+    shift), over the marks near the median of every X and Y ratio, so one misread mark does not drag
+    it, and every mark is checked against the result to within max(8, longest side / 160) px (12 on
+    1920): all within at 1:1 is "read 1:1"; a consistent scale S < 1 gives `--fit N`, N = S x the
+    longest side to the nearest 8 (0.758 of 1920: 1456), with the error of those readings mapped back
+    as `click --in` would, the `omabox config shot-fit N` to suggest (the user's setting: printed,
+    never set; "already" when it is) and a check card (`--size 1456x819` should read 1:1); marks off
+    the scale (a swap names the two), x and y at different scales, or a scale above 1 are "no single
+    scale fits", exit 1: a new card and another read, else points off shots are not reliable there.
+    **A real run** (Opus 5.5 in Claude Code, reading the card with its Read tool): a 1920x1080 card
+    read exactly (every mark within 0 px: 1:1). A 3840x2160 card was shown at 2000x1125 with
+    Claude Code's "multiply coordinates by 1.92" note: following it read 1:1 (within 2 px); the
+    raw readings in the image shown gave 0.521x and `--fit 2000` (2000x1125), exactly the size
+    Claude Code had scaled it to. Haiku was not run here (the issue's table is the evidence for it).
+    Tests: t_unit_calibrate (the marks: letters, margins, spread, seeds; the card's size, comment and
+    each cross's red at its point; the fitting: 1:1, 0.758x, 0.5x, 4K at 0.379x, a portrait card,
+    noise within and beyond the tolerance, a swapped pair, x and y apart, above 1; the answer's forms
+    and refusals; the command's verdicts and exit codes, nothing set); scale_on (t_scale,
+    t_scale_nvidia): the card is the size of a scale-2 box's shot, and of a scale-2 + scale-1 layout's.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

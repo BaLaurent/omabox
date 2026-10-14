@@ -1107,6 +1107,92 @@ t_unit_shot_fit() {
   check "...removing its line" bash -c "! grep -q shot-fit '$h/.config/omabox/config'"
 }
 
+# calibrate (#188): the card's marks, the fitting of readings to them, the answer's forms, the verdict.
+t_unit_calibrate() {
+  local d=$TMP/calib; mkdir -p "$d"
+  # cal_reads MARKS S [NOISE]: each mark read at S, plus up to NOISE px either way (a fixed seed).
+  cal_reads() { awk -v s="$2" -v n="${3:-0}" 'BEGIN { srand(11) } { printf "%s %.0f %.0f\n", $1, $2 * s + n * (2 * rand() - 1), $3 * s + n * (2 * rand() - 1) }' <<<"$1"; }
+  local m sz w h bad="" sp=""
+  for sz in 1920x1080 2560x1440 3840x2160 1080x1920 800x600; do
+    w=${sz%x*} h=${sz#*x}
+    for seed in 1 2 3; do
+      m=$(lib calib_marks "$w" "$h" "$seed")
+      [ "$(cut -d' ' -f1 <<<"$m" | tr -d '\n')" = ABCDEF ] || bad+=" $sz/$seed:letters"
+      awk -v w="$w" -v h="$h" '$2 < 0.08 * w - 1 || $2 > 0.92 * w || $3 < 0.08 * h - 1 || $3 > 0.92 * h { e = 1 } END { exit e }' <<<"$m" || bad+=" $sz/$seed:edge"
+      # Spread over the card: no two marks closer than a tenth of its short side.
+      awk -v w="$w" -v h="$h" '{ x[NR] = $2; y[NR] = $3 } END { for (i = 1; i <= NR; i++) for (j = i + 1; j <= NR; j++)
+        if (sqrt((x[i] - x[j]) ^ 2 + (y[i] - y[j]) ^ 2) < 0.1 * (w < h ? w : h)) exit 1 }' <<<"$m" || bad+=" $sz/$seed:close"
+      sp+=$(cut -d' ' -f1 <<<"$m" | head -3 | tr -d '\n')" "
+    done
+  done
+  check_eq "calib_marks: A-F, off the edges, spread out (5 sizes x 3 seeds)" "" "$bad"
+  check_eq "...the same seed, the same marks" "$(lib calib_marks 1920 1080 7)" "$(lib calib_marks 1920 1080 7)"
+  check "...another, other ones" test "$(lib calib_marks 1920 1080 7)" != "$(lib calib_marks 1920 1080 8)"
+  check "...letters not in reading order every time" test "$(tr ' ' '\n' <<<"$sp" | sort -u | wc -l)" -gt 1
+  # The card: its size, the marks kept in it, each cross red at its point, the card grey around it.
+  m=$(lib calib_marks 1920 1080 5)
+  lib calib_card "$d/c.png" 1920 1080 "$m"
+  check_eq "calib_card: the size asked" 1920x1080 "$(magick identify -format '%wx%h' "$d/c.png" 2>&1)"
+  check_eq "...calib_read gives its size and marks back" "1920 1080"$'\n'"$m" "$(lib calib_read "$d/c.png")"
+  local l x y px=""
+  while read -r l x y; do px+="$l:$(magick "$d/c.png" -format "%[hex:p{$x,$y}]" info: 2>&1) "; done <<<"$m"
+  check_eq "...each mark's centre is its cross's red" "$(cut -d' ' -f1 <<<"$m" | sed 's/$/:D4141E/' | tr '\n' ' ')" "$px"
+  check_eq "...the rest the card's grey" F2F2F2 "$(magick "$d/c.png" -format '%[hex:p{5,5}]' info: 2>&1)"
+  check_fails "...a PNG that is no card is refused" lib calib_read "$(magick -size 10x10 xc:white "$d/n.png" && echo "$d/n.png")"
+  # The fitting, on synthetic readings of this card.
+  fit() { lib calib_fit 1920 1080 "$m" "$1"; }
+  check_match "1:1 readings: one" "^one 0 " "$(fit "$m")"
+  check_match "...a few px off still is" "^one [0-9] " "$(fit "$(cal_reads "$m" 1 4)")"
+  check_match "0.758x (Haiku on 1920x1080): --fit 1456, 1456x819" "^fit 0.758 0.758 0.758 1456 1456x819 [0-2] " "$(fit "$(cal_reads "$m" 0.7583)")"
+  check_match "0.5x: --fit 960" "^fit 0.500 .* 960 960x540 [0-2] " "$(fit "$(cal_reads "$m" 0.5)")"
+  check_match "0.758x with 5 px of noise: still 1456, within the tolerance" "^fit 0.75[6-9] .* 1456 1456x819 ([0-9]|1[0-2]) " "$(fit "$(cal_reads "$m" 0.7583 5)")"
+  check_match "60 px of noise: no one scale" "^off 0\.[0-9]+ 12( [A-F]:[0-9]+)+$" "$(fit "$(cal_reads "$m" 0.7583 60)")"
+  check_fails "...exit 1" fit "$(cal_reads "$m" 0.7583 60)"
+  local sw; sw=$(cal_reads "$m" 0.7583 | awk 'NR == FNR { if ($1 == "B") b = $2 " " $3; if ($1 == "E") e = $2 " " $3; next }
+    $1 == "B" { $0 = "B " e } $1 == "E" { $0 = "E " b } 1' - <(cal_reads "$m" 0.7583))
+  check_match "B and E swapped: those two named, the scale the rest show" "^off 0.758 12 B:[0-9]+ E:[0-9]+$" "$(fit "$sw")"
+  check_match "readings past the marks (1.3x): up" "^up 1.300$" "$(fit "$(cal_reads "$m" 1.3)")"
+  check_match "x and y at different scales: off" "^off " "$(fit "$(awk '{ printf "%s %d %d\n", $1, $2 * 0.75, $3 * 0.6 }' <<<"$m")")"
+  local pm; pm=$(lib calib_marks 1080 1920 5)
+  check_match "a portrait card at 0.758x: 819x1456" "^fit 0.758 .* 1456 819x1456 " "$(lib calib_fit 1080 1920 "$pm" "$(cal_reads "$pm" 0.7583)")"
+  check_match "a 4K card at 0.379x: --fit 1456" "^fit 0.379 .* 1456 1456x819 " \
+    "$(m4=$(lib calib_marks 3840 2160 3); lib calib_fit 3840 2160 "$m4" "$(cal_reads "$m4" 0.3792)")"
+  # The answer's forms.
+  check_eq "calib_answer: A X,Y pairs" $'A 12 34\nB 56 78' "$(lib calib_answer "A 12,34 B 56,78")"
+  check_eq "...lower case, colons, brackets, decimals" $'A 12 34\nB 5.5 78\nC 1 2' "$(lib calib_answer "a: (12, 34); b=5.5,78 c 1 2")"
+  for bad in "" "A 12" "A 12,34 B" "AB 1,2" "A x,y" "A 1,2 A 3,4" "A -1,2"; do
+    check_fails "...'$bad' refused" lib calib_answer "$bad"
+  done
+  # The command: draw, then answer.
+  local h2=$d/home; mkdir -p "$h2"
+  cal() { HOME=$h2 OMABOX_SHOT_FIT=${CSF:-} "$CLI" calibrate "$@"; }
+  check_eq "calibrate -o: the card's path on stdout" "$d/card.png" "$(cal --size 1920x1080 -o "$d/card.png" 2>/dev/null)"
+  check_match "...and how to answer, on stderr" "calibrate .*card.png --answer \"A X,Y B X,Y" "$(cal --size 1920x1080 -o "$d/card.png" 2>&1 >/dev/null)"
+  check_eq "...the size asked" 1456x819 "$(cal --size 1456x819 -o "$d/c2.png" >/dev/null 2>&1; magick identify -format '%wx%h' "$d/c2.png" 2>&1)"
+  for bad in 1920 1920x 10x10 99999x1080 axb; do check_fails "...--size $bad refused" cal --size "$bad" -o "$d/c3.png"; done
+  m=$(lib calib_read "$d/card.png" | tail -n +2)
+  local out rc
+  out=$(cal "$d/card.png" --answer "$(tr '\n' ' ' <<<"$m")" 2>&1); rc=$?
+  check_match "--answer 1:1: says so, exit 0" "^read 1:1: .*no --fit needed" "$out $rc"
+  out=$(cal "$d/card.png" --answer "$(cal_reads "$m" 0.7583 | tr '\n' ' ')" 2>&1); rc=$?
+  check_match "--answer 0.758x: the --fit, exit 0" "^read at 0.758x.*shot --fit 1456 .*click --in.* 0$" "${out//$'\n'/ } $rc"
+  check_match "...and the setting to suggest, the user's" "the user can run: omabox config shot-fit 1456 .*never set it" "$out"
+  check_match "...and how to check it" "omabox calibrate --size 1456x819 should read 1:1" "$out"
+  check "...nothing set" bash -c "! grep -qs shot-fit '$h2/.config/omabox/config'"
+  check_match "...one already set at that: said" "shot-fit is 1456 here already" "$(CSF=1456 cal "$d/card.png" --answer "$(cal_reads "$m" 0.7583 | tr '\n' ' ')" 2>&1)"
+  out=$(cal "$d/card.png" --answer "$(cal_reads "$m" 0.7583 60 | tr '\n' ' ')" 2>&1); rc=$?
+  check_match "--answer inconsistent: says so, exit 1" "^no single scale fits .*Draw a new card.* 1$" "${out//$'\n'/ } $rc"
+  out=$(cal "$d/card.png" --answer "$(cal_reads "$m" 0.7583 | head -4 | tr '\n' ' ')" 2>&1); rc=$?
+  check_match "...4 marks of 6: the verdict, the missing named" "not given: E F.*read at 0.7[56][0-9]x.* 0$" "${out//$'\n'/ } $rc"
+  out=$(cal "$d/card.png" --answer "A 1,2 B 3,4" 2>&1); rc=$?
+  check_match "...2 marks: refused, exit 2" "at least 3 marks, got 2 2$" "${out//$'\n'/ } $rc"
+  out=$(cal "$d/card.png" --answer "A 1,2 B 3,4 Q 5,6" 2>&1); rc=$?
+  check_match "...a letter the card has not: refused, exit 2" "the card has no mark Q .* 2$" "${out//$'\n'/ } $rc"
+  out=$(cal "$d/none.png" --answer "A 1,2 B 3,4 C 5,6" 2>&1); rc=$?
+  check_match "...no card: says how to draw one, exit 2" "no card at .*omabox calibrate draws one first.* 2$" "${out//$'\n'/ } $rc"
+  check "calibrate is in -b's commands (a box's size)" bash -c "'$CLI' -b '$P-nobox' calibrate --size 640x480 -o '$d/c4.png' >/dev/null 2>&1"
+}
+
 # seed_home's copies of the user's config dirs (finding 74): a link inside is kept as a link, never
 # followed (a theme linked from its repo, a link to api-keys.env); no .git, no hidden files.
 t_unit_seed_copy() {
@@ -6624,6 +6710,9 @@ scale_on() {
   local f=$TMP/$B.png err
   err=$(ob shot -b "$B" -o "$f" 2>&1 >/dev/null)
   check_eq "shot: the screen's pixels, 2560x1440" 2560x1440 "$(magick identify -format '%wx%h' "$f" 2>&1)"
+  # calibrate's card (#188): the size of a full shot, asked of the box.
+  ob calibrate -b "$B" -o "$TMP/$B-card.png" >/dev/null 2>&1
+  check_eq "calibrate: a card the size of the shot" 2560x1440 "$(magick identify -format '%wx%h' "$TMP/$B-card.png" 2>&1)"
   check_match "...said: an image of the 1280x720 layout" "2560x1440 image of the screen's 1280x720 at 0,0 \(x0.5\)" "$err"
   check "click --in the shot: image pixels to the layout's" ob click -b "$B" --in "$f" 2000 1000
   check_eq "...the pointer at half of them" "1000, 500" "$(ob hyprctl -b "$B" cursorpos)"
@@ -6714,6 +6803,9 @@ scale_on() {
   # A layout of scale 2 and 1 (#227): grim writes the whole at 2, a region of the scale-1 one at 1.
   ob shot -b "$B" --fit 3000 -o "$ff" >/dev/null 2>&1
   check_eq "shot --fit 3000 of 2080x720 at scale 2 and 1: 3000 px long" 3000x1038 "$(magick identify -format '%wx%h' "$ff" 2>&1)"
+  ob shot -b "$B" --fit 0 -o "$ff" >/dev/null 2>&1; ob calibrate -b "$B" -o "$TMP/$B-card.png" >/dev/null 2>&1
+  check_eq "calibrate: a card the size of that layout's full shot" "$(magick identify -format '%wx%h' "$ff" 2>&1)" \
+    "$(magick identify -format '%wx%h' "$TMP/$B-card.png" 2>&1)"
   ob shot -b "$B" -g "1280,0 800x600" --fit 1000 -o "$ff" >/dev/null 2>&1
   check_eq "shot -g of the scale-1 monitor --fit 1000: its 800x600, as it is" 800x600 "$(magick identify -format '%wx%h' "$ff" 2>&1)"
   check "monitor remove" ob monitor -b "$B" remove "$m1"
@@ -10344,7 +10436,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)

@@ -285,7 +285,8 @@ them, and `omabox config KEY default` puts one back.
   its API scales a big one down to (`1456` for a 16:9 screen on Claude; NOTES finding 251). It goes
   where `--fit` goes (window shots, `-g`, `--monitor`, `--burst`, `drag --shot`), not `--changed` or
   `--zoom`; `click --in` maps it as usual, and `--fit 0` takes one shot full size. `off` (the
-  default) clears it; `OMABOX_SHOT_FIT=N` (or `off`) overrides it for one agent.
+  default) clears it; `OMABOX_SHOT_FIT=N` (or `off`) overrides it for one agent. Which N, for the
+  model at hand: have the agent run `omabox calibrate` (it reads a test card and says the size).
   Tested on a desktop with an AMD iGPU and an NVIDIA dGPU (on `nvidia` and on `vfio-pci`); laptops
   (hybrid graphics, MUX, eGPU) should work the same but are untested: reports welcome (#119).
 
