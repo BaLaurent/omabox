@@ -5910,11 +5910,20 @@ from them.
     1000` came out 2000 px long. `cmd_shot` now compares N with layout x scale (the most of the
     monitors a screen shot or `-g` crosses; the window's monitor's) and gives `-s N/layout` (screen,
     region) or `-s N/buffer` (window). `click --in` was right all along: the shot record keeps the
-    image's real size. Also seen: grim takes a window's `-g` in buffer pixels, so `shot --window -g`
-    on a scaled monitor crops the wrong part (300x200 of a scale-2 window is its 150x100 logical),
-    and `click --in` maps it as logical; left as it is (its `--fit` counts that crop at 1). t_scale /
+    image's real size. (A window's `-g`: finding 300.) t_scale /
     t_scale_nvidia: `--fit` 2000 and 3000 of the screen, `-g --fit`, `--window --fit` above and below
     the layout, `click --in` each, and a scale-2 + scale-1 layout (fail on the code before).
+300. **A window's `-g` and `pixel` read buffer pixels on a scaled monitor** (2026-10-14, found with
+    #227). grim takes `-g` with `-T` in the window's buffer pixels, not its own coordinates: on a
+    scale-2 monitor `shot --window -g "10,10 300x200"` gave the window's 150x100 at 5,5 as a 300x200
+    image, which `click --in` then mapped as 300x200 of the window (clicks off by the scale), and
+    `pixel --window X Y` read the window's X/2,Y/2. Since window shots took -g and
+    `pixel` windows; unseen at scale 1, the only one boxes had until `--size ...,scale=S`. Both now
+    scale the region to the buffer (`win_buf_geom`: each edge at the window's monitor's scale,
+    rounded as Hyprland rounds the buffer, inside it), and `--fit` counts the crop at that size.
+    t_scale / t_scale_nvidia: a terminal with a red band; `--window -g` against its whole shot's
+    crop, `pixel --window` and `pixel --in` against its whole shot, `-g --fit` and `click --in` it
+    (fail on the code before).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

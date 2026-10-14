@@ -6046,7 +6046,9 @@ scale_on() {
   check_eq "shot -g 400x300 --fit 600 (an 800x600 image): 600 px long" 600x450 "$(magick identify -format '%wx%h' "$ff" 2>&1)"
   check "...click --in it" ob click -b "$B" --in "$ff" 300 225
   check_eq "...the pointer in the region's layout" "300, 250" "$(ob hyprctl -b "$B" cursorpos)"
-  ob run -b "$B" -d --wait -- foot --app-id t227 >/dev/null 2>&1
+  # A terminal with a red band (rows 20-35, 100 columns) under black: a window's pixels tell places apart.
+  ob run -b "$B" -d --wait -- foot --app-id t227 sh -c \
+    'r=20; while [ $r -le 35 ]; do printf "\033[%d;1H\033[41m%100s" $r ""; r=$((r+1)); done; printf "\033[0m"; sleep 600' >/dev/null 2>&1
   local wl; wl=$(ob windows -b "$B" --json | jq -r '.[] | select(.class == "t227") | "\(.size[0]) \(.size[1]) \(.at[0]) \(.at[1])"')
   if [ -n "$wl" ]; then
     local ww wh wx wy iw ih wlong fn; read -r ww wh wx wy <<<"$wl"; wlong=$((ww > wh ? ww : wh))
@@ -6057,6 +6059,23 @@ scale_on() {
     read -r iw ih < <(magick identify -format '%w %h\n' "$ff" 2>/dev/null) || iw=1 ih=1
     check "...click --in it" ob click -b "$B" --in "$ff" 100 50
     check_eq "...the pointer at the window's point" "$((wx + 201 * ww / (2 * iw))), $((wy + 101 * wh / (2 * ih)))" "$(ob hyprctl -b "$B" cursorpos)"
+    # A window's -g and pixel in its own coordinates, which grim takes in its buffer's (finding 300).
+    local wf=$TMP/$B-win.png wg=$TMP/$B-wing.png
+    ob shot -b "$B" --window class:t227 --fit 0 -o "$wf" >/dev/null 2>&1
+    ob shot -b "$B" --window class:t227 -g "300,250 200x200" -o "$wg" >/dev/null 2>&1
+    check_eq "shot --window -g 200x200 at scale 2: a 400x400 image" 400x400 "$(magick identify -format '%wx%h' "$wg" 2>&1)"
+    check_eq "...the window's 300,250 200x200 (across the band's top): its whole shot's 600,500 400x400" 0 \
+      "$(magick "$wf" -crop 400x400+600+500 +repage "$wg" -alpha off -metric AE -compare -format '%[distortion]' info: 2>&1)"
+    local px1 px2 px3; px1=$(magick "$wf" -alpha off -format '#%[hex:p{800,1000}]' info: | tr 'A-F' 'a-f')
+    px3=$(magick "$wf" -alpha off -format '#%[hex:p{800,700}]' info: | tr 'A-F' 'a-f')
+    px2=$(magick "$wf" -alpha off -format '#%[hex:p{400,200}]' info: | tr 'A-F' 'a-f')
+    check_eq "pixel --window: the window's 400,500 (in the band) and 200,100, as its whole shot has them" "400,500 $px1 200,100 $px2" \
+      "$(ob pixel -b "$B" --window class:t227 400 500 200 100 | tr '\n' ' ' | sed 's/ $//')"
+    check_eq "pixel --in the -g shot: the window's 400,350" "$px3" "$(ob pixel -b "$B" --in "$wg" 200 200)"
+    ob shot -b "$B" --window class:t227 -g "300,250 200x200" --fit 300 -o "$wg" >/dev/null 2>&1
+    check_eq "shot --window -g 200x200 --fit 300 (a 400x400 image): 300 px long" 300x300 "$(magick identify -format '%wx%h' "$wg" 2>&1)"
+    check "...click --in it" ob click -b "$B" --in "$wg" 150 150
+    check_eq "...the pointer at the crop's point in the window" "$((wx + 300 + 100)), $((wy + 250 + 100))" "$(ob hyprctl -b "$B" cursorpos)"
     ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
   else no "a foot window for shot --window --fit" "none listed"; fi
   # record (finding 297): a video of the screen at its pixels, a steady frame rate, made in the box.

@@ -13,6 +13,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`shot --fit N` on a scaled screen.** It compared N with the layout's size, not the image's: at
   `--size 2560x1440,scale=2`, `--fit 2000` gave the full 2560x1440, and a window's shot came out at
   twice N. The longest side is N now on any screen, window, region or mix of scales.
+- **`shot --window -g` and `pixel --window` on a scaled monitor.** They read the window's buffer
+  pixels as its own coordinates: at scale 2, `-g "10,10 300x200"` took the window's 150x100 at 5,5,
+  `click --in` that shot missed by the scale, and `pixel --window X Y` read X/2,Y/2. Both take the
+  window's own coordinates now, as the help says.
 
 ## 0.5.5 — 2026-10-14
 

@@ -4025,6 +4025,27 @@ WIN_JQ='
       active: (.address == $a.address), onscreen,
       cover: [$all[] | select(.address != $t.address and .onscreen and above(.; $t) and overlaps($t))
               | {address, class, title, at, size}]}]'
+# The scale of a window's capture (grim -T): the buffer is drawn at its monitor's (#227, finding 299).
+# 1 when it cannot be read. Callers take it with `sc=$(win_scale ADDRESS) || exit $?` (hypr_json).
+win_scale() {
+  local cl mons sc
+  cl=$(hypr_json clients) || exit $?
+  mons=$(hypr_json monitors) || exit $?
+  sc=$(jq -r --arg a "$1" --argjson m "$mons" \
+    'first(.[] | select(.address == $a) | .monitor) as $id | first($m[] | select(.id == $id) | .scale) // 1' <<<"$cl" 2>/dev/null) || sc=1
+  [[ $sc =~ ^[0-9]+(\.[0-9]+)?$ ]] || sc=1
+  echo "$sc"
+}
+# A region of a window (its own coordinates) as grim -T's -g takes it, in the buffer's pixels
+# (finding 300): "X,Y WxH", each edge at SCALE rounded as the buffer's size is, inside the buffer.
+# win_buf_geom X Y W H SCALE WINDOW_W WINDOW_H
+win_buf_geom() {
+  awk -v x="$1" -v y="$2" -v w="$3" -v h="$4" -v s="$5" -v ww="$6" -v wh="$7" 'function r(v) { return int(v * s + 0.5) }
+    BEGIN { x0 = r(x); y0 = r(y); x1 = r(x + w); y1 = r(y + h)
+      if (x1 > r(ww)) x1 = r(ww); if (y1 > r(wh)) y1 = r(wh)
+      if (x1 <= x0) x1 = x0 + 1; if (y1 <= y0) y1 = y0 + 1
+      printf "%d,%d %dx%d\n", x0, y0, x1 - x0, y1 - y0 }'
+}
 win_annotate() { jq -c -n --argjson c "$1" --argjson m "$2" --argjson a "$3" "$WIN_JQ"; }
 # One question at a time, the first left unanswered the end (hypr_json): callers take its list with
 # `wins=$(box_windows) || exit $?`, never as an argument, where its exit would be lost.
@@ -4566,7 +4587,7 @@ cmd_shot() {
   # PNG level 1: most of a shot's time was compression, for a file an agent reads once (finding 83).
   # With --window, -g is in the window's own coordinates (grim crops the window's capture), and the
   # shot records where in the window it starts, for --in.
-  local grim=(grim -l 1) win="" where lw lh ww wh gx gy
+  local grim=(grim -l 1) win="" where lw lh ww wh gx gy wsc="" wgeo=""
   [ -z "$g" ] || read -r gx gy lw lh <<<"$g"
   if [ ${#sels[@]} -gt 0 ]; then
     local wins; wins=$(box_windows)
@@ -4579,7 +4600,10 @@ cmd_shot() {
     if [ -n "$g" ]; then
       [ "$gx" -ge 0 ] && [ "$gy" -ge 0 ] && [ $((gx + lw)) -le "$ww" ] && [ $((gy + lh)) -le "$wh" ] ||
         die "shot: -g $gx,$gy ${lw}x$lh is not inside window $(win_desc "$win") (${ww}x$wh; -g is in the window's coordinates)"
-      grim+=(-g "$gx,$gy ${lw}x$lh")
+      # grim takes a window's -g in its buffer's pixels (finding 300): the crop scaled to them.
+      wsc=$(win_scale "$(jq -r .address <<<"$win")") || exit $?
+      wgeo=$(win_buf_geom "$gx" "$gy" "$lw" "$lh" "$wsc" "$ww" "$wh")
+      grim+=(-g "$wgeo")
       where+=" $gx,$gy ${ww}x$wh"
     else lw=$ww lh=$wh; fi
   elif [ -n "$g" ]; then
@@ -4593,27 +4617,32 @@ cmd_shot() {
   # compared with N is the image grim writes without -s (#227): the layout's size times the highest
   # scale of the outputs captured (a scale-2 screen's 1280 px is a 2560 px image). -s replaces that
   # scale for the screen or a region, so it is N / the layout's side; a window's capture is its
-  # buffer, at its monitor's scale, which -s multiplies, so there it is N / the buffer's side.
+  # buffer (or the crop of it -g took), at its monitor's scale, which -s multiplies, so there it is
+  # N / the buffer's side.
   local long=$((lw > lh ? lw : lh))
   local scaled=0
   if [ -n "$fit" ]; then
-    local mons sc base
-    mons=$(hypr_json monitors) || exit $?
-    # A -g of a window grim takes in its buffer's pixels (finding 299): that crop is the image, at 1.
-    if [ -n "$win" ] && [ -n "$g" ]; then sc=1
-    elif [ -n "$win" ]; then
-      local cl; cl=$(hypr_json clients) || exit $?
-      sc=$(jq -r --arg a "$(jq -r .address <<<"$win")" --argjson m "$mons" \
-        'first(.[] | select(.address == $a) | .monitor) as $id | first($m[] | select(.id == $id) | .scale) // 1' <<<"$cl" 2>/dev/null) || sc=1
+    local native base
+    if [ -n "$win" ]; then
+      if [ -n "$wgeo" ]; then
+        local bw bh; IFS='x ' read -r _ bw bh <<<"$wgeo"
+        native=$((bw > bh ? bw : bh))
+      else
+        wsc=$(win_scale "$(jq -r .address <<<"$win")") || exit $?
+        native=$(awk -v l="$long" -v s="$wsc" 'BEGIN { printf "%d", l * s + 0.5 }')
+      fi
+      base=$native
     else
-      local rx=${gx:-0} ry=${gy:-0}
+      local mons sc rx=${gx:-0} ry=${gy:-0}
+      mons=$(hypr_json monitors) || exit $?
       sc=$(jq -r --argjson x "$rx" --argjson y "$ry" --argjson w "$lw" --argjson h "$lh" \
         '[.[] | select((.disabled | not) and .x < $x + $w and $x < .x + .width / .scale and .y < $y + $h and $y < .y + .height / .scale) | .scale]
          | max // 1' <<<"$mons" 2>/dev/null) || sc=1
+      [[ $sc =~ ^[0-9]+(\.[0-9]+)?$ ]] || sc=1
+      native=$(awk -v l="$long" -v s="$sc" 'BEGIN { printf "%.6f", l * s }')
+      base=$long
     fi
-    [[ $sc =~ ^[0-9]+(\.[0-9]+)?$ ]] || sc=1
-    base=$long; [ -z "$win" ] || base=$(awk -v l="$long" -v s="$sc" 'BEGIN { printf "%d", l * s + 0.5 }')
-    if awk -v l="$long" -v s="$sc" -v n="$fit" 'BEGIN { exit !(l * s > n + 1e-9) }'; then
+    if awk -v l="$native" -v n="$fit" 'BEGIN { exit !(l > n + 1e-9) }'; then
       scaled=1
       grim+=(-s "$(awk -v n="$fit" -v l="$base" 'BEGIN { printf "%.6f", int(n / l * 1e6 + 1) / 1e6 }')")
     fi
@@ -4885,8 +4914,11 @@ cmd_pixel() {
     ((pts[i + 1] < y0)) && y0=${pts[i + 1]}; ((pts[i + 1] > y1)) && y1=${pts[i + 1]}
   done
   local bw=$((x1 - x0 + 1)) bh=$((y1 - y0 + 1)) grim=(grim -t ppm)
-  [ -z "$id" ] || grim+=(-T "$id")
-  grim+=(-g "$x0,$y0 ${bw}x$bh")
+  if [ -n "$id" ]; then
+    # A window's -g is in its buffer's pixels, at its monitor's scale (finding 300).
+    local wsc; wsc=$(win_scale "$(jq -r .address <<<"$w")") || exit $?
+    grim+=(-T "$id" -g "$(win_buf_geom "$x0" "$y0" "$bw" "$bh" "$wsc" "$lim_w" "$lim_h")")
+  else grim+=(-g "$x0,$y0 ${bw}x$bh"); fi
   local f err rc=0; f=$(mktemp) err=$(mktemp)
   { [ -z "$id" ] || on_box timeout 10 "${grim[@]}" - >/dev/null 2>&1; on_box timeout 10 "${grim[@]}" - > "$f" 2>"$err"; } || rc=$?
   local why; why=$(tr '\n' ' ' < "$err" | sed 's/ *$//'); rm -f "$err"
