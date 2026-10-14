@@ -23,6 +23,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   looks as it did, except that the mark no longer moves up a pixel when the count shows.
 - **A bare "shot: grim failed" says how grim ended** when grim gives no reason of its own: an empty
   image, nothing in 10 s, or the status it ended with.
+- **The Codex guard works with your own `shell_environment_policy.set`.** `guard on` refused a
+  `~/.codex/config.toml` that already had one, and told you to add its keys by hand, after which
+  `omabox guard` said `outdated` forever. It now adds its keys to your table between its markers, and
+  `guard off` takes out only those. Keys you merged by hand read as on, and `guard on` marks them.
+  Your own value for one of the guard's keys is never overwritten: `guard on` says which one.
 
 ## 0.5.5 — 2026-10-14
 

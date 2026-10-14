@@ -5948,6 +5948,22 @@ from them.
     exited 0 with an empty image. The message now tells those apart ("it gave an empty image", "it
     gave nothing in 10 s", "it ended with status N and said nothing"); grim's own reason is unchanged
     when it gives one. The cause stays open on #217 until the next occurrence names the case.
+303. **The Codex guard merges into a config's own `shell_environment_policy.set`** (2026-10-14,
+    #221, reported from outside). Our block declares `[shell_environment_policy.set]`, so a config
+    that had its own (a documented Codex setting) failed the TOML check and `on` refused, telling the
+    user to add the keys by hand; keys merged that way had no markers, so `guard` read `outdated`
+    forever. Now, when the table exists, the guard's keys go into it, marked, right under its header
+    (`set.KEY` under `[shell_environment_policy]`, `shell_environment_policy.set.KEY` at the top for
+    dotted keys); only the keys it lacks, as one with the guard's value is the user's. A key with
+    another value is refused by name, never overwritten; an inline table cannot take keys, so it is
+    refused with the lines to add. Every result must read back (tomllib) as the config plus the
+    guard. All the guard's keys present with its values, unmarked, read as `on`; `on` takes them out
+    and puts the marked block in, `off` takes them out. Codex 0.162.1 (`CODEX_HOME` scratch, `codex
+    mcp add`): our start marker rides on our first key and the end marker on the next key or table,
+    so a block under the header stays put; an empty table at the end leaves our end marker as the
+    file's last comment, which Codex keeps last (finding 74), so its new table lands inside the
+    markers and `off` keeps it. With dotted `set.KEY`s, Codex groups the user's next to ours, inside
+    the markers: `off` keeps every line that is not one of the guard's keys there.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

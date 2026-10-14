@@ -353,8 +353,9 @@ PATH puts `share/guard/quickshell` and `qs` first, which refuse `kill` and `ipc`
   shell`, `hyprctl reload`, a theme switch) in your own terminal, or ask the agent to use `omabox
   host`. If omabox is gone (deleted without `guard off`), the hook applies nothing
   and says so in one line.
-- **Codex**: `[shell_environment_policy.set]` in a marked block of `~/.codex/config.toml` (a config
-  whose own `set` table would clash is refused, untouched, with the lines to add by hand), and a
+- **Codex**: `[shell_environment_policy.set]` in a marked block of `~/.codex/config.toml`, or, when
+  the config has its own `set` table, the guard's keys marked inside it (`guard off` keeps yours; a
+  value of your own for one of them, or an inline table, is refused, untouched), and a
   `SessionStart` hook in `~/.codex/hooks.json` that gives the agent the same note. Codex runs that
   hook only after you trust it once (`/hooks` in Codex). No core limit. The block's values are fixed,
   so they stay if omabox is gone: the hook then tells the agent how to take them out. The variables

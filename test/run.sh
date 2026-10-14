@@ -6662,9 +6662,9 @@ t_unit_guard_settings() {
   printf '%s\n' "$(cat "$c")" "" "# >>> omabox guard" "[shell_environment_policy.set]" 'MINE = "1"' "# <<< omabox guard" > "$c"
   check_match "Codex: a key of someone else's inside the block: refused" "added inside" "$(g off codex)"
   printf 'model = "x"\n\n[features]\nhooks = true\n' > "$c"
-  printf '[shell_environment_policy.set]\nFOO = "1"\n' > "$c"; orig=$(cat "$c"; echo .)
+  printf 'shell_environment_policy = { inherit = "core" }\n' > "$c"; orig=$(cat "$c"; echo .)
   out=$(g on codex)
-  check_match "Codex: its own [shell_environment_policy.set] is refused, with the block to add" "clashes.*WAYLAND_DISPLAY" "$(tr '\n' ' ' <<<"$out")"
+  check_match "Codex: its own inline shell_environment_policy is refused, with the keys to add" "clashes.*WAYLAND_DISPLAY" "$(tr '\n' ' ' <<<"$out")"
   check_eq "...untouched" "$orig" "$(cat "$c"; echo .)"
   printf '[shell_environment_policy]\ninherit = "core"\n' > "$c"
   g on codex >/dev/null
@@ -6676,6 +6676,89 @@ t_unit_guard_settings() {
   printf 'x = \n' > "$c"
   check_match "Codex: a file that is not TOML is refused" "not valid TOML" "$(g on codex)"
   check_eq "...untouched" 'x = ' "$(cat "$c")"
+}
+
+# #221: a Codex config with its own shell_environment_policy.set. The guard's keys go into that table,
+# marked, instead of a second [shell_environment_policy.set] (a TOML error, so `on` refused); keys
+# merged there by hand, as omabox once told people to, read as on.
+t_unit_guard_codex_merge() {
+  local h=$TMP/gcm c keys out orig
+  c=$h/.codex/config.toml; mkdir -p "$h/.codex"
+  g() { HOME=$h CODEX_HOME=$h/.codex "$CLI" guard "$@" 2>&1; }
+  st() { g | sed -n 's/^Codex (.*): //p'; }
+  val() { python3 -c 'import tomllib, sys; p = tomllib.load(open(sys.argv[1], "rb"))["shell_environment_policy"]; print(" ".join(str(p["set"].get(k)) for k in sys.argv[2:]))' "$c" "$@"; }
+  : > "$c"; g on codex >/dev/null   # the guard's keys, as a table of its own gives them
+  keys=$(sed '1,2d;$d' "$c"); g off codex >/dev/null
+  # The user's table first, other tables after it.
+  printf 'model = "x"\n\n[shell_environment_policy]\ninherit = "core"\n\n[shell_environment_policy.set]\nMY_KEY = "1"\n\n[features]\nhooks = true\n' > "$c"
+  orig=$(cat "$c"; echo .)
+  check_eq "Codex, its own [shell_environment_policy.set]: off" off "$(st)"
+  out=$(g on codex)
+  check_match "...on merges the guard into it (#221)" "guard on in .*config.toml" "$out"
+  check_eq "...the guard's keys and the user's in one table" "omabox-guard 1" "$(val WAYLAND_DISPLAY MY_KEY)"
+  check_eq "...marked, right under its header" "$(printf '%s\n' '[shell_environment_policy.set]' "# >>> omabox guard (\`omabox guard off\` removes this block)" "$keys" '# <<< omabox guard' 'MY_KEY = "1"')" \
+    "$(sed -n '/^\[shell_environment_policy.set\]/,/^MY_KEY/p' "$c")"
+  check_eq "...and reads on" on "$(st)"
+  check_match "...on again leaves it" "already on in .*config.toml" "$(g on codex)"
+  g off codex >/dev/null
+  check_eq "...off gives back the same file, the user's keys kept" "$orig" "$(cat "$c"; echo .)"
+  # The user's table last: Codex adds its tables after it (finding 74).
+  printf 'model = "x"\n\n[shell_environment_policy.set]\nMY_KEY = "1"\n' > "$c"; orig=$(cat "$c"; echo .)
+  g on codex >/dev/null
+  printf '\n[mcp_servers.x]\ncommand = "true"\n' >> "$c"
+  check_eq "its table last, then a table of Codex's after it: on" on "$(st)"
+  g off codex >/dev/null
+  check_eq "...off keeps both" "$(printf 'model = "x"\n\n[shell_environment_policy.set]\nMY_KEY = "1"\n\n[mcp_servers.x]\ncommand = "true"\n.')" "$(cat "$c"; echo .)"
+  # An empty table last: our end marker is the file's last comment, which Codex keeps at the very end
+  # when it adds a table (as codex 0.162.1's `mcp add` writes it).
+  printf 'model = "x"\n\n[shell_environment_policy.set]\n' > "$c"
+  g on codex >/dev/null
+  sed -i 's/^# <<< omabox guard$/\n[mcp_servers.x]\ncommand = "true"\n# <<< omabox guard/' "$c"
+  check_eq "an empty table of its own, Codex's table inside our markers: on" on "$(st)"
+  g off codex >/dev/null
+  check_eq "...off keeps Codex's table, apart from the user's" "$(printf 'model = "x"\n\n[shell_environment_policy.set]\n\n[mcp_servers.x]\ncommand = "true"\n.')" "$(cat "$c"; echo .)"
+  # Merged by hand, unmarked (the state #221 was found in): on, and `on` adds the markers.
+  printf '[shell_environment_policy.set]\nMY_KEY = "1"\n%s\n\n[features]\nhooks = true\n' "$keys" > "$c"
+  g on codex >/dev/null; g off codex >/dev/null   # the hook in hooks.json: on and off, and the keys gone
+  printf '[shell_environment_policy.set]\nMY_KEY = "1"\n%s\n\n[features]\nhooks = true\n' "$keys" > "$c"
+  check_match "keys merged by hand, no markers: on but for its hook" "outdated \(its hook in .*: off\)" "$(st)"
+  g on codex >/dev/null
+  check_eq "...on adopts them: marked once, no key twice" "1 1 $(wc -l <<<"$keys")" \
+    "$(grep -c '^# >>> omabox guard' "$c") $(grep -c '^# <<< omabox guard' "$c") $(grep -cE '^[A-Z_]+ = ' "$c" | awk '{print $1 - 1}')"
+  check_eq "...reads on" on "$(st)"
+  g off codex >/dev/null
+  check_eq "...off leaves the user's" "$(printf '[shell_environment_policy.set]\nMY_KEY = "1"\n\n[features]\nhooks = true\n.')" "$(cat "$c"; echo .)"
+  printf '[shell_environment_policy.set]\nMY_KEY = "1"\n%s\n' "$keys" > "$c"
+  g off codex >/dev/null
+  check_eq "keys merged by hand: off takes them out too" "$(printf '[shell_environment_policy.set]\nMY_KEY = "1"\n.')" "$(cat "$c"; echo .)"
+  check_eq "...and reads off" off "$(st)"
+  # A value of the user's own for one of the guard's keys: theirs, not overwritten.
+  printf '[shell_environment_policy.set]\nBROWSER = "firefox"\n' > "$c"; orig=$(cat "$c"; echo .)
+  out=$(g on codex)
+  check_match "its own value for a key of the guard's: refused, naming it" "has BROWSER = \"firefox\", the guard needs BROWSER = .*not touched" "$out"
+  check_eq "...untouched" "$orig" "$(cat "$c"; echo .)"
+  check_eq "...and reads off" off "$(st)"
+  # The same value: the user's too, left where it is; ours are the others.
+  printf '[shell_environment_policy.set]\nDISPLAY = ""\n' > "$c"
+  g on codex >/dev/null
+  check_eq "its own DISPLAY with the guard's value: on, kept outside our block" "on 1" "$(st) $(sed -n '/^# <<< omabox guard/,$p' "$c" | grep -c '^DISPLAY = ""')"
+  g off codex >/dev/null
+  check_eq "...and kept by off" "$(printf '[shell_environment_policy.set]\nDISPLAY = ""\n.')" "$(cat "$c"; echo .)"
+  # Dotted keys, under [shell_environment_policy] and at the top.
+  printf '[shell_environment_policy]\ninherit = "core"\nset.MY_KEY = "1"\n\n[x]\ny = 1\n' > "$c"; orig=$(cat "$c"; echo .)
+  g on codex >/dev/null
+  check_eq "dotted set.KEY under [shell_environment_policy]: merged as set.KEY, on" "omabox-guard 1 on" "$(val WAYLAND_DISPLAY MY_KEY) $(st)"
+  g off codex >/dev/null
+  check_eq "...off gives it back" "$orig" "$(cat "$c"; echo .)"
+  printf 'model = "x"\nshell_environment_policy.set.MY_KEY = "1"\n\n[x]\ny = 1\n' > "$c"; orig=$(cat "$c"; echo .)
+  g on codex >/dev/null
+  check_eq "dotted keys at the top: merged as such, on" "omabox-guard 1 on" "$(val WAYLAND_DISPLAY MY_KEY) $(st)"
+  g off codex >/dev/null
+  check_eq "...off gives it back" "$orig" "$(cat "$c"; echo .)"
+  # An inline table cannot take more keys.
+  printf '[shell_environment_policy]\nset = { MY_KEY = "1" }\n' > "$c"; orig=$(cat "$c"; echo .)
+  check_match "an inline set table: refused, with the keys to add by hand" "could not merge .*not touched; add these to it by hand: WAYLAND_DISPLAY" "$(g on codex | tr '\n' ' ')"
+  check_eq "...untouched" "$orig" "$(cat "$c"; echo .)"
 }
 
 # guard exec (any agent, whole) and host (one command on the real desktop, from a guarded shell).
@@ -9265,7 +9348,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
