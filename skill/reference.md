@@ -508,6 +508,14 @@ most people will. Then:
   setBarWidget ID KEY VALUE_JSON '{}'` (kept in the widget's entry in the bar layout),
   `moveBarWidget ID '{"section":"left","after":"omarchy.clock"}'`, `setPluginEnabled ID false`. Or
   edit the box's `$(omabox path)/home/.config/omarchy/shell.json`: its shell applies it at once.
+- **Against the user's real desk** (a bar plugin hosting other widgets, plugins reading their own
+  files beside `shell.json`, a bug that shows only with everything loaded): `omabox up --desk-shell
+  [--plugin PATH]` mounts every plugin in `~/.config/omarchy/plugins` (read-only; the `--plugin` of
+  the same id wins: the working copy), puts in the desk's `shell.json` unfiltered (only idle held
+  off) and copies the other files there the plugins read. Secrets never go in (`api-keys.env`, any
+  name or content that is a key, token, secret or password), nor hooks; `up` prints each file left
+  out and why, `ls --json` has `desk_shell`. A plugin the desk has off stays off, unwarned. Only when
+  asked to test against the desk: otherwise mount just the plugin under test.
 - **A config the plugin reads once at start**: `omabox up --plugin PATH --seed ./fixtures/config.json:.config/myplugin/config.json`
   copies it into the box HOME before the shell starts (no second shell start, no wrong state in between).
 - **A vertical or bottom bar**: `"bar": {"position": "left"}` (`right`, `bottom`) in that file.

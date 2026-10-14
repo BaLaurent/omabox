@@ -6302,6 +6302,38 @@ from them.
     scale 2), t_monitors_turned / _nvidia (whole, each turned monitor, -g across them, a window on the
     turned scale-2 one, its --fit; a window burst on three monitors 16 events at most), t_unit_wait
     (the tool refuses outside a box).
+315. **`up --desk-shell`: the desk's whole shell in a box** (2026-10-14, #206). Checking a bar widget
+    against a real desk (a bar plugin that re-hosts other widgets, plugins reading their own files
+    beside `shell.json`) took a `--plugin` per installed plugin, the unfiltered `shell.json` and those
+    files written into the box HOME by hand (`--seed` refuses anything in `~/.config/omarchy` but
+    `plugins/` and `themes/`, finding 228), then `restart-shell`; that mirror found two bugs the
+    filtered one-plugin box did not. `--desk-shell` does it: every plugin in the desk's `plugins/`
+    (one with no manifest or an id that is not a name, or one refuse_src keeps out, skipped and said:
+    what omabox adds by itself is skipped, what the user names refused), mounted or linked as
+    `--plugin`'s; a `--plugin` of the same id wins (a working copy). `shell.json` goes in as the
+    desk's, only `idle` held off (finding 10: no real input); the desk's plugins are where it has them
+    and one it has off stays off, `plugin_status` `disabled` with no warning. The other files: Omarchy's
+    manifest declares no config files (its settings are inline in `shell.json`, the shell README's
+    "Storage rules"), so no allow-list could come from it; a deny-list instead (decided), over
+    everything but what seed_home makes (`shell.json`, `plugins/`, `themes/`, `backgrounds/`,
+    `branding/`, `extensions/`): never `hooks/` (the user's scripts), nor a name that is a secret's
+    (`api-keys.env`, any `.env`, anything naming a key, token, secret, password, credential, auth,
+    cookie, session or private, `.pem`, `.gpg`, `id_*`...; a folder so named with all in it), a git
+    dir, a backup (`*.bak*`, `~`); nor a file whose content gives a key, token, secret or password a
+    value, holds a private key or a token-shaped string (GitHub, GitLab, Slack, OpenAI/Anthropic,
+    AWS); regular files only, 1 MiB each, 16 MiB and 1000 files in all, 8 folders deep. A link is
+    followed only to a file inside the folder (the target's path checked as its own: a `x.json` linked
+    to `api-keys.env` stays out); one out of it, to a folder, or dangling is not. They are copies
+    (the box's writes stay in it), made last, links on the way cleared (finding 168). `up` says what
+    went in and every file left out with why; `ls --json` has `desk_shell` (config, plugins, copied,
+    skipped) and `bar: "desk"`. Refused with `--stock-bar` and inside ai-jail (the desk is the
+    user's, outside the jail). The suite's fake desk: `OMABOX_DESK_CONFIG=DIR` stands in for
+    `~/.config/omarchy` (never the user's in a test). Tests: t_unit_desk_shell (what is copied and
+    skipped and why on a fixture with planted secrets, names and contents, the caps, desk_plugins,
+    the refusals), t_desk_shell (a box on the fake desk: three plugins, two loaded where its
+    `shell.json` has them, the off one off unsaid; its `shell.json` key kept, idle held off; the
+    plugin's JSON and folder in the box; no secret, link target, hook or git dir; plugins
+    read-only). Not run on the real desk (26 plugins): the selection is said at `up`, to check there.
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

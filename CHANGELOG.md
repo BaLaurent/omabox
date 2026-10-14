@@ -7,6 +7,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **Your desk's whole shell in a box: `omabox up --desk-shell`.** Every plugin in
+  `~/.config/omarchy/plugins` (read-only, as `--plugin` mounts one; a `--plugin` of the same id wins,
+  for your working copy), your `shell.json` as it is (only idle held off), and the other files in
+  `~/.config/omarchy` your plugins read, such as a plugin's JSON or a folder of profiles, copied into
+  the box. Never `api-keys.env` nor anything named or holding a key, token, secret or password,
+  your hooks, a git dir or a backup; regular files only, with a size cap, and a link only to a file
+  inside the folder. `up` lists what went in and what did not, and why (`ls --json`: `desk_shell`),
+  so a widget can be checked against the bar you really have (#206).
 - **Sound in a box, and in its videos.** `omabox up --audio` gives a box its own PipeWire (Pulse
   apps too) with a speaker nobody hears as its only output and a silent microphone: an app's sounds
   play, and never reach your speakers or your audio server. `omabox audio 3` listens for three

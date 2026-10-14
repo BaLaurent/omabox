@@ -1332,6 +1332,117 @@ t_unit_plugin_link() {
   check_fails "...nor another plugin's place" blk "$sb/file" .config/omarchy/plugins/x.z/cfg.json
 }
 
+# A fake desk's Omarchy config (#206): what `up --desk-shell` reads, in place of ~/.config/omarchy.
+# desk_fixture DIR PREFIX: plugins PREFIX.da (a dir), PREFIX.db (a link to a dir elsewhere, as a
+# dev-linked desk has) and PREFIX.doff (off in its shell.json); a shell.json with a key of its own;
+# a plugin's JSON and a folder of profiles beside it; and what must stay out: secrets by name and by
+# content, links out of the folder and to a secret, hooks, a backup, a big file, a FIFO, a git dir.
+desk_fixture() {
+  local d=$1 p=$2 n
+  mkdir -p "$d/desk/plugins" "$d/elsewhere" "$d/desk/profiles/deep" "$d/desk/my-secrets" "$d/desk/hooks" "$d/desk/.git"
+  for n in da db doff; do
+    local at=$d/desk/plugins/$n
+    [ "$n" != db ] || { at=$d/elsewhere/db; ln -s "$at" "$d/desk/plugins/db"; }
+    mkdir -p "$at"
+    jq -n --arg id "$p.$n" '{schemaVersion: 1, id: $id, name: $id, version: "0.1.0", kinds: ["bar-widget"],
+      entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$at/manifest.json"
+    printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$n" > "$at/W.qml"
+  done
+  jq -n --arg a "$p.da" --arg b "$p.db" '{version: 1, deskMark: "kept", idle: {screensaver: 150, lock: 300},
+    bar: {layout: {left: [{id: "omarchy.menu"}, {id: "omarchy.workspaces"}, {id: $a}], center: [{id: "omarchy.clock"}], right: [{id: $b}]}},
+    plugins: [{id: $a, hosts: [$b]}]}' > "$d/desk/shell.json"
+  echo '{"widgets": ["a", "b"]}' > "$d/desk/hostfix.json"
+  echo '{"name": "one"}' > "$d/desk/profiles/one.json"
+  echo '{"name": "two"}' > "$d/desk/profiles/deep/two.json"
+  echo 'OPENAI_API_KEY=planted' > "$d/desk/api-keys.env"
+  echo planted > "$d/desk/foo.token"
+  echo 'X=planted' > "$d/desk/.env"
+  echo planted > "$d/desk/id_ed25519"
+  echo '{"x": 1}' > "$d/desk/my-secrets/x.json"
+  printf '{\n  "user": "me",\n  "apiToken": "planted"\n}\n' > "$d/desk/creds.json"
+  echo '{"outside": "planted"}' > "$d/outside.json"
+  ln -s "$d/outside.json" "$d/desk/out.json"
+  ln -s hostfix.json "$d/desk/alias.json"
+  ln -s api-keys.env "$d/desk/sneaky.json"
+  ln -s profiles "$d/desk/linkdir"
+  ln -s nowhere.json "$d/desk/dangling.json"
+  printf '#!/bin/sh\necho planted\n' > "$d/desk/hooks/post.sh"
+  echo '{}' > "$d/desk/shell.json.bak-1"
+  head -c 2097152 /dev/zero > "$d/desk/big.json"
+  mkfifo "$d/desk/pipe"
+  echo '[remote "o"] url = https://planted@x' > "$d/desk/.git/config"
+}
+
+# #206: what `up --desk-shell` copies of a desk's Omarchy config, what it leaves out and why, which
+# plugins it mounts; and where it is refused.
+t_unit_desk_shell() {
+  local d=$TMP/$P-desk h out
+  desk_fixture "$d" "$P"; h=$d/home; mkdir -p "$h"
+  out=$(lib desk_files "$d/desk" "$h")
+  check_eq "copied: the plugin's JSON, the folder beside shell.json, a link to a file inside" \
+    "alias.json hostfix.json profiles/deep/two.json profiles/one.json" \
+    "$(sed -n 's/^copied //p' <<<"$out" | sort | tr '\n' ' ' | sed 's/ $//')"
+  local want=".env|a secret's name
+.git/|a git dir (its config can hold credentials)
+api-keys.env|a secret's name
+big.json|over 1 MiB
+creds.json|it holds what looks like a key, token or password
+dangling.json|a link that leads nowhere
+foo.token|a secret's name
+hooks/|your scripts (Omarchy runs them on its events)
+id_ed25519|a secret's name
+linkdir|a link to a folder (not followed)
+my-secrets/|a secret's name
+out.json|a link out of the folder (not followed)
+pipe|not a regular file
+shell.json.bak-1|a backup
+sneaky.json|a link to api-keys.env: a secret's name"
+  check_eq "skipped, each with why" "$want" "$(sed -n 's/^skipped //p' <<<"$out" | tr '\t' '|' | LC_ALL=C sort)"
+  check_eq "...the box HOME has only what was copied, as files (no link)" \
+    ".config/omarchy/alias.json .config/omarchy/hostfix.json .config/omarchy/profiles/deep/two.json .config/omarchy/profiles/one.json" \
+    "$(cd "$h" && command find . ! -type d | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+  check_eq "...the content as the desk's" '{"widgets": ["a", "b"]}' "$(cat "$h/.config/omarchy/alias.json")"
+  check_fails "...nothing planted in it" grep -rq planted "$h"
+  check_eq "without HOME: only said, nothing copied" "$out" "$(lib desk_files "$d/desk")"
+  # A file over the cap in all: 16 files of 1 MiB fill it.
+  local c=$d/cap i; mkdir -p "$c/plugins"
+  for i in $(seq 10 26); do head -c 1048576 /dev/zero > "$c/f$i.json"; done
+  check_eq "16 MiB in all: the 17th is skipped" "16 f26.json|over the cap of 16 MiB and 1000 files in all" \
+    "$(lib desk_files "$c" | { grep -c '^copied ' | tr '\n' ' '; } ; lib desk_files "$c" | sed -n 's/^skipped //p' | tr '\t' '|')"
+  # The names refused, and some that are not.
+  local nm bad=""
+  for nm in api-keys.env x.env .env.local GitHubToken.json client_secret.json passwords auth.json oauth cookies.txt \
+      session.json private.json key.pem id_rsa.pub keyring x.gpg db.kdbx .netrc; do
+    lib desk_name_refused "$nm" >/dev/null || bad+="$nm "
+  done
+  check_eq "secret names refused" "" "$bad"
+  for nm in console.json solari.json workspace-names.json profiles settings.json; do
+    ! lib desk_name_refused "$nm" >/dev/null || bad+="$nm "
+  done
+  check_eq "...plugin configs not" "" "$bad"
+  # Content: a token-shaped string, a private key, a password line; not a plain config.
+  printf 'x = "ghp_%s"\n' "$(printf 'a%.0s' {1..36})" > "$d/t1"; printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\n' > "$d/t2"
+  printf 'password = hunter2\n' > "$d/t3"; printf '{"desk": "desk-shell-and-a-long-name", "count": 3, "theme": "sk"}\n' > "$d/t4"
+  check_eq "content refused: a token, a private key, a password; not a plain config" "0 0 0 1" \
+    "$(for i in 1 2 3 4; do lib desk_content_refused "$d/t$i" >/dev/null; printf '%s ' $?; done | sed 's/ $//')"
+  # desk_plugins: each with a manifest and a name for an id, once; a --plugin of the same id wins.
+  mkdir -p "$d/desk/plugins/nomani" "$d/desk/plugins/badid" "$d/desk/plugins/dup"
+  echo '{"id": "../x"}' > "$d/desk/plugins/badid/manifest.json"; echo "{\"id\": \"$P.da\"}" > "$d/desk/plugins/dup/manifest.json"
+  out=$(bash -c 'source "$1"; PLUGINS=("$2.db	/elsewhere"); desk_plugins "$3"' _ "$TMP/lib/bin/omabox" "$P" "$d/desk" 2>&1)
+  check_eq "desk_plugins: a dir and a link to one (resolved); off ones too; not the --plugin's id" \
+    "$P.da	$d/desk/plugins/da|$P.doff	$d/desk/plugins/doff" "$(grep -v '^omabox:' <<<"$out" | tr '\n' '|' | sed 's/|$//')"
+  check_match "...one with no manifest said" "not mounting plugins/nomani: no manifest.json" "$out"
+  check_match "...an id that is not a name said" "not mounting plugins/badid: its manifest id '../x'" "$out"
+  check_fails "...a second dir with the same id: left out, unsaid" grep -q dup <<<"$out"
+  # Refused before anything is made.
+  check_match "--desk-shell with --stock-bar refused" "--desk-shell or --stock-bar, not both" \
+    "$(OMABOX_DESK_CONFIG=$d/desk ob up "$P-ds0" --desk-shell --stock-bar 2>&1)"
+  check_match "...one with no config folder" "--desk-shell: no Omarchy config folder at $d/none" \
+    "$(OMABOX_DESK_CONFIG=$d/none ob up "$P-ds0" --desk-shell 2>&1)"
+  check_match "...inside a jail" "not for an agent inside ai-jail" "$(OMABOX_JAIL='{"roots":[]}' ob up "$P-ds0" --desk-shell 2>&1)"
+  check_fails "...none of them made the box" test -e "$(ob path "$P-ds0" 2>/dev/null || echo /nonexistent)"
+}
+
 t_unit_bar_filter() {
   # shellcheck disable=SC2329 # called below
   bar() { lib shell_json_filter "$1" true "$2" <<<"$3" | jq -c "${4:-.bar.layout}"; }
@@ -3855,6 +3966,39 @@ t_plugin_hosted() {
   check_eq "...ls --json: hosted, and by which" "hosted $P.hb" \
     "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.ha" '.[] | select(.name == $n) | .plugin_status[$i] | "\(.state) \(.host)"')"
   check_match "a widget off the bar and in no plugin's layout: still disabled" "plugin $P.hc disabled: listed but not enabled" "$out"
+  ob down "$B" >/dev/null 2>&1
+}
+
+# #206: up --desk-shell on a fake desk (desk_fixture, as OMABOX_DESK_CONFIG; never the user's): every
+# plugin of the desk's mounted read-only and loaded where its shell.json has it, that shell.json
+# unfiltered but for idle, the plugins' files beside it copied, no secret in the box, no link followed.
+t_desk_shell() {
+  local B=$P-dsk d=$TMP/$P-dsk out H j c=/home/sbx/.config/omarchy
+  desk_fixture "$d" "$P"
+  out=$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --net isolated --desk-shell 2>&1) || { no "up --desk-shell" "$out"; return; }
+  ok "up --desk-shell on a fake desk"
+  H=$(ob path "$B")/home
+  check_match "...says what it mounted and copied" "--desk-shell: 3 plugins of $d/desk/plugins, its shell.json \(idle held off\), and 4 files copied into the box's ~/.config/omarchy: alias.json hostfix.json profiles/deep/two.json profiles/one.json" "$out"
+  check_match "...and what it did not, and why" "not copied: $d/desk/api-keys.env \(a secret's name\)" "$out"
+  check_match "...a link out of the folder" "not copied: $d/desk/out.json \(a link out of the folder \(not followed\)\)" "$out"
+  check_fails "...a plugin the desk has off: no warning" grep -q "$P.doff" <<<"$out"
+  j=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n)')
+  check_eq "the desk's plugins load where its shell.json has them; the one it has off stays off" "loaded loaded disabled" \
+    "$(jq -r --arg p "$P" '.plugin_status | [.[$p + ".da", $p + ".db", $p + ".doff"] | .state] | join(" ")' <<<"$j")"
+  check_eq "...ls --json: bar desk, what was copied, skipped" "desk 4 15" \
+    "$(jq -r '"\(.bar) \(.desk_shell.copied | length) \(.desk_shell.skipped | length)"' <<<"$j")"
+  check_eq "shell.json as the desk's: its own key, its layout, a plugin's entry; idle held off" \
+    "kept|$P.da|$P.db|$P.db|1000000 1000000" \
+    "$(jq -r '"\(.deskMark)|\(.bar.layout.left[2].id)|\(.bar.layout.right[0].id)|\(.plugins[0].hosts[0])|\(.idle.screensaver) \(.idle.lock)"' "$H/.config/omarchy/shell.json")"
+  check_eq "the plugin's JSON and the folder beside it, in the box" '{"widgets": ["a", "b"]}|{"name": "two"}' \
+    "$(ob run -b "$B" -- sh -c "cat $c/hostfix.json $c/profiles/deep/two.json" | paste -sd '|')"
+  # (hooks/ itself is there: Omarchy's samples, from /etc/skel.)
+  check_eq "no secret, no link out, no hook of the desk's, no git dir in the box" "" \
+    "$(ob run -b "$B" -- sh -c "cd $c && ls -d api-keys.env foo.token .env id_ed25519 creds.json my-secrets out.json sneaky.json linkdir hooks/post.sh .git big.json pipe shell.json.bak-1 2>/dev/null; grep -rl planted . 2>/dev/null")"
+  check_fails "the desk's plugins are read-only in the box" ob run -b "$B" -- touch "$c/plugins/$P.da/x"
+  check_eq "...a linked one mounted from where its link leads, as --plugin mounts it" "$d/elsewhere/db mounted" \
+    "$(jq -r --arg i "$P.db" '"\(.plugin_dirs[$i]) \(.plugin_via[$i])"' "$(ob path "$B")/box.json")"
+  check_match "up --desk-shell again: already up" "already up" "$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --desk-shell 2>&1)"
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -10200,10 +10344,10 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

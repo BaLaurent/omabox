@@ -185,6 +185,12 @@ with no workspace numbers, it gets Omarchy's: where your plugin's were, or after
 When the shell does not load a plugin (a manifest it refuses, a QML error), `up` and `restart-shell`
 say why, with Omarchy's plugin validator's message when it has one; the box comes up anyway.
 
+To check a plugin against your real desk (a bar plugin that hosts others, plugins that read their
+own files), `omabox up --desk-shell [--plugin ~/code/myplugin]` mirrors your whole shell: every
+plugin in `~/.config/omarchy/plugins`, your `shell.json` as it is, and the other files in
+`~/.config/omarchy` your plugins read, copied. Never `api-keys.env` or anything named or holding a
+key, token, secret or password, nor your hooks; `up` lists what went in and what did not, and why.
+
 ### A Hyprland change
 
 ```bash

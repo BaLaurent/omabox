@@ -82,6 +82,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--theme NAME]                               start on that theme, not your desktop's current one
             [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
             [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
+            [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
             [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
@@ -239,6 +240,15 @@ reloads for ever). Its config is still the box's own copy; an Omarchy update rel
 One the box has at its own path (in the repo \`up\` runs from, a same-path --ro-bind or an --overlay)
 is linked to there, as on a desk, so readlink -f leads into its repo; any other is mounted
 (plugin_status: via).
+@ up run restart-shell
+--desk-shell: your desktop's shell as it is, to check a plugin against a real desk: every plugin in
+~/.config/omarchy/plugins (read-only, as --plugin's; a --plugin of the same id wins: your working
+copy), your shell.json unfiltered (only idle held off: a box has no real input), and the other files
+in ~/.config/omarchy your plugins read (a plugin's JSON, a folder beside shell.json) copied into the
+box's. Never api-keys.env nor anything named or holding a key, token, secret, password, credential,
+auth, cookie or session (any .env, .pem, .gpg...), hooks/ (your scripts), a git dir or a backup; regular
+files up to 1 MiB (16 MiB, 1000 in all); a link only to a file inside the folder. \`up\` says what went
+in and what did not, and why (\`ls --json\`: desk_shell). Not with --stock-bar; not inside ai-jail.
 @ up run
 --hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
 box's aquamarine, so a build must link a libaquamarine soname the box has (checked before the box
@@ -1745,8 +1755,10 @@ resolve_plugin() {
 # load), not loaded (not listed), disabled, or enabled (a panel, menu or overlay only: its QML loads
 # when summoned, so its errors show then, in `omabox log shell`).
 plugin_check() {
-  local ids id dir tree validate listed=null log f lines why v kinds state status='{}' bad=0 host cfg=""
+  local ids id dir tree validate listed=null log f lines why v kinds state status='{}' bad=0 host cfg="" desk
   ids=$(jq -r '.plugins[]?' "$D/box.json" 2>/dev/null) || return 0
+  # An --desk-shell box's (#206): the desk's plugins it has off stay off, unsaid.
+  desk=" $(jq -r '.desk_shell.plugins // [] | join(" ")' "$D/box.json" 2>/dev/null) " || desk=" "
   [ -n "$ids" ] || return 0
   tree=$(meta omarchy); validate=${tree:-/usr/share/omarchy}/bin/omarchy-plugin-validate
   # A jailed caller's --omarchy tree is theirs to write, so its validator must never run on the host
@@ -1783,11 +1795,14 @@ plugin_check() {
           '[(.plugins // [])[] | select(.id != $id and (.id as $p | $m | index($p)))
             | select([.. | if type == "object" then .id? elif type == "string" then . else empty end] | index($id)) | .id][0] // empty' \
           "$cfg" 2>/dev/null) || host=""
-        if [ -n "$host" ]; then state=hosted why=""; else state=disabled why="listed but not enabled"; fi
+        if [ -n "$host" ]; then state=hosted why=""
+        elif [[ $desk == *" $id "* ]]; then state=disabled why="off in the desk's shell.json"
+        else state=disabled why="listed but not enabled"; fi
       elif [[ " $kinds " =~ \ (bar-widget|bar|service)\  ]]; then state=loaded why=$(head -n 1 <<<"$lines")
       else state=enabled why=$(head -n 1 <<<"$lines"); fi
       case $state in
         hosted) ;;
+        disabled) [[ $desk == *" $id "* ]] || { say "warning: plugin $id $state: $why"; bad=1; } ;;
         loaded|enabled) [ -z "$why" ] || say "plugin $id $state, with a warning in the shell log: $why" ;;
         *) say "warning: plugin $id $state: $why"; bad=1 ;;
       esac
@@ -1860,6 +1875,134 @@ place_plugin() {
     else .plugins = ((.plugins // []) + [{id: $id}]) end'
 }
 
+# up --desk-shell (#206): the desk's shell as it is, every plugin, its shell.json and the files its
+# plugins read beside it. desk_config prints the desk's Omarchy config dir, resolved (a dotfiles link):
+# ~/.config/omarchy, or OMABOX_DESK_CONFIG, the suite's stand-in for it (a fake desk; never a jailed
+# caller's: --desk-shell is refused in a jail).
+desk_config() {
+  local d=${OMABOX_DESK_CONFIG:-$HOME/.config/omarchy} r
+  r=$(readlink -e -- "$d" 2>/dev/null) && [ -d "$r" ] || die "--desk-shell: no Omarchy config folder at $d"
+  echo "$r"
+}
+
+# The plugins in the desk's plugins/ (DESK), "id<TAB>dir" each, as resolve_plugin has them; one
+# already in PLUGINS (a --plugin of the same id: a working copy) is left to it. What omabox adds by
+# itself is skipped, said, where a --plugin is refused: no manifest, an id that is not a name, a dir
+# refuse_src keeps out of a box (a link to a secret store), a second dir with the same id.
+desk_plugins() {
+  local e id dir why have=" "
+  for e in "${PLUGINS[@]}"; do have+="${e%%$'\t'*} "; done
+  for e in "$1"/plugins/* "$1"/plugins/.[!.]*; do
+    [ -e "$e" ] || continue
+    [ -f "$e/manifest.json" ] || { say "--desk-shell: not mounting plugins/${e##*/}: no manifest.json in it"; continue; }
+    dir=$(readlink -f -- "$e") || continue
+    id=$(jq -r '.id // empty' "$dir/manifest.json" 2>/dev/null) || id=""
+    [[ $id =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] ||
+      { say "--desk-shell: not mounting plugins/${e##*/}: its manifest id '$id' is not letters, digits, . _ -"; continue; }
+    [[ $have != *" $id "* ]] || continue
+    if why=$(refuse_src "$dir"); then say "--desk-shell: not mounting plugins/${e##*/} ($dir): $why"; continue; fi
+    have+="$id "
+    printf '%s\t%s\n' "$id" "$dir"
+  done
+}
+
+# Why a file or folder of the desk's Omarchy config stays out of a box by its name (prints it), or
+# fails when its name is fine: a secret's (api-keys.env, any .env, anything naming a key, token,
+# secret, password, credential, auth, cookie, session or private, keys and keyrings), a git dir (its
+# config can hold credentials), a backup (shell.json.bak-*: noise, and old copies of what is refused).
+desk_name_refused() {
+  local n=${1,,}
+  case $n in
+    api-keys.env|*.env|.env.*|*key*|*token*|*secret*|*credential*|*passw*|*auth*|*cookie*|*session*|*private*|\
+      *.pem|*.p12|*.pfx|*.gpg|*.asc|*.kdbx|id_rsa*|id_dsa*|id_ecdsa*|id_ed25519*|.netrc|.pgpass)
+      echo "a secret's name" ;;
+    .git) echo "a git dir (its config can hold credentials)" ;;
+    *.bak|*.bak[-._0-9]*|*~|*.swp|*.orig|*.old) echo "a backup" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Why a desk file stays out of a box by what it holds (prints it), or fails: a key, token, secret,
+# password or credential given a value (`"apiToken": "…"`, `password = …`), a private key, or a
+# token-shaped string (GitHub, GitLab, Slack, OpenAI and Anthropic, AWS). A file that cannot be read
+# stays out too. Nothing of what matched is printed.
+desk_content_refused() {
+  local rc=0
+  # shellcheck disable=SC2016 # a regex
+  LC_ALL=C grep -aqiE -- '(api[_-]?key|secret|token|passw(or)?d|bearer|credential|authorization)[A-Za-z0-9_-]*["'\'']?[[:space:]]*[:=]|-----BEGIN [A-Z ]*PRIVATE KEY|(^|[^A-Za-z0-9])(ghp|gho|ghs|ghu|ghr|github_pat|glpat|xox[abpr]|sk|sk-ant)[-_][A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}' "$1" || rc=$?
+  case $rc in
+    0) echo "it holds what looks like a key, token or password" ;;
+    1) return 1 ;;
+    *) echo "it could not be read" ;;
+  esac
+}
+
+# desk_files DESK [HOME]: the desk's other Omarchy config files (#206), what its plugins read beside
+# shell.json (a hosting plugin's JSON, a folder of profiles), copied into HOME's ~/.config/omarchy at
+# the same place; without HOME only said. Omarchy's plugin manifest declares no config files (its
+# settings live in shell.json), so this is a deny-list: what seed_home makes (shell.json, plugins/,
+# themes/, backgrounds/, branding/, extensions/) is left to it, hooks/ never goes in (the user's
+# scripts), nor a secret by its name (desk_name_refused, a folder's for all in it) or by what it holds
+# (desk_content_refused). Regular files only, each up to 1 MiB, 16 MiB and 1000 files in all, 8
+# folders deep. A link is followed only to a file inside DESK, its target's path checked as its own:
+# one out of DESK, to a folder, or dangling is not. Prints "copied REL" and "skipped REL<TAB>WHY".
+desk_files() {
+  local root=$1 h=${2:-} total=0 count=0
+  desk_walk "" 0
+}
+desk_walk() {   # (desk_files's) REL DEPTH: the entries of DESK/REL
+  local rel=$1 depth=$2 e name r t trel seg segs=() why size dir=$root${1:+/$1}
+  for e in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$e" ] || [ -L "$e" ] || continue
+    name=${e##*/}; r=${rel:+$rel/}$name
+    if [ -z "$rel" ]; then
+      case $name in
+        shell.json|plugins|themes|backgrounds|branding|extensions) continue ;;
+        hooks) printf 'skipped %s\t%s\n' "hooks/" "your scripts (Omarchy runs them on its events)"; continue ;;
+      esac
+    fi
+    if why=$(desk_name_refused "$name"); then
+      [ -L "$e" ] || [ ! -d "$e" ] || r+=/
+      printf 'skipped %s\t%s\n' "$r" "$why"; continue
+    fi
+    t=$e
+    if [ -L "$e" ]; then
+      t=$(readlink -e -- "$e" 2>/dev/null) || t=""
+      [ -n "$t" ] || { printf 'skipped %s\t%s\n' "$r" "a link that leads nowhere"; continue; }
+      [[ $t == "$root"/* ]] || { printf 'skipped %s\t%s\n' "$r" "a link out of the folder (not followed)"; continue; }
+      [ ! -d "$t" ] || { printf 'skipped %s\t%s\n' "$r" "a link to a folder (not followed)"; continue; }
+      trel=${t#"$root"/} why=""
+      case ${trel%%/*} in hooks|plugins|themes|backgrounds|branding|extensions) why="a link into ${trel%%/*}/" ;; esac
+      IFS=/ read -ra segs <<<"$trel"
+      for seg in "${segs[@]}"; do
+        [ -z "$why" ] || break
+        if why=$(desk_name_refused "$seg"); then why="a link to $trel: $why"; else why=""; fi
+      done
+      [ -z "$why" ] || { printf 'skipped %s\t%s\n' "$r" "$why"; continue; }
+    fi
+    if [ -d "$t" ]; then
+      if [ "$depth" -ge 8 ]; then printf 'skipped %s\t%s\n' "$r/" "more than 8 folders deep"; else desk_walk "$r" $((depth + 1)); fi
+      continue
+    fi
+    [ -f "$t" ] || { printf 'skipped %s\t%s\n' "$r" "not a regular file"; continue; }
+    size=$(stat -c %s -- "$t" 2>/dev/null) || size=""
+    [[ $size =~ ^[0-9]+$ ]] || { printf 'skipped %s\t%s\n' "$r" "it could not be read"; continue; }
+    [ "$size" -le 1048576 ] || { printf 'skipped %s\t%s\n' "$r" "over 1 MiB"; continue; }
+    [ $((total + size)) -le 16777216 ] && [ "$count" -lt 1000 ] ||
+      { printf 'skipped %s\t%s\n' "$r" "over the cap of 16 MiB and 1000 files in all"; continue; }
+    if why=$(desk_content_refused "$t"); then printf 'skipped %s\t%s\n' "$r" "$why"; continue; fi
+    if [ -n "$h" ]; then
+      home_unlink "$h" ".config/omarchy/$r"
+      if ! { mkdir -p -- "$(dirname -- "$h/.config/omarchy/$r")" && rm -rf -- "${h:?}/.config/omarchy/$r" &&
+        cp --preserve=mode,timestamps -- "$t" "$h/.config/omarchy/$r"; }; then
+        printf 'skipped %s\t%s\n' "$r" "it could not be copied"; continue
+      fi
+    fi
+    total=$((total + size)) count=$((count + 1))
+    printf 'copied %s\n' "$r"
+  done
+}
+
 # The box's fake HOME: the user's Omarchy look, no secrets (never api-keys.env, keyrings, tokens).
 # shell.json keeps the user's bar settings but only the built-in widgets plus the plugins mounted
 # into this box, each enabled where its manifest says it belongs. --stock-bar starts from Omarchy's
@@ -1907,10 +2050,20 @@ seed_home() {
   local notify=true
   for p in "${PLUGINS[@]}"; do grep -rqs --include='*.qml' NotificationServer "${p#*$'\t'}" && notify=false; done
   local pagers; pagers=$(printf '%s\n' "${PLUGINS[@]}" | workspace_widgets) || pagers='[]'
-  shell_json_filter "$ids" $notify "$pagers" < "$shell_json" > "$h/.config/omarchy/shell.json" 2>/dev/null ||
-    echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"
+  # --desk-shell (#206): the desk's shell.json as it is, every plugin of the desk's in it where the desk
+  # has it (one the desk has off stays off), only idle held off (no real input in a box: finding 10).
+  # Of the plugins, only a --plugin the desk does not have is placed where its manifest says.
+  if [ "${DESK_SHELL:-0}" = 1 ]; then
+    jq '.idle = {screensaver: 1000000, lock: 1000000}' "$DESK/shell.json" > "$h/.config/omarchy/shell.json" 2>/dev/null || {
+      say "--desk-shell: no shell.json in $DESK (or not JSON): the box's shell starts from an empty one"
+      echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"; }
+  else
+    shell_json_filter "$ids" $notify "$pagers" < "$shell_json" > "$h/.config/omarchy/shell.json" 2>/dev/null ||
+      echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"
+  fi
   for p in "${PLUGINS[@]}"; do
     id=${p%%$'\t'*}; dir=${p#*$'\t'}
+    [[ " ${DESK_IDS:-} " != *" $id "* ]] || continue
     kinds=$(jq -c '.kinds // []' "$dir/manifest.json")
     section=$(jq -r '.barWidget.defaultSection // "center"' "$dir/manifest.json")
     place_plugin "$id" "$section" "$kinds" "$ids" < "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new"
@@ -1978,6 +2131,20 @@ seed_home() {
     val=$(git -C / config --global "$key" 2>/dev/null) || continue
     git -C / config --file "$h/.gitconfig" "$key" "$val"
   done
+  # --desk-shell (#206): the desk's other config files, last (over the shell.toml above), and said:
+  # what went in and what did not, and why (DESK_FILES, box.json's desk_shell).
+  if [ "${DESK_SHELL:-0}" = 1 ]; then
+    local line copied=()
+    DESK_FILES=$(desk_files "$DESK" "$h")
+    while IFS= read -r line; do
+      case $line in
+        "copied "*) copied+=("${line#copied }") ;;
+        "skipped "*) line=${line#skipped }; say "--desk-shell: not copied: $DESK_SHOWN/${line%%$'\t'*} (${line#*$'\t'})" ;;
+      esac
+    done <<<"$DESK_FILES"
+    say "--desk-shell: $(wc -w <<<"$DESK_IDS") plugins of $DESK_SHOWN/plugins, its shell.json (idle held off)," \
+      "and ${#copied[@]} files copied into the box's ~/.config/omarchy${copied[*]:+: ${copied[*]}}"
+  fi
 }
 
 # The user's own wallpapers for THEME, ~/.config/omarchy/backgrounds/THEME (where
@@ -2372,6 +2539,7 @@ up_already() {
   case " $given " in *" systemd "*) [ "$(meta systemd)" = true ] || diff+=("--systemd (it has no user manager)") ;; esac
   case " $given " in *" audio "*) [ "$(meta audio)" = true ] || diff+=("--audio (it has no audio)") ;; esac
   case " $given " in *" stock-bar "*) [ "$(meta bar)" = stock ] || diff+=("--stock-bar (it has your bar)") ;; esac
+  case " $given " in *" desk-shell "*) [ "$(meta bar)" = desk ] || diff+=("--desk-shell (it has $([ "$(meta bar)" = stock ] && echo "the stock bar" || echo "your bar with only its own plugins"))") ;; esac
   case " $given " in *" xwayland "*) [ "$(meta xwayland)" = true ] || diff+=("--xwayland (it has none)") ;; esac
   case " $given " in *" autoreload "*) [ "$(meta autoreload)" = true ] || diff+=("--autoreload (its autoreload is off)") ;; esac
   case " $given " in *" no-pointer "*) grep -qsx hidden "$D/pointer" || diff+=("--no-pointer (its pointer shows: omabox pointer hide)") ;; esac
@@ -2403,7 +2571,7 @@ up_already() {
 }
 
 cmd_up() {
-  STOCK_BAR=0 THEME=""
+  STOCK_BAR=0 THEME="" DESK_SHELL=0 DESK="" DESK_SHOWN="" DESK_IDS="" DESK_FILES=""
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 audio=0 audio_missing="" owner=""
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 nopointer=0 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
@@ -2424,7 +2592,7 @@ cmd_up() {
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--stock-bar|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--monitor|--theme-dir|--theme)
+      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--stock-bar|--desk-shell|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--monitor|--theme-dir|--theme)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -2472,6 +2640,8 @@ cmd_up() {
         shift ;;
       --owner) optarg "$@"; [[ $2 =~ ^[1-9][0-9]*$ ]] || die "up: --owner is a pid, got $2"; owner=$2; shift ;;   # internal: `run`'s throwaway box goes when this pid does
       --stock-bar) STOCK_BAR=1 ;;
+      # The desk's config is outside any jail, and its files are the user's (#206).
+      --desk-shell) ! in_jail || die "up: --desk-shell mirrors your desktop's shell config, not for an agent inside ai-jail"; DESK_SHELL=1 ;;
       --systemd) systemd=1 ;;
       --audio) audio=1 ;;
       --xwayland) xwayland=1 ;;
@@ -2500,6 +2670,16 @@ cmd_up() {
       PLUGINS+=("$(resolve_plugin "$p")") || exit 1
     fi
   done
+  # --desk-shell (#206): every plugin of the desk's too, after the --plugin ones (which win for an id
+  # both have); its shell.json and other files go in with seed_home.
+  if [ "$DESK_SHELL" = 1 ]; then
+    [ "$STOCK_BAR" = 0 ] || die "up: --desk-shell or --stock-bar, not both"
+    DESK=$(desk_config) || exit 1
+    DESK_SHOWN=$DESK
+    if [ -z "${OMABOX_DESK_CONFIG:-}" ]; then DESK_SHOWN=\~/.config/omarchy; fi
+    local desk_list; desk_list=$(desk_plugins "$DESK") || exit 1
+    while IFS= read -r p; do [ -z "$p" ] || { PLUGINS+=("$p"); DESK_IDS+="${p%%$'\t'*} "; }; done <<<"$desk_list"
+  fi
   # A jailed caller's --hyprland and --omarchy, checked before anything reads in them (theme_named lists
   # the tree's themes: in a folder with something hidden, it named what the jail could not see).
   if in_jail; then
@@ -2842,7 +3022,7 @@ cmd_up() {
       + (if $fallback then {wanted: $wanted, why: $why} else {} end)')
   jq -n --arg name "$NAME" --arg mode "$([ $interactive = 1 ] && echo interactive || echo headless)" \
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --argjson scale "$scale" --arg created "$(date -Is)" \
-    --arg net "$net" --arg allow "$allow" --argjson net_addrs "$(printf '%s\n' ${net_addrs[@]+"${net_addrs[@]}"} | jq -R 'select(. != "")' | jq -sc .)" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
+    --arg net "$net" --arg allow "$allow" --argjson net_addrs "$(printf '%s\n' ${net_addrs[@]+"${net_addrs[@]}"} | jq -R 'select(. != "")' | jq -sc .)" --argjson idle "$idle_s" --arg bar "$(if [ "$STOCK_BAR" = 1 ]; then echo stock; elif [ "$DESK_SHELL" = 1 ]; then echo desk; else echo user; fi)" \
     --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --argjson audio "$([ $audio = 1 ] && echo true || echo false)" --arg owner "$owner" --arg owner_start "$owner_start" --arg agent "$agent" \
     --arg starter "$starter" --argjson at_term "$at_term" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
@@ -2855,6 +3035,7 @@ cmd_up() {
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --arg aq_main "${AQ_MAIN:-}" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
     --argjson themes "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R 'select(. != "")' | jq -s .)" --arg theme "$THEME" \
+    --arg desk "$DESK" --arg desk_ids "$DESK_IDS" --arg desk_files "$DESK_FILES" \
     --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     '{name: $name, mode: $mode, size: $size, scale: $scale, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs,
       plugin_via: (reduce $plugins[] as $i ({}; .[$i] = (if $linked | index($i) then "linked" else "mounted" end))), net: $net, allow: $allow,
@@ -2863,6 +3044,9 @@ cmd_up() {
       aquamarine: ({kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed} + (if $aq_main != "" then {main_checkout: $aq_main} else {} end))}
       + (if $render != null then {render: $render} else {} end)
       + (if ($seeds | length) > 0 then {seeds: $seeds} else {} end)
+      + (if $bar == "desk" then {desk_shell: {config: $desk, plugins: ($desk_ids | split(" ") | map(select(. != ""))),
+          copied: [$desk_files | splits("\n") | select(startswith("copied ")) | .[7:]],
+          skipped: [$desk_files | splits("\n") | select(startswith("skipped ")) | .[8:] | split("\t") | {path: .[0], why: .[1]}]}} else {} end)
       + (if ($net_addrs | length) > 0 then {addrs: $net_addrs} else {} end)
       + (if ($themes | length) > 0 then {theme_dirs: $themes} else {} end)
       + (if $theme != "" then {theme: $theme} else {} end)
@@ -4143,7 +4327,7 @@ cmd_run() {
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
       --size|--plugin|--ro-bind|--overlay|--seed|--theme-dir|--theme|--monitor|--net|--allow|--addr|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
-      --xwayland|--autoreload|--no-shell|--no-pointer|--stock-bar|--systemd|--audio) up_args+=("$1") ;;
+      --xwayland|--autoreload|--no-shell|--no-pointer|--stock-bar|--desk-shell|--systemd|--audio) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
       -*) die "run: unknown option $1 (the command goes after --; --interactive is up's only)" ;;
@@ -9808,7 +9992,7 @@ box_json() {
       client_render: (.client_render // null),
       monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end),
-      starter: (.starter // null)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}' "$D/box.json" 2>/dev/null ||
+      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false, orphan: false}'
 }
 
