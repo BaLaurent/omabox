@@ -5,6 +5,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **`ls` tells a box nobody will take down.** A headless box at `--idle 0` with no agent session to
+  go with has nothing to end it, and when the script or agent that started it was gone it stayed up
+  for good, listed like any box in use (#220). `up` now records what started a box; `ls` says
+  `orphan` under IDLE for such a box once that is gone (`ls --json`: `orphan`, and `starter`), the bar
+  widget says it on the box's row, and `omabox down --orphans` takes those down, naming each. Nothing
+  takes one down by itself, and a box you start at a terminal is never one. `up --idle 0` says, to a
+  caller that is not a terminal, that nothing will take the box down but `omabox down`.
+
 ### Fixed
 
 - **`omabox gpu` exits 0 when no process has GPU figures.** On a GPU whose driver keeps no

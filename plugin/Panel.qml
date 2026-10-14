@@ -315,6 +315,8 @@ Panel {
       parts.push(b.render.driver + " " + String(b.render.pci || "").replace(/^0000:/, "") + (b.render.fallback ? " (fallback)" : ""))
     if (b.mode !== "interactive" && b.size) parts.push(b.size)
     var a = age(b.created); if (a) parts.push(a)
+    // No idle limit, and what started it is gone (#220): up until someone takes it down.
+    if (b.orphan) parts.push("orphan")
     if (b.plugins && b.plugins.length) parts.push(b.plugins.join(", "))
     if (b.net === "isolated") parts.push("isolated")
     if (b.peeking) parts.push("peeking")

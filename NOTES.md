@@ -5964,6 +5964,28 @@ from them.
     file's last comment, which Codex keeps last (finding 74), so its new table lands inside the
     markers and `off` keeps it. With dotted `set.KEY`s, Codex groups the user's next to ours, inside
     the markers: `off` keeps every line that is not one of the guard's keys there.
+304. **`ls` calls a box nobody will take down an orphan; `down --orphans`** (2026-10-14, #220, reported
+    from outside: six leaked `--idle 0` boxes took a desktop's load to ~38). A headless box at `--idle
+    0` with no owner and no agent recorded (an agent in a sandbox, a harness without session variables)
+    gets no reaper by design, and `ls` showed it as `never`, like a box in use (finding 203 left this
+    part of #137 unbuilt). `up` now records the box's starter in box.json (`starter`: pid, start time,
+    command, `terminal`), as `box_starter` finds it: the nearest ancestor that outlives the one command,
+    skipping a shell given a command string (`bash -c`: each agent tool call, which Claude Code runs in
+    a session of its own, so the session leader would be the wrong pick), a script's subshell (its
+    command line is its parent's: `$(omabox up)`, the suite's parallel tests) and timeout, flock, time.
+    VERIFIED from this Claude Code session: the walk lands on `claude` (its CLAUDE_PID). An orphan
+    (`box_orphan`): up, headless, idle 0, no owner, no agent, a starter recorded and gone (pid and start
+    time, as `owner_alive`). Decided: a box whose `up` had a terminal on stdin outside any agent session
+    is a person's, on purpose: `terminal: true`, never an orphan, so closing the terminal of a forever
+    box does not mark it; no starter found (`setsid -f omabox up`, parent gone already) or a box.json
+    from before: never one either (unknown is not orphan). Nothing takes an orphan down by itself: `ls`
+    says `orphan` under IDLE and names them on stderr, `ls --json` has `orphan` and `starter`, the
+    widget's row says it, and `down --orphans` (no names, no `--all`) takes each down as that box
+    (`DOWN_IF_CREATED`), naming its starter. `up` at idle 0 with no owner or agent, not at a terminal,
+    notes that nothing will take the box down but `down`. t_unit_orphan (the walk's skips, every
+    kept case, `down --orphans` with stubs), t_orphan (a starter that exits, one that stays then is
+    killed, an idle limit, one under script(1)'s terminal; `down --orphans` skipped when the user has
+    orphans of their own up, as it would take those too), t_widget_list's caption.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

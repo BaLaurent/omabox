@@ -45,8 +45,9 @@ Your box is named after the repo (or worktree) and your session, so no other ses
 goes down when your agent exits: `omabox down` when done, and before `/clear`. Subagents share it; for
 one of its own, `omabox up --new [--plugin …]` starts a box under a free name and prints it (`box-3`):
 all its options on that call, then `-b box-3` on every later call, typed out (your shell keeps no
-variables). A box the user started: `-b NAME` (`omabox ls`). In a worktree-isolated Claude Code
-subagent, compound commands (`$(…)`, aliases) are refused: one literal `omabox -b NAME …` per call.
+variables), and it outlives you: `omabox down -b box-3`. A box the user started: `-b NAME` (`omabox
+ls`). In a worktree-isolated Claude Code subagent, compound commands (`$(…)`, aliases) are refused:
+one literal `omabox -b NAME …` per call.
 ref: Project instructions, in detail.
 
 ## The loop

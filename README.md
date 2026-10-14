@@ -133,6 +133,10 @@ omabox which 12345                     # the box a host pid is in, a bar like yo
   `omabox mode` changes it live.
 - **Idle**: a headless box goes down after 2 hours with no `omabox` command, peek or `omabox run`
   against it (`--idle 30m`, `--idle 0` for never, or `OMABOX_IDLE`). A `run -d` job does not count.
+  A box at `--idle 0` that goes with no agent stays up until `omabox down`: once what started it (a
+  script, an agent whose process omabox could not find) is gone, `omabox ls` says `orphan` under IDLE,
+  and `omabox down --orphans` takes those down. Nothing does by itself, and a box you start at a
+  terminal is never one.
 - **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours), `--systemd` (a real
   systemd user manager, for plugins that manage a service or schedule alarms), `--from SAVE` (start
   with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for
@@ -630,7 +634,8 @@ dir, its `/run/user/$UID`: `omabox path --run`; the host's own is your real sess
   its command directly too, timers excepted, and `systemd-cat` writes to `~/IDENTIFIER.log`, so
   `omarchy restart shell` works in a box.
 - A `run -d` job does not count as use for idle expiry: a server the agent only polls over HTTP needs
-  `--idle 0` (or a longer one). Nor does it keep an agent session's box once the agent exits.
+  `--idle 0` (or a longer one), and the agent then takes that box down itself when done. Nor does it
+  keep an agent session's box once the agent exits.
 - On NVIDIA, whose driver reports no per-process DRM counters, `omabox gpu` takes the driver's own
   sampling through `nvidia-smi pmon`: whole seconds, and a process the driver did not sample in a
   second counts 0 for it. Intel's i915 and xe are untested (#223). Tools that sum GPU time by process

@@ -102,7 +102,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 | `omabox lua 'hl.dsp…'` printed `HL.Dispatcher` or `function: 0x…` | A dispatcher, returned and not run: `omabox lua 'hl.dispatch(EXPR)'` or `omabox hyprctl dispatch 'EXPR'`. |
 | "its Hyprland did not answer (hung? …)", `ls` says `hung` | The box's Hyprland is stuck (a plugin under test?): `omabox gdb` for where, `omabox log`, then `omabox down`. |
 | "no box 'default-…' is up" | Run from outside any repo, where your session's box is used only when it has exactly one up: run it from the repo, or pass `-b NAME` (`omabox ls`). |
-| A box went down by itself ("idle") | 2h with no omabox command against it (`up --idle 0` keeps one, `--idle 30m`); your session's box still goes when your agent exits; a `run -d` job is not use: a server you only poll over HTTP needs `--idle 0`. `down --all` takes other agents' and the user's boxes too. |
+| A box went down by itself ("idle") | 2h with no omabox command against it (`up --idle 0` keeps one, `--idle 30m`); your session's box still goes when your agent exits; a `run -d` job is not use: a server you only poll over HTTP needs `--idle 0`, and such a box outlives you unless it is your session's: `omabox down` it when done (`ls` says `orphan` for one whose starter is gone). `down --all` takes other agents' and the user's boxes too. |
 
 ## Tests that touch the desktop
 

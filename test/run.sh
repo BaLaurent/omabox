@@ -2776,6 +2776,60 @@ t_unit_agent_session() {
     "$(sel "$P-r-$sid" down 'select_box() { echo "got:[${1-}]"; exit 0; }; cmd_down' | tail -1)"
 }
 
+# #220: a box at --idle 0 with no agent or owner had no reaper, and `ls` could not tell one left behind
+# by a run that is gone from one in use. `up` records its starter (box_starter: the nearest ancestor that
+# outlives the command, past `bash -c`, a script's subshells, timeout); `ls` calls a box whose starter is
+# gone an orphan (box_orphan), and `down --orphans` takes those down. Nothing else: no agent, owner,
+# idle limit or interactive box is ever one, nor one a person started at a terminal.
+t_unit_orphan() {
+  local L=$TMP/lib/bin/omabox d=$TMP/orphan out pid
+  mkdir -p "$d"
+  # Each starter script prints its pid, then what box_starter finds from below it.
+  printf '%s\n' 'echo "$$"' 'bash -c '"'"'source "$1"; box_starter'"'"' _ "$1"' > "$d/direct.sh"
+  printf '%s\n' 'echo "$$"' 'bash -c '"'"'bash -c "source \"\$1\"; box_starter" _ "$1"; true'"'"' _ "$1"' > "$d/dash-c.sh"
+  printf '%s\n' 'echo "$$"' '( bash -c '"'"'source "$1"; box_starter'"'"' _ "$1"; true )' > "$d/subshell.sh"
+  printf '%s\n' 'echo "$$"' 'timeout 20 bash -c '"'"'source "$1"; box_starter'"'"' _ "$1"' > "$d/timeout.sh"
+  starter_is() { local o; o=$(bash "$d/$1" "$L" 2>&1); [[ $(sed -n 2p <<<"$o") =~ ^$(head -1 <<<"$o")\ [0-9]+\ bash$ ]] || { echo "$o"; return 1; }; }
+  check "box_starter: the script that ran up (its pid, start time, command)" starter_is direct.sh
+  check "...past a bash -c that only carries the command (an agent's tool call)" starter_is dash-c.sh
+  check "...past the script's own subshell ( … ), its command line the script's" starter_is subshell.sh
+  check "...past timeout" starter_is timeout.sh
+  # box_orphan, on box.json alone: a starter that runs (this shell), one gone (a sleep killed), one whose
+  # pid is this shell's with another start time (a reused pid).
+  sleep 30 & pid=$!; local gone_start; gone_start=$(cut -d' ' -f22 "/proc/$pid/stat"); kill "$pid"; wait "$pid" 2>/dev/null
+  local my_start; my_start=$(cut -d' ' -f22 /proc/$$/stat)
+  local live="{\"pid\": $$, \"start\": \"$my_start\", \"command\": \"bash\", \"terminal\": false}"
+  local dead="{\"pid\": $pid, \"start\": \"$gone_start\", \"command\": \"sleep\", \"terminal\": false}"
+  local reused="{\"pid\": $$, \"start\": \"1\", \"command\": \"bash\", \"terminal\": false}"
+  orphan_of() {
+    mkdir -p "$d/b"; jq -n "{mode: \"headless\", idle: 0} + $1" > "$d/b/box.json"
+    bash -c 'source "$1"; D=$2; box_orphan && echo orphan || echo kept' _ "$L" "$d/b"
+  }
+  check_eq "idle 0, no agent or owner, its starter gone: an orphan" orphan "$(orphan_of "{starter: $dead}")"
+  check_eq "...its pid reused by another process: still an orphan" orphan "$(orphan_of "{starter: $reused}")"
+  check_eq "...its starter still running: not one" kept "$(orphan_of "{starter: $live}")"
+  check_eq "an idle limit: not one (its reaper takes it down)" kept "$(orphan_of "{idle: 7200, starter: $dead}")"
+  check_eq "an agent: not one" kept "$(orphan_of "{agent: $pid, agent_start: \"$gone_start\", starter: $dead}")"
+  check_eq "an owner (a throwaway run's box): not one" kept "$(orphan_of "{owner: $pid, owner_start: \"$gone_start\", starter: $dead}")"
+  check_eq "an interactive box: not one" kept "$(orphan_of "{mode: \"interactive\", starter: $dead}")"
+  check_eq "started at a terminal outside an agent session (a person's): not one" kept \
+    "$(orphan_of "{starter: ($dead + {terminal: true})}")"
+  check_eq "no starter found (a parent gone already), or a box.json from before: not one" "kept kept" \
+    "$(orphan_of '{starter: {terminal: false}}') $(orphan_of '{}')"
+  # down --orphans: the orphans only, each named with its starter; none, said so.
+  local b=$d/boxes; mkdir -p "$b/lost" "$b/kept"
+  jq -n "{mode: \"headless\", idle: 0, created: \"1\", starter: $dead}" > "$b/lost/box.json"
+  jq -n "{mode: \"headless\", idle: 0, created: \"2\", starter: $live}" > "$b/kept/box.json"
+  dn() { bash -c 'source "$1"; BOXES=$2; shift 2; box_state() { [ -d "$D" ] && echo up || echo gone; }; kill_box() { :; }
+    peek_pid() { return 1; }; pgrep() { :; }; rm_box() { rm -rf "$D"; }; cmd_down "$@"' _ "$L" "$b" "$@" 2>&1; }
+  out=$(dn --orphans)
+  check_match "down --orphans names each orphan and what started it" "box 'lost': an orphan \(no idle limit; what started it, sleep, pid $pid, is gone\)" "$out"
+  check "...and takes it down" test ! -e "$b/lost"
+  check "...not a box whose starter runs" test -e "$b/kept/box.json"
+  check_eq "...none left: said so" "omabox: no orphan boxes" "$(dn --orphans)"
+  check_match "...takes no names" "takes no names" "$(dn --orphans kept)"
+}
+
 # findings 88 and 93: two agent sessions in one repo get a box each, and one's `down` leaves the
 # other's up. A session's box goes when its agent exits, but not while it is in use, and a dead one
 # keeps its logs. The "agent" here is a shell that exports its own pid as CLAUDE_PID, as Claude Code does.
@@ -4636,6 +4690,55 @@ t_stale_pid() {
   pkill -P "$decoy"; kill "$decoy" 2>/dev/null
 }
 
+# #220: a headless box at --idle 0 with no agent or owner has no reaper. `ls` calls it an orphan once
+# what started it is gone, `down --orphans` takes it down, and nothing else does. Four boxes: one up
+# from a script that exits (an orphan at once), one from a script that stays (not one, then one once it
+# is killed), one with an idle limit and one started at a terminal (never one).
+t_orphan() {
+  local A=$P-or-a B=$P-or-b C=$P-or-c T=$P-or-t bd=$XDG_RUNTIME_DIR/omabox
+  printf '%s\n' 'echo "$$" > "$1.pid"' '"$2" up "$3" --no-shell --net isolated "${@:4}" </dev/null >/dev/null 2>"$1.err"' 'true' > "$TMP/or-short.sh"
+  printf '%s\n' 'echo "$$" > "$1.pid"' '"$2" up "$3" --no-shell --net isolated --idle 0 </dev/null >/dev/null 2>"$1.err"' 'exec sleep 300' > "$TMP/or-long.sh"
+  orphan_of() { "$CLI" ls --json | jq -r --arg n "$1" '[.[] | select(.name == $n) | if .orphan then "orphan" else .state end][0] // "gone"'; }
+  idle_col() { "$CLI" ls 2>/dev/null | awk -v n="$1" '$1 == n { print $7 }'; }
+  bash "$TMP/or-short.sh" "$TMP/or-a" "$CLI" "$A" --idle 0
+  bash "$TMP/or-long.sh" "$TMP/or-b" "$CLI" "$B" & local holder=$!
+  bash "$TMP/or-short.sh" "$TMP/or-c" "$CLI" "$C" --idle 30m
+  # A person at a terminal: up's stdin a terminal (script(1)'s), outside any agent session.
+  bash -c 'script -qec "$1 up $2 --no-shell --net isolated --idle 0" /dev/null </dev/null >"$3" 2>&1; true' _ "$CLI" "$T" "$TMP/or-t.err"
+  check "the boxes start" until_ok 40 bash -c "[ -s '$TMP/or-b.err' ] && jq -e .pidns '$bd/$A/box.json' '$bd/$B/box.json' '$bd/$C/box.json' '$bd/$T/box.json' >/dev/null"
+  check_eq "up records its starter: the script that ran it" "$(cat "$TMP/or-a.pid") bash false" \
+    "$(jq -r '.starter | "\(.pid) \(.command) \(.terminal)"' "$bd/$A/box.json")"
+  check_match "up --idle 0 with no agent says nothing takes the box down but down" \
+    "note: box '$A' has no idle limit and goes with no agent: nothing takes it down but omabox down $A; once what started it \(bash, pid $(cat "$TMP/or-a.pid")\) is gone, ls calls it an orphan" \
+    "$(cat "$TMP/or-a.err")"
+  check_fails "...not with an idle limit" grep -q 'no idle limit' "$TMP/or-c.err"
+  check_eq "its starter gone: ls --json says orphan" orphan "$(orphan_of "$A")"
+  check_eq "...and ls, under IDLE" orphan "$(idle_col "$A")"
+  check_match "...naming it on stderr with what takes it down" "orphan: .*$A.*omabox down --orphans does" "$("$CLI" ls 2>&1 >/dev/null)"
+  check_eq "its starter still running: not an orphan" up "$(orphan_of "$B")"
+  check_eq "...ls says never" never "$(idle_col "$B")"
+  check_eq "an idle limit, its starter gone: not an orphan" up "$(orphan_of "$C")"
+  check_eq "started at a terminal (a person's), its starter gone: not an orphan" "up true" \
+    "$(orphan_of "$T") $(jq -r .starter.terminal "$bd/$T/box.json")"
+  check "...its up said so at the terminal" grep -q "box '$T' up (" "$TMP/or-t.err"
+  check_fails "...without the note" grep -q 'no idle limit' "$TMP/or-t.err"
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  check_eq "the starter killed: an orphan now" orphan "$(orphan_of "$B")"
+  check_eq "...and nothing takes it down by itself (no reaper)" "up up 0" \
+    "$("$CLI" ls --json | jq -r --arg a "$A" --arg b "$B" '[.[] | select(.name == $a or .name == $b) | .state] | join(" ")') $(pgrep -fc "omabox _reap ($A|$B) ")"
+  # down --orphans takes every orphan of the user's: not when one up is not this run's.
+  local others; others=$("$CLI" ls --json | jq -r --arg p "$P-or-" '.[] | select(.orphan and (.name | startswith($p) | not)) | .name')
+  if [ -n "$others" ]; then
+    skip "down --orphans" "orphans up that are not this test's (${others//$'\n'/ }): it would take them down too"
+  else
+    local out; out=$("$CLI" down --orphans 2>&1)
+    check_match "down --orphans names each orphan and its starter" "box '$A': an orphan \(no idle limit; what started it, bash, pid [0-9]+, is gone\): taking it down" "$out"
+    check_match "...takes them down" "box '$B' down" "$out"
+    check_eq "...them only" "gone gone up up" "$(orphan_of "$A") $(orphan_of "$B") $(orphan_of "$C") $(orphan_of "$T")"
+  fi
+  ob down "$A" "$B" "$C" "$T" >/dev/null 2>&1
+}
+
 # An up killed once its box started (SIGKILL: no EXIT trap; a killed suite run, a harness's timeout)
 # left a box with no reaper, up for good (#137). Its reaper starts with the box now, and does not
 # count a slow start as idle time.
@@ -6054,7 +6157,7 @@ t_widget_list() {
   # being NVIDIA's; a row's caption names its GPU as `ls` does: with one render node (the other GPU on
   # vfio-pci), only a fallback's, with its slot.
   local rr='{"node":"/dev/dri/renderD128","pci":"0000:7a:00.0","driver":"amdgpu"}'
-  jq -n "[$row + {name: \"a\", render: ($rr + {fallback: true, wanted: \"nvidia\"})}, $row + {name: \"c\", render: ($rr + {fallback: false})}]" > "$H/list.json"
+  jq -n "[$row + {name: \"a\", render: ($rr + {fallback: true, wanted: \"nvidia\"})}, $row + {name: \"c\", render: ($rr + {fallback: false}), orphan: true}]" > "$H/list.json"
   jq -n --argjson g "$gpus" '{gpu: "nvidia", gpus: $g, "gpu-auto": "0000:7a:00.0", "gpu-now": "0000:7a:00.0"}' > "$H/config.json"
   ob keys -b "$B" Escape Escape >/dev/null
   ob run -b "$B" -- omarchy-shell chaves.omabox.panel face settings
@@ -6063,6 +6166,8 @@ t_widget_list() {
   ob keys -b "$B" Escape >/dev/null; wl_polled
   check_eq "a row names its GPU as ls does: with one render node a fallback's only, its slot too (finding 237)" "true false" \
     "$(q '[.rows[] | {(.name): .caption}] | add | "\(.a | test("^headless · amdgpu 7a:00.0 \\(fallback\\) · ")) \(.c | test("amdgpu"))"')"
+  check_eq "...and says orphan for an orphan, as ls does (#220)" "false true" \
+    "$(q '[.rows[] | {(.name): .caption}] | add | "\(.a | test("orphan")) \(.c | test(" · orphan"))"')"
   jq -n --argjson g "[$(jq -c '.[1]' <<<"$gpus")]" '{gpu: "auto", gpus: $g, "gpu-auto": "0000:7a:00.0", "gpu-now": "0000:7a:00.0"}' > "$H/config.json"
   ob keys -b "$B" Escape Escape >/dev/null
   ob run -b "$B" -- omarchy-shell chaves.omabox.panel face settings
@@ -9348,9 +9453,9 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_lock_markers t_unit_git_dirs t_unit_box_gone t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

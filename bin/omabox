@@ -131,7 +131,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]
   omabox path [NAME | -b NAME] [--logs | --run]          the box dir (HOME is <dir>/home); --logs: each log's file;
                                                          --run: the box's /run/user/\$UID (<dir>/run)
-  omabox down [NAME | -b NAME | --all]
+  omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)
   omabox ls [--json]
   omabox which PID                                       the box a host process is in, or "not in a box" (exit 1)
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
@@ -411,6 +411,11 @@ log's last lines, and exits with that status (124 when it was 0: the screen is s
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
 (-b NAME) stays.
+@ up down ls
+A headless box at --idle 0 with no agent to go with stays up until \`down\`. Once what started it is
+gone (the script or agent whose command ran \`up\`), \`ls\` says orphan under IDLE (\`ls --json\`:
+orphan) and \`down --orphans\` takes those down; nothing does by itself. One you started at a terminal,
+outside an agent session, is yours: never an orphan.
 @ up mode gpu cpu run
 Sizes: WxH is @60; \`host\` copies your focused monitor's size and refresh rate (scale stays 1).
 \`,scale=S\` (1 to 4, as a monitor's) gives the main screen a scale, headless only: \`--size 3840x2160,scale=2\`
@@ -656,6 +661,33 @@ proc_stat() {
 }
 proc_ppid() { proc_stat "$1" 1; }
 proc_start() { proc_stat "$1" 19; }
+
+# The process `up` records as its box's starter (#220), as "PID START COMMAND": the nearest ancestor that
+# outlives the one command it ran. Skipped: a shell given a command string (`bash -c`, as an agent runs
+# each of its commands, in a session of its own), a script's subshell (`$(omabox up)`, `( … ) &`: the
+# same command line as its parent's), and timeout, flock and time, which end with their command. Fails
+# when none is found below PID 1 (`setsid -f omabox up`: a parent gone already) or this pid namespace's
+# first process (a sandbox's: its edge).
+box_starter() {
+  local p=$PPID pp comm args a skip start
+  while [[ $p =~ ^[0-9]+$ ]] && [ "$p" -gt 1 ]; do
+    comm=$(cat "/proc/$p/comm" 2>/dev/null) && pp=$(proc_ppid "$p") || return 1
+    skip=0
+    case $comm in
+      timeout|flock|time) skip=1 ;;
+      sh|bash|dash|zsh|ksh|mksh|fish|busybox)
+        mapfile -d '' args < "/proc/$p/cmdline" 2>/dev/null || args=()
+        for a in "${args[@]:1}"; do
+          case $a in --command|--command=*) skip=1; break ;; --*) ;; -*c*) skip=1; break ;; -*) ;; *) break ;; esac
+        done ;;
+    esac
+    if [ "$skip" = 0 ] && [ "$pp" -gt 0 ] && cmp -s "/proc/$p/cmdline" "/proc/$pp/cmdline" 2>/dev/null; then skip=1; fi
+    if [ "$skip" = 1 ]; then p=$pp; continue; fi
+    start=$(proc_start "$p") && [ -n "$start" ] || return 1
+    echo "$p $start $comm"; return 0
+  done
+  return 1
+}
 
 # lock_file VAR FILE FLOCK_OPTS...: opens FILE on a new fd, stored in VAR, and flocks it; on failure
 # the fd is closed again. A `down` removes a name's lock file once the box is gone (#158), so an fd
@@ -2637,6 +2669,11 @@ cmd_up() {
   fi
   # The owner's start time with its pid, as for an agent: a pid reused after a SIGKILLed run is not it.
   local owner_start=""; [ -z "$owner" ] || owner_start=$(proc_start "$owner") || owner_start=""
+  # Who started it (#220), for `ls` to tell an orphan: a box with no idle limit, owner or agent, whose
+  # starter is gone. One started at a terminal outside any agent session is a person's, on purpose:
+  # never an orphan (closing the terminal does not make it one).
+  local starter at_term=false; starter=$(box_starter) || starter=""
+  if [ -t 0 ] && ! agent_var >/dev/null && ! in_jail; then at_term=true; fi
   # Where a headless box renders (#118): the node, its GPU's slot and driver, and whether the gpu setting's
   # GPU was not there (fallback). An interactive box renders where the desktop does (finding 95): none.
   # A fallback keeps the setting's value and why it was not there (finding 237), for `ls` and `gpu`.
@@ -2652,6 +2689,7 @@ cmd_up() {
     --arg size "$([ $interactive = 1 ] && echo window || echo "$size")" --argjson scale "$scale" --arg created "$(date -Is)" \
     --arg net "$net" --arg allow "$allow" --argjson idle "$idle_s" --arg bar "$([ "$STOCK_BAR" = 1 ] && echo stock || echo user)" \
     --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --arg owner "$owner" --arg owner_start "$owner_start" --arg agent "$agent" \
+    --arg starter "$starter" --argjson at_term "$at_term" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson plugin_dirs "$(printf '%s\n' "${PLUGINS[@]}" | jq -R 'select(. != "") | split("\t") | {(.[0]): .[1]}' | jq -s 'add // {}')" \
     --argjson linked "$(printf '%s\n' "${LINKED_PLUGINS[@]}" | jq -R 'select(. != "")' | jq -s .)" \
@@ -2680,6 +2718,8 @@ cmd_up() {
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
       + (if $owner_start != "" then {owner_start: $owner_start} else {} end)
       + (if $agent != "" then ($agent | split(" ") | {agent: (.[0] | tonumber), agent_start: .[1]}) else {} end)
+      + {starter: (($starter | capture("^(?<pid>[0-9]+) (?<start>[0-9]+) (?<command>.+)$") | .pid |= tonumber) // {}
+          | . + {terminal: $at_term})}
       + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from,
           drawn_hidden: true} else {} end)' > "$D/box.json"
   [ $interactive = 0 ] || write_confirm_flag "$D/run" "$confirm"
@@ -2934,6 +2974,13 @@ cmd_up() {
   rm -f "$D/starting"; touch "$D/used"
   local screen live_sc; screen=$(box_screen); live_sc=$(main_scale_live) || live_sc=""
   say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")) in $D"
+  # No idle limit and no agent or owner to go with (#220): it outlives its caller, said to the caller
+  # that is not a person at a terminal (an agent whose own process `up` could not find, a script).
+  if [ $interactive = 0 ] && [ "$idle_s" = 0 ] && [ -z "$owner$agent" ] && [ "$at_term" = false ]; then
+    local by=""; [ -z "$starter" ] || by=" (${starter#* * }, pid ${starter%% *})"
+    say "note: box '$NAME' has no idle limit and goes with no agent: nothing takes it down but omabox down $NAME;" \
+      "once what started it$by is gone, ls calls it an orphan"
+  fi
   if [ $json = 1 ]; then box_json
   elif [ $new = 1 ]; then echo "$NAME"; fi
   [ -z "$crashed" ] || { say "$crashed"; exit 1; }
@@ -3580,6 +3627,17 @@ owner_alive() {
   [ -n "$2" ] || return 0
   local state start; state=$(proc_stat "$1" 0) && start=$(proc_start "$1") || return 1
   [ "$state" != Z ] && [ "$start" = "$2" ]
+}
+
+# Whether the selected box, up, is an orphan (#220): headless, with no idle limit and no owner or agent
+# (whose reaper would take it down), started by a process `up` recorded (box_starter: not a person at
+# a terminal) that is gone. Nothing takes an orphan down by itself: `down --orphans` does, when asked.
+# A box.json from before the starter was recorded names none: never an orphan.
+box_orphan() {
+  local s; s=$(jq -r 'select(.mode == "headless" and (.idle // 0) == 0 and .owner == null and .agent == null
+    and .starter.pid != null and .starter.start != null and (.starter.terminal | not)) | "\(.starter.pid) \(.starter.start)"' \
+    "$D/box.json" 2>/dev/null) && [ -n "$s" ] || return 1
+  ! owner_alive "${s%% *}" "${s#* }"
 }
 
 # Whether the agent `up` recorded for this box still runs: its pid, started when it was then, and not
@@ -8694,16 +8752,21 @@ prune_marks() {
   find "$BOXES" -maxdepth 1 \( -name '.down-*' -mmin +10 -o -name '.expired-*' -mmin +1440 \) -type f -delete 2>/dev/null || true
 }
 cmd_down() {
-  local names=() n all=0
+  local names=() n all=0 orphans=0
   while [ $# -gt 0 ]; do
     case $1 in
       --all) all=1 ;;
+      --orphans) orphans=1 ;;
       -b|--box) optarg "$@"; names+=("$2"); shift ;;
       -*) die "down: unknown option $1" ;;
       *) names+=("$1") ;;
     esac
     shift
   done
+  if [ $orphans = 1 ]; then
+    [ $all = 0 ] && [ ${#names[@]} = 0 ] || die "down: --orphans takes no names, nor --all"
+    down_orphans; return
+  fi
   if [ $all = 1 ]; then
     [ ${#names[@]} = 0 ] || die "down: --all or names, not both"
     mapfile -t names < <(list_names)
@@ -8758,6 +8821,25 @@ cmd_down() {
   return $rc
 }
 
+# down --orphans (#220): every box `ls` calls an orphan, each named with what started it, then taken
+# down as that box (not a new one that took its name meanwhile).
+down_orphans() {
+  local n rc=0 found=() created=() by i
+  for n in $(list_names); do
+    select_box "$n"
+    if [ "$(box_state)" != up ] || ! box_orphan; then continue; fi
+    found+=("$NAME") created+=("$(meta created)")
+  done
+  [ ${#found[@]} -gt 0 ] || { say "no orphan boxes"; return 0; }
+  for i in "${!found[@]}"; do
+    select_box "${found[i]}"
+    by=$(jq -r '.starter | "\(.command), pid \(.pid)"' "$D/box.json" 2>/dev/null) || by="?"
+    say "box '$NAME': an orphan (no idle limit; what started it, $by, is gone): taking it down"
+    DOWN_IF_CREATED=${created[i]} cmd_down "$NAME" || rc=1
+  done
+  return $rc
+}
+
 # The box's theme name (its theme.name's first line), "" when the file is not one to read or the name
 # not a plain one: the box writes that file, and whatever reads `ls --json` shows the name (finding 159).
 box_theme() {
@@ -8790,7 +8872,8 @@ hung_boxes() {
 # The selected box as one line of JSON, as `ls --json` lists it (and `up --json` prints it). HUNG: true
 # when hung_boxes named it. Its state stays `up`: the bar widget offers Down for any other state, as
 # for a dead box, and a box `save` has paused answers no IPC either. SHELL: shell_state's hung or ok,
-# when hung_boxes asked already. box_json [HUNG [SHELL]]
+# when hung_boxes asked already. `orphan` (#220): box_orphan's, for a box up; `starter`: as `up` recorded it.
+# box_json [HUNG [SHELL]]
 box_json() {
   local state peeking=false keys=false hung=${1:-false}
   state=$(box_state)
@@ -8798,16 +8881,18 @@ box_json() {
   [ ! -f "$D/keys-to-box" ] || keys=true
   local theme; theme=$(box_theme)
   local sh=none crashes=0; if [ "$state" = up ]; then sh=$(shell_state "${2:-}"); crashes=$(shell_crashes); fi
+  local orphan=false; [ "$state" != up ] || ! box_orphan || orphan=true
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" --argjson hung "$hung" \
-    --arg sh "$sh" --argjson crashes "$crashes" \
+    --arg sh "$sh" --argjson crashes "$crashes" --argjson orphan "$orphan" \
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), idle: (.idle // 0),
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
         | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
       client_render: (.client_render // null),
       monitors: (.monitors // null),
-      omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes}' "$D/box.json" 2>/dev/null ||
-    jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false}'
+      omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end),
+      starter: (.starter // null)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}' "$D/box.json" 2>/dev/null ||
+    jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false, orphan: false}'
 }
 
 # After an interactive box went (finding 134): the host out of the "omabox" submap once no interactive
@@ -8836,7 +8921,7 @@ cmd_ls() {
   # IDLE: minutes since the box was last used, of its limit (it goes down when they meet). SHELL (#147):
   # running, hung, restarting or gone, and its crashes since up (+N, as running+2); - for none or a box not up.
   printf '%-24s %-11s %-16s %-7s %-14s %-9s %-9s %s\n' NAME MODE SIZE STATE SHELL NET IDLE PLUGINS
-  local used gpus; gpus=$(render_nodes | wc -l)
+  local used gpus orphans=(); gpus=$(render_nodes | wc -l)
   for n in $(list_names); do
     select_box "$n"
     # A box going down while this lists them has no box.json any more: left out, not the end of the
@@ -8846,6 +8931,7 @@ cmd_ls() {
     idle=$(meta idle) || continue
     if [ "${idle:-0}" -gt 0 ] && used=$(stat -c %Y "$D/used" 2>/dev/null); then
       idle="$((($(date +%s) - used) / 60))m/$(human_duration "$idle")"
+    elif { [ "$state" = up ] || [ "$state" = hung ]; } && box_orphan; then idle=orphan; orphans+=("$NAME")
     else idle=never; fi
     local sh=- c; if [ "$state" = up ] && [ "$(meta shell)" = true ]; then
       sh=$(shell_state "$(grep -qFx -- "shell $n" <<<"$hung" && echo hung || echo ok)"); c=$(shell_crashes); [ "$c" = 0 ] || sh+="+$c"
@@ -8866,6 +8952,9 @@ cmd_ls() {
     jq -r '.client_render // empty | select(.software == true) | "  apps: \(.renderer | sub(" \\(.*"; "")), in software (cost measured here is software rendering'"'"'s)"' \
       "$D/box.json" 2>/dev/null || true
   done
+  # Orphans (#220), on stderr: what the IDLE column's word means, and what takes them down.
+  [ ${#orphans[@]} = 0 ] || say "orphan: ${orphans[*]} (no idle limit, and what started it is gone; nothing takes it down by itself:" \
+    "omabox down --orphans does)"
 }
 
 # omabox which PID (#172): the box a host process is in. A box's shell has the desktop's command line
