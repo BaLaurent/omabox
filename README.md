@@ -137,7 +137,7 @@ omabox which 12345                     # the box a host pid is in, a bar like yo
   with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for
   the whole box session), `--xwayland`, `--autoreload` (Hyprland reloads its config when a file it
   loaded changes, as on your desktop), `omabox gpu 10` (GPU time of one box's
-  processes, where the driver reports per-process counters) and `omabox cpu 10` (their CPU, as % of one
+  processes; on NVIDIA, its driver's own sampling) and `omabox cpu 10` (their CPU, as % of one
   core, and memory; `--app NAME` or `--pid PID` for one). `omabox help` lists every flag,
   `omabox help CMD` (or `omabox CMD --help`) one command's.
 
@@ -629,9 +629,10 @@ dir, its `/run/user/$UID`: `omabox path --run`; the host's own is your real sess
   `omarchy restart shell` works in a box.
 - A `run -d` job does not count as use for idle expiry: a server the agent only polls over HTTP needs
   `--idle 0` (or a longer one). Nor does it keep an agent session's box once the agent exits.
-- `omabox gpu` shows no per-process figures on NVIDIA 615.71.09, which does not report them. Tools
-  that sum GPU time by process name add a box's Hyprland to yours: use `--size host` and `omabox gpu`
-  to see what an animation costs.
+- On NVIDIA, whose driver reports no per-process DRM counters, `omabox gpu` takes the driver's own
+  sampling through `nvidia-smi pmon`: whole seconds, and a process the driver did not sample in a
+  second counts 0 for it. Intel's i915 and xe are untested (#223). Tools that sum GPU time by process
+  name add a box's Hyprland to yours: use `--size host` and `omabox gpu` to see what an animation costs.
 
 ## Contributing
 

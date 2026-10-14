@@ -1056,7 +1056,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     then reapply Hyprland's mode after its initial 1280x720 xdg configure; `omabox mode` changes both.
     A custom bar without `omarchy.tray` does not start `org.kde.StatusNotifierWatcher`: readiness
     waits for it only when that widget is present. This machine's driver exposes no `drm-engine-*`
-    counters in `/proc/*/fdinfo`, so `omabox gpu` reports no per-process figures. Default and
+    counters in `/proc/*/fdinfo`, so `omabox gpu` reports no per-process figures (since finding 295:
+    the driver's own sampling, through nvidia-smi). Default and
     `--net isolated` boxes, 1920x1080 screenshots, input, live resize and host focus were checked;
     broader NVIDIA hardware remains untested.
 78. **Check the NVIDIA resize helper before starting a box** (2026-09-25). The NVIDIA headless path
@@ -5830,6 +5831,26 @@ from them.
     t_main's NVIDIA branch (the card path an empty read-only regular file; `eglinfo -p wayland` on
     NVIDIA: fails on the code before), t_output_nvidia (nothing said of software rendering), and
     every `check_box_safety`.
+295. **`omabox gpu` on NVIDIA: the driver's own sampling, through `nvidia-smi pmon`** (2026-10-14;
+    finding 77 found no figures there). NVIDIA's driver (610.57.04, as 615.71.09 before) puts no
+    `drm-*` lines in a GPU client's fdinfo: the desktop's Hyprland and quickshell, holding renderD129,
+    have none. NVML has per-process utilization: `nvmlDeviceGetProcessUtilization` gave the latest
+    sample of each process sampled since a timestamp (3 of the GPU's ~70 contexts, the idle ones
+    left out), and `nvidia-smi pmon -s u` prints it once a second for every process with a context
+    (sm, mem, enc, dec, jpg, ofa %; `-` for one with no sample in that second), under host pids, so a
+    box's processes are found as `gpu` finds them (`box_pids`). Measured in a box on the RTX 5070 Ti:
+    an offscreen GLES loop with an expensive shader read 98% SM in pmon, 80% in NVML's call, the
+    device 99%; the box's Hyprland ~3% idle and its bar 0; es2gears_wayland 0-9% (light enough to be
+    missed in a second). So on NVIDIA `gpu` runs `nvidia-smi pmon -s u -d 1 -c N+1` (N: the seconds
+    rounded up; `-i` the box's PCI slot when it has one; an interactive box is NVIDIA's when one of
+    its processes holds `/dev/nvidiactl`, then every GPU) and `pmon_figures` drops the first sample
+    (the second before), averages each box process's sm+enc+dec+jpg+ofa over the N (a `-` counts 0;
+    `mem`, the memory controller's, left out), by name as before. The header and `--json`'s `source`
+    say which figures they are. They are not the DRM path's busy time: a process the driver did not
+    sample in a second is 0 for it, and one saturating the GPU leaves the others at 0. No
+    nvidia-smi: `gpu` says so and fails. Tests: t_unit_gpu (`pmon_figures` on a canned output: the
+    second before dropped, `-` as 0, mem not counted, a host process left out, two GPUs), t_main's
+    NVIDIA branch (`source`, the box's Hyprland listed, only names of the box's processes).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

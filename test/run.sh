@@ -3193,8 +3193,16 @@ print(*r)' 2>&1)"
       skip "gpu --json lists Hyprland" "the render node's driver keeps no DRM fdinfo ($rn)"
     fi
   else
-    # NVIDIA's driver may expose no drm-engine-* counters in /proc/*/fdinfo.
-    check "gpu --json handles missing driver counters" jq -e '.percent | type == "object"' <<<"$gpu"
+    # NVIDIA's driver publishes no drm-engine-* counters: its own sampling, through nvidia-smi
+    # (finding 295), lists the box's processes with a GPU context, never the host's.
+    if command -v nvidia-smi >/dev/null; then
+      check_eq "gpu --json on NVIDIA: from nvidia-smi pmon, the box's Hyprland listed" "nvidia-smi pmon true" \
+        "$(jq -r '"\(.source) \(.percent | has("Hyprland"))"' <<<"$gpu")"
+      local bcomms; bcomms=$(for p in $(lib eval "NAME='$B'; D='$D'; box_pids"); do cat "/proc/$p/comm" 2>/dev/null; done | tr -s ' \t' _ | sort -u)
+      check_eq "...only names of the box's own processes" "" "$(jq -r '.percent | keys[]' <<<"$gpu" | grep -vxF -f <(echo "$bcomms"))"
+    else
+      check "gpu --json handles missing driver counters" jq -e '.percent | type == "object"' <<<"$gpu"
+    fi
   fi
   check_match "gpu first line names the mode" "1280x720@120" "$(ob gpu -b "$B" 1 | head -1)"
   check_eq "gpu --json names the box's aquamarine (#47)" "$(jq -c .aquamarine "$D/box.json")" "$(jq -c .aquamarine <<<"$gpu")"
@@ -8247,6 +8255,25 @@ t_unit_gpu() {
   local out; out=$(rel nvidia | paste -sd '|'); wait "$holder"
   check_match "gpu release waits for an up in progress, said" "waiting for box 'f' \(an up or down in progress\)" "$out"
   check_match "...and takes its box down too" "\|down a d f$" "$out"
+  # pmon_figures (finding 295): NVIDIA's own per-process sampling, the box's processes only.
+  local pc=$TMP/$P-pmon-pids; printf '100 Hyprland\n101 quickshell\n102 heavy\n' > "$pc"
+  local pm='# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command
+# Idx           #    C/G      %      %      %      %      %      %    name
+    0       100     G     50      9      -      -      -      -    Hyprland
+    0       102     G     90      1      -      -      -      -    heavy
+    0       100     G      2     40      -      -      -      -    Hyprland
+    0       101     G      -      -      -      -      -      -    quickshell
+    0       102     G     98      1     10      -      -      -    heavy
+    0       555     G     70      3      -      -      -      -    Hyprland
+    0       100     G      4      1      -      -      -      -    Hyprland
+    0       101     G      -      -      -      -      -      -    quickshell
+    0       555     G     60      3      -      -      -      -    Hyprland
+    1       102     G      -      -      -      -      -      -    heavy'
+  local pf; pf=$(lib pmon_figures "$pc" <<<"$pm" | LC_ALL=C sort)
+  check_eq "pmon_figures: the window's samples averaged, the second before left out, mem not counted" \
+    "engine Hyprland sm 3.0|engine heavy enc 5.0|engine heavy sm 49.0|proc Hyprland 3.0|proc heavy 54.0|proc quickshell 0.0" "$(paste -sd '|' <<<"$pf")"
+  check_eq "...a process not in the box (555, the host's Hyprland) is not counted" "" "$(grep -E '(proc|engine) Hyprland (sm )?(6|3[5-9]|4)' <<<"$pf")"
+  check_eq "...no samples (only the header): nothing" "" "$(lib pmon_figures "$pc" <<<"$(head -2 <<<"$pm")")"
 }
 
 # omabox cpu (#205, finding 277): /proc read on a fake tree (cpu_sample), the arithmetic on injected

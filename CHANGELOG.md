@@ -5,6 +5,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **`omabox gpu` on NVIDIA** (finding 295). NVIDIA's driver reports no per-process DRM counters, so
+  `gpu` listed nothing there. It now takes the driver's own per-process sampling through
+  `nvidia-smi pmon`, for the box's processes only: whole seconds, each process's share of the GPU as
+  sampled once a second (`--json` has `source`).
+
 ### Fixed
 
 - **Apps in a box on an NVIDIA GPU draw on the GPU** (#204). They fell back to Mesa's software

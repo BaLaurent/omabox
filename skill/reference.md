@@ -159,9 +159,11 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   put the UI in the state to measure, then `omabox gpu 10` (% of wall time per process, this box
   only; `--json`). Never read host-wide tools (nvtop, radeontop, scripts summing `/proc/*/fdinfo` by
   name) while a box is up: they add the box's Hyprland and quickshell to the user's. Match the mode:
-  anything that repaints per frame costs ~2.4x more at 144 Hz than at the default 60. NVIDIA driver
-  615.71.09 does not expose the per-process DRM counters `gpu` needs; on that driver it reports no
-  percentages.
+  anything that repaints per frame costs ~2.4x more at 144 Hz than at the default 60. On NVIDIA,
+  whose driver has no per-process DRM counters, `gpu` reads the driver's own sampling (`nvidia-smi
+  pmon`, `source` in `--json`): whole seconds, % of the GPU each process was seen using once a second;
+  a light process can read 0, and one saturating the GPU leaves the others at 0. Compare runs, not
+  absolute figures, there.
 - **Apps in a box that render in software** (llvmpipe; on NVIDIA they draw on the GPU, but Vulkan
   there still fails). Their CPU and frame cost measured there is software rendering's, and `gpu`
   counts none of their drawing. `up` says so once, `ls` and `gpu`/`cpu` show an `apps: llvmpipe, in software` line,

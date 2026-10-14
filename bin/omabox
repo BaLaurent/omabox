@@ -439,6 +439,9 @@ render node, and on NVIDIA its /dev/nvidia*). Interactive boxes are left alone (
 desktop's GPU), and so are boxes on other GPUs. An \`up\` or \`down\` in progress is waited for first.
 Each box's GPU is in \`gpu\`, \`ls\` (with more than one GPU, or when it is a fallback, and why) and
 \`--json\` (render).
+\`gpu\` reads the kernel's per-process DRM counters (AMD; Intel untested). NVIDIA's driver has none:
+there it is the driver's own sampling through nvidia-smi pmon, whole seconds, each process's share of
+the GPU as seen once a second (\`--json\` says which, as source).
 @ cpu
 \`cpu\` is \`gpu\`'s twin for CPU and memory: each process in the box's pid namespace (never the
 desktop's, which a host \`top\` or \`pgrep\` mixes in), its CPU over SECONDS as % of one core (100% is
@@ -7121,10 +7124,49 @@ cost_lines() {
   [ "${cr:-null}" = null ] || jq -r 'select(.software == true) | "apps: \(.renderer | sub(" \\(.*"; "")), in software: their drawing is CPU time, not in the GPU figures"' <<<"$cr" || true
 }
 
+# Whether this box draws on NVIDIA, whose driver publishes no DRM fdinfo counters (finding 77): a
+# headless box's render node, or an interactive box with a process holding NVIDIA's control node.
+gpu_on_nvidia() {
+  [ "$(jq -r '.render.driver // empty' "$D/box.json" 2>/dev/null)" != nvidia ] || return 0
+  [ "$(meta mode)" = interactive ] || return 1
+  local p f
+  for p in $(box_pids); do
+    for f in "/proc/$p/fd/"*; do [ "$(readlink "$f" 2>/dev/null)" != /dev/nvidiactl ] || return 0; done
+  done
+  return 1
+}
+
+# NVIDIA's own per-process sampling (finding 295), from `nvidia-smi pmon -s u` output on stdin: each
+# second's utilization (sm, enc, dec, jpg, ofa; mem, the memory controller's, left out of the total)
+# of each process with a context. The first sample is the second before the window, dropped; a
+# process with no sample in a second ("-") is at 0 then. PIDCOMM: "pid name" lines, the box's
+# processes (others are not counted). Prints gpu's "proc NAME %" and "engine NAME ENGINE %" lines.
+pmon_figures() {
+  # shellcheck disable=SC2016 # awk's own $ fields
+  awk -v pidcomm="$1" '
+    BEGIN { while ((getline l < pidcomm) > 0) { split(l, f, " "); comm[f[1]] = f[2] } }
+    /^#/ { if (!ncol) for (i = 2; i <= NF; i++) if ($i != "command") col[++ncol] = $i; next }
+    NF >= 3 && ncol {
+      key = sprintf("%08d %012d", $1, $2)
+      if (prev != "" && key <= prev) sample++
+      prev = key
+      if (sample == 0 || !($2 in comm)) next
+      if (sample > n) n = sample
+      seen[comm[$2]]
+      for (i = 4; i <= ncol && i <= NF; i++) {
+        e = col[i]; if (e == "mem" || $i == "-") continue
+        t[comm[$2]] += $i; te[comm[$2] " " e] += $i
+      }
+    }
+    END { for (c in seen) printf "proc %s %.1f\n", c, (n ? t[c] / n : 0)
+          for (k in te) printf "engine %s %.1f\n", k, te[k] / n }'
+}
+
 # GPU engine time of this box's processes, as % of wall time, by process name. Host-wide tools sum
 # DRM fdinfo by name, so a box's Hyprland and quickshell merge with the real ones; here a process
 # belongs to the box when it is in the box's pid namespace. Any driver that reports drm-engine-*;
-# a DRM client shared by several fds or processes counts once (drm-pdev + drm-client-id).
+# a DRM client shared by several fds or processes counts once (drm-pdev + drm-client-id). NVIDIA
+# reports none: there, its driver's own sampling through nvidia-smi (finding 295).
 cmd_gpu() {
   [ "${1:-}" != release ] || { shift; gpu_release "$@"; return; }
   local name="" secs=5 json=0
@@ -7156,29 +7198,47 @@ cmd_gpu() {
         END { flush() }' "/proc/$p/fdinfo/"* 2>/dev/null || true
     done
   }
-  local t0 t1
-  t0=$(date +%s%N); snap > "$tmp/a"
-  sleep "$secs"
-  t1=$(date +%s%N); snap > "$tmp/b"
+  local t0 t1 via=drm
+  if gpu_on_nvidia; then
+    command -v nvidia-smi >/dev/null ||
+      die "gpu: box '$NAME' draws on NVIDIA, whose driver publishes no per-process DRM counters; its own figures come through nvidia-smi (nvidia-utils), which is not installed"
+    # Whole seconds: the driver samples once a second. Its first sample is the second before.
+    via=nvidia secs=$(awk -v s="$secs" 'BEGIN { n = int(s); if (n < s) n++; print n }')
+    local pci; pci=$(jq -r '.render.pci // empty' "$D/box.json" 2>/dev/null) || pci=""
+    nvidia-smi pmon -s u -d 1 -c $((secs + 1)) ${pci:+-i "$pci"} > "$tmp/pmon" 2>&1 ||
+      die "gpu: nvidia-smi pmon failed: $(head -3 "$tmp/pmon" | tr '\n' ' ')"
+    local p
+    for p in $(box_pids); do printf '%s %s\n' "$p" "$(tr -s ' \t' _ < "/proc/$p/comm" 2>/dev/null)"; done > "$tmp/pids"
+    pmon_figures "$tmp/pids" < "$tmp/pmon" > "$tmp/r"
+  else
+    t0=$(date +%s%N); snap > "$tmp/a"
+    sleep "$secs"
+    t1=$(date +%s%N); snap > "$tmp/b"
+    # A client first seen in the second sample started during the window: all its time counts. Every
+    # process holding a client is listed, idle ones at 0.0.
+    awk -v wall=$((t1 - t0)) '
+      FNR == NR { a[$1 " " $2] = $3; next }
+      !(($1 " " $2) in seen) { seen[$1 " " $2]; if (!($1 in who)) who[$1] = $5
+        d = $3 - a[$1 " " $2]; if (d < 0) d = 0; t[who[$1]] += d; te[who[$1] " " $2] += d }
+      END { for (n in t) printf "proc %s %.1f\n", n, t[n] / wall * 100
+            for (k in te) printf "engine %s %.1f\n", k, te[k] / wall * 100 }' "$tmp/a" "$tmp/b" > "$tmp/r"
+  fi
   local screen aq rj cr; cost_context
-  # A client first seen in the second sample started during the window: all its time counts. Every
-  # process holding a client is listed, idle ones at 0.0.
-  awk -v wall=$((t1 - t0)) '
-    FNR == NR { a[$1 " " $2] = $3; next }
-    !(($1 " " $2) in seen) { seen[$1 " " $2]; if (!($1 in who)) who[$1] = $5
-      d = $3 - a[$1 " " $2]; if (d < 0) d = 0; t[who[$1]] += d; te[who[$1] " " $2] += d }
-    END { for (n in t) printf "proc %s %.1f\n", n, t[n] / wall * 100
-          for (k in te) printf "engine %s %.1f\n", k, te[k] / wall * 100 }' "$tmp/a" "$tmp/b" > "$tmp/r"
   if [ $json = 1 ]; then
-    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson aq "$aq" --argjson render "$rj" --argjson cr "$cr" '
+    jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson aq "$aq" --argjson render "$rj" --argjson cr "$cr" --arg via "$via" '
       [inputs | split(" ")] as $r |
       { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, aquamarine: $aq, render: $render,
+        source: (if $via == "nvidia" then "nvidia-smi pmon" else "drm fdinfo" end),
         client_render: $cr,
         percent: ([$r[] | select(.[0] == "proc") | {(.[1]): (.[2] | tonumber)}] | add // {}),
         engines: (reduce ($r[] | select(.[0] == "engine")) as $e ({}; .[$e[1]][$e[2]] = ($e[3] | tonumber))) }' < "$tmp/r"
     return
   fi
-  echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of wall time on the GPU (all engines)"
+  if [ $via = nvidia ]; then
+    echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of the GPU by process as NVIDIA's driver samples it each second (nvidia-smi pmon: SM, encoders, decoders)"
+  else
+    echo "box '$NAME': ${screen#* } on ${screen%% *}, ${secs}s, % of wall time on the GPU (all engines)"
+  fi
   cost_lines
   # Rows by kind (finding 176): a process whose comm is `engine` is a process.
   grep '^proc ' "$tmp/r" | sort -k3 -rn | awk '{ printf "  %-20s %5.1f%%\n", $2, $3 }'
