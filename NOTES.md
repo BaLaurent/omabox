@@ -4901,7 +4901,7 @@ from them.
     adding that it may be the grabs and to take it at `--every 100ms` or slower. Frames are kept, not
     deduplicated (each is a time and a `click --in`). Not built: one capture client for a whole burst
     (four events a burst, not a frame), which would need grim's work (outputs, scale, -g across
-    monitors, window capture, --fit, PNG) in a tool of ours. `help shot` and the skill's Shots say how
+    monitors, window capture, --fit, PNG) in a tool of ours (built since: finding 314). `help shot` and the skill's Shots say how
     fast is safe. Checks: t_unit_pixel (`--every 0` is a pace, so refused without --burst; `0x`
     refused), t_burst (a `qs` square on a 40 ms Timer beside a 10 ms handler of Hyprland's events: a
     default 20-frame burst spans at least a second and shows at least one step per 80 ms of it, 48 in
@@ -6264,6 +6264,44 @@ from them.
     tone within 50 ms of its moment and of the first red frame give or take one); t_main (no audio:
     refusals, no pipewire); t_unit_record (`mark --audio`, `audio 0`).
 
+314. **`shot --burst` through one capture client: `tools/burst`** (2026-10-14, #196). Finding 249's
+    cause was a grim a frame: Hyprland 0.56 keeps a screencast session per client and source and posts
+    `screencast`/`screencastv2` `>>1` at its first frame and `>>0` once 500 ms pass without one (its
+    `m_shareStopTimer`), so a client that stays is four events however many frames it takes, while
+    the frames come under 500 ms apart. `omabox-burst` (bound at `/opt/omabox/bin` like still; refuses
+    outside a box) takes the whole burst in one client and streams it to the CLI on stdout (`frame I T
+    LEN`, then LEN bytes of PNG; the CLI writes the files, the box none). It takes grim's arguments
+    (`-l`, `-g`, `-T`, `-s`) and makes the image with grim 1.5's own render and PNG code (MIT, credited
+    in the file), so a frame of a still scene is grim's shot byte for byte: seen for the screen, -g,
+    --fit, --monitor and --window (and its -g, --fit) at scale 1, at scale 2, and on a layout with a
+    turned monitor and a turned scale-2 one, AMD and NVIDIA. The screen is wlr-screencopy's plain copy
+    of each output -g touches (it redraws the output, never waits); ext-image-copy-capture's frames
+    after the first wait for the next render, which an idle box never does. A window is one
+    ext-image-copy-capture session (grim's toplevel path, its frames' first one dropped and 100 ms
+    waited, finding 81's priming), each frame nudged by a plain copy of every output, since a window's
+    frame is filled at its monitor's next render. A whole output, not a pixel: Hyprland keeps a region's
+    session for the next frame only at scale 1 (`getManagedSession` compares the asked box with the
+    one it scaled), so a 1x1 region of a scale-2 monitor was a new session, four events, a frame (an
+    upstream bug, not filed). Measured in boxes: a 20-frame burst of one monitor posts 4 events
+    (grims: 80), a window burst on three monitors 10-16 (the window's four, four for each monitor
+    whose nudge got its copy in); 30 frames of a 100x100 crop back to back in 0.44 s, a 1920x1080
+    screen ~25 ms a frame. Beside t_burst's 40 ms Timer and 10 ms handler, a 30-frame burst back to
+    back shows 12 of its steps in 0.44 s (the grims: 0, every frame the same). `--every 0` is safe
+    now, but the default stays 100 ms (decided): 12 frames back to back are 0.15 s of a crop, over
+    before an `--after` action (an omabox of its own) has landed: `--burst 12 --diff --after -- keys -t
+    xyz` on a foot crop, back to back, showed no change in its 0.15 s (the README's and skill's example
+    is that shape). The repeated-frames line says only "nothing new
+    drawn between them". A box started without the tool (an install from before) takes a grim a
+    frame as before and says so. A window gone mid-burst: `frame N failed: the window is gone`; one
+    resized: the frame asked again at its new size. The burst's own frames keep the layout of its
+    start (an output unplugged mid-burst is left empty, one added is not in it). The tool ends when
+    the CLI does: a pipe's writing end polls POLLERR once its reader is gone. Tests: t_burst (a frame
+    of a still scene equal to the shot: screen, -g, window, window -g --fit; 4 events for a 20-frame
+    burst; the Timer at half its own pace or more at `--every 0`, which the grims failed at 0-1 steps;
+    the repeated-frames line), t_scale / t_scale_nvidia (--fit, -g --fit, window, window -g --fit at
+    scale 2), t_monitors_turned / _nvidia (whole, each turned monitor, -g across them, a window on the
+    turned scale-2 one, its --fit; a window burst on three monitors 16 events at most), t_unit_wait
+    (the tool refuses outside a box).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

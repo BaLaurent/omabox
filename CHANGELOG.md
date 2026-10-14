@@ -53,6 +53,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`omabox shot --burst` no longer holds up what it records.** Each frame was a grim of its own, and
+  each grim four Hyprland events: a shell or widget that works on every event (as widgets do to refresh) was
+  held up by a fast burst, so its timers and animations stalled in the very frames meant to show them.
+  A burst is now one capture client in the box for all its frames, four events in all, so `--every 0`
+  (back to back, ~15 ms a crop) shows an animation as it runs. Frames are the same images `omabox shot`
+  takes. A box started before this update still takes a frame at a time until it is started again
+  (#196).
 - **`omabox record`'s colours.** Every video came out washed out: pure green as #0cea0d, white as
   #e8e8e8, black as #101010. wf-recorder wrote its frames' values in TV range (16-235) but marked them
   full range, and every player believed the mark. Videos now come out in the standard form players

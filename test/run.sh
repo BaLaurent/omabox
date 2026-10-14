@@ -6456,6 +6456,20 @@ t_scale_nvidia() {
   local n; n=$(nvidia_ready) || { skip "a scaled main screen on NVIDIA" "$n"; return; }
   scale_on "$n" "$P-scnv" WAYLAND-1 WAYLAND-2
 }
+# burst_vs_shot BOX ARGS...: a 2-frame `shot --burst` with ARGS against a plain `shot` with the same, of a
+# still scene (#196, finding 314): "WxH WxH AE" (the frame's size, the shot's, the pixels that differ).
+# The burst's frames come from tools/burst, the shot from grim: the same image is the point.
+burst_vs_shot() {
+  local b=$1 d=$TMP/bvs-$1; shift
+  rm -rf "$d"; mkdir -p "$d"
+  ob shot -b "$b" "$@" --burst 2 -o "$d/b" >/dev/null 2>&1 || { echo "burst failed"; return; }
+  ob shot -b "$b" "$@" -o "$d/s.png" >/dev/null 2>&1 || { echo "shot failed"; return; }
+  echo "$(magick identify -format '%wx%h' "$d/b/frame-002.png" 2>&1) $(magick identify -format '%wx%h' "$d/s.png" 2>&1)" \
+    "$(magick compare -metric AE "$d/s.png" "$d/b/frame-002.png" null: 2>&1 | cut -d' ' -f1)"
+}
+# The screencast events box B's Hyprland posted since line N of its events log (#196): screencast_since B N
+screencast_since() { tail -n "+$(($2 + 1))" "$(ob path -b "$1")/home/events.log" 2>/dev/null | grep -c '^[0-9.]* screencast'; }
+
 scale_on() {
   local n=$1 B=$2 m0=$3 m1=$4 out
   out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 2560x1440,scale=2 --net isolated 2>&1) || { no "up --size 2560x1440,scale=2" "failed: $out"; return; }
@@ -6514,6 +6528,13 @@ scale_on() {
     check_eq "shot --window -g 200x200 --fit 300 (a 400x400 image): 300 px long" 300x300 "$(magick identify -format '%wx%h' "$wg" 2>&1)"
     check "...click --in it" ob click -b "$B" --in "$wg" 150 150
     check_eq "...the pointer at the crop's point in the window" "$((wx + 300 + 100)), $((wy + 250 + 100))" "$(ob hyprctl -b "$B" cursorpos)"
+    # shot --burst through one client (#196, finding 314): frames the size and pixels of grim's shot,
+    # at scale 2: the screen --fit, a -g --fit, a window, a window's -g --fit.
+    local a r args; for a in "--fit|2000" "-g|100,100 400x300|--fit|600" "--window|class:t227" "--window|class:t227|-g|300,250 200x200|--fit|300"; do
+      IFS='|' read -r -a args <<<"$a"
+      r=$(burst_vs_shot "$B" "${args[@]}")
+      check "shot --burst ${args[*]}: a frame is the shot's image ($r)" awk '{ exit !($1 == $2 && $3 + 0 <= 50) }' <<<"$r"
+    done
     ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
   else no "a foot window for shot --window --fit" "none listed"; fi
   # record (finding 297): a video of the screen at its pixels, a steady frame rate, made in the box.
@@ -6882,6 +6903,22 @@ monitors_turned_on() {
   ob click -b "$B" --in "$fb" 360 640 >/dev/null 2>&1
   check_eq "click --in $m2's shot at 360,640: its middle, 2180,320, its terminal focused" "2180, 320 L4" \
     "$(ob hyprctl -b "$B" cursorpos) $(ob hyprctl -b "$B" -j activewindow | jq -r .title)"
+  # shot --burst through one client (#196, finding 314): the turned layout as grim takes it, whole and
+  # a monitor at a time, a -g across them, and a window on the turned scale-2 monitor.
+  local a args r; for a in "--no-pointer" "--no-pointer|--monitor|$m1" "--no-pointer|--monitor|$m2" "--no-pointer|-g|1000,100 1200x300" "--window|L4" "--window|L4|--fit|300"; do
+    IFS='|' read -r -a args <<<"$a"
+    r=$(burst_vs_shot "$B" "${args[@]}")
+    check "shot --burst ${args[*]}: a frame is the shot's image ($r)" awk '{ exit !($1 == $2 && $3 + 0 <= 50) }' <<<"$r"
+  done
+  # Four screencast events a session for the whole burst, not four a frame: the window's, and a copy of
+  # each monitor that makes it render (a region of a scaled monitor was a session a frame: whole ones).
+  sleep 0.8   # (the bursts before: their sessions' last events, 500 ms after their last frames)
+  local e0; e0=$(wc -l < "$(ob path -b "$B")/home/events.log")
+  ob shot -b "$B" --window L4 --burst 20 --every 0 -o "$TMP/$B-wb" >/dev/null 2>&1
+  sleep 0.8   # (Hyprland says a session stopped 500 ms after its last frame.)
+  local ne; ne=$(screencast_since "$B" "$e0")
+  check "a 20-frame window burst on three monitors: at most 16 screencast events, four a session ($ne)" \
+    test "$ne" -gt 0 -a "$ne" -le 16 -a $((ne % 4)) = 0
   ob pointer -b "$B" -- move 1640 1200 >/dev/null
   check_eq "pointer move 1640,1200: low on the portrait monitor" "1640, 1200" "$(ob hyprctl -b "$B" cursorpos)"
   # pixel: yellow low on the portrait monitor, blue low on the other.
@@ -8619,8 +8656,9 @@ t_burst() {
   check "...on a 100 ms pace: none ahead of it, in order" awk '{ t = $2 + 0; if (t < (NR - 1) * 0.1 - 0.01 || (NR > 1 && t <= p)) bad = 1; p = t }
     END { exit bad || NR != 5 || p > 0.4 + 2 }' <<<"$out"
   check_match "...said, with --in" "5 frames of 200x200 \(screen 0,0\) over .*click with --in a frame" "$err"
-  # (Frames for 2.4 s: the keys, a command of its own started after the first, land later under load.)
-  out=$(ob shot -b "$B" --burst 25 --diff --sheet -g "0,0 600x200" -o "$o/b" --after -- keys -t xyz 2>/dev/null); rc=$?
+  # (Frames for 2.4 s, 100 ms apart: the keys, a command of its own started after the first, land later
+  # under load.)
+  out=$(ob shot -b "$B" --burst 25 --every 100ms --diff --sheet -g "0,0 600x200" -o "$o/b" --after -- keys -t xyz 2>/dev/null); rc=$?
   check_eq "--after -- keys, --diff, --sheet: exit 0" 0 "$rc"
   check_match "...the first frame before the keys, a later one changed" "frame-001\.png 0\.[0-4][0-9]s"$'\n'".*changed [0-9]+,[0-9]+ [0-9]+x[0-9]+" "$out"
   check_match "...one contact sheet, last" "^$o/b/sheet\.png$" "$(tail -n 1 <<<"$out")"
@@ -8651,10 +8689,29 @@ t_burst() {
   wait "$b1"
   check_eq "two bursts started together: two folders of 2 frames" "2 2 2" \
     "$(find "$o/tmp" -mindepth 1 -maxdepth 1 -type d | wc -l) $(for d in "$o"/tmp/*/; do find "$d" -name 'frame-*.png' | wc -l; done | xargs)"
-  # #191, finding 249: each grab is four Hyprland events (screencast), so back-to-back grabs held up a
-  # client that works on each one, its timers with it: a 40 ms Timer beside a 10 ms handler of
-  # Hyprland's events showed a step or two in a whole default burst. The square's colour is the Timer's
-  # count (red + 256 green); over a burst it moves about one step per 40 ms of the burst's span.
+  # #196, finding 314: a burst is one capture client in the box (tools/burst), not a grim a frame. Of
+  # a still scene, its frames are grim's shots: the screen, a crop, a window, a window's crop scaled.
+  local a args r; for a in "" "-g|300,300 400x200" "--window|A" "--window|A|-g|10,10 200x100|--fit|100"; do
+    IFS='|' read -r -a args <<<"$a"
+    r=$(burst_vs_shot "$B" "${args[@]}")
+    check "shot --burst ${args[*]:-(the screen)}: a frame of a still scene is the shot's image ($r)" \
+      awk '{ exit !($1 == $2 && $3 + 0 <= 50) }' <<<"$r"
+  done
+  out=$(ob shot -b "$B" --burst 5 -g "300,300 100x100" -o "$o/still" 2>&1 >/dev/null)
+  check_match "...repeated frames said as nothing new drawn, no longer the grabs (#191)" \
+    "4 of 4 frames identical to the one before: nothing new drawn between them$" "$out"
+  # Hyprland's screencast events (on: screencast, screencastv2; off 500 ms after the last frame): four
+  # for a whole burst. A grim a frame was four a frame (finding 249).
+  sleep 0.8   # (the bursts before: their sessions' last events, 500 ms after their last frames)
+  local e0 ne; e0=$(wc -l < "$(ob path -b "$B")/home/events.log")
+  ob shot -b "$B" --burst 20 --every 0 -g "0,0 200x200" -o "$o/ev" >/dev/null 2>&1
+  sleep 0.8
+  ne=$(screencast_since "$B" "$e0")
+  check_eq "a 20-frame burst back to back: four screencast events, not four a frame" 4 "$ne"
+  # #191, finding 249: those events held up a client that works on each one, its timers with it: a 40
+  # ms Timer beside a 10 ms handler of Hyprland's events showed a step or two in a whole back-to-back
+  # burst. The square's colour is the Timer's count (red + 256 green); over a burst it moves about one
+  # step per 40 ms of the burst's span.
   local D st sp; D=$(ob path -b "$B")
   cat > "$D/home/t191.qml" <<'QML'
 import QtQuick
@@ -8691,27 +8748,22 @@ QML
     echo "$(((last - first + 65536) % 65536)) $(awk 'END { sub(/s$/, "", $2); printf "%d", $2 * 1000 }' "$1.out")"
   }
   # Measured against the Timer's own pace just before, two frames 2 s apart (#200): under load the client
-  # is slower by itself, and a fixed 1 step in 80 ms failed. The burst's pace at least half of it (the
-  # bug showed a step or two in a whole burst); 3 tries, as load comes and goes.
+  # is slower by itself. A 30-frame burst back to back (~0.5 s) at half that pace or more (the grims
+  # showed 0 or 1 step, finding 249); 3 tries, as load comes and goes. Each after the events of the
+  # one before had their 10 ms.
   local ist isp i
   for i in 1 2 3; do
     ob shot -b "$B" --burst 2 --every 2s -g "0,0 100x100" -o "$o/i" >"$o/i.out" 2>/dev/null
     read -r ist isp < <(burst_steps "$o/i")
-    ob shot -b "$B" --burst 20 -g "0,0 100x100" -o "$o/t" >"$o/t.out" 2>/dev/null
+    sleep 1
+    ob shot -b "$B" --burst 30 --every 0 -g "0,0 100x100" -o "$o/t" >"$o/t.out" 2>/dev/null
     read -r st sp < <(burst_steps "$o/t")
-    [ "$ist" -le 0 ] || [ $((st * isp * 2)) -lt $((ist * sp)) ] || [ "$sp" -lt 1000 ] || break
+    [ "$ist" -le 0 ] || [ $((st * isp * 2)) -lt $((ist * sp)) ] || [ "$st" -lt 3 ] || break
     [ "$i" = 3 ] || note "try $i: $st steps in $sp ms, $ist in $isp ms without a burst"
+    sleep 1
   done
-  check "a default burst beside a client busy on each Hyprland event: its 40 ms Timer at half its own pace or more ($st steps in $sp ms; $ist in $isp ms with none)" \
-    test "$ist" -gt 0 -a $((st * isp * 2)) -ge $((ist * sp)) -a "$sp" -ge 1000
-  # Back to back, frames repeat when the grabs hold the client up, or outpace its steps; a grab slowed by
-  # load can miss both: 3 tries.
-  for i in 1 2 3; do
-    out=$(ob shot -b "$B" --burst 20 --every 0 -g "0,0 100x100" -o "$o/t0" 2>&1 >"$o/t0.out")
-    [[ ! $out =~ "frames identical to the one before" ]] || break
-  done
-  check_match "--every 0: back to back, the frames that repeat said, with the pace to use" \
-    "[0-9]+ of 19 frames identical to the one before: .*held the box up.*--every 100ms or slower" "$out"
+  check "--every 0 beside a client busy on each Hyprland event: its 40 ms Timer at half its own pace or more ($st steps in $sp ms; $ist in $isp ms with none)" \
+    test "$ist" -gt 0 -a $((st * isp * 2)) -ge $((ist * sp)) -a "$st" -ge 3
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -9731,6 +9783,10 @@ t_unit_wait() {
   out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --die-with-parent \
         env -i "$ROOT/tools/still/omabox-still" still --timeout 100 2>&1) || rc=$?
   check_eq "omabox-still refuses outside a box" 2 "$rc"
+  check_match "...and says so" "only runs inside an omabox box" "$out"
+  rc=0; out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --die-with-parent \
+        env -i "$ROOT/tools/burst/omabox-burst" -n 2 2>&1) || rc=$?
+  check_eq "omabox-burst refuses outside a box (#196)" 2 "$rc"
   check_match "...and says so" "only runs inside an omabox box" "$out"
   # #124, finding 181: settle_end waited on the tool with no limit. One that never ends (and never
   # answered) is killed after 2 s, with what runs it; a box not answering either is said so.

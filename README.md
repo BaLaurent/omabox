@@ -615,6 +615,7 @@ Wayland connection.
 | `tools/wlfd` | hands an interactive box its one connection to your compositor |
 | `tools/peek` | the live view-only window (`omabox peek`) |
 | `tools/still` | waits in a box until its screen holds still or changes (`omabox wait`, `--wait`) |
+| `tools/burst` | takes a `shot --burst`'s frames through one capture client (Hyprland's screencast events once a burst) |
 | `tools/events` | records a box's Hyprland events, stamped, from its start (`omabox events`) |
 | `tools/relay` | carries an omabox command from inside ai-jail to the broker outside (`omabox broker`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |

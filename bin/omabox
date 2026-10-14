@@ -19,6 +19,7 @@ POINTER=$ROOT/tools/pointer/omabox-pointer
 KEYBOARD=$ROOT/tools/keyboard/omabox-keyboard
 PEEK=$ROOT/tools/peek/omabox-peek
 STILL=$ROOT/tools/still/omabox-still
+BURST=$ROOT/tools/burst/omabox-burst
 EVENTS=$ROOT/tools/events/omabox-events
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
 RELAY=$ROOT/tools/relay/omabox-relay
@@ -297,13 +298,14 @@ BTN is left (the default), right, middle, back or forward (also side and extra: 
 buttons, BTN_SIDE and BTN_EXTRA, which apps take as back and forward).
 @ shot
 \`shot --burst N\` takes N frames (2-200) of the same capture 100 ms apart (--every DURATION; --every 0:
-back to back, ~16 ms a crop) into a folder, one line each: its path and time, with --diff where it
-differs from the frame before ("changed X,Y WxH", in the screen's coordinates as wait says them,
-whatever -g, --monitor or --fit took; with --window in the window's own, as \`click --window\` takes
-them). Faster than 100 ms can hold the box up: each grab is four Hyprland events (screencast), and a
-shell or widget that works on each one stalls its timers and animations (with 10 ms of work an event,
-a 40 ms timer ran at 8% of its speed back to back, 48% at 40 ms apart, all of it from 60 ms; at 15
-ms an event no pace kept it whole). Frames identical to the one before are counted on stderr.
+back to back, ~15 ms a crop, ~25 a 1920x1080 screen) into a folder, one line each: its path and time,
+with --diff where it differs from the frame before ("changed X,Y WxH", in the screen's coordinates as
+wait says them, whatever -g, --monitor or --fit took; with --window in the window's own, as \`click
+--window\` takes them). The whole burst is one capture client in the box, so Hyprland posts its
+screencast events once (four a monitor), not four a frame, which stalled the timers and animations of
+a shell or widget that works on each event: any pace is safe. Frames identical to the one before are
+counted on stderr: nothing new drawn between them. (A box started by an omabox from before takes a
+grim a frame, and says so: there, faster than 100 ms can stall them.)
 -o DIR: a folder used before loses the frame-NNN.png and sheet.png a burst left there, nothing else;
 without -o, a new folder each time. --after -- ACTION takes the first frame, then runs \`omabox
 ACTION\` (keys, click, scroll, run -d, monitor add ...) beside the rest: a transition from its start.
@@ -950,6 +952,7 @@ run_read() { local f=$D/run/$1; [ ! -L "$f" ] && [ -f "$f" ] && head -c 65536 --
 BOX_KEYBOARD=/opt/omabox/bin/omabox-keyboard
 BOX_POINTER=/opt/omabox/bin/omabox-pointer
 BOX_STILL=/opt/omabox/bin/omabox-still
+BOX_BURST=/opt/omabox/bin/omabox-burst
 BOX_EVENTS=/opt/omabox/bin/omabox-events
 
 # Run a tool against the box's compositor (grim, hyprctl, the keyboard and pointer), inside the box's
@@ -2907,6 +2910,9 @@ cmd_up() {
     --ro-bind "$ROOT/share" /opt/omabox/share
     --ro-bind "$KEYBOARD" "$BOX_KEYBOARD" --ro-bind "$POINTER" "$BOX_POINTER" --ro-bind "$STILL" "$BOX_STILL"
     --ro-bind "$EVENTS" "$BOX_EVENTS")
+  # shot --burst's one capture client (#196); without it (an install from before) a burst takes a grim
+  # a frame, as it did.
+  [ ! -x "$BURST" ] || args+=(--ro-bind "$BURST" "$BOX_BURST")
   # A private aquamarine (finding 125), which share/start-hyprland.sh puts first; none: the system's.
   [ -z "$AQ_LIB" ] || args+=(--ro-bind "$AQ_LIB" /opt/omabox/lib)
   for n in "${renders[@]}"; do args+=(--dev-bind "$n" "$n"); done
@@ -5679,16 +5685,20 @@ cmd_pixel() {
   rm -f "$f"
 }
 
-# shot --burst N (#132, finding 212): N frames of the same capture, 100 ms or --every apart (0: as fast
-# as the box gives them), into a folder; each a shot of its own (`click --in` maps from any). A loop of bare
-# grabs here (16 ms for a crop, against 50 ms for a whole `shot` and its checks); the box writes
-# nothing of them. --after -- ACTION: the first frame, then `omabox ACTION` beside the rest, so a
-# transition is caught from its start. --diff: per frame, where it differs from the one before;
-# --sheet: one contact sheet, each frame labelled with its time (both ImageMagick's, part of Omarchy).
-# Each grab is a screencopy client of its own, so four Hyprland events (screencast and screencastv2, on
-# and off): a shell or widget that works on each one is held up by a fast burst, its timers with it
-# (#191, finding 249). Hence 100 ms by default, and frames identical to the one before said: a still
-# screen, or a box the grabs kept from drawing.
+# shot --burst N (#132, finding 212): N frames of the same capture, 100 ms or --every apart (0: back
+# to back), into a folder; each a shot of its own (`click --in` maps from any). The box writes nothing
+# of them.
+# --after -- ACTION: the first frame, then `omabox ACTION` beside the rest, so a transition is caught
+# from its start. --diff: per frame, where it differs from the one before; --sheet: one contact sheet,
+# each frame labelled with its time (both ImageMagick's, part of Omarchy).
+# The frames come from tools/burst, one capture client for the whole burst (#196, finding 314): a grim
+# a frame was four Hyprland events a frame (screencast and screencastv2, on and off), and a shell or
+# widget that works on each one was held up by a fast burst, its timers with it (#191, finding 249).
+# One client is four a burst, so --every 0 (back to back) is safe now. 100 ms stays the default: 12
+# frames back to back are 0.15 s of a crop, over before an --after action has landed (it starts its own
+# omabox). A box started without the tool (an install from before it) still takes a grim a frame, and
+# says why.
+# Frames identical to the one before are said: a still screen, or (grims) a box the grabs held up.
 # Uses cmd_shot's grim, win, where, lw, lh, out and tofd. shot_burst N EVERY_MS SHEET DIFF ACTION...
 shot_burst() {
   local n=$1 every=$2 sheet=$3 bd=$4 i; shift 4
@@ -5715,30 +5725,56 @@ shot_burst() {
       die "shot --burst: cannot clear the frames an earlier burst left in $out (frame-NNN.png, sheet.png)"
   fi
   out=$(readlink -f -- "$out")
-  local f err rc t0 t ts=() files=() act="" arc=0
+  local f err rc t0 t ts=() files=() act="" arc=0 one=0
   err=$(mktemp)
-  # A window off screen draws on its first capture (shot does it twice, finding 81): primed once.
-  [ -z "$win" ] || on_box timeout 10 "${grim[@]}" - >/dev/null 2>&1 || true
-  t0=$(date +%s%3N)
-  for ((i = 1; i <= n; i++)); do
-    f=$(printf '%s/frame-%03d.png' "$out" "$i")
-    t=$(($(date +%s%3N) - t0))
-    rc=0; on_box timeout 10 "${grim[@]}" - > "$f" 2>"$err" || rc=$?
-    if [ $rc != 0 ] || [ ! -s "$f" ]; then
-      rm -f -- "$f"
+  on_box test -x "$BOX_BURST" 2>/dev/null && one=1
+  if [ $one = 1 ]; then
+    # One client in the box (tools/burst), streaming each frame as `frame I T LEN` and LEN bytes of PNG;
+    # written here. A window is primed in it (finding 81): one frame dropped, 100 ms, then the burst.
+    local bfd bpid w fno ft fl
+    exec {bfd}< <(on_box "$BOX_BURST" -n "$n" -e "$every" ${win:+--prime 100} "${grim[@]:1}" 2>"$err")
+    bpid=$!
+    while read -r -u "$bfd" w fno ft fl && [ "$w" = frame ] && [[ $fno$ft$fl =~ ^[0-9]+$ ]]; do
+      f=$(printf '%s/frame-%03d.png' "$out" "$fno")
+      head -c "$fl" <&"$bfd" > "$f" && [ "$(stat -c %s -- "$f")" = "$fl" ] || { rm -f -- "$f"; break; }
+      ts+=("$ft") files+=("$f")
+      # The action, once the first frame is there: beside the rest, its output on stderr (not holding the
+      # frames' pipe, which tells the tool when this omabox is gone).
+      if [ "$fno" = 1 ] && [ $# -gt 0 ]; then "$0" -b "$NAME" "$@" {bfd}<&- >&2 & act=$!; fi
+    done
+    exec {bfd}<&-
+    rc=0; wait "$bpid" 2>/dev/null || rc=$?
+    if [ ${#files[@]} != "$n" ]; then
       [ -z "$act" ] || wait "$act" 2>/dev/null || true
-      box_alive || die "shot --burst: box '$NAME' went down at frame $i"
+      box_alive || die "shot --burst: box '$NAME' went down at frame $((${#files[@]} + 1))"
       hypr_answers || die "shot --burst: $(hung_text)"
-      die "shot --burst: frame $i failed: $(tr '\n' ' ' < "$err")"
+      die "shot --burst: frame $((${#files[@]} + 1)) failed: $(sed 's/^omabox-burst: \(frame [0-9]*: \)\{0,1\}//' "$err" | tr '\n' ' ')(status $rc)"
     fi
-    ts+=("$t") files+=("$f")
-    # The action, once the first frame is there: beside the rest, its output on stderr.
-    if [ $i = 1 ] && [ $# -gt 0 ]; then "$0" -b "$NAME" "$@" >&2 & act=$!; fi
-    if [ "$every" -gt 0 ] && [ $i -lt "$n" ]; then
-      local next=$((t0 + i * every - $(date +%s%3N)))
-      [ $next -le 0 ] || sleep "$(awk -v m="$next" 'BEGIN { printf "%.3f", m / 1000 }')"
-    fi
-  done
+  else
+    say "box '$NAME' has no $BOX_BURST (started by an omabox without it): a grim a frame, four Hyprland events each (omabox down $NAME, then up again, for one client a burst)"
+    # A window off screen draws on its first capture (shot does it twice, finding 81): primed once.
+    [ -z "$win" ] || on_box timeout 10 "${grim[@]}" - >/dev/null 2>&1 || true
+    t0=$(date +%s%3N)
+    for ((i = 1; i <= n; i++)); do
+      f=$(printf '%s/frame-%03d.png' "$out" "$i")
+      t=$(($(date +%s%3N) - t0))
+      rc=0; on_box timeout 10 "${grim[@]}" - > "$f" 2>"$err" || rc=$?
+      if [ $rc != 0 ] || [ ! -s "$f" ]; then
+        rm -f -- "$f"
+        [ -z "$act" ] || wait "$act" 2>/dev/null || true
+        box_alive || die "shot --burst: box '$NAME' went down at frame $i"
+        hypr_answers || die "shot --burst: $(hung_text)"
+        die "shot --burst: frame $i failed: $(tr '\n' ' ' < "$err")"
+      fi
+      ts+=("$t") files+=("$f")
+      # The action, once the first frame is there: beside the rest, its output on stderr.
+      if [ $i = 1 ] && [ $# -gt 0 ]; then "$0" -b "$NAME" "$@" >&2 & act=$!; fi
+      if [ "$every" -gt 0 ] && [ $i -lt "$n" ]; then
+        local next=$((t0 + i * every - $(date +%s%3N)))
+        [ $next -le 0 ] || sleep "$(awk -v m="$next" 'BEGIN { printf "%.3f", m / 1000 }')"
+      fi
+    done
+  fi
   rm -f "$err"
   [ -z "$act" ] || { wait "$act" || arc=$?; }
   local iw ih screen; screen=$(box_screen)
@@ -5783,10 +5819,10 @@ shot_burst() {
   # Frames identical to the one before (#191): the same pixels give the same PNG (grim -l 1).
   local same; same=$(md5sum -- "${files[@]}" | awk '{ if (NR > 1 && $1 == p) n++; p = $1 } END { print n + 0 }') || same=0
   if [ "$same" -gt 0 ]; then
-    if [ "$every" -lt 100 ]; then
+    if [ $one = 0 ] && [ "$every" -lt 100 ]; then
       say "$same of $((n - 1)) frames identical to the one before: nothing new drawn between them, or the grabs held the box up (each is four Hyprland screencast events; a shell or widget that works on each stalls its timers and animations): --every 100ms or slower to tell"
     else
-      say "$same of $((n - 1)) frames identical to the one before"
+      say "$same of $((n - 1)) frames identical to the one before: nothing new drawn between them"
     fi
   fi
   [ $# = 0 ] || [ $arc = 0 ] || { say "the action ($*) failed: exit $arc"; return 1; }

@@ -12,7 +12,7 @@ PKGS=(
   quickshell gtk3 xdg-terminal-exec dbus                                 # in a box (Omarchy has them)
   passt                                                                  # every box's network (pasta)
   python                                                                 # the agent guard's Codex check, a jailed box's covers
-  wayland libxkbcommon base-devel pkgconf                                               # tools/
+  wayland libxkbcommon base-devel pkgconf libpng                                        # tools/ (pixman below)
   git cmake ninja hyprwayland-scanner hyprutils seatd libdisplay-info hwdata libinput   # aquamarine
   libdrm mesa pixman
 )
@@ -46,7 +46,7 @@ step "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"
 
 step "Tools"
 # (Not `make && echo`: set -e ignores a failure on the left of &&, and install.sh would carry on.)
-for t in pointer keyboard wlfd peek still relay events; do
+for t in pointer keyboard wlfd peek still burst relay events; do
   make -s -C "$ROOT/tools/$t" || die "building tools/$t failed"
   echo "tools/$t"
 done
