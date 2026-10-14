@@ -3,7 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.6.0 — 2026-10-14
+
+Agents can read a window as text (`omabox tree`), check how their model reads click points
+(`omabox calibrate`), and make videos with sound, marks and every monitor (`up --audio`, `record
+mark`, `record --monitor all`, `--no-pointer`). A box can mirror your whole shell (`up
+--desk-shell`), `ls` names boxes nobody will take down (`down --orphans`), and fast `shot --burst`es
+no longer stall what they record. Fixes for scaled and turned screens, video colours, and the Codex
+guard. Packages: two new tools, `omabox-burst` (libpng) and `omabox-tree` (at-spi2-core, glib2).
 
 ### Added
 
