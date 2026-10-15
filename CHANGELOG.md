@@ -16,6 +16,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   on `click`, `pointer`, `drag`) makes the pointer travel there in that time instead of jumping, while
   agents' clicks stay instant otherwise (#176).
 
+- **`omabox record` inside ai-jail.** A jailed agent's `record start -o demo.mp4`, `mark`, `stop`,
+  `record -- ACTION` and `record sheet` work as outside: the video, its marks, captions and contact
+  sheet land in the jail's project, written there by the agent's own `omabox`; the broker writes
+  and reads them only through the files it was handed, never at a path the jail names (#224). A
+  video is at most 16 GiB (an hour of 4K): `record stop` says so and keeps a larger one in the box.
+
 ### Fixed
 
 - `record --no-pointer -- ACTION` ended by Ctrl-C while the action ran showed the pointer again
@@ -24,6 +30,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - `up --desk-shell` kept a plugin's config out of the box when a setting's name only contained a
   word like token or password (`"maxTokens": 4`); only a key of that name with a value is a secret.
 - `omabox tree --find` paths lost an ancestor past 64 printed levels.
+- **What omabox runs in a box for itself is the system's.** Its own steps there (recording, the
+  clipboard, `up`'s checks) run the box's `/usr/bin` tools by their paths, not what the box's own
+  PATH would pick, and what omabox reads back from a box is bounded on its side. A command in a box
+  (`omabox run`) gets stdin, stdout and stderr, and no other file the caller has open.
 
 ## 0.6.0 — 2026-10-14
 

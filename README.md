@@ -584,8 +584,8 @@ These projects are good at what it does not do.
   box is running code in it, so that is what stops a box from being a way out of the jail. Not for a
   jailed agent: `omabox host`, `peek`, interactive boxes, `guard`, `config` changes. `omabox ports`
   lists the jail's boxes and says a host process, another user or a box outside the jail holds a port
-  without naming it. A shot is written into the jail by its own `omabox`; the broker never opens a path the
-  jail names.
+  without naming it. A shot or a recording (`record`, its marks, captions and contact sheet) is written into
+  the jail by its own `omabox`; the broker never opens a path the jail names.
   Since ai-jail 2.8, a bare `ai-jail claude` reaches its model's API and nothing else; its boxes
   still get no network. `omabox broker off` turns it off. Checked with ai-jail 2.2.1, 2.6.2 and
   2.8.1 (omabox 0.5.2).

@@ -6477,6 +6477,82 @@ from them.
     stamp the first frame itself); the contact-sheet montage exists in `record_sheet` and
     `shot_burst` both.
 
+321. **`record` for a jailed agent** (2026-10-14, #224). `record` refused a jailed agent (finding 297):
+    its files would be written at paths the jail names, which the broker never opens (finding 99).
+    Now it goes as `shot --to-fd` does: every file is the jail's, made by the jail's own omabox
+    (relay_record) as a temp beside where it goes, filled by the broker through the fd passed, and
+    renamed into place once whole (removed on any failure). `start -o FILE` is resolved in the jail
+    (and checked writable there) and reaches the broker as `--as NAME`, only a name: nothing is made,
+    opened or looked at there (record.as in the box dir says so). `stop` asks the broker the name
+    (`status --file`), opens the video, marks and captions beside it in the jail and passes them
+    (`--to-fd`, `--marks-fd`, `--vtt-fd`, with `--as NAME`, refused unless it is the recording's,
+    before anything is stopped); the video streams from the box's `cat` into the fd, the marks and
+    captions are made in a folder of the box dir's (the jail has no way in) and copied in. `record
+    sheet VIDEO` passes the video and its marks to read (`--from-fd`, `--marks-from-fd`) and the
+    sheet to write; the video at most 4 GiB (its copy in the box is on the host's disk, and a sparse
+    file costs the jail nothing), the marks 1 MiB. `record -- ACTION` and `stop --sheet` are run by
+    the jail's omabox as their steps (start, the action relayed as any command, stop; stop, then
+    sheet), so the broker refuses an action (its paths, like `click --in`, would be read here). A
+    jailed recording stopped from outside the jail is written to a new file in `$TMPDIR`, never at the
+    jail's name (said). Every fd is checked without opening anything (fd_file, which `shot --to-fd`
+    now uses too): a regular file (a folder, socket, FIFO or device refused: a FIFO's read or write
+    could wait for ever), open for reading or for writing as it is used (from fdinfo's flags; O_PATH
+    refused), not on one of the kernel's filesystems (procfs, sysfs, cgroups...: some act on a write
+    with the writer's rights, the broker's more than the jail's), each fd once. Bounds on what the
+    broker reads of the box's files, which the box's processes can replace (by a link to /dev/zero
+    too): the first-frame stamp 200 bytes, a sheet frame 64 MiB; and on marks, 1000 characters each
+    and 1 MiB a recording (the box dir is in the runtime dir, memory). Tests: t_unit_record (the
+    refusals and each kind of fd, before any box), t_jail_record (the broker's side with a stand-in
+    jail: a name's folder never made, a link out of the project never followed, a wrong name and a
+    read-only fd refused with the recording still running, the files only in the fds; then a real
+    ai-jail 2.8.1: start -o ./demo.mp4, mark, stop, `-- ACTION --frames 2`, `sheet`, a take without
+    marks dropping the earlier ones, -o through a link to a read-only folder refused in the jail, a
+    broker-folder name given straight to the relay never written, an action given straight to it
+    refused). Its fd checks and bounds were redone after a review: finding 322.
+322. **omabox's own steps in a box: by their paths, bounded on the host; only the fds given** (2026-10-14,
+    review of #224). box_exec runs a command with the box session's PATH, which has the box HOME's
+    ~/.local/bin first, and its environment from omabox.env in the box's runtime dir: both are the
+    box's processes' to write, which is right for `run` (the user's command, as the session has it)
+    and not for the steps omabox takes in a box whose output it reads or keeps. Those now go through
+    box_sys (BOX_SYS=1): the command by its full path, PATH=/usr/bin, an environment of the box HOME,
+    the runtime dir, the Wayland, Hyprland and session bus names only, in the box HOME (/usr and /etc
+    in a box are the host's, read-only). `record` (all its steps), `clip`'s, `up`'s bus checks;
+    `run -d`'s launcher names its own steps by path (the command still on the session's PATH), as
+    `wait cmd`'s timeout, `up`'s eglinfo (in the session's environment, as an app gets it). A box's
+    files stay the box's to swap (a link to /dev/zero, a FIFO), so what the host reads of them it
+    bounds on its side of the pipe, as clip did: box_copy (record's video and sheet frames) takes a
+    regular file the box has the blocks for (not sparse), no more bytes than its size then, and
+    checks that many came; every capture of a helper's answer is cut (`head -c`), hyprctl's at 64
+    MiB, `hyprctl version`'s, a job's exit status and the last lines of its log too. The sheet's
+    frames are in a folder of the box dir, gone with this omabox however it ends (a trap) and with
+    the box; the video's .part too. box_exec passes only the fds a command is given: stdin, stdout,
+    stderr, its --pass fd, ns_held's stderr and what a caller names (BOX_KEEP: `run -d`'s and `record
+    start`'s fd 3); fds_only closes the rest before nsenter. (`omabox run -- CMD 3<FILE` no longer
+    hands fd 3 in.) For #224 too: fd_file takes filesystems by an allow-list (FD_FS: ext4, btrfs, xfs,
+    tmpfs, ...), not a deny-list, so an anonymous inode (eventfd, timerfd, pidfd: they say they are
+    regular files) or a FUSE file is refused; a jail's marks are read in 10 s at most; `status --file`
+    and a jailed stop take only a jail's recording (record.as), a recording the user started on the
+    jail's box stays the user's (its file not named to the jail); record.as is written before the
+    recording's record. Tests: t_unit_record (an eventfd refused), t_jail_record (a head, cat, sh,
+    bash, stat and ffprobe planted in the box HOME pouring 50 MB of zeros: a jailed recording
+    stopped outside the jail and a sheet through fds still come out whole and their own size, no
+    folder left in the box dir; a box command gets fds 0-2 only with fd 7 open on the host, `run -d`
+    still its pid; the user's recording neither named to nor stopped by the jail).
+323. **What omabox copies out of a box: a fixed cap, a time, a disk** (2026-10-14, re-check of #224).
+    box_copy's "not sparse" rule (blocks on disk cover the size) bounds the copy by what the box
+    reserved, not what it wrote: `fallocate -l 64M` reports all 64 MiB of blocks at once, and on btrfs
+    (this machine's box HOMEs) a reflinked copy does too. So every box_copy now takes a MAX: REC_MAX
+    for a video, 16 GiB (an hour of 4K at 36 Mbit/s; a screen's video is mostly far less), past which
+    `stop` says so and keeps the video in the box (not cut); `record sheet`'s video into a box takes
+    the same cap (was 4 GiB); a sheet frame 16 MiB. $OMABOX_RECORD_MAX lowers it (the suite's). Its
+    `cat` runs under a timeout of 10 s plus the size at 10 MiB/s, so a file swapped for a FIFO after
+    the stat ends. A jailed recording stopped outside the jail goes to ~/.cache/omabox/records
+    ($XDG_CACHE_HOME), on disk, not $TMPDIR (memory on most machines). FD_FS takes no network
+    filesystem (nfs, smb2, ecryptfs were on it): a hard mount whose server is gone blocks a read or
+    write for ever. Tests: t_jail_record (a fallocated 64 MiB file past a 1 MiB cap refused, said; a
+    FIFO behind a stat that says a file given up in 10 s; a stop past OMABOX_RECORD_MAX=2000 refused,
+    nothing written, the video kept in the box; the outside stop's file in the cache folder).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -613,7 +613,8 @@ most people will. Then:
   --audio` muxes the box's speaker into the MP4 (AAC), in step with the picture (a sound within ~15 ms
   of a change drawn at the same moment; a player's own start adds its latency: pw-play ~60 ms);
   `omabox audio 3 [--json]` listens for 3 s from now and says silence, or when and how loud (peak, RMS
-  in dBFS, the spans): start it, then make the sound. Frames to compare instead (an animation's steps):
+  in dBFS, the spans): start it, then make the sound. Inside ai-jail `record` works the same (its
+  files are written into the jail by your omabox). Frames to compare instead (an animation's steps):
   `omabox shot --burst N --sheet` (above), never a loop of `grim` in the box.
 - **The package itself** (install, upgrade, removal, pacman hooks): not in a box (a read-only `/usr`,
   no pacman). A VM, or ask the user.

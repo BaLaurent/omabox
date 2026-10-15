@@ -563,6 +563,41 @@ t_unit_record() {
   check_match "record sheet without a video" "record sheet: the video, like" "$(ob record sheet 2>&1)"
   check_match "...of no file" "record sheet: no video $TMP/none.mp4" "$(ob record sheet "$TMP/none.mp4" 2>&1)"
   check_match "...two videos" "record sheet: unexpected b.mp4" "$(ob record sheet a.mp4 b.mp4 2>&1)"
+  # A jailed agent's record (#224, finding 321): the broker (OMABOX_JAIL set) opens no path the jail
+  # names, and takes only fds that are files open as they are used; all refused before any box.
+  local rj=$TMP/rjail; mkdir -p "$rj/dir"; : > "$rj/f"; : > "$rj/r"; rm -f "$rj/fifo"; mkfifo "$rj/fifo"; echo HOSTVIDEO > "$rj/host.mp4"
+  jr() { OMABOX_JAIL='{"id": "1 2", "roots": []}' "$CLI" record "$@" 2>&1; }
+  local fds3=(--to-fd 3 --marks-fd 4 --vtt-fd 5 --as "$rj/v.mp4")
+  check_match "in a jail: record start -o refused (resolved by the jail's own omabox)" "a jailed agent's -o is resolved by its own omabox" "$(jr start -o "$rj/x.mp4")"
+  check_fails "...nothing made there" test -e "$rj/x.mp4.part"
+  check_match "...start without --as" "named by its own omabox \(--as\)" "$(jr start)"
+  check_match "...--as a relative name" "--as takes an absolute file name" "$(jr start --as v.mp4)"
+  check_match "...--as with a newline" "--as takes an absolute file name" "$(jr start --as "$rj/a"$'\n'"b.mp4")"
+  check_match "...stop without fds" "written by its own omabox \(--to-fd\), never at a path here" "$(jr stop)"
+  check_match "...-- ACTION (the jail's omabox runs it)" "a jailed agent's own omabox runs it" "$(jr -- keys a)"
+  check_match "...sheet of a path, said before it is looked at" "never at a path here" "$(jr sheet "$rj/host.mp4")"
+  check_match "...not even whether it is there" "never at a path here" "$(jr sheet "$rj/none.mp4")"
+  check_match "...stop's fds: a folder" "fd 3 is not a file" "$(jr stop "${fds3[@]}" 3<"$rj/dir" 4<>"$rj/f" 5<>"$rj/f")"
+  check_match "...a FIFO (would block)" "fd 3 is not a file" "$(jr stop "${fds3[@]}" 3<>"$rj/fifo" 4<>"$rj/f" 5<>"$rj/f")"
+  check_match "...a device" "fd 4 is not a file" "$(jr stop "${fds3[@]}" 3<>"$rj/f" 4>/dev/null 5<>"$rj/f")"
+  check_match "...a socket" "fd 3 is not a file" \
+    "$(python3 -c 'import os, socket, sys; s = socket.socket(socket.AF_UNIX); os.dup2(s.fileno(), 3); os.set_inheritable(3, True); os.execvp(sys.argv[1], sys.argv[1:])' \
+      env OMABOX_JAIL='{}' "$CLI" record stop "${fds3[@]}" 4<>"$rj/f" 5<>"$rj/f" 2>&1)"
+  check_match "...one not passed" "fd 5 is not a file" "$(jr stop "${fds3[@]}" 3<>"$rj/f" 4<>"$rj/f")"
+  check_match "...read-only (never reopened to write)" "fd 3 is not open for writing" "$(jr stop "${fds3[@]}" 3<"$rj/r" 4<>"$rj/f" 5<>"$rj/f")"
+  check_match "...a file of the kernel's (filesystems by an allow-list)" "fd 3 is not a file on a disk or in memory \(its filesystem: proc\)" "$(jr stop "${fds3[@]}" 3<>/proc/self/comm 4<>"$rj/f" 5<>"$rj/f")"
+  check_match "...an eventfd, which says it is a regular file (a read of it waits for ever)" "fd 4 is not a file on a disk or in memory" \
+    "$(python3 -c 'import os, sys; e = os.eventfd(0); os.set_inheritable(e, True); e == 4 or os.dup2(e, 4); os.execvp(sys.argv[1], sys.argv[1:])' \
+      env OMABOX_JAIL='{}' timeout 20 "$CLI" record sheet --from-fd 3 --marks-from-fd 4 --to-fd 5 --as "$rj/s.png" 3<"$rj/r" 5<>"$rj/f" 2>&1)"
+  check_match "...the same fd twice" "each fd once" "$(jr stop --to-fd 3 --marks-fd 3 --vtt-fd 5 --as "$rj/v.mp4" 3<>"$rj/f" 5<>"$rj/f")"
+  check_match "...stop's fds with --sheet" "without --sheet" "$(jr stop "${fds3[@]}" --sheet 3<>"$rj/f" 4<>"$rj/f" 5<>"$rj/f")"
+  check_match "...sheet's video fd write-only" "fd 3 is not open for reading" "$(jr sheet --from-fd 3 --to-fd 4 --as "$rj/s.png" 3>"$rj/w" 4<>"$rj/f")"
+  check_match "...sheet's fds with -o" "without -o" "$(jr sheet --from-fd 3 --to-fd 4 --as "$rj/s.png" -o "$rj/o.png" 3<"$rj/r" 4<>"$rj/f")"
+  check_match "...status --file only" "--file goes with status" "$(jr mark --file x)"
+  check_eq "...the host file named never touched" HOSTVIDEO "$(cat "$rj/host.mp4")"
+  check_match "shot --to-fd: a read-only fd refused too (fd_file)" "shot: fd 3 is not open for writing" "$(OMABOX_JAIL='{}' "$CLI" shot --to-fd 3 --as "$rj/s.png" 3<"$rj/f" 2>&1)"
+  check_match "a jailed agent's omabox keeps the broker's own options to itself" "--to-fd is omabox's own" \
+    "$(lib relay_record /bin/false -- stop --to-fd 3 2>&1)"
   # record_marks: wall-clock µs to ms from the first frame (in order; one before it at 0), the
   # wall-clock time as events has it, WebVTT cues from each to the next (the last to the end), its
   # text escaped; none, and an earlier take's files go.
@@ -2455,6 +2490,155 @@ t_unit_jail_covers() {
   # jail_read: not a file the jail hides, whatever led there.
   check_fails "jail_read: not a hidden file (a link swapped in leads there)" jl jail_read "$p/envlink"
   check_eq "...one that is not" hi "$(jl jail_read "$p/README")"
+}
+
+# record for a jailed agent (#224, finding 321). The broker's side with a stand-in jail (OMABOX_JAIL,
+# a bwrap for its mounts): the names a jail gives are never opened (a folder not made, a link out of
+# the project not followed), the video, marks, captions and a sheet go only into the fds passed, a
+# wrong name or a read-only fd refused before the recording is stopped, and a jailed recording stopped
+# from outside the jail goes to a file of its own. Then the whole of it from inside a real ai-jail.
+t_jail_record() {
+  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record for a jailed agent" "no wf-recorder or ffmpeg"; return; fi
+  local d=$TMP/jrec p jb J N=$P-jrs out v
+  p=$d/proj; mkdir -p "$p" "$d/host"; git -C "$p" init -q
+  echo HOSTVIDEO > "$d/host/v.mp4"; ln -s "$d/host/v.mp4" "$p/link.mp4"
+  bwrap --unshare-user --die-with-parent --info-fd 3 --dev-bind / / sleep 300 3>"$d/jinfo" & jb=$!
+  until_ok 5 jq -e '."child-pid"' "$d/jinfo" >/dev/null
+  local jpid; jpid=$(jq '."child-pid"' "$d/jinfo")
+  J=$(jq -nc --arg p "$p" --argjson j "$jpid" --arg ns "$(readlink "/proc/$jpid/ns/mnt")" \
+    '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: false}], masks: [], mntpid: $j, mntns: $ns}')
+  jo() { (cd "$p" && OMABOX_JAIL=$J "$CLI" "$@"); }
+  jo up "$N" --no-shell --net isolated >/dev/null 2>&1 || { no "record for a jailed agent: up in the stand-in jail" "failed"; kill "$jb"; return; }
+  local as=$p/new/demo.mp4
+  check "a jailed agent's record start --as NAME" jo record -b "$N" start --as "$as"
+  check_fails "...the name's folder is not made" test -e "$p/new"
+  sleep 0.5; jo record -b "$N" mark "scene one" >/dev/null 2>&1; sleep 0.5
+  check_match "...status names it as the jail's" "to $as \\(a jailed agent's file" "$(jo record -b "$N" status 2>&1)"
+  check_eq "...status --file prints the name" "$as" "$(jo record -b "$N" status --file 2>&1)"
+  : > "$d/ro"
+  check_match "stop with another name: refused" "records to $as, not $p/other.mp4" \
+    "$(jo record -b "$N" stop --to-fd 3 --marks-fd 4 --vtt-fd 5 --as "$p/other.mp4" 3<>"$d/v" 4<>"$d/m" 5<>"$d/c" 2>&1)"
+  check_match "stop with a read-only fd: refused" "fd 3 is not open for writing" \
+    "$(jo record -b "$N" stop --to-fd 3 --marks-fd 4 --vtt-fd 5 --as "$as" 3<"$d/ro" 4<>"$d/m" 5<>"$d/c" 2>&1)"
+  check_match "...both before it was stopped: still recording" "^recording " "$(jo record -b "$N" status 2>&1)"
+  out=$(jo record -b "$N" stop --to-fd 3 --marks-fd 4 --vtt-fd 5 --as "$as" 3<>"$d/v" 4<>"$d/m" 5<>"$d/c" 2>"$d/stop.err")
+  check_eq "stop through the fds prints the jail's name" "$as" "$out"
+  check_match "...says the marks by the jail's names" "1 mark in $p/new/demo\\.marks\\.tsv .*and $p/new/demo\\.vtt" "$(cat "$d/stop.err")"
+  check_eq "...the video into the video's fd (H.264)" h264 "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$d/v" 2>&1)"
+  check_eq "...the marks into theirs, the captions into theirs" "scene one|WEBVTT" "$(tail -n 1 "$d/m" | cut -f3)|$(head -n 1 "$d/c")"
+  check_fails "...nothing at the name, nor its folder" test -e "$p/new"
+  check_eq "...the read-only file untouched" 0 "$(stat -c %s "$d/ro")"
+  out=$(jo record -b "$N" sheet --from-fd 3 --marks-from-fd 4 --to-fd 5 --as "$p/s.png" --frames 2 3<"$d/v" 4<"$d/m" 5<>"$d/s" 2>"$d/sheet.err")
+  check_eq "sheet from the fds prints the jail's name" "$p/s.png" "$out"
+  check_match "...the sheet into its fd, with the marks" "PNG.*marks under" "$(head -c 4 "$d/s" | tail -c 3) $(cat "$d/sheet.err")"
+  check_fails "...nothing at the name" test -e "$p/s.png"
+  # Stopped from outside the jail: never at the name, a link out of the project.
+  jo record -b "$N" start --as "$p/link.mp4" >/dev/null 2>&1
+  out=$(env -u OMABOX_JAIL XDG_CACHE_HOME="$d/cache" "$CLI" record -b "$N" stop 2>"$d/host.err")
+  check_match "a jailed agent's recording stopped outside the jail: said" "written to .* instead \\(never at a path a jail named\\)" "$(cat "$d/host.err")"
+  check_match "...to a new file in omabox's cache folder (on disk, not \$TMPDIR)" "^$d/cache/omabox/records/omabox-$N-[0-9-]+\\.mp4$" "$out"
+  check_eq "...the link's file outside the project untouched" HOSTVIDEO "$(cat "$d/host/v.mp4")"
+  # A recording the user started on the jail's box stays the user's: its name not said to the jail,
+  # nor stopped by it.
+  local mine=$d/mine.mp4
+  env -u OMABOX_JAIL "$CLI" record -b "$N" start -o "$mine" >/dev/null 2>&1
+  out=$(jo record -b "$N" status 2>&1)
+  check_match "the user's recording on the jail's box: status in the jail does not name its file" "to a file outside the jail " "$out"
+  check_fails "...(not $mine)" grep -qF "$mine" <<<"$out"
+  check_match "...status --file refused" "started outside the jail" "$(jo record -b "$N" status --file 2>&1)"
+  check_match "...stop with fds refused" "started outside the jail" \
+    "$(jo record -b "$N" stop --to-fd 3 --marks-fd 4 --vtt-fd 5 --as "$mine" 3<>"$d/v2" 4<>"$d/m2" 5<>"$d/c2" 2>&1)"
+  check_eq "...the user's stop writes it" "$mine" "$(env -u OMABOX_JAIL "$CLI" record -b "$N" stop 2>/dev/null)"
+  # omabox's own helpers in the box are not the box's to choose (#224 review): a head, cat, sh,
+  # stat, ffprobe and ffmpeg in the box HOME's ~/.local/bin (first on the session's PATH) that pour
+  # 50 MB of zeros change nothing the host keeps: the video, the sheet and their sizes are right.
+  local fake='#!/bin/sh
+exec /usr/bin/head -c 50000000 /dev/zero'
+  jo run -b "$N" -- sh -c 'mkdir -p ~/.local/bin && for t in head cat sh bash stat ffprobe; do printf "%s\n" "$1" > ~/.local/bin/$t && chmod +x ~/.local/bin/$t; done' _ "$fake"
+  check_eq "...(the planted head is what a box command gets)" 50000000 "$(jo run -b "$N" -- head 2>/dev/null | wc -c)"
+  jo record -b "$N" start --as "$p/planted.mp4" >/dev/null 2>&1; sleep 1
+  out=$(env -u OMABOX_JAIL XDG_CACHE_HOME="$d/cache" "$CLI" record -b "$N" stop 2>/dev/null)
+  check_eq "a jailed recording stopped outside the jail, with helpers planted in the box: an H.264 video" h264 \
+    "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$out" 2>&1)"
+  check "...of a video's size, not the planted 50 MB" test "$(stat -c %s "$out" 2>/dev/null || echo 0)" -lt 20000000
+  : > "$d/s2"
+  out=$(jo record -b "$N" sheet --from-fd 3 --to-fd 4 --as "$p/s2.png" --frames 2 3<"$d/v" 4<>"$d/s2" 2>&1)
+  check_eq "...a sheet through the fds, helpers planted: a PNG" PNG "$(head -c 4 "$d/s2" | tail -c 3)"
+  check "...of a sheet's size" test "$(stat -c %s "$d/s2")" -lt 20000000
+  check_fails "...no folder of its left in the box dir" compgen -G "$XDG_RUNTIME_DIR/omabox/$N/.record-*"
+  # Copies out of a box are capped (#224 re-check): blocks the box reserved (fallocate) are no bound,
+  # and a file swapped for a FIFO after its stat is not read for ever.
+  local bc=$TMP/lib/bin/omabox
+  jo run -b "$N" -- /usr/bin/sh -c 'rm -f ~/.local/bin/*; fallocate -l 64M ~/big && mkfifo ~/fifo'
+  check_match "a fallocated 64 MiB file past box_copy's cap: refused, said" "is 64.0 MiB: more than omabox copies out of a box \\(1.0 MiB\\)" \
+    "$(env -u OMABOX_JAIL bash -c 'source "$1"; select_box "$2"; box_copy /home/sbx/big 1048576 | wc -c' _ "$bc" "$N" 2>&1)"
+  local t0=$SECONDS
+  out=$(env -u OMABOX_JAIL timeout 60 bash -c 'source "$1"; select_box "$2"
+    box_sys() { if [ "$1" = /usr/bin/stat ]; then echo "regular file|10|8|512"; else BOX_SYS=1 box_exec "$@"; fi; }
+    box_copy /home/sbx/fifo 100 | wc -c' _ "$bc" "$N" 2>&1)
+  check "...one swapped for a FIFO after its stat: given up in its time (10 s), not read for ever (${out//$'\n'/ }, $((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 30
+  # The cap on a stop (OMABOX_RECORD_MAX lowers the 16 GiB): refused, said, the video kept in the box.
+  env -u OMABOX_JAIL "$CLI" record -b "$N" start -o "$d/capped.mp4" >/dev/null 2>&1; sleep 0.5
+  out=$(env -u OMABOX_JAIL OMABOX_RECORD_MAX=2000 "$CLI" record -b "$N" stop 2>&1)
+  check_match "a video past the cap: stop refuses it, says so" "more than omabox copies out of a box \\(2000 bytes\\).*out\\.mp4 there is kept" "${out//$'\n'/ }"
+  check_fails "...nothing written" test -e "$d/capped.mp4" -o -e "$d/capped.mp4.part"
+  check "...the video kept in the box" jo run -b "$N" -- test -s /home/sbx/.cache/omabox-record/out.mp4
+  # box_exec passes only the fds a command is given (#224 review): one the caller has open (7) is
+  # not in a box command's.
+  out=$(env -u OMABOX_JAIL "$CLI" run -b "$N" -- /usr/bin/ls /proc/self/fd 7<"$d/ro" 2>&1 | paste -sd ' ')
+  check_eq "a box command gets none of the caller's other fds (7 open here): 0-2, and ls's own" "0 1 2 3" "$out"
+  check_match "...run -d still gets its pid back (fd 3, given)" "started in box" "$(env -u OMABOX_JAIL "$CLI" run -b "$N" -d -- /usr/bin/sleep 1 2>&1)"
+  jo down "$N" >/dev/null 2>&1
+  kill "$jb" 2>/dev/null; wait "$jb" 2>/dev/null
+  # The whole of it from inside ai-jail: the jail's omabox opens its files, the broker fills them.
+  command -v ai-jail >/dev/null || { skip "record from inside ai-jail" "ai-jail is not installed"; return; }
+  [ "${OMABOX_TEST_INSTALLED:-0}" = 0 ] || { skip "record from inside ai-jail" "--installed: ai-jail trusts no bwrap in a user namespace"; return; }
+  local R=$ROOT/tools/relay/omabox-relay br=$TMP/jrbr repo
+  [ -x "$R" ] || { skip "record from inside ai-jail" "tools/relay not built"; return; }
+  mkdir -p "$br" "$d/rodir"; repo=$(tmp_repo jrec)
+  ln -s "$d/rodir/x.mp4" "$repo/out.mp4"
+  env -i HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" LANG="${LANG:-C.UTF-8}" USER="$USER" \
+    systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$CLI" >"$br/log" 2>&1 & SERVERS+=($!)
+  until_ok 5 test -S "$br/sock" >/dev/null
+  cat > "$repo/t.sh" <<EOF
+O=$CLI
+r() { echo "== \$1"; shift; "\$@" 2>&1; echo "rc=\$?"; }
+r up \$O up --no-shell
+r start \$O record start -o ./demo.mp4
+r mark \$O record mark scene one
+r stop \$O record stop
+r marks sh -c 'tail -n 1 demo.marks.tsv | cut -f3; head -n 1 demo.vtt'
+r one \$O record -o ./one.mp4 --frames 2 -- run -- true
+r sheet \$O record sheet ./demo.mp4 --frames 2 -o ./ds.png
+r again sh -c '\$0 record start -o ./demo.mp4 >/dev/null 2>&1 && \$0 record stop' \$O
+r outlink \$O record start -o ./out.mp4
+r brname $R call $br/sock -- record -b $P-jrec start --as $br/pwned.mp4
+r brstop \$O record stop
+r brstop2 $R call $br/sock -- record -b $P-jrec stop
+r brone $R call $br/sock -- record -b $P-jrec -o $br/pwned2.mp4 -- keys a
+r down \$O down
+EOF
+  (cd "$repo" && timeout 240 ai-jail --no-save-config --map "$ROOT" --map "$br" --map "$d/rodir" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null > "$TMP/jrec.out" 2>&1)
+  sect() { awk -v s="== $1" '$0 == s {on = 1; next} /^== / {on = 0} on' "$TMP/jrec.out" | tr '\n' ' '; }
+  check_match "from ai-jail: record start -o ./demo.mp4" "recording .* to $repo/demo\\.mp4 .*rc=0" "$(sect start)"
+  check_match "...record mark" "s scene one rc=0" "$(sect mark)"
+  check_match "...record stop prints the video in the jail's project" "$repo/demo\\.mp4 rc=0" "$(sect stop)"
+  check_eq "...an H.264 video there" h264 "$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$repo/demo.mp4" 2>&1)"
+  check_eq "...its marks and captions beside it" "scene one WEBVTT rc=0 " "$(sect marks)"
+  check_match "...record -- ACTION --frames 2: the video and its sheet" "$repo/one\\.mp4 .*$repo/one\\.sheet\\.png rc=0" "$(sect one)"
+  check "...both there" test -s "$repo/one.mp4" -a -s "$repo/one.sheet.png"
+  check_match "...record sheet VIDEO -o PNG" "$repo/ds\\.png rc=0" "$(sect sheet)"
+  check_eq "...a PNG" PNG "$(head -c 4 "$repo/ds.png" | tail -c 3)"
+  check_match "...a take without marks" "$repo/demo\\.mp4 rc=0" "$(sect again)"
+  check_fails "...the earlier take's marks gone" test -e "$repo/demo.marks.tsv" -o -e "$repo/demo.vtt"
+  check_match "...-o through a link out of the project (read-only in the jail): refused there" "cannot write in $d/rodir rc=1" "$(sect outlink)"
+  check_match "...a name of the broker's own folder given straight to the broker: only a name" "rc=0" "$(sect brname)"
+  check_match "...stopped: the jail's omabox cannot write there" "cannot write in $br .*rc=1" "$(sect brstop)"
+  check_match "...stopped through the relay without fds: refused" "never at a path here rc=1" "$(sect brstop2)"
+  check_match "...an action given straight to the broker: refused" "a jailed agent's own omabox runs it .*rc=1" "$(sect brone)"
+  check_fails "...nothing written where the jail could not" bash -c "ls '$br'/pwned* '$d/rodir/x.mp4' 2>/dev/null | grep ."
+  check_fails "...no temp file left in the project" bash -c "ls -A '$repo' | grep '^\\.omabox-'"
+  check_match "...down" "rc=0" "$(sect down)"
 }
 
 # #210 review: a jailed caller's box is entered by nothing while its covers wait for their check, and
@@ -5116,7 +5300,7 @@ t_unit_hyprland() {
   # Another version than the installed hyprctl's: a warning (the box's answers stubbed).
   mkdir -p "$d/box"; echo '{}' > "$d/box/box.json"
   out=$(bash -c 'source "$1"; D=$2 NAME=x
-    on_box() { if [ "${3:-}" = -j ]; then echo "{\"version\": \"0.0.1\"}"; else echo "Hyprland 0.0.1 built from branch x"; fi; }
+    on_box() { if [ "${!#}" = -j ]; then echo "{\"version\": \"0.0.1\"}"; else echo "Hyprland 0.0.1 built from branch x"; fi; }
     hypr_version' _ "$TMP/lib/bin/omabox" "$d/box" 2>&1)
   check_match "another Hyprland version than hyprctl's: a warning" "warning: box 'x' runs Hyprland 0.0.1, but hyprctl and hyprpm are the installed" "$out"
   check_eq "...and box.json has its version line" "Hyprland 0.0.1 built from branch x" "$(jq -r .hyprland_version "$d/box/box.json")"
@@ -10693,7 +10877,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

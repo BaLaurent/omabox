@@ -370,6 +370,11 @@ every still stretch longer than DURATION (1s) to that: no frame change (a blinki
 digit is still), no input (with --show-input, 3 s after it while it is drawn), no mark, no sound;
 whole frames, the sound by the same times, the marks and captions moved with them. The input comes
 from omabox's own commands (\`run\`'s app moving its own windows is not input).
+A video is at most 16 GiB (an hour of 4K at 36 Mbit/s): omabox copies no more out of a box, and
+\`stop\` says so and keeps a larger one in the box. Inside ai-jail all of it works through the
+broker: the jail's own omabox resolves -o and opens the video, its marks, captions and sheet (and
+\`record sheet\`'s video) itself, and the broker writes and reads them only through those, never at
+a path the jail names; one stopped outside the jail goes to ~/.cache/omabox/records.
 @ audio
 \`audio [SECONDS]\` listens to the box's speaker for SECONDS (3) from now, 100 ms at a time: "sound for
 1.1s of 3s: peak -21.1 dBFS, RMS -24.5 dBFS while it sounded; at 0.4-1.5s", or "silence for 3s".
@@ -1086,7 +1091,8 @@ hypr_answers() { box_alive && on_box timeout "${1:-2}" hyprctl version >/dev/nul
 # always JSON (not getoption of an unknown option). hypr_json ARGS...
 hypr_json() {
   local out
-  out=$(on_box timeout 6 hyprctl -j "$@" 2>/dev/null) || out=""
+  # (At most 64 MiB: the box's Hyprland may be a build of the box's user's.)
+  out=$(on_box timeout 6 hyprctl -j "$@" 2>/dev/null | head -c 67108864) || out=""
   if jq -e type >/dev/null 2>&1 <<<"$out"; then printf '%s\n' "$out"; return 0; fi
   box_alive || die "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
   die "$(hung_text)"
@@ -1163,13 +1169,31 @@ caller_path() {
 # PATH (findings 47, 57): omabox's stand-ins, the box HOME's ~/.local/bin (stubs), then the caller's
 # PATH in its order (so the same node or python wins as on the host), keeping only absolute dirs the
 # box can see, then the rest of the box's own: the order the session itself has.
+# The command gets stdin, stdout, stderr and only the fds it is given (#224): any other the caller has
+# open is closed before nsenter; BOX_KEEP="N..." keeps those (run -d's and record start's fd 3).
+# BOX_SYS=1 (box_sys): one of omabox's own helpers, whose output the host reads or keeps. The box's
+# processes write its HOME and its runtime dir (omabox.env), so the session's PATH (~/.local/bin
+# first) and environment (LD_PRELOAD, exported functions) are theirs: a helper is named by its full
+# path, runs with PATH=/usr/bin and only the box's Wayland and Hyprland names from omabox.env, in the
+# box HOME. Its files are still the box's to swap: what the host reads of them it bounds itself.
 box_exec() {
-  local env=() cwd=/home/sbx pid
+  local env=() cwd=/home/sbx pid sys=${BOX_SYS:-} v
   pid=$(box_pid); [ -n "$pid" ] || die "box '$NAME' is not up"
   covers_held
-  mapfile -d '' env < <(run_read omabox.env)
   local here there wd=$PWD
-  ! in_jail || wd=$(jail_get '.cwd // empty')   # a jailed caller's, when its jail and the host agree on it
+  if [ -n "$sys" ]; then
+    [[ ${1:-} == /* ]] || die "box_exec: omabox's own helper goes by its full path, got ${1:-nothing}"
+    env=(HOME=/home/sbx LANG="${LANG:-C.UTF-8}" XDG_RUNTIME_DIR="/run/user/$UID" OMABOX_SYS=1)
+    for v in WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE; do
+      if v=$v=$(box_env "$v"); then env+=("$v"); fi
+    done
+    v=$(run_read omabox.env | tr '\0' '\n' | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' | head -n 1) || v=""
+    [[ ! $v =~ ^unix:[A-Za-z0-9_.=/,-]{1,200}$ ]] || env+=("DBUS_SESSION_BUS_ADDRESS=$v")
+    wd=""
+  else
+    mapfile -d '' env < <(run_read omabox.env)
+    ! in_jail || wd=$(jail_get '.cwd // empty')   # a jailed caller's, when its jail and the host agree on it
+  fi
   if [ -n "$wd" ]; then
     here=$(stat -c %d:%i -- "$wd" 2>/dev/null) || here=""
     there=$(nsenter -t "$pid" -U -m --preserve-credentials stat -c %d:%i -- "$wd" 2>/dev/null) || there=""
@@ -1192,16 +1216,18 @@ box_exec() {
   fi
   # The command's stderr is the caller's (ns_held): nsenter's own words on a box going down are left to
   # the caller (run says it in its words), or printed as they came on a box that is up.
-  local rc=0
+  local rc=0 cpath=""
+  [ -n "$sys" ] || cpath=$(caller_path box)
   # shellcheck disable=SC2016 # $1/$@ belong to the inner bash
-  ns_held nocore nsenter -t "$pid" "${ns[@]}" --preserve-credentials -- \
-    env -i OMABOX_EFD=@EFD "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="$(caller_path box)" "${pass[@]}" bash -c '
+  ns_held fds_only "${pfd:-} ${BOX_KEEP:-}" nocore nsenter -t "$pid" "${ns[@]}" --preserve-credentials -- \
+    /usr/bin/env -i OMABOX_EFD=@EFD "${env[@]}" OMABOX=1 OMABOX_NAME="$NAME" OMABOX_CALLER_PATH="$cpath" "${pass[@]}" /usr/bin/bash -c '
       case $OMABOX_EFD in *[!0-9]*) ;; *) eval "exec 2>&$OMABOX_EFD $OMABOX_EFD>&-" ;; esac; unset OMABOX_EFD
       if [ -n "${OMABOX_PASS_FD:-}" ]; then
         while IFS= read -r -d "" kv <&"$OMABOX_PASS_FD"; do export "$kv"; done
         eval "exec $OMABOX_PASS_FD<&-"; unset OMABOX_PASS_FD
       fi
       cd "$1" && shift
+      if [ -n "${OMABOX_SYS:-}" ]; then unset OMABOX_SYS OMABOX_CALLER_PATH; PATH=/usr/bin exec -- "$@"; fi
       p=/opt/omabox/share/bin:/home/sbx/.local/bin
       # `up --omarchy`: its bin before the caller'"'"'s dirs, as in the session (finding 135).
       [ "${OMARCHY_PATH:-/usr/share/omarchy}" = /usr/share/omarchy ] || p=$p:${OMARCHY_PATH%/}/bin
@@ -1214,6 +1240,25 @@ box_exec() {
   [ ${#pass[@]} -eq 0 ] || exec {pfd}<&-
   ns_said $rc
   return $rc
+}
+
+# box_exec for omabox's own helpers (BOX_SYS above): box_sys /usr/bin/CMD ARG...
+box_sys() { BOX_SYS=1 box_exec "$@"; }
+
+# fds_only "KEEP..." CMD...: CMD (a function too) with no fd above 2 open but those in KEEP and the
+# one its words name as OMABOX_EFD=N (ns_held's), so box_exec passes only the fds a command is given.
+# shellcheck disable=SC2329 # called through ns_held
+fds_only() {
+  local keep=" $1 " a; shift
+  for a; do if [[ $a =~ ^OMABOX_EFD=([0-9]+)$ ]]; then keep+="${BASH_REMATCH[1]} "; break; fi; done
+  (
+    for a in /proc/"$BASHPID"/fd/*; do
+      a=${a##*/}
+      [[ $a =~ ^[0-9]+$ ]] && [ "$a" -gt 2 ] && [[ $keep != *" $a "* ]] || continue
+      eval "exec $a>&-" 2>/dev/null || true
+    done
+    "$@"
+  )
 }
 
 # Processes in a box, and what `run` starts there, get a core limit of exactly 1 byte: the kernel then
@@ -1538,7 +1583,7 @@ wait_ready() {
     "$f" >/dev/null && tray_expected=1
   local how
   until [ -n "$(on_box hyprctl -j layers 2>/dev/null | layer_at omarchy-bar 2>/dev/null)" ] &&
-        { [ "$tray_expected" = 0 ] || box_exec busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
+        { [ "$tray_expected" = 0 ] || box_sys /usr/bin/busctl --user status org.kde.StatusNotifierWatcher >/dev/null 2>&1; }; do
     starting_ok
     # A shell that crashed (or quit) on its way up: said now, with its report, not after READY_TIMEOUT.
     if how=$(shell_crash "$(shell_pid)"); then die "$(shell_crash_text while "$how" | sed 's/^warning: //')"; fi
@@ -1551,8 +1596,8 @@ wait_ready() {
   # ServiceUnknown (finding 62). A server that never comes is a warning, not a failed box.
   local nd=$((SECONDS + 5))
   # (NameHasOwner: `busctl status` exits 0 for a name nobody owns yet.)
-  until [ "$(box_exec busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus \
-           NameHasOwner s org.freedesktop.Notifications 2>/dev/null)" = "b true" ]; do
+  until [ "$(box_sys /usr/bin/busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus \
+           NameHasOwner s org.freedesktop.Notifications 2>/dev/null | head -c 64)" = "b true" ]; do
     starting_ok
     [ $SECONDS -lt $nd ] || { say "no notification server on the box's bus yet; see $D/home/shell.log"; break; }
     sleep 0.1
@@ -1811,7 +1856,8 @@ plugin_check() {
   ! in_jail || validate=/usr/share/omarchy/bin/omarchy-plugin-validate
   [ -x "$validate" ] || validate=""
   if [ "$(jq -r '.shell | tostring' "$D/box.json")" != false ]; then
-    listed=$(box_exec omarchy-shell shell listPlugins 2>/dev/null | jq -c 'map({(.id): {enabled, kinds}}) | add // {}' 2>/dev/null) || listed=null
+    # (The session's omarchy-shell, an --omarchy tree's too: its answer read up to 1 MiB.)
+    listed=$(box_exec omarchy-shell shell listPlugins 2>/dev/null | head -c 1048576 | jq -c 'map({(.id): {enabled, kinds}}) | add // {}' 2>/dev/null) || listed=null
     [ -n "$listed" ] || listed=null
     cfg=$(box_home_file .config/omarchy/shell.json) || cfg=""
     # Its warnings and errors, colour codes and the level/category prefix dropped.
@@ -3872,8 +3918,8 @@ hypr_bin() {
 # (and hyprpm, the installed Hyprland's) is of another version: their IPC may not match.
 hypr_version() {
   local line ver host
-  line=$(on_box hyprctl version 2>/dev/null | head -n 1) || line=""
-  ver=$(on_box hyprctl version -j 2>/dev/null | jq -r '.version // empty' 2>/dev/null) || ver=""
+  line=$(on_box timeout 6 hyprctl version 2>/dev/null | head -c 65536 | head -n 1) || line=""
+  ver=$(on_box timeout 6 hyprctl version -j 2>/dev/null | head -c 65536 | jq -r '.version // empty' 2>/dev/null) || ver=""
   [ -n "$line" ] || { say "box '$NAME': its Hyprland ($(meta hyprland)) did not say its version (hyprctl version)"; return 0; }
   jq --arg v "$line" '.hyprland_version = $v' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
   host=$(/usr/bin/Hyprland --version-json 2>/dev/null | jq -r '.version // empty' 2>/dev/null) || host=""
@@ -4319,7 +4365,7 @@ job_ended() {
   # The waiter writes the status once the job's process is reaped: a moment after it is gone.
   local st="" i
   for i in 1 2 3 4 5 6 7 8 9 10; do
-    st=$(on_box cat -- "$ex" 2>/dev/null) || st=""
+    st=$(on_box timeout 2 cat -- "$ex" 2>/dev/null | head -c 64) || st=""
     [[ $st =~ ^[0-9]+$ ]] && break
     st=""; [ $i = 10 ] || sleep 0.1
   done
@@ -4331,7 +4377,7 @@ job_ended() {
   for a; do
     if [[ $a == /* ]] && [ -e "$a" ] && ! on_box test -e "$a"; then miss+=("$a"); fi
   done
-  local tail; tail=$(on_box tail -n 5 -- "/home/sbx/$log" 2>/dev/null | cut -c1-300 | sed 's/^/  /') || tail=""
+  local tail; tail=$(on_box timeout 2 tail -n 5 -- "/home/sbx/$log" 2>/dev/null | head -c 65536 | cut -c1-300 | sed 's/^/  /') || tail=""
   say "the command $what before the screen settled, and left nothing running$([ "$st" != 0 ] || echo ": what the screen shows is not its (124 is about the screen)")"
   [ ${#miss[@]} = 0 ] || say "its arguments name host paths box '$NAME' does not have: ${miss[*]} (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME)"
   if [ -n "$tail" ]; then say "its log ends (omabox log -b $NAME run):"; printf '%s\n' "$tail" >&2
@@ -4437,9 +4483,10 @@ cmd_run() {
       # whose share has no run-job.sh (another omabox's) starts it as before, without a status.
       local jpid ex=/run/user/$UID/omabox.${log%.log}.exit
       # shellcheck disable=SC2016 # $@ and $! belong to the inner bash
-      jpid=$(settle_act box_exec bash -c 'rm -f -- "$1" && set -C && exec >"$1" 2>&1 || exit 125; set +C; ex=$2; shift 2
-        [ ! -x /opt/omabox/share/run-job.sh ] || exec setsid -f /opt/omabox/share/run-job.sh "$ex" 4< <(printf "%s\0" "$@")
-        (trap - INT QUIT; exec 3>&-; exec setsid -- "$@") & echo "$!" >&3' omabox-run "/home/sbx/$log" "$ex" "$@" 3>&1 </dev/null >&2) ||
+      # (Its own steps by their paths, the command on the session's PATH; the pid read up to 64 bytes.)
+      jpid=$(BOX_KEEP=3 settle_act box_exec /usr/bin/bash -c '/usr/bin/rm -f -- "$1" && set -C && exec >"$1" 2>&1 || exit 125; set +C; ex=$2; shift 2
+        [ ! -x /opt/omabox/share/run-job.sh ] || exec /usr/bin/setsid -f /opt/omabox/share/run-job.sh "$ex" 4< <(printf "%s\0" "$@")
+        (trap - INT QUIT; exec 3>&-; exec /usr/bin/setsid -- "$@") & echo "$!" >&3' omabox-run "/home/sbx/$log" "$ex" "$@" 3>&1 </dev/null >&2 | head -c 64) ||
         die "run -d: could not start the command"
       local lname=$log; log=$D/home/$log
       [[ $jpid =~ ^[0-9]+$ ]] && job_record "$jpid" "$log" "$@"
@@ -4835,6 +4882,33 @@ shot_path() {
   rm -f -- "$file"
 }
 
+# fd_file N r|w WHAT: fd N (3-9), a jailed caller's file its omabox opened and passed (shot --to-fd,
+# record's fds, #224), checked without opening anything: a regular file (not a folder, socket, FIFO
+# or device: a FIFO's read or write could wait for ever), open for reading or for writing as WHAT
+# uses it (never reopened by name, so a read-only fd stays read-only; not O_PATH), on a filesystem
+# of files on a disk or in memory, by name (FD_FS): not one of the kernel's own (procfs, sysfs,
+# cgroups...: some act on a write with the writer's rights, the broker's more than the jail's), nor
+# an anonymous inode (an eventfd, timerfd or pidfd says it is a regular file, and a read of one can
+# wait for ever), nor FUSE (a program answers its reads), nor one stat cannot name.
+fd_file() {
+  local n=$1 how=$2 what=$3 fl t
+  [[ $n =~ ^[3-9]$ ]] || die "$what: an fd is 3 to 9, got $n"
+  [ -f "/dev/fd/$n" ] || die "$what: fd $n is not a file"
+  fl=$(awk '/^flags:/ { print $2; exit }' "/proc/$$/fdinfo/$n" 2>/dev/null) || fl=""
+  [[ $fl =~ ^[0-7]{1,11}$ ]] || die "$what: fd $n cannot be looked at"
+  (( (8#$fl & 8#10000000) == 0 )) || die "$what: fd $n is O_PATH, not open for reading or writing"
+  case $how$((8#$fl & 3)) in
+    r0|r2|w1|w2) ;;
+    r*) die "$what: fd $n is not open for reading" ;;
+    *) die "$what: fd $n is not open for writing" ;;
+  esac
+  t=$(stat -f -c %T "/dev/fd/$n" 2>/dev/null) || die "$what: fd $n: cannot tell its filesystem"
+  [[ " $FD_FS " == *" $t "* ]] || die "$what: fd $n is not a file on a disk or in memory (its filesystem: $t)"
+}
+# stat -f's names of the filesystems fd_file takes (ext4 says ext2/ext3).
+# No network filesystem (nfs, smb, ...): a hard mount whose server is gone blocks a read for ever.
+FD_FS="ext2/ext3 btrfs xfs tmpfs f2fs zfs overlayfs bcachefs ramfs jfs reiserfs nilfs2 exfat vfat msdos ntfs ntfs3"
+
 # The --fit a shot takes when it is given none (#188): $OMABOX_SHOT_FIT (a jailed caller's, sent by its
 # omabox), else the shot-fit setting; nothing when off. A bad $OMABOX_SHOT_FIT is refused, not ignored.
 shot_fit_default() {
@@ -5075,6 +5149,10 @@ calib_verdict() {
 # record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps N] [--hold DURATION] [SHEET] -- ACTION...
 # record [-b NAME] sheet VIDEO [-o PNG] [--frames N | --every DURATION] [--fit N]
 REC_DIR=/home/sbx/.cache/omabox-record
+# The largest video omabox copies out of a box or into one (#224): 16 GiB, an hour of 4K at 36 Mbit/s
+# (a screen's is mostly far less). $OMABOX_RECORD_MAX lowers it (the suite's).
+REC_MAX=$((16 << 30))
+if [[ ${OMABOX_RECORD_MAX:-} =~ ^[0-9]{1,12}$ ]] && [ "$OMABOX_RECORD_MAX" -lt $REC_MAX ]; then REC_MAX=$OMABOX_RECORD_MAX; fi
 # The colours (finding 312). wf-recorder 0.6.0 (on ffmpeg 9) left to its own pixel format writes
 # limited-range values (16-235) tagged full range, so every player read them as full: muted, white
 # ~#e8e8e8, black ~#101010. Asked for yuvj420p (-x) it writes full-range values, tagged so, in
@@ -5090,11 +5168,22 @@ REC_TAGS=(-pix_fmt yuv420p -color_range tv -colorspace bt709 -color_primaries bt
 REC_AAC=(-c:a aac -b:a 192k)
 cmd_record() {
   local name="" sub="" out="" monitor="" fps=30 hold=1000 ract=() nopointer=0 text=() video="" audio=0
-  local sheet=0 frames="" every="" fit="" w glide="" show=0 caps=0 cut=""
+  local sheet=0 frames="" every="" fit="" w glide="" show=0 caps=0 cut="" as="" tofd="" mfd="" vfd="" fromfd="" mfromfd="" sfile=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
+      # A jailed caller's omabox (relay_record, #224): its files opened in the jail and passed as fds,
+      # the video's (or the sheet's, with sheet) --to-fd, the marks' and captions' --marks-fd and
+      # --vtt-fd; sheet reads its video from --from-fd and the video's marks from --marks-from-fd.
+      # --as NAME: the file's name there, only said (start keeps it for stop). status --file prints it.
+      --to-fd) optarg "$@"; tofd=$2; shift ;;
+      --marks-fd) optarg "$@"; mfd=$2; shift ;;
+      --vtt-fd) optarg "$@"; vfd=$2; shift ;;
+      --from-fd) optarg "$@"; fromfd=$2; shift ;;
+      --marks-from-fd) optarg "$@"; mfromfd=$2; shift ;;
+      --as) optarg "$@"; as=$2; shift ;;
+      --file) sfile=1 ;;
       --monitor) optarg "$@"; monitor=$2; shift ;;
       --no-pointer) nopointer=1 ;;
       --audio) audio=1 ;;
@@ -5127,15 +5216,9 @@ cmd_record() {
     shift
   done
   [[ $fps =~ ^[0-9]+$ ]] && [ "$fps" -ge 1 ] && [ "$fps" -le 120 ] || die "record: --fps is 1 to 120, got $fps"
-  ! in_jail || die "record: not for a jailed agent yet (its files are written by its own omabox): shot --burst for frames"
   if [ ${#ract[@]} -gt 0 ]; then
     [ -z "$sub" ] || die "record: -- ACTION records one action (start, recording, stop): not with $sub"
-    case ${ract[0]} in
-      keys|click|scroll|drag|pointer|run|hyprctl|lua|output|monitor|mode|restart-shell|wait) ;;
-      *) die "record -- ACTION: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, restart-shell, wait), got ${ract[0]}" ;;
-    esac
-    local rown=(); for w in "${ract[@]}"; do [ "$w" != -- ] || break; rown+=("$w"); done
-    [[ " ${rown[*]} " != *" -b "* && " ${rown[*]} " != *" --box "* ]] || die "record -- ACTION: the action runs on the recorded box (no -b)"
+    record_action_check "${ract[@]}"
   else
     [ -n "$sub" ] || die "record: start, stop, status, mark, sheet, or -- ACTION (omabox help record)"
   fi
@@ -5148,10 +5231,50 @@ cmd_record() {
   case $sub in
     mark) [ ${#text[@]} -gt 0 ] || die "record mark: the mark's text, like: omabox record mark \"scene 2\""
       [ -z "$out$monitor" ] || die "record mark: -o and --monitor go with start" ;;
-    sheet) [ -n "$video" ] || die "record sheet: the video, like: omabox record sheet demo.mp4"
-      [ -f "$video" ] || die "record sheet: no video $video"
+    sheet) [ -n "$video$fromfd" ] || die "record sheet: the video, like: omabox record sheet demo.mp4"
+      [ -z "$video" ] || [ -z "$fromfd" ] || die "record sheet: VIDEO or --from-fd, not both"
+      # (A jailed agent's path is never looked at here, not even whether it is there.)
+      if [ -z "$fromfd" ]; then
+        ! in_jail || die "record sheet: a jailed agent's video and sheet are opened by its own omabox (--from-fd, --to-fd), never at a path here"
+        [ -f "$video" ] || die "record sheet: no video $video"
+      fi
       [ -z "$monitor" ] || die "record sheet: --monitor goes with start" ;;
   esac
+  # The fds and names a jailed caller's omabox passes (#224), checked before anything is done: the
+  # broker writes and reads a jailed agent's files only through them, never at a path it names.
+  [ $sfile = 0 ] || [ "$sub" = status ] || die "record: --file goes with status"
+  [ -z "$tofd" ] || [ "$sub" = stop ] || [ "$sub" = sheet ] || die "record: --to-fd goes with stop or sheet"
+  [ -z "$mfd$vfd" ] || [ "$sub" = stop ] || die "record: --marks-fd and --vtt-fd go with stop"
+  [ -z "$fromfd$mfromfd" ] || [ "$sub" = sheet ] || die "record: --from-fd and --marks-from-fd go with sheet"
+  [ -z "$mfromfd" ] || [ -n "$fromfd" ] || die "record sheet: --marks-from-fd goes with --from-fd"
+  if [ -n "$as" ]; then
+    case $sub in start|stop|sheet) ;; *) die "record: --as goes with start, stop or sheet" ;; esac
+    [[ $as == /* && $as != *[[:cntrl:]]* && ${#as} -le 4096 ]] || die "record: --as takes an absolute file name"
+    [ "$sub" = start ] || [ -n "$tofd" ] || die "record $sub: --as goes with --to-fd"
+  fi
+  case $sub in
+    stop) [ -z "$tofd$mfd$vfd" ] || { [ -n "$tofd" ] && [ -n "$mfd" ] && [ -n "$vfd" ] && [ -n "$as" ] && [ $sheet = 0 ]; } ||
+      die "record stop: --to-fd, --marks-fd and --vtt-fd go together, with --as NAME, without --sheet (its sheet is made from the file: record sheet)" ;;
+    sheet) [ -z "$tofd$fromfd" ] || { [ -n "$tofd" ] && [ -n "$fromfd" ] && [ -n "$as" ] && [ -z "$out" ]; } ||
+      die "record sheet: --from-fd and --to-fd go together, with --as NAME, without -o" ;;
+  esac
+  local fdl=() f nu
+  [ -z "$tofd" ] || { fd_file "$tofd" w record; fdl+=("$tofd"); }
+  for f in "$mfd" "$vfd"; do [ -z "$f" ] || { fd_file "$f" w record; fdl+=("$f"); }; done
+  for f in "$fromfd" "$mfromfd"; do [ -z "$f" ] || { fd_file "$f" r record; fdl+=("$f"); }; done
+  nu=$(printf '%s\n' ${fdl[@]+"${fdl[@]}"} | sort -u | grep -c .) || nu=0
+  [ "${#fdl[@]}" = "$nu" ] || die "record: each fd once"
+  # A jailed agent (#224): its omabox resolves -o, opens the files and runs an action itself (as
+  # start, the action, stop, so the action goes through the broker as any command does).
+  if in_jail; then
+    [ ${#ract[@]} = 0 ] || die "record -- ACTION: a jailed agent's own omabox runs it (start, the action, stop), never the broker"
+    [ -z "$out" ] || die "record: a jailed agent's -o is resolved by its own omabox, never at a path here"
+    case $sub in
+      start) [ -n "$as" ] || die "record start: a jailed agent's video is named by its own omabox (--as), never opened here" ;;
+      stop) [ -n "$tofd" ] || die "record stop: a jailed agent's video is written by its own omabox (--to-fd), never at a path here" ;;
+      sheet) [ -n "$fromfd" ] || die "record sheet: a jailed agent's video and sheet are opened by its own omabox (--from-fd, --to-fd), never at a path here" ;;
+    esac
+  fi
   if [ $sheet = 1 ] || [ "$sub" = sheet ]; then
     command -v magick >/dev/null || die "record: a contact sheet needs ImageMagick's magick (package imagemagick, part of Omarchy)"
     [ -n "$fit" ] || fit=$(shot_fit_default) || exit 1
@@ -5159,12 +5282,14 @@ cmd_record() {
   fi
   select_box "$name"; need_box
   case $sub in
-    status) record_status; return ;;
+    status) record_status "$sfile"; return ;;
     mark) record_mark "${text[*]}"; return ;;
-    sheet) record_sheet_file "$video" "$out" "$frames" "$every" "$fit"; return ;;
-    stop) [ -z "$out$monitor" ] || die "record stop: -o and --monitor go with start"; record_stop "$sheet" "$frames" "$every" "$fit" "$show" "$caps" "$cut"; return ;;
+    sheet) record_sheet_file "$video" "$out" "$frames" "$every" "$fit" "$fromfd" "$mfromfd" "$tofd" "$as"; return ;;
+    stop) [ -z "$out$monitor" ] || die "record stop: -o and --monitor go with start"
+      record_stop "$sheet" "$frames" "$every" "$fit" "$show" "$caps" "$cut" "$tofd" "$mfd" "$vfd" "$as"; return ;;
   esac
-  record_start "$out" "$monitor" "$fps" "$nopointer" "$audio" "$glide"
+  [ -z "$as" ] || [ -z "$out" ] || die "record start: -o or --as, not both"
+  record_start "${as:-$out}" "$monitor" "$fps" "$nopointer" "$audio" "$glide" "${as:+as}"
   # Once it records, the pointer stays hidden until `record stop` (finding 320): a recording that goes
   # on past this omabox, and one whose action a Ctrl-C ends (the recording is kept, so is the hold).
   trap - EXIT INT TERM HUP
@@ -5175,6 +5300,45 @@ cmd_record() {
   record_stop "$sheet" "$frames" "$every" "$fit" "$show" "$caps" "$cut" || return $?
   [ $rc = 0 ] || say "record: the action ended $rc (the recording is kept)"
   return $rc
+}
+
+# box_copy FILE_IN_BOX MAX: the file's bytes on stdout, read in the box by its cat (the host never
+# opens a path the box could have made a link, finding 297), when the box's stat says it is a regular
+# file with the blocks for its size (not sparse) of at most MAX bytes; never more bytes than that size,
+# cut here (the box's processes can swap the file meanwhile, for a link to /dev/zero too: the bound
+# that counts is this side's), and in a time for that size at 10 MiB/s, plus 10 s (one swapped for a
+# FIFO would be read for ever). MAX is the bound: blocks the box has reserved (fallocate, a reflink)
+# say nothing of what it wrote. Sets BOX_COPY_SIZE, for the caller to check that many came.
+box_copy() {
+  local st type size blocks bsz max=$2
+  BOX_COPY_SIZE=""
+  st=$(box_sys /usr/bin/stat -c '%F|%s|%b|%B' -- "$1" 2>/dev/null | head -c 200) || st=""
+  IFS='|' read -r type size blocks bsz <<<"$st"
+  [ "$type" = "regular file" ] && [[ "$size $blocks $bsz" =~ ^[0-9]{1,15}\ [0-9]{1,15}\ [0-9]{1,6}$ ]] ||
+    { say "record: $1 in box '$NAME' is not a file"; return 1; }
+  [ $((blocks * bsz + 1048576)) -ge "$size" ] || { say "record: $1 in box '$NAME' is sparse ($size bytes, $((blocks * bsz)) on disk)"; return 1; }
+  [ "$size" -le "$max" ] || { say "record: $1 in box '$NAME' is $(bytes_h "$size"): more than omabox copies out of a box ($(bytes_h "$max"))"; return 1; }
+  BOX_COPY_SIZE=$size
+  box_sys /usr/bin/timeout -k 1 $((10 + size / 10485760)) /usr/bin/cat -- "$1" | head -c "$size"
+}
+bytes_h() { awk -v b="$1" 'BEGIN { if (b < 1048576) printf "%d bytes", b; else if (b < 1073741824) printf "%.1f MiB", b / 1048576; else printf "%.1f GiB", b / 1073741824 }'; }
+# The folders a recording's stop or sheet makes here (in the box dir) and the video's .part, removed
+# however this omabox ends (with a --no-pointer hold's release, which shares the EXIT trap).
+REC_TMPS=() REC_PART=""
+rec_traps() {
+  trap 'rm -rf -- "${REC_TMPS[@]}"; [ -z "$REC_PART" ] || rm -f -- "$REC_PART"; [ -z "${PTR_TAG:-}" ] || ptr_release_quiet "$PTR_TAG"' EXIT
+  trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+}
+
+# record -- ACTION's action: one that acts, on the recorded box.
+record_action_check() {
+  local w rown=()
+  case ${1:-} in
+    keys|click|scroll|drag|pointer|run|hyprctl|lua|output|monitor|mode|restart-shell|wait) ;;
+    *) die "record -- ACTION: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, restart-shell, wait), got ${1:-nothing}" ;;
+  esac
+  for w; do [ "$w" != -- ] || break; rown+=("$w"); done
+  [[ " ${rown[*]} " != *" -b "* && " ${rown[*]} " != *" --box "* ]] || die "record -- ACTION: the action runs on the recorded box (no -b)"
 }
 
 # The recording running in this box, as $D/record has it: sets REC_PID REC_OUT REC_FPS REC_START
@@ -5188,7 +5352,7 @@ record_running() {
   [[ $REC_PID =~ ^[0-9]+(,[0-9]+)*$ ]] || return 1
   local p=${REC_PID//[!,]/}; REC_N=$((${#p} + 1))
   # shellcheck disable=SC2016,SC2086 # the inner sh's; the pids split
-  box_exec sh -c 'for p; do [ "$(cat "/proc/$p/comm" 2>/dev/null)" = wf-recorder ] || exit 1; done' omabox-record ${REC_PID//,/ } 2>/dev/null
+  box_sys /usr/bin/sh -c 'for p; do [ "$(cat "/proc/$p/comm" 2>/dev/null)" = wf-recorder ] || exit 1; done' omabox-record ${REC_PID//,/ } 2>/dev/null
 }
 # The folders in the box the recording's wf-recorders write to, one a line.
 rec_dirs() {
@@ -5197,27 +5361,43 @@ rec_dirs() {
   else echo "$REC_DIR"; fi
 }
 
+# record_status [FILE]: with FILE 1 (--file), only the file the recording goes to (a jailed caller's
+# omabox opens its files beside it before `stop`, #224).
 record_status() {
+  if [ "${1:-0}" = 1 ]; then
+    local f
+    [ -f "$D/record" ] && read -r _ _ _ _ f < "$D/record" && [ -n "$f" ] || die "record: box '$NAME' is not recording"
+    # A jailed caller's own recordings only (#224): one the user started stays the user's, its file
+    # name included.
+    ! in_jail || [ -f "$D/record.as" ] || die "record: box '$NAME''s recording was started outside the jail: it is stopped there"
+    echo "$f"; return
+  fi
   local snd=""; [ ! -f "$D/record.audio" ] || snd=" and its sound"
+  local whose=""; [ ! -f "$D/record.as" ] || whose=" (a jailed agent's file, written by its own omabox)"
   if record_running; then
+    # (A recording the user started, seen from a jail: not its file's name.)
+    ! in_jail || [ -f "$D/record.as" ] || REC_FILE="a file outside the jail"
     if [ "$REC_N" -gt 1 ] && [ -f "$D/record.layout" ]; then
-      echo "recording $(record_names "$REC_OUT") of box '$NAME'$snd as one $(record_size) video at $REC_FPS fps, to $REC_FILE (omabox record stop)"
-    else echo "recording $REC_OUT of box '$NAME'$snd at $REC_FPS fps, to $REC_FILE (omabox record stop)"; fi
+      echo "recording $(record_names "$REC_OUT") of box '$NAME'$snd as one $(record_size) video at $REC_FPS fps, to $REC_FILE$whose (omabox record stop)"
+    else echo "recording $REC_OUT of box '$NAME'$snd at $REC_FPS fps, to $REC_FILE$whose (omabox record stop)"; fi
   elif [ -f "$D/record" ]; then echo "box '$NAME': its recording stopped by itself (omabox record stop keeps what it has)"
   else echo "box '$NAME': not recording"; fi
 }
 
-# record_start FILE MONITOR FPS NOPOINTER AUDIO GLIDE_MS (MONITOR all: the whole layout, #225; AUDIO 1:
-# the box's sound too, #226; GLIDE_MS: click, pointer and drag glide while it records, #176)
+# record_start FILE MONITOR FPS NOPOINTER AUDIO GLIDE_MS [as] (MONITOR all: the whole layout, #225; AUDIO
+# 1: the box's sound too, #226; GLIDE_MS: click, pointer and drag glide while it records, #176). With
+# `as` (#224), FILE is only a name, a jailed caller's: nothing is made or opened at it here, and
+# $D/record.as says so to `stop`, which writes the video through the caller's fds (or, stopped from
+# outside the jail, to a file of its own).
 record_start() {
-  local file=$1 mon=$2 fps=$3 nopointer=${4:-0} audio=${5:-0} glide=${6:-} mons layout="" names=() i geo
+  local file=$1 mon=$2 fps=$3 nopointer=${4:-0} audio=${5:-0} glide=${6:-} asname=${7:-} mons layout="" names=() i geo
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then
     die "record: needs wf-recorder and ffmpeg (sudo pacman -S wf-recorder ffmpeg)"
   fi
   if record_running; then die "record: box '$NAME' is recording already, to $REC_FILE (omabox record stop)"; fi
   [ "$audio" = 0 ] || [ "$(meta audio)" = true ] ||
     die "record --audio: box '$NAME' has no audio: a box gets it at up (omabox up --audio; down first, or up --new --audio)"
-  rm -f "$D/record" "$D/record.marks" "$D/record.layout" "$D/record.audio" "$D/record.input" "$D/record.geo" "$D/record.glide"
+  rm -f "$D/record" "$D/record.marks" "$D/record.layout" "$D/record.audio" "$D/record.input" "$D/record.geo" "$D/record.glide" "$D/record.as"
   mons=$(hypr_json monitors)
   if [ "$mon" = all ]; then
     layout=$(record_layout <<<"$mons") && [ -n "$layout" ] || die "record: box '$NAME' has no monitor to record"
@@ -5242,11 +5422,13 @@ record_start() {
     geo+=" $(head -n 1 <<<"$layout" | awk '{ print $3 * $4 }')"
     geo+=" $(tail -n +2 <<<"$layout" | awk -v m="$mainn" '$1 == m { print $2, $3, $4, $5; exit }')"
   else geo=$(jq -r --arg n "$mon" '.[] | select(.name == $n) | "\(.x) \(.y) \(.scale)"' <<<"$mons" | head -n 1); fi
-  [ -n "$file" ] || file=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S).mp4
-  mkdir -p -- "$(dirname -- "$file")" || die "record: cannot make the directory $(dirname -- "$file")"
-  file=$(readlink -f -- "$file")
-  local err; err=$( { : > "$file.part"; } 2>&1 ) || die "record: cannot write $file: ${err##*: }"
-  rm -f -- "$file.part"
+  if [ -z "$asname" ]; then
+    [ -n "$file" ] || file=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S).mp4
+    mkdir -p -- "$(dirname -- "$file")" || die "record: cannot make the directory $(dirname -- "$file")"
+    file=$(readlink -f -- "$file")
+    local err; err=$( { : > "$file.part"; } 2>&1 ) || die "record: cannot write $file: ${err##*: }"
+    rm -f -- "$file.part"
+  fi
   # --no-pointer (#228): hidden before the first frame; `record stop` shows it again (and this omabox,
   # should it fail before the recording runs).
   [ "$nopointer" = 0 ] || ptr_hold_until_exit "record $$"
@@ -5268,7 +5450,8 @@ record_start() {
   # put in step by them, #225). The rest of the debug lines are dropped (grep); wf-recorder's own
   # lines go on to its log.
   # shellcheck disable=SC2016 # the inner bash's
-  mapfile -t pids < <(box_exec bash -c '
+  # (The pids, a line each on fd 3, the only fd it is given; read here up to 4 KiB.)
+  mapfile -t pids < <(BOX_KEEP=3 box_sys /usr/bin/bash -c '
     first() {
       local d=$1 l re="zwlr_screencopy_frame_v1[@#][0-9]+[.]ready[(]([0-9]+), ([0-9]+), ([0-9]+)[)]"
       while IFS= read -r l; do
@@ -5289,9 +5472,16 @@ record_start() {
       (exec >"$d/wf-recorder.log" 2>&1 3>&-; trap - INT QUIT; export WAYLAND_DEBUG=client
         exec setsid -- wf-recorder -y -D -o "$o" -c libx264 -x yuvj420p -p preset=ultrafast -p crf=14 -f "$d/raw.mkv" 2> >(first "$d")) &
       echo "$!" >&3
-    done' omabox-record "${pairs[@]}" 3>&1 </dev/null >&2)
+    done' omabox-record "${pairs[@]}" 3>&1 </dev/null >&2 | head -c 4096)
   [ ${#pids[@]} = ${#names[@]} ] || { record_audio_end "$apid"; die "record: could not start wf-recorder in box '$NAME'"; }
   for i in "${pids[@]}"; do [[ $i =~ ^[0-9]+$ ]] || { record_audio_end "$apid"; die "record: could not start wf-recorder in box '$NAME' (no pid: $i)"; }; done
+  # record.as first (#224): a recording is never there without it, for a stop outside the jail to
+  # read as the user's and write at the jail's name.
+  if [ -n "$asname" ] && ! : > "$D/record.as"; then
+    box_sys /usr/bin/kill -KILL "${pids[@]}" 2>/dev/null || true
+    record_audio_end "$apid"
+    die "record: cannot write in $D"
+  fi
   echo "$(IFS=,; echo "${pids[*]}") $(IFS=,; echo "${names[*]}") $fps $start $file" > "$D/record"
   [ -z "$apid" ] || echo "$apid" > "$D/record.audio"
   [ -z "$layout" ] || echo "$layout" > "$D/record.layout"
@@ -5301,13 +5491,13 @@ record_start() {
   # later (the muxer buffers it), but its frames are stamped from the first. One of the layout's
   # ended takes the others with it.
   # shellcheck disable=SC2016 # the inner sh's
-  box_exec sh -c 'for i in 1 2 3 4 5; do sleep 0.1; for p; do kill -0 "$p" 2>/dev/null || exit 1; done; done' omabox-record "${pids[@]}" || {
-    rm -f "$D/record" "$D/record.layout" "$D/record.audio" "$D/record.geo" "$D/record.glide"
+  box_sys /usr/bin/sh -c 'for i in 1 2 3 4 5; do sleep 0.1; for p; do kill -0 "$p" 2>/dev/null || exit 1; done; done' omabox-record "${pids[@]}" || {
+    rm -f "$D/record" "$D/record.layout" "$D/record.audio" "$D/record.geo" "$D/record.glide" "$D/record.as"
     record_audio_end "$apid"
-    [ ${#pids[@]} = 1 ] || box_exec kill -KILL "${pids[@]}" 2>/dev/null || true
+    [ ${#pids[@]} = 1 ] || box_sys /usr/bin/kill -KILL "${pids[@]}" 2>/dev/null || true
     local dirs=(); for ((i = 0; i < ${#pairs[@]}; i += 2)); do dirs+=("${pairs[i]}"); done
     # shellcheck disable=SC2016 # the inner sh's
-    die "record: wf-recorder ended at once: $(box_exec sh -c 'for d; do tail -n 3 "$d/wf-recorder.log"; done' omabox-record "${dirs[@]}" 2>/dev/null | tr '\n' ' ')"; }
+    die "record: wf-recorder ended at once: $(box_sys /usr/bin/sh -c 'for d; do timeout 2 tail -n 3 "$d/wf-recorder.log"; done' omabox-record "${dirs[@]}" 2>/dev/null | head -c 2000 | tr '\n' ' ')"; }
   local snd=""; [ -z "$apid" ] || snd=" and its sound"
   if [ -n "$layout" ]; then
     say "record: recording $(record_names "${names[*]}") of box '$NAME'$snd as one $(record_size) video ($(record_how)) to $file (omabox record stop)"
@@ -5410,7 +5600,7 @@ record_firsts() {
     if [[ $a =~ ^([0-9]{1,17})\ ([0-9]{1,17})\ ([0-9]{1,17})\ ([0-9]{1,17})$ ]]; then
       echo "$((10#${BASH_REMATCH[1]})) $(( 10#${BASH_REMATCH[1]} + (10#${BASH_REMATCH[2]} + 10#${BASH_REMATCH[4]}) / 2 - 10#${BASH_REMATCH[3]} ))"
     else echo -; fi
-  done < <(mapfile -t ds < <(rec_dirs); box_exec sh -c 'for d; do head -n 1 "$d/first-frame" 2>/dev/null || echo; done' omabox-record "${ds[@]}" 2>/dev/null)
+  done < <(mapfile -t ds < <(rec_dirs); box_sys /usr/bin/sh -c 'for d; do l=$(head -c 200 "$d/first-frame" 2>/dev/null | head -n 1); echo "$l"; done' omabox-record "${ds[@]}" 2>/dev/null | head -c 4096)
 }
 # The wall-clock time of the video's first frame, in µs: the recording's first frame's; the layout's
 # (#225) starts once each monitor has given one, the latest of them. Fails when none has come.
@@ -5431,6 +5621,11 @@ record_mark() {
     [ ! -f "$D/record" ] || die "record mark: box '$NAME''s recording stopped by itself (omabox record stop keeps what it has)"
     die "record mark: box '$NAME' is not recording (omabox record start)"
   fi
+  # Bounded (#224): a mark 1000 characters at most, a recording's 1 MiB of them (a loop of marks from a
+  # jail would otherwise fill the runtime dir, which is memory).
+  [ ${#mtext} -le 1000 ] || mtext="${mtext:0:997}..."
+  local msz; msz=$(stat -c %s "$D/record.marks" 2>/dev/null) || msz=0
+  [ "$msz" -lt 1048576 ] || die "record mark: box '$NAME''s recording has 1 MiB of marks already"
   printf '%s\t%s\n' "$CALL_US" "$mtext" >> "$D/record.marks" || die "record mark: cannot write $D/record.marks"
   if first=$(record_first_us); then
     ms=$(( (CALL_US - first + 500) / 1000 )); [ $ms -ge 0 ] || ms=0
@@ -5438,13 +5633,29 @@ record_mark() {
   else echo "before the first frame: $mtext"; fi
 }
 
-# record_stop SHEET FRAMES EVERY_MS FIT SHOW CAPTIONS CUT_MS: the video, its marks beside it, and with
-# SHEET its contact sheet; SHOW 1 the input drawn into it, CAPTIONS 1 the marks, CUT_MS its still
-# stretches cut to that (#176).
+# record_stop SHEET FRAMES EVERY_MS FIT SHOW CAPTIONS CUT_MS [TOFD MARKSFD VTTFD AS]: the video, its
+# marks beside it, and with SHEET its contact sheet; SHOW 1 the input drawn into it, CAPTIONS 1 the
+# marks, CUT_MS its still stretches cut to that (#176). With the fds (a jailed caller's, #224): the
+# video, the marks and the captions written through them, each whole or nothing (the marks' and
+# captions' empty: none), and AS, the name the caller gave at start, said; nothing opened at a path
+# of the caller's.
 record_stop() {
-  local sheet=${1:-0} frames=${2:-} every=${3:-} fit=${4:-} show=${5:-0} caps=${6:-0} cut=${7:-} alive=0 apid=""
+  local sheet=${1:-0} frames=${2:-} every=${3:-} fit=${4:-} show=${5:-0} caps=${6:-0} cut=${7:-} tofd=${8:-} mfd=${9:-} vfd=${10:-} as=${11:-} alive=0 apid=""
   if record_running; then alive=1
   elif [ ! -f "$D/record" ]; then die "record stop: box '$NAME' is not recording"; fi
+  # Before it is stopped: a jailed caller's own recording (one the user started stays the user's), and
+  # the name the caller's omabox opened its files for this recording's.
+  ! in_jail || [ -f "$D/record.as" ] || die "record stop: box '$NAME''s recording was started outside the jail: it is stopped there"
+  [ -z "$as" ] || [ "$as" = "$REC_FILE" ] || die "record stop: box '$NAME' records to $REC_FILE, not $as"
+  # A jailed agent's recording stopped from outside the jail (no fds): never written at the name it
+  # gave, a path of the jail's; a new file in omabox's cache folder instead (on disk: $TMPDIR is
+  # memory on most machines, and the video may be large).
+  if [ -z "$tofd" ] && [ -f "$D/record.as" ]; then
+    local asname=$REC_FILE cache=${XDG_CACHE_HOME:-$HOME/.cache}/omabox/records
+    mkdir -p -- "$cache" || die "record stop: cannot make $cache"
+    REC_FILE=$cache/omabox-$NAME-$(date +%Y%m%d-%H%M%S).mp4
+    say "record: a jailed agent started this recording, to its file $asname: written to $REC_FILE instead (never at a path a jail named)"
+  fi
   [ ! -f "$D/record.audio" ] || apid=$(cat "$D/record.audio") || apid=""
   # Each wf-recorder still running (the layout's: one may have ended by itself) told to finish.
   if [ $alive = 1 ] || [ "$REC_N" -gt 1 ]; then
@@ -5452,22 +5663,22 @@ record_stop() {
     # shellcheck disable=SC2016 # the inner sh's
     local still='for p; do [ "$(cat "/proc/$p/comm" 2>/dev/null)" != wf-recorder ] || { [ -z "$S" ] || kill "-$S" "$p"; R=0; }; done; exit ${R:-1}'
     # shellcheck disable=SC2086 # the pids split
-    box_exec env S=INT sh -c "$still" omabox-record $rpids 2>/dev/null || true
+    box_sys /usr/bin/env S=INT /usr/bin/sh -c "$still" omabox-record $rpids 2>/dev/null || true
     record_audio_end "$apid"   # the sound's ffmpeg (#226) as the frames end
     # shellcheck disable=SC2086 # the pids split
-    while box_exec env S= sh -c "$still" omabox-record $rpids 2>/dev/null; do
-      [ $SECONDS -lt $end ] || { box_exec env S=KILL sh -c "$still" omabox-record $rpids 2>/dev/null || true; say "record: wf-recorder did not finish in 15 s: killed (its file may lack its last frames)"; break; }
+    while box_sys /usr/bin/env S= /usr/bin/sh -c "$still" omabox-record $rpids 2>/dev/null; do
+      [ $SECONDS -lt $end ] || { box_sys /usr/bin/env S=KILL /usr/bin/sh -c "$still" omabox-record $rpids 2>/dev/null || true; say "record: wf-recorder did not finish in 15 s: killed (its file may lack its last frames)"; break; }
       sleep 0.1
     done
   fi
   # A recording that stopped by itself (no wf-recorder left) still has its sound's ffmpeg to end.
   [ $alive = 1 ] || [ "$REC_N" -gt 1 ] || record_audio_end "$apid"
-  rm -f "$D/record" "$D/record.audio"
+  rm -f "$D/record" "$D/record.audio" "$D/record.as"
   # Its sound (#226), put in the video's clock: REC_AFILT, the filter for the third input of the fps
   # pass (or record_compose's last); none when it has no sound.
   REC_AFILT=""
   if [ -n "$apid" ]; then
-    if box_exec ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$REC_DIR/audio.mka" 2>/dev/null | grep -q .; then
+    if box_sys /usr/bin/ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$REC_DIR/audio.mka" 2>/dev/null | head -c 4096 | grep -q .; then
       local vfirst; vfirst=$(record_first_us) || vfirst=$REC_START
       REC_AFILT=$(record_audio_filter "$vfirst") || {
         REC_AFILT="asetpts=N/SR/TB,apad"
@@ -5508,7 +5719,7 @@ record_stop() {
     # the video's clock stays wf-recorder's, so a mark's time is still its time (finding 306).
     local ain=() aout=()
     [ -z "$REC_AFILT" ] || { ain=(-i "$REC_DIR/audio.mka"); aout=(-map 0:v:0 -map 1:a:0 -af "$REC_AFILT" "${REC_AAC[@]}" -shortest); }
-    box_exec ffmpeg -v error -y -i "$REC_DIR/raw.mkv" "${ain[@]}" -vf "fps=$REC_FPS,$REC_YUV$REC_VASS" -c:v libx264 -preset medium -crf "$(rec_crf "$cut")" \
+    box_sys /usr/bin/ffmpeg -v error -y -i "$REC_DIR/raw.mkv" "${ain[@]}" -vf "fps=$REC_FPS,$REC_YUV$REC_VASS" -c:v libx264 -preset medium -crf "$(rec_crf "$cut")" \
       "${REC_TAGS[@]}" "${aout[@]}" -movflags +faststart "$REC_DIR/out.mp4" </dev/null >&2 ||
       die "record: ffmpeg could not make the video ($REC_DIR/raw.mkv in box '$NAME' is kept)"
   fi
@@ -5517,17 +5728,37 @@ record_stop() {
   [ -z "$cut" ] || record_cut "$cut" "$first" "$input" "$marks" "$show" || say "record --cut-idle: could not cut it: the video as it was recorded"
   [ -z "$input" ] || rm -f -- "$input"
   # (ffprobe in the box too: its file, never read on the host but as bytes.)
-  local info dur=""; info=$(box_exec ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | paste -sd ' ') || info=""
+  local info dur=""; info=$(box_sys /usr/bin/ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | head -c 4096 | paste -sd ' ') || info=""
   [[ ! $info =~ \ ([0-9]+)(\.([0-9]{1,3}))?[0-9]*$ ]] || dur=$((10#${BASH_REMATCH[1]} * 1000 + 10#$(printf '%-3s' "${BASH_REMATCH[3]}" | tr ' ' 0)))
-  box_exec cat "$REC_DIR/out.mp4" > "$REC_FILE.part" || { rm -f -- "$REC_FILE.part"; die "record: could not copy the video out of box '$NAME'"; }
-  mv -f -- "$REC_FILE.part" "$REC_FILE"
-  local base=${REC_FILE%.mp4} sp=""
-  record_marks "$marks" "$first" "$dur" "$base" "$REC_CUTS"
+  local base=${REC_FILE%.mp4} sp="" tmpd=""
+  if [ -n "$tofd" ]; then
+    # Streamed into the caller's file, as the bytes of the box's `cat` (never held here whole).
+    { box_copy "$REC_DIR/out.mp4" "$REC_MAX" >&"$tofd" && [ "$(stat -L -c %s "/dev/fd/$tofd" 2>/dev/null)" = "$BOX_COPY_SIZE" ]; } ||
+      die "record: could not copy the video out of box '$NAME' (into the caller's file; $REC_DIR/out.mp4 there is kept)"
+  else
+    REC_PART=$REC_FILE.part; rec_traps
+    { box_copy "$REC_DIR/out.mp4" "$REC_MAX" > "$REC_FILE.part" && [ "$(stat -c %s -- "$REC_FILE.part" 2>/dev/null)" = "$BOX_COPY_SIZE" ]; } ||
+      { rm -f -- "$REC_FILE.part"; die "record: could not copy the video out of box '$NAME' ($REC_DIR/out.mp4 there is kept)"; }
+    mv -f -- "$REC_FILE.part" "$REC_FILE"; REC_PART=""
+  fi
+  if [ -n "$tofd" ]; then
+    # The marks and captions made in a folder of the box dir's own (the jail has no way in), then
+    # copied into the caller's files.
+    tmpd=$(mktemp -d "$D/.record-XXXXXX") || die "record: cannot write in $D"
+    REC_TMPS+=("$tmpd"); rec_traps
+    record_marks "$marks" "$first" "$dur" "$tmpd/v" "$REC_CUTS" "$base"
+    if [ -f "$tmpd/v.marks.tsv" ]; then
+      if ! cat -- "$tmpd/v.marks.tsv" >&"$mfd" || ! cat -- "$tmpd/v.vtt" >&"$vfd"; then
+        rm -rf -- "$tmpd"; die "record: could not write the marks into the caller's files"
+      fi
+    fi
+    rm -rf -- "$tmpd"
+  else record_marks "$marks" "$first" "$dur" "$base" "$REC_CUTS"; fi
   [ "$sheet" = 0 ] || sp=$(record_sheet "$REC_DIR/out.mp4" "$base.marks.tsv" "$base.sheet.png" "$frames" "$every" "$fit") || sp=""
   local rmd=("$REC_DIR/raw.mkv" "$REC_DIR/out.mp4" "$REC_DIR/first-frame" "$REC_DIR/overlay.ass" "$REC_DIR/cut.mp4")
   [ -z "$REC_AFILT" ] || rmd+=("$REC_DIR/audio.mka" "$REC_DIR/audio.log")
   [ "$REC_N" = 1 ] || mapfile -t -O "${#rmd[@]}" rmd < <(rec_dirs)
-  box_exec rm -rf "${rmd[@]}" 2>/dev/null || true
+  box_sys /usr/bin/rm -rf -- "${rmd[@]}" 2>/dev/null || true
   [[ ! $info =~ ^([0-9]+),([0-9]+)\  ]] || say "record: ${BASH_REMATCH[1]}x${BASH_REMATCH[2]}, $(ms_s "${dur:-0}") at $REC_FPS fps${REC_AFILT:+, with sound}"
   echo "$REC_FILE"
   [ -z "$sp" ] || echo "$sp"
@@ -5549,7 +5780,7 @@ record_compose() {
   mapfile -t dirs < <(rec_dirs)
   mapfile -t firsts < <(record_firsts)
   # shellcheck disable=SC2016 # the inner sh's
-  mapfile -t durs < <(box_exec sh -c 'for d; do ffprobe -v error -show_entries format=duration -of csv=p=0 "$d/raw.mkv" 2>/dev/null | head -n 1 | grep . || echo; done' omabox-record "${dirs[@]}" 2>/dev/null)
+  mapfile -t durs < <(box_sys /usr/bin/sh -c 'for d; do ffprobe -v error -show_entries format=duration -of csv=p=0 "$d/raw.mkv" 2>/dev/null | head -n 1 | grep . || echo; done' omabox-record "${dirs[@]}" 2>/dev/null | head -c 4096)
   n=${#dirs[@]}
   [ ${#lay[@]} = "$n" ] && [ ${#firsts[@]} = "$n" ] || { say "record: the layout's recordings do not match its record"; return 1; }
   for ((i = 0; i < n; i++)); do
@@ -5587,18 +5818,19 @@ record_compose() {
     args+=(-i "$REC_DIR/audio.mka"); fc+=";[$((k + 1)):a]${REC_AFILT}[a]"; amap=(-map "[a]" "${REC_AAC[@]}" -shortest)
   fi
   args+=(-filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf "$(rec_crf "${REC_CUT:-}")" "${REC_TAGS[@]}" "${amap[@]}" "${tlim[@]}" -movflags +faststart "$REC_DIR/out.mp4")
-  box_exec ffmpeg "${args[@]}" </dev/null >&2
+  box_sys /usr/bin/ffmpeg "${args[@]}" </dev/null >&2
 }
 
-# record_marks MARKS FIRST_US DURATION_MS BASE: the marks ("WALL_US TEXT" lines) in the video's clock
+# record_marks MARKS FIRST_US DURATION_MS BASE [SHOWN]: the marks ("WALL_US TEXT" lines) in the video's clock
 # (ms from its first frame, at FIRST_US) as BASE.marks.tsv (ms, the wall-clock time as `events` has
 # it, the text) and BASE.vtt (WebVTT captions: each mark until the next, the last until the end). No
 # marks: no files, and an earlier take's at those names go, so they are never read as this one's.
 # CUTS (--cut-idle, record_cut's REC_CUTS): "FROM TO" frames taken out at REC_FPS; a mark after one is
-# that much earlier (one in one, at its start).
-# record_marks MARKS FIRST_US DURATION_MS BASE [CUTS]
+# that much earlier (one in one, at its start). SHOWN: the base said instead of BASE (a jailed
+# caller's, whose files these are copied into).
+# record_marks MARKS FIRST_US DURATION_MS BASE [CUTS] [SHOWN]
 record_marks() {
-  local marks=$1 first=$2 dur=${3:-0} base=$4 cuts=${5:-} tsv vtt n
+  local marks=$1 first=$2 dur=${3:-0} base=$4 cuts=${5:-} shown=${6:-$4} tsv vtt n
   tsv=$base.marks.tsv vtt=$base.vtt
   if [ -z "$marks" ]; then rm -f -- "$tsv" "$vtt"; return 0; fi
   # shellcheck disable=SC2016 # awk's
@@ -5622,7 +5854,7 @@ record_marks() {
     { rm -f -- "$vtt.part"; die "record: cannot write $vtt"; }
   mv -f -- "$vtt.part" "$vtt" || die "record: cannot write $vtt"
   n=$(($(wc -l < "$tsv") - 1))
-  say "record: $n mark$([ "$n" = 1 ] || echo s) in $tsv (ms in the video), and $vtt (captions)"
+  say "record: $n mark$([ "$n" = 1 ] || echo s) in $shown.marks.tsv (ms in the video), and $shown.vtt (captions)"
 }
 
 # The first pass's quality: 18, or 12 when --cut-idle encodes it once more (rec_crf CUT_MS).
@@ -5875,31 +6107,53 @@ record_overlay() {
 }
 
 # record sheet VIDEO (#176): the video copied into the box (ffmpeg reads it there, as stop's), its sheet
-# beside it (or -o), with VIDEO's marks (VIDEO less .mp4, .marks.tsv) when there are some.
-# record_sheet_file VIDEO OUT FRAMES EVERY_MS FIT
+# beside it (or -o), with VIDEO's marks (VIDEO less .mp4, .marks.tsv) when there are some. A jailed
+# caller's (#224): the video, its marks and the sheet are files of the jail's its omabox passed open
+# (FROMFD, MARKSFD, TOFD), the sheet named AS; the video at most REC_MAX bytes (the box's copy of it
+# is on the host's disk, which a sparse file in the jail costs nothing to fill), the marks 1 MiB.
+# record_sheet_file VIDEO OUT FRAMES EVERY_MS FIT [FROMFD MARKSFD TOFD AS]
 record_sheet_file() {
-  local video=$1 out=$2 base=${1%.mp4} bv rc=0 sp
-  [ -n "$out" ] || out=$base.sheet.png
+  local video=$1 out=$2 base=${1%.mp4} fromfd=${6:-} mfromfd=${7:-} tofd=${8:-} as=${9:-} bv rc=0 sp tmpd="" tsv size
   bv=$REC_DIR/sheet-$$.mp4
-  # shellcheck disable=SC2016 # the inner bash's
-  box_exec bash -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$bv" < "$video" ||
-    die "record sheet: could not copy $video into box '$NAME'"
-  sp=$(record_sheet "$bv" "$base.marks.tsv" "$out" "$3" "$4" "$5") || rc=$?
-  box_exec rm -f "$bv" 2>/dev/null || true
+  if [ -n "$fromfd" ]; then
+    size=$(stat -L -c %s "/dev/fd/$fromfd") || size=""
+    [[ $size =~ ^[0-9]+$ ]] && [ "$size" -le "$REC_MAX" ] || die "record sheet: the video is $(bytes_h "${size:-0}"): more than omabox copies into a box ($(bytes_h "$REC_MAX"))"
+    tmpd=$(mktemp -d "$D/.record-XXXXXX") || die "record sheet: cannot write in $D"
+    REC_TMPS+=("$tmpd"); rec_traps
+    tsv=$tmpd/v.marks.tsv out=$tmpd/v.sheet.png
+    # (In 10 s: a file the caller passed is not one to wait on.)
+    if [ -n "$mfromfd" ]; then timeout 10 head -c 1048576 <&"$mfromfd" > "$tsv" || { rm -rf -- "$tmpd"; die "record sheet: cannot read the marks"; }; fi
+    # Read from the fd as it is, never reopened; no more than its size said (a file that grows meanwhile).
+    # shellcheck disable=SC2016 # the inner bash's
+    head -c "$size" <&"$fromfd" | box_sys /usr/bin/bash -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$bv" ||
+      { rm -rf -- "$tmpd"; die "record sheet: could not copy the video into box '$NAME'"; }
+  else
+    [ -n "$out" ] || out=$base.sheet.png
+    tsv=$base.marks.tsv
+    # shellcheck disable=SC2016 # the inner bash's
+    box_sys /usr/bin/bash -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$bv" < "$video" ||
+      die "record sheet: could not copy $video into box '$NAME'"
+  fi
+  sp=$(record_sheet "$bv" "$tsv" "$out" "$3" "$4" "$5" "$as") || rc=$?
+  box_sys /usr/bin/rm -f -- "$bv" 2>/dev/null || true
+  if [ -n "$tmpd" ]; then
+    [ $rc != 0 ] || cat -- "$out" >&"$tofd" || { rc=1; say "record sheet: could not write the sheet into the caller's file"; }
+    rm -rf -- "$tmpd"
+  fi
   [ $rc = 0 ] || return $rc
   echo "$sp"
 }
 
-# record_sheet VIDEO_IN_BOX MARKS_TSV OUT FRAMES EVERY_MS FIT (#176): a contact sheet of the video,
+# record_sheet VIDEO_IN_BOX MARKS_TSV OUT FRAMES EVERY_MS FIT [SHOWN] (#176): a contact sheet of the video,
 # for an agent that cannot watch it: FRAMES (15) from the first to the last, or one each EVERY_MS;
 # each tile labelled with its number and time in the video, and below it the marks since the tile
 # before ("> 4.20s TEXT": what led to it). Frames picked and scaled by ffmpeg in the box (select by
 # number, so times are exact to a frame), copied out as bytes, put together by magick as shot --burst's
 # sheet; 5 a row, tiles 320 px wide, or FIT / 5 with a FIT, which the whole sheet then fits. Prints OUT.
 record_sheet() {
-  local v=$1 tsv=$2 png=$3 n=${4:-15} every=${5:-} fit=${6:-} j nb num den vw vh
-  j=$(box_exec ffprobe -v error -select_streams v:0 -count_packets \
-    -show_entries stream=nb_read_packets,r_frame_rate,width,height -of json "$v" 2>/dev/null) || j=""
+  local v=$1 tsv=$2 png=$3 n=${4:-15} every=${5:-} fit=${6:-} shown=${7:-} j nb num den vw vh
+  j=$(box_sys /usr/bin/ffprobe -v error -select_streams v:0 -count_packets \
+    -show_entries stream=nb_read_packets,r_frame_rate,width,height -of json "$v" 2>/dev/null | head -c 65536) || j=""
   read -r nb num den vw vh < <(jq -r '.streams[0] | "\(.nb_read_packets) \(.r_frame_rate | sub("/"; " ")) \(.width) \(.height)"' <<<"$j" 2>/dev/null) || nb=""
   [[ "$nb $num $den $vw $vh" =~ ^[1-9][0-9]{0,8}\ [1-9][0-9]{0,6}\ [1-9][0-9]{0,6}\ [1-9][0-9]{0,5}\ [1-9][0-9]{0,5}$ ]] || {
     say "record: the contact sheet: ffprobe could not read the video's frames"; return 1; }
@@ -5923,21 +6177,27 @@ record_sheet() {
   tw=$((tw / 2 * 2)); [ "$tw" -ge 16 ] || tw=16
   for k in "${ks[@]}"; do sel+="${sel:++}eq(n,$k)"; done
   # shellcheck disable=SC2016 # the inner bash's
-  if ! box_exec bash -c 'rm -rf "$1" && mkdir -p "$1"' omabox-record "$bd" ||
-    ! box_exec ffmpeg -v error -i "$v" -vf "select='$sel',scale=$tw:-2" -fps_mode passthrough "$bd/t-%03d.png" </dev/null >&2; then
-    box_exec rm -rf "$bd" 2>/dev/null || true; say "record: the contact sheet: ffmpeg could not take the frames"; return 1
+  if ! box_sys /usr/bin/bash -c 'rm -rf "$1" && mkdir -p "$1"' omabox-record "$bd" ||
+    ! box_sys /usr/bin/ffmpeg -v error -i "$v" -vf "select='$sel',scale=$tw:-2" -fps_mode passthrough "$bd/t-%03d.png" </dev/null >&2; then
+    box_sys /usr/bin/rm -rf -- "$bd" 2>/dev/null || true; say "record: the contact sheet: ffmpeg could not take the frames"; return 1
   fi
-  local tmp f ms=() lab=() args=() line m t
-  tmp=$(mktemp -d) || return 1
+  # The frames copied out into a folder of the box dir's (gone with the box, and on any end of this
+  # one: it runs in a subshell of its own), each at most 16 MiB, all of them 256.
+  local tmp f ms=() lab=() args=() line m t total=0
+  tmp=$(mktemp -d "$D/.record-XXXXXX") || return 1
+  # shellcheck disable=SC2064 # $tmp now
+  trap "rm -rf -- '$tmp'" EXIT; trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
   for ((i = 0; i < cnt; i++)); do
     f=$(printf '%s/%03d.png' "$tmp" $((i + 1)))
-    if ! box_exec cat "$(printf '%s/t-%03d.png' "$bd" $((i + 1)))" > "$f" 2>/dev/null || ! png_size "$f" >/dev/null 2>&1; then
-      box_exec rm -rf "$bd" 2>/dev/null || true; rm -rf -- "$tmp"; say "record: the contact sheet: frame $((i + 1)) did not come out"; return 1
+    if ! box_copy "$(printf '%s/t-%03d.png' "$bd" $((i + 1)))" 16777216 > "$f" 2>/dev/null ||
+       [ "$(stat -c %s -- "$f" 2>/dev/null)" != "$BOX_COPY_SIZE" ] || ! png_size "$f" >/dev/null 2>&1 ||
+       [ $((total += BOX_COPY_SIZE)) -gt 268435456 ]; then
+      box_sys /usr/bin/rm -rf -- "$bd" 2>/dev/null || true; rm -rf -- "$tmp"; say "record: the contact sheet: frame $((i + 1)) did not come out"; return 1
     fi
     ms+=($(( (ks[i] * 1000 * den + num / 2) / num )))
     lab+=("$((i + 1)): $(printf '%d.%02ds' $((ms[i] / 1000)) $((ms[i] % 1000 / 10)))")
   done
-  box_exec rm -rf "$bd" 2>/dev/null || true
+  box_sys /usr/bin/rm -rf -- "$bd" 2>/dev/null || true
   # The marks, each under the first tile at or after it (the last tile for any after that).
   if [ -f "$tsv" ]; then
     while IFS=$'\t' read -r m t line; do
@@ -5961,8 +6221,9 @@ record_sheet() {
   mv -f -- "$png.part" "$png"
   png=$(readlink -f -- "$png")
   local sz; sz=$(png_size "$png" | tr ' ' x) || sz=""
-  say "record: a $sz contact sheet of $cnt frames ($(printf '%d.%02ds' $((ms[cnt - 1] / 1000)) $((ms[cnt - 1] % 1000 / 10))) of video), each labelled with its time$([ ! -f "$tsv" ] || echo ", the marks under the frame after them"): $png"
-  echo "$png"
+  [ -n "$shown" ] || shown=$png
+  say "record: a $sz contact sheet of $cnt frames ($(printf '%d.%02ds' $((ms[cnt - 1] / 1000)) $((ms[cnt - 1] % 1000 / 10))) of video), each labelled with its time$([ ! -s "$tsv" ] || echo ", the marks under the frame after them"): $shown"
+  echo "$shown"
 }
 
 cmd_shot() {
@@ -6040,7 +6301,7 @@ cmd_shot() {
   local file
   if [ -n "$tofd" ]; then
     [ -n "$as" ] && [ -z "$out" ] || die "shot: --to-fd goes with --as NAME, without -o"
-    [ -f "/dev/fd/$tofd" ] || die "shot: fd $tofd is not a file"
+    fd_file "$tofd" w shot
     out=$as file=/dev/fd/$tofd
   else
     in_jail && die "shot: a jailed agent's shot is written by its own omabox (--to-fd), never at a path here"
@@ -7678,7 +7939,7 @@ layer_probe() {
 cmd_probe() {
   local left=$((POLL_TMO - ($(date +%s%3N) - POLL_T0))) rc=0
   box_alive || return 1
-  box_exec timeout -k 1 "$(awk -v m="$left" 'BEGIN { printf "%.3f", (m < 100 ? 100 : m) / 1000 }')" "$@" >/dev/null 2>&1 || rc=$?
+  box_exec /usr/bin/timeout -k 1 "$(awk -v m="$left" 'BEGIN { printf "%.3f", (m < 100 ? 100 : m) / 1000 }')" "$@" >/dev/null 2>&1 || rc=$?
   if [ "$rc" = 0 ]; then echo yes; else echo "no exit $rc"; fi
 }
 
@@ -8286,7 +8547,8 @@ soft_note() {
 # eglinfo (mesa-utils) or no renderer named: nothing kept, nothing said. ~0.1 s.
 client_render_check() {
   local rec note
-  local out; out=$(box_exec /usr/bin/timeout -k 1 5 eglinfo -B -p wayland 2>/dev/null </dev/null) || true
+  # (The session's environment, as an app gets it; eglinfo by its path, its answer read up to 64 KiB.)
+  local out; out=$(box_exec /usr/bin/timeout -k 1 5 /usr/bin/eglinfo -B -p wayland 2>/dev/null </dev/null | head -c 65536) || true
   rec=$(egl_render <<<"$out") || rec=""
   [ -n "$rec" ] || return 0
   jq --argjson r "$rec" '.client_render = $r' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
@@ -10435,11 +10697,11 @@ cmd_clip() {
     t=$(clip_pick "$types") || die "clip: your clipboard holds $(clip_types "$types"): only text and images go into a box"
     host_wl timeout 10 wl-paste -n --type "$t" 2>"/dev/fd/$CLIP_EFD" | head -c $((CLIP_MAX + 1)) >"/dev/fd/$CLIP_FD" || rc=$?
   else
-    types=$(box_exec /usr/bin/bash -c "$CLIP_BOX_TYPES" 2>/dev/null {CLIP_FD}>&- {CLIP_EFD}>&- | head -c 65536) || rc=$?
+    types=$(box_sys /usr/bin/bash -c "$CLIP_BOX_TYPES" 2>/dev/null {CLIP_FD}>&- {CLIP_EFD}>&- | head -c 65536) || rc=$?
     [ $rc != 3 ] || die "clip: box '$NAME''s clipboard is empty: nothing handed over"
     [ $rc = 0 ] || die "clip: cannot read box '$NAME''s clipboard (exit $rc)"
     t=$(clip_pick "$types") || die "clip: box '$NAME''s clipboard holds $(clip_types "$types"): only text and images come out"
-    box_exec /usr/bin/timeout 10 /usr/bin/wl-paste -n --type "$t" 2>/dev/null {CLIP_FD}>&- {CLIP_EFD}>&- | head -c $((CLIP_MAX + 1)) >"/dev/fd/$CLIP_FD" || rc=$?
+    box_sys /usr/bin/timeout 10 /usr/bin/wl-paste -n --type "$t" 2>/dev/null {CLIP_FD}>&- {CLIP_EFD}>&- | head -c $((CLIP_MAX + 1)) >"/dev/fd/$CLIP_FD" || rc=$?
   fi
   size=$(stat -L -c %s "/dev/fd/$CLIP_FD")
   [ "$size" -le $CLIP_MAX ] || die "clip: the item is over $(clip_size $CLIP_MAX): nothing handed over"
@@ -10452,7 +10714,7 @@ cmd_clip() {
   ! grep -qx x-kde-passwordManagerHint <<<"$types" || sens=(--sensitive)
   local what; what="$(clip_is_text "$t" && echo text || echo "an image") ($hand, $(clip_size "$size")${sens:+, marked sensitive})"
   if [ $from = 0 ]; then
-    local err; err=$(box_exec /usr/bin/bash -c "$CLIP_BOX_COPY" clip "$hand" "${sens[@]}" <"/dev/fd/$CLIP_FD" 2>&1 >/dev/null {CLIP_FD}>&- {CLIP_EFD}>&-) ||
+    local err; err=$(box_sys /usr/bin/bash -c "$CLIP_BOX_COPY" clip "$hand" "${sens[@]}" <"/dev/fd/$CLIP_FD" 2>&1 >/dev/null {CLIP_FD}>&- {CLIP_EFD}>&-) ||
       die "clip: could not put it on box '$NAME''s clipboard: $(tail -n 1 <<<"$err" | tr -cd '[:print:]' | cut -c1-200)"
     say "handed $what from your clipboard to box '$NAME'"
   else
@@ -11386,6 +11648,8 @@ broker_check() {
   local cmd=$1; shift
   case $cmd in
     up|run|shot|screenshot|pixel|windows|tree|keys|click|scroll|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|monitor|gpu|cpu|audio|env|path|down|ls|list) ;;
+    # record (#224): its files only through fds the caller's omabox opened (cmd_record checks them).
+    record) ;;
     # ports (#93): the jail's own boxes (list_names), with the host side named by state only (cmd_ports).
     ports) ;;
     help|-h|--help|version|-V|--version) ;;
@@ -11443,6 +11707,7 @@ relay_call() {
   done
   case $cmd in
     shot|screenshot) relay_shot "$relay" "${env[@]}" -- "${args[@]}" ;;
+    record) relay_record "$relay" "${env[@]}" -- "${args[@]}" ;;
     click|scroll|pointer|drag|pixel) relay_in "$relay" "$cmd" "${env[@]}" -- "${args[@]}" ;;
     *) exec "$relay" call "$BROKER_SOCK" "${env[@]}" -- "$cmd" "${args[@]}" ;;
   esac
@@ -11480,6 +11745,106 @@ relay_shot() {
   # --changed with nothing changed writes no image: nothing at $out either.
   if [ $rc = 0 ] && [ -s "$tmp" ]; then mv -f -- "$tmp" "$out"; else rm -f -- "$tmp"; fi
   exit $rc
+}
+
+# record, from a jail (#224): every file is the jail's, made here as a temp beside where it goes,
+# filled by the broker through its fd and renamed into place once whole. start names the video (-o,
+# resolved here, or a new one in $TMPDIR here) and checks it can be written; stop opens the video, its
+# marks and its captions for the name the broker says the recording goes to (the one start gave);
+# `sheet VIDEO` passes the video and its marks to read, the sheet to write. `record -- ACTION` is
+# start, the action (relayed as any command), stop, run from here; `stop --sheet` is stop, then
+# `sheet` of the video it wrote. status, mark and what the broker refuses anyway go as they are.
+# relay_record RELAY ENV... -- ARGS
+relay_record() {
+  local relay=$1 env=() all=() pre=() rest=() name="" sub="" out="" video="" sheet=0 sargs=() ract=() hold=1000 dash=0; shift
+  while [ "$1" != -- ]; do env+=("$1"); shift; done; shift
+  # The caller's default --fit for a sheet (#188): the broker gets nothing of its environment but what is sent.
+  [ -z "${OMABOX_SHOT_FIT:-}" ] || env+=(--env "SHOT_FIT=$OMABOX_SHOT_FIT")
+  all=("$@")
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; pre=("$1" "$2"); shift ;;
+      -o|--output) optarg "$@"; out=$2; shift ;;
+      --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "record: --hold takes a duration up to 60s, like 500ms or 2s, got $2"; shift ;;
+      --sheet) sheet=1 ;;
+      --frames|--every|--fit) optarg "$@"; sheet=1 sargs+=("$1" "$2"); shift ;;
+      --monitor|--fps) optarg "$@"; rest+=("$1" "$2"); shift ;;
+      --to-fd|--marks-fd|--vtt-fd|--from-fd|--marks-from-fd|--as|--file) die "record: $1 is omabox's own, between a jailed agent's omabox and the broker" ;;
+      --) dash=1; shift; ract=("$@"); break ;;
+      -*) rest+=("$1") ;;
+      *) if [ -z "$sub" ]; then sub=$1; rest+=("$1")
+         elif [ "$sub" = sheet ] && [ -z "$video" ]; then video=$1
+         else rest+=("$1"); fi ;;
+    esac
+    shift
+  done
+  local call=("$relay" call "$BROKER_SOCK")
+  case $sub in
+    start|stop|sheet) [ $dash = 0 ] || exec "${call[@]}" "${env[@]}" -- record "${all[@]}" ;;
+    "") [ $dash = 1 ] || exec "${call[@]}" "${env[@]}" -- record "${all[@]}" ;;
+    *) exec "${call[@]}" "${env[@]}" -- record "${all[@]}" ;;
+  esac
+  select_box "$name"
+  local dir tmp tmps=() fds=() a=() rc=0 fd i base
+  case $sub in
+    start)
+      [ $sheet = 0 ] || exec "${call[@]}" "${env[@]}" -- record "${all[@]}"
+      [ -n "$out" ] || out=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S).mp4
+      mkdir -p -- "$(dirname -- "$out")" || die "record: cannot make the directory $(dirname -- "$out")"
+      out=$(readlink -f -- "$out")
+      # Written here at stop: said now if it cannot be.
+      tmp=$(mktemp "$(dirname -- "$out")/.omabox-record.XXXXXX" 2>/dev/null) || die "record: cannot write in $(dirname -- "$out")"
+      rm -f -- "$tmp"
+      exec "${call[@]}" "${env[@]}" -- record "${rest[@]}" --as "$out" ;;
+    "")
+      # One action, checked as cmd_record does before anything starts; each step through this omabox.
+      record_action_check "${ract[@]}"
+      local st=() so=()
+      [ -z "$out" ] || st=(-o "$out")
+      [ $sheet = 0 ] || so=(--sheet "${sargs[@]}")
+      "$0" record "${pre[@]}" start "${rest[@]}" "${st[@]}" || exit $?
+      "$0" "${pre[@]}" "${ract[@]}" >&2 || rc=$?
+      sleep "$(awk -v ms="$hold" 'BEGIN { printf "%.3f", ms / 1000 }')"
+      "$0" record "${pre[@]}" stop "${so[@]}" || exit $?
+      [ $rc = 0 ] || say "record: the action ended $rc (the recording is kept)"
+      exit $rc ;;
+    stop)
+      [ -z "$out" ] || exec "${call[@]}" "${env[@]}" -- record "${all[@]}"
+      out=$("${call[@]}" "${env[@]}" -- record "${pre[@]}" status --file) || exit $?
+      [[ $out == /* ]] || die "record stop: the broker named no file to write ($out)"
+      dir=$(dirname -- "$out") base=${out%.mp4}
+      mkdir -p -- "$dir" || die "record stop: cannot make the directory $dir (the video goes to $out)"
+      for i in 1 2 3; do
+        tmp=$(mktemp "$dir/.omabox-record.XXXXXX" 2>/dev/null) || { rm -f -- "${tmps[@]}"; die "record stop: cannot write in $dir (the video goes to $out)"; }
+        tmps+=("$tmp"); exec {fd}<>"$tmp"; fds+=(--fd "$fd")
+      done
+      "${call[@]}" "${fds[@]}" "${env[@]}" -- record "${rest[@]}" --to-fd 3 --marks-fd 4 --vtt-fd 5 --as "$out" || rc=$?
+      for ((i = 1; i < ${#fds[@]}; i += 2)); do fd=${fds[i]}; exec {fd}>&-; done
+      if [ $rc != 0 ] || [ ! -s "${tmps[0]}" ]; then rm -f -- "${tmps[@]}"; exit $((rc ? rc : 1)); fi
+      # As a file made here would be (mktemp's are 0600).
+      chmod "$(printf '%o' $((8#666 & ~8#$(umask))))" -- "${tmps[@]}" 2>/dev/null || true
+      mv -f -- "${tmps[0]}" "$out"
+      # No marks: none beside it, and an earlier take's go (as record_marks does outside a jail).
+      if [ -s "${tmps[1]}" ]; then mv -f -- "${tmps[1]}" "$base.marks.tsv"; mv -f -- "${tmps[2]}" "$base.vtt"
+      else rm -f -- "${tmps[1]}" "${tmps[2]}" "$base.marks.tsv" "$base.vtt"; fi
+      [ $sheet = 0 ] || exec "$0" record "${pre[@]}" sheet "$out" "${sargs[@]}"
+      exit 0 ;;
+    sheet)
+      [ -n "$video" ] || exec "${call[@]}" "${env[@]}" -- record "${all[@]}"
+      [ -f "$video" ] || die "record sheet: no video $video"
+      video=$(readlink -f -- "$video") base=${video%.mp4}
+      [ -n "$out" ] || out=$base.sheet.png
+      mkdir -p -- "$(dirname -- "$out")" || die "record sheet: cannot make the directory $(dirname -- "$out")"
+      out=$(readlink -f -- "$out")
+      exec {fd}<"$video"; fds+=(--fd "$fd"); a+=(--from-fd 3)
+      if [ -f "$base.marks.tsv" ]; then exec {fd}<"$base.marks.tsv"; fds+=(--fd "$fd"); a+=(--marks-from-fd 4); fi
+      tmp=$(mktemp "$(dirname -- "$out")/.omabox-sheet.XXXXXX" 2>/dev/null) || die "record sheet: cannot write in $(dirname -- "$out")"
+      exec {fd}<>"$tmp"; fds+=(--fd "$fd"); a+=(--to-fd $((${#fds[@]} / 2 + 2)) --as "$out")
+      "${call[@]}" "${fds[@]}" "${env[@]}" -- record "${rest[@]}" "${sargs[@]}" "${a[@]}" || rc=$?
+      for ((i = 1; i < ${#fds[@]}; i += 2)); do fd=${fds[i]}; exec {fd}>&-; done
+      if [ $rc = 0 ] && [ -s "$tmp" ]; then chmod "$(printf '%o' $((8#666 & ~8#$(umask))))" -- "$tmp" 2>/dev/null || true; mv -f -- "$tmp" "$out"; else rm -f -- "$tmp"; exit $((rc ? rc : 1)); fi
+      exit 0 ;;
+  esac
 }
 
 # click, pointer, drag and pixel --in SHOT, from a jail: the shot is opened here and passed as fd 3, with its name.
