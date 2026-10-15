@@ -606,7 +606,10 @@ most people will. Then:
   the first frame, exact to a few ms); `stop` writes demo.marks.tsv and demo.vtt (captions: `ffmpeg
   -i demo.mp4 -vf subtitles=demo.vtt out.mp4`; a cut: `ffmpeg -ss A -to B` with two marks' times), and
   the sheet shows each mark under the frame after it. A script's omabox calls take time of their own:
-  the marks show how far the scenes drift from its sleeps. Sound (an `up --audio` box): `record start
+  the marks show how far the scenes drift from its sleeps. For people watching it: `record start
+  --glide 600ms` (click, pointer and drag glide there while it records), then `record stop
+  --show-input --captions --cut-idle` (clicks, pointer and keys drawn in as peek shows them, --pass as
+  `*`; the marks as captions; every still stretch cut to 1 s, marks moved with it). Sound (an `up --audio` box): `record start
   --audio` muxes the box's speaker into the MP4 (AAC), in step with the picture (a sound within ~15 ms
   of a change drawn at the same moment; a player's own start adds its latency: pw-play ~60 ms);
   `omabox audio 3 [--json]` listens for 3 s from now and says silence, or when and how loud (peak, RMS

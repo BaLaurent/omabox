@@ -592,6 +592,39 @@ t_unit_record() {
   check "...nine 4K: no more pixels than H.264's largest frame" awk -v l="$(lib record_layout <<<"[$mj]" | head -n 1)" \
     'BEGIN { split(l, a, " "); exit !(a[1] * a[2] <= 35651584 && a[1] * a[2] > 35000000 && a[4] < 1) }'
   check_eq "...no monitor: nothing" "" "$(lib record_layout <<<'[]')"
+  # The rest of #176 (finding 319): --show-input, --captions and --cut-idle with stop, --glide with
+  # start; record_overlay draws rec_input's lines; record_marks shifts marks by the cuts; glide_to.
+  check_match "record start --show-input refused" "record start: --show-input, --captions and --cut-idle go with stop or -- ACTION" "$(ob record start --show-input 2>&1)"
+  check_match "...start --cut-idle" "record start: --show-input, --captions and --cut-idle go with stop" "$(ob record start --cut-idle 2>&1)"
+  check_match "...stop --glide" "record stop: --glide goes with start or -- ACTION" "$(ob record stop --glide 1s 2>&1)"
+  check_match "...--glide 20s" "record: --glide takes a duration up to 10s" "$(ob record start --glide 20s 2>&1)"
+  check_match "...--cut-idle 50ms" "record: --cut-idle takes a duration from 100ms to 10m, like 1s, got 50ms" "$(ob record stop --cut-idle 50ms 2>&1)"
+  check_match "click --steps and --glide" "click: --steps or --glide, not both" "$(ob click --steps 5 --glide 1s 10 10 2>&1)"
+  check_match "...drag" "drag: --steps or --glide, not both" "$(ob drag --steps 5 --glide 1s 1 1 2 2 2>&1)"
+  check_match "...pointer" "pointer: --steps or --glide, not both" "$(ob pointer --steps 5 --glide 1s -- move 1 1 2>&1)"
+  check_match "...pointer hide --glide" "pointer hide: nothing else with it" "$(ob pointer --glide 1s hide 2>&1)"
+  check_eq "glide_to: 400 ms is 10 moves, eased (slow, fast, slow), ending there" \
+    "move 3 0 move 10 0 move 22 0 move 35 0 move 50 0 move 65 0 move 78 0 move 90 0 move 97 0 move 100 0" \
+    "$(lib eval 'SEQ=(); glide_to 0 0 100 0 400; echo "${SEQ[*]}"')"
+  check_eq "...nothing when it is there" "" "$(lib eval 'SEQ=(); glide_to 5 5 5 5 400; echo "${SEQ[*]}"')"
+  local ri=$TMP/rmarks/input ass
+  printf '%s\n' "1000000100000 1000000160000 ptr 1280x720 move 100 50 click right" \
+    "1000001000000 1000001400000 text a{b}" "1000001000000 1000001400000 secret 21" "1000001000000 1000001400000 combo Return" \
+    "x y ptr 1280x720 move 1 1" "1000002000000 1000002050000 ptr 1280x720 move 9999999 1 click" > "$ri"
+  ass=$(lib record_overlay "$ri" $'1000000500000\tscene {one}' 1000000000000 0 0 2 2560 1440 5000 1 1)
+  check_match "record_overlay: an ASS script at the video's size" $'^\\[Script Info\\].*PlayResX: 2560.PlayResY: 1440' "$(tr '\n' '.' <<<"$ass")"
+  check_match "...the pointer ring at the click point, at scale 2 (the pixel's centre)" '\\pos\(201\.0,101\.0\)\\1c&HC83CFF&' "$ass"
+  check "...a ripple from it as the click went (the click's share of the line)" grep -qE '^Dialogue: 0,0:00:00\.14,0:00:00\.74,D,.*\\t\(\\fscx317' <<<"$ass"
+  check "...the button's name beside it" grep -qE '\\pos\(233\.0,129\.0\)\\fad\(0,500\)\}right$' <<<"$ass"
+  check "...keys of one call in one caption, braces as their wide forms, a --pass as 16 * at most" \
+    grep -qE '\}a｛b｝ \*{16} Return$' <<<"$ass"
+  check "...text a character at a time" grep -qE '\}a｛$' <<<"$ass"
+  check_fails "...a line not as rec_input writes it is dropped (no move to 9999999, none from x y)" grep -qE 'pos\(3\.0,3\.0\)|20000' <<<"$ass"
+  check "...--captions: the mark at the top, until the end" grep -qE '^Dialogue: 4,0:00:00\.50,0:00:05\.00,K,,0,0,0,,\{\\an8\\pos\(1280\.0,40\.0\)\}scene ｛one｝$' <<<"$ass"
+  check_eq "...with neither: no Dialogue" 0 "$(lib record_overlay "$ri" "" 1000000000000 0 0 2 2560 1440 5000 0 0 | grep -c '^Dialogue')"
+  lib record_marks $'1000002500000\tafter\n1000000500000\tbefore\n1000001100000\tin' 1000000000000 4000 "$rb" $'30 60\n' 2>/dev/null
+  check_eq "record_marks with a cut (frames 30 to 60, 1 s at 30 fps): one after it 1 s earlier, one in it at its start" \
+    "ms text|500 before|1000 in|1500 after" "$(cut -f1,3 "$rb.marks.tsv" | tr '\t' ' ' | paste -sd '|')"
   # JQ_MON (finding 311): a monitor's logical sides, swapped by a quarter turn (1, 3, 5, 7).
   mj=""; for i in 0 1 2 3 4 5 6 7; do mj+="${mj:+,}{\"width\":2560,\"height\":1440,\"scale\":2,\"transform\":$i}"; done
   check_eq "JQ_MON: transforms 1, 3, 5, 7 swap a monitor's sides, the others do not" \
@@ -7097,6 +7130,111 @@ record_layout_on() {
   check_eq "...at its pixels" "1280,720" "$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$v")"
   ob down "$B" >/dev/null
 }
+# The rest of #176 (finding 319): input drawn into a recording, a gliding pointer, idle stretches
+# cut. In a 1280x720 box at scale 2 (a 2560x1440 video), over a terminal of one flat colour.
+t_record_input() {
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "record --show-input" "no render node here but NVIDIA's"; return; }
+  record_input_on "$n" "$P-ri"
+}
+# The colour at video pixel X Y of VIDEO at SEC seconds: "R G B". ri_rgb VIDEO SEC X Y
+ri_rgb() {
+  ffmpeg -v error -ss "$2" -i "$1" -frames:v 1 -vf "crop=2:2:$3:$4" -f rawvideo -pix_fmt rgb24 - 2>/dev/null |
+    od -An -tu1 -w3 -v | head -n 1 | awk '{ print $1, $2, $3 }'
+}
+# Within 60 a channel of peek's accent, #ff3cc8 (H.264 blurs a thin ring's colour).
+ri_accent() { awk -v c="$1" 'BEGIN { split(c, a, " "); exit !(a[1] > 195 && a[2] < 120 && a[3] > 140) }'; }
+# A video's frame at SEC seconds as a PNG. ri_frame VIDEO SEC PNG
+ri_frame() { ffmpeg -v error -y -ss "$2" -i "$1" -frames:v 1 -update 1 "$3" 2>/dev/null; }
+# A mark's ms in a recording's marks.tsv, by its text. ri_ms TSV TEXT
+ri_ms() { awk -F '\t' -v t="$2" '$3 == t { print $1; exit }' "$1"; }
+record_input_on() {
+  local n=$1 B=$2 D v1=$TMP/$2-input.mp4 v2=$TMP/$2-glide.mp4 v3=$TMP/$2-cut.mp4 out m1 m2 c
+  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --show-input" "no wf-recorder or ffmpeg here"; return; fi
+  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --size 2560x1440,scale=2 >/dev/null 2>&1 || { no "up for record --show-input" "failed"; return; }
+  D=$(ob path -b "$B")
+  # A terminal of one colour all over (no caret, no echo), turning red on a trigger.
+  ob run -b "$B" -d --wait -- foot --app-id t319 bash -c 'stty -echo; printf "\033]11;#203040\007\033[?25l\033[2J"
+    rm -f /tmp/go319; mkfifo /tmp/go319; read -r _ < /tmp/go319; t=$EPOCHREALTIME; printf "\033]11;#ff0000\007"; echo "$t" > /tmp/flip319; sleep 600' >/dev/null 2>&1
+  ob wait -b "$B" window class:t319 >/dev/null 2>&1 || { no "record --show-input: a terminal" "none"; ob down "$B" >/dev/null 2>&1; return; }
+  ob pointer -b "$B" -- move 200 150 >/dev/null 2>&1; ob wait -b "$B" still >/dev/null 2>&1 || true
+  # --show-input and --captions: a click, then keys with a --pass, each after a mark.
+  ob record -b "$B" start -o "$v1" >/dev/null 2>&1 || { no "record start" "failed"; ob down "$B" >/dev/null 2>&1; return; }
+  sleep 0.5; ob record -b "$B" mark "click" >/dev/null 2>&1
+  ob click -b "$B" 900 500 >/dev/null 2>&1; sleep 0.6
+  export T319PASS=sesame7
+  ob keys -b "$B" -t abc --pass T319PASS >/dev/null 2>&1
+  check "while it records, the box dir has the input: a --pass as its length alone" grep -q ' secret 7$' "$D/record.input"
+  check_fails "...never its value" grep -q sesame7 "$D/record.input"
+  sleep 1; ob record -b "$B" mark "keys" >/dev/null 2>&1; sleep 0.3
+  out=$(ob record -b "$B" stop --show-input --captions 2>&1)
+  check_match "record stop --show-input --captions makes the video" "$v1" "$out"
+  check_fails "...the input goes with the recording" test -e "$D/record.input"
+  m1=$(ri_ms "${v1%.mp4}.marks.tsv" click) m2=$(ri_ms "${v1%.mp4}.marks.tsv" keys)
+  if [[ $m1 =~ ^[0-9]+$ && $m2 =~ ^[0-9]+$ ]]; then
+    # The ring around the click point (900,500: video 1801,1001), 12 layout px out: 24 at scale 2.
+    c=$(ri_rgb "$v1" "$(awk -v m="$m1" 'BEGIN { printf "%.3f", m / 1000 + 0.4 }')" 1825 1000)
+    check "...a frame just after the click: the ring at the click point, peek's accent ($c)" ri_accent "$c"
+    c=$(ri_rgb "$v1" "$(awk -v m="$m1" 'BEGIN { printf "%.3f", (m > 150 ? m - 150 : 0) / 1000 }')" 1825 1000)
+    check_fails "...not before it ($c)" ri_accent "$c"
+    # The caption: the frame at the second mark against the frame before the click with the caption
+    # drawn on it as record_overlay draws "abc *******", and as it would draw the secret in clear.
+    local fa=$TMP/$B-a.png fb=$TMP/$B-b.png ass=$TMP/$B-ref.ass ref=$TMP/$B-ref.png bad=$TMP/$B-bad.png crop="1200x110+680+1320" good wrong
+    ri_frame "$v1" "$(awk -v m="$m2" 'BEGIN { printf "%.3f", m / 1000 }')" "$fa"
+    ri_frame "$v1" "$(awk -v m="$m1" 'BEGIN { printf "%.3f", (m > 150 ? m - 150 : 0) / 1000 }')" "$fb"
+    printf '%s\n' "1000 2000 text abc" "1000 2000 secret 7" > "$TMP/$B-ri"
+    lib record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
+    ffmpeg -v error -y -loop 1 -i "$fb" -vf "ass=$ass" -ss 0.5 -frames:v 1 -update 1 "$ref" 2>/dev/null
+    printf '%s\n' "1000 2000 text abc sesame7" > "$TMP/$B-ri"
+    lib record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
+    ffmpeg -v error -y -loop 1 -i "$fb" -vf "ass=$ass" -ss 0.5 -frames:v 1 -update 1 "$bad" 2>/dev/null
+    good=$(magick "$fa" "$ref" -crop "$crop" +repage -fuzz 12% -metric AE -compare -format '%[distortion]' info: 2>&1)
+    wrong=$(magick "$fa" "$bad" -crop "$crop" +repage -fuzz 12% -metric AE -compare -format '%[distortion]' info: 2>&1)
+    check "...the keys' caption at the bottom, the --pass as * (pixels off: $good; drawn in clear it would be $wrong)" \
+      awk -v g="$good" -v w="$wrong" 'BEGIN { exit !(g ~ /^[0-9.e+-]+$/ && w ~ /^[0-9.e+-]+$/ && g < 0.001 && w > 10 * g + 0.001) }'
+    # --captions: the mark's text at the top, from its time.
+    c=$(magick "$fa" -crop 900x110+830+0 +repage -fx 'r > 0.75 && g < 0.45 && b > 0.55' -format '%[fx:mean*w*h]' info: 2>/dev/null)
+    check "...the mark as a caption at the top, its plate's accent edge ($c px)" awk -v c="$c" 'BEGIN { exit !(c > 200) }'
+  else no "record --show-input: the marks" "none in ${v1%.mp4}.marks.tsv"; fi
+  # --glide: record start --glide 1s, then a plain pointer move glides: the pointer travels, its x in
+  # the frames between start and end rising, over about a second. The pointer's x a frame: the mean
+  # of the pixels off the terminal's colour in a band around its path (a quarter of the size).
+  ob pointer -b "$B" --steps 1 -- move 200 300 >/dev/null 2>&1; ob wait -b "$B" still >/dev/null 2>&1 || true
+  ob record -b "$B" start -o "$v2" --glide 1s >/dev/null 2>&1 || { no "record start --glide" "failed"; ob down "$B" >/dev/null 2>&1; return; }
+  check_eq "...the box knows the glide while it records" 1000 "$(cat "$D/record.glide" 2>&1)"
+  sleep 0.4; local g0=$SECONDS; ob pointer -b "$B" -- move 1100 300 >/dev/null 2>&1; sleep 0.4
+  ob record -b "$B" stop >/dev/null 2>&1
+  check_fails "...and not after it (click, pointer and drag jump again)" test -e "$D/record.glide"
+  local xs
+  xs=$(ffmpeg -v error -i "$v2" -vf "crop=1840:80:340:560,scale=460:20,format=gray" -f rawvideo - 2>/dev/null |
+    od -An -tu1 -w9200 -v | awk '{ s = 0; c = 0; for (i = 1; i <= NF; i++) { v = $i - 45; if (v > 40 || v < -40) { s += (i - 1) % 460; c++ } }
+      if (c >= 3) printf "%d ", s / c; else printf "- " }')
+  check "...the pointer's x in the frames rises (never back by more than 2), and 15 or more frames on the way over 0.6 s or more ($xs)" \
+    awk -v xs="$xs" 'BEGIN { n = split(xs, x, " "); p = -1; mid = 0; f = 0; l = 0
+      for (i = 1; i <= n; i++) { if (x[i] == "-") continue; if (p >= 0 && x[i] < p - 2) exit 1; p = x[i]
+        if (x[i] > 40 && x[i] < 410) { mid++; if (!f) f = i; l = i } }
+      exit !(mid >= 15 && (l - f) / 30 >= 0.6) }'
+  [ $((SECONDS - g0)) -lt 10 ] || no "...the glide took its time" "$((SECONDS - g0)) s"
+  # --cut-idle 1s: a 5 s still gap cut to 1 s; a mark after it, just before the terminal turns red,
+  # still lands on that change, within a frame (finding 306's check).
+  ob record -b "$B" start -o "$v3" >/dev/null 2>&1 || { no "record start (cut)" "failed"; ob down "$B" >/dev/null 2>&1; return; }
+  sleep 0.3; ob keys -b "$B" -t x >/dev/null 2>&1
+  sleep 5; ob record -b "$B" mark red >/dev/null 2>&1
+  ob run -b "$B" -- sh -c 'echo > /tmp/go319'
+  sleep 0.5
+  out=$(ob record -b "$B" stop --cut-idle 1s 2>&1)
+  local cutms; cutms=$(sed -n 's/.*cut to 1\.00s (\([0-9.]*\)s out).*/\1/p' <<<"$out")
+  check "record stop --cut-idle 1s: the 5 s gap cut to 1 s, about 4 s out ($cutms s)" awk -v c="$cutms" 'BEGIN { exit !(c != "" && c >= 3.4 && c <= 4.9) }'
+  local flip mt cv fr
+  flip=$(ob run -b "$B" -- cat /tmp/flip319 | tr , .)
+  read -r m1 mt < <(awk -F '\t' '$3 == "red" { print $1, $2 }' "${v3%.mp4}.marks.tsv")
+  cv=$(awk -v m="$m1" -v mt="$mt" -v c="$flip" 'BEGIN { printf "%d", m + (c - mt) * 1000 }')
+  fr=$(ffmpeg -v error -i "$v3" -vf "crop=200:200:1180:620,scale=1:1" -f rawvideo -pix_fmt rgb24 - 2>/dev/null |
+    od -An -tu1 -w3 -v | awk '$1 > 200 && $2 < 80 && $3 < 80 { print NR - 1; exit }')
+  check "...the mark after the gap moved with it: the change's first frame no more than a frame early, at most 250 ms late (mark at ${m1:-?} ms, the change at $cv ms, first red frame ${fr:-none} at 30 fps)" \
+    awk -v f="${fr:--1}" -v cv="$cv" -v m="${m1:-99999}" 'BEGIN { t = f * 1000 / 30; exit !(f >= 0 && m < 4000 && t >= cv - 1000 / 30 && t <= cv + 250) }'
+  ob down "$B" >/dev/null 2>&1
+}
 # Audio in a box (#226, finding 313): up --audio's own PipeWire, its only devices a speaker nobody
 # hears and a silent mic, nothing of the host's audio in it (no /dev/snd, its own sockets; your
 # PipeWire, asked read-only, has no client from it); `audio` tells silence from a tone; `record
@@ -10539,7 +10677,7 @@ t_inspect() {
 
 UNIT=(t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

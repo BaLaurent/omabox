@@ -96,10 +96,13 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
-  omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] | mark TEXT | stop [SHEET] | status)   a video of the screen
-  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--hold 1s] [--no-pointer] [--audio] [SHEET] -- ACTION...   one action, recorded
+  omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [--glide DURATION]
+                | mark TEXT | stop [SHEET] [POLISH] | status)   a video of the screen
+  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--hold 1s] [--no-pointer] [--audio] [--glide DURATION]
+                [SHEET] [POLISH] -- ACTION...   one action, recorded
   omabox record [-b NAME] sheet VIDEO [-o PNG] [--frames 15 | --every DURATION] [--fit N]   a contact sheet of a video
               SHEET: --sheet [--frames 15 | --every DURATION] [--fit N]   the recording's contact sheet, FILE.sheet.png
+              POLISH: [--show-input] [--captions] [--cut-idle [1s]]   clicks, pointer, keys and marks drawn in; still stretches cut
   omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb
   omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..."    where you see each mark: 1:1, or the --fit N that maps it
@@ -107,11 +110,11 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox tree [-b NAME] [--window SEL] [--find TEXT] [--json] [--all]   a window's accessibility tree as text
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
-               [--steps N] [--mod MODS]                  --steps: travel there; --mod ctrl: ctrl-click
+               [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
   omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [BTN]
-              [--steps 10] [--hold DURATION] [--mod MODS]  press, move, hold, release
+              [--steps 10 | --glide DURATION] [--hold DURATION] [--mod MODS]  press, move, hold, release
               [--shot-fit N | --shot-g "X,Y WxH" | --shot-monitor NAME]   (with --shot: as shot's --fit, -g, --monitor)
-  omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- ARGS...
+  omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N | --glide DURATION] [--mod MODS] -- ARGS...
                  raw: move X Y [--steps N], click/down/up [BTN], scroll DY, hscroll DX,
                  source wheel|finger|continuous|tilt, sleep MS
   omabox pointer [-b NAME] hide | show                   the pointer out of shots and recordings (it still moves), over reloads
@@ -306,7 +309,9 @@ focus-follows-mouse the windows on the way take focus, as with a real mouse (\`p
 move A move B\` passes through A). --mod MODS (ctrl, shift, alt, super, altgr; ctrl+shift, or --mod
 again) holds modifiers down across a click, drag, scroll or pointer run, released after it, whatever
 happens to omabox. SUPER with the left or right button is Hyprland's move or resize window, not the
-app's.
+app's. --glide DURATION (up to 10s; for videos) travels there in that time, eased in and out, a step
+each 40 ms: the pointer seen moving, as a hand moves it (drag: to its start, then its path, each in
+that time). Without it nothing glides, but while \`record start --glide\` records.
 @ click drag pointer
 BTN is left (the default), right, middle, back or forward (also side and extra: a mouse's thumb
 buttons, BTN_SIDE and BTN_EXTRA, which apps take as back and forward).
@@ -354,6 +359,17 @@ its time and the marks since the frame before it ("> 4.20s TEXT"), 5 a row, 320 
 step with the picture (ffmpeg's first samples stamped and put in the video's clock: a sound starts
 within ~15 ms of a change drawn at the same moment), with --monitor all too. A player is slower to
 start than a terminal to draw: pw-play's first sound came ~60 ms after its terminal changed.
+Polish for people watching it (#176): \`record start --glide DURATION\` makes click, pointer and drag
+glide there in that time while it records (unless --steps), the pointer seen moving. \`record stop
+--show-input\` draws what click, scroll, pointer, drag and keys did into the video, as peek shows it,
+at the times it happened: a ring over the pointer following each move (gone 3 s after the last), a
+ripple from each click (its button named but for left), key captions at the bottom (typed text a
+character at a time; keys 1.5 s apart in one caption; --pass as *); \`--captions\` the marks' texts at
+the top, each until the next (in a layout, both on the main screen). \`--cut-idle [DURATION]\` cuts
+every still stretch longer than DURATION (1s) to that: no frame change (a blinking caret or a clock
+digit is still), no input (with --show-input, 3 s after it while it is drawn), no mark, no sound;
+whole frames, the sound by the same times, the marks and captions moved with them. The input comes
+from omabox's own commands (\`run\`'s app moving its own windows is not input).
 @ audio
 \`audio [SECONDS]\` listens to the box's speaker for SECONDS (3) from now, 100 ms at a time: "sound for
 1.1s of 3s: peak -21.1 dBFS, RMS -24.5 dBFS while it sounded; at 0.4-1.5s", or "silence for 3s".
@@ -4115,9 +4131,31 @@ peek_pid() {
 mark() {
   local f=$D/marks
   [ $# -gt 0 ] || return 0
+  [ "${MARK_NOREC:-0}" = 1 ] || rec_input "${MARK_T0:-}" "$@"
   peek_pid >/dev/null || { rm -f "$f"; return 0; }
   [ ! -f "$f" ] || [ "$(stat -c %s "$f")" -le 65536 ] || : > "$f"
   (umask 077; printf '%s\n' "$@" >> "$f") 2>/dev/null || true
+}
+# While the box records (#176, finding 319): what click, scroll, pointer, drag and keys did, as peek's
+# marks have it (a pointer line the tool's whole sequence: every step of a glide), with the wall-clock
+# time it began (T0, µs; MARK_T0 when the caller set it) and ended (now): "T0 T1 LINE" a line, in
+# $D/record.input, which `record stop --show-input` draws into the video. Host side, as $D/marks: the
+# box can neither forge it nor read it (a --pass value is only its length here too). 4 MB at most.
+# rec_input T0 LINE...
+REC_INPUT_MAX=4194304
+rec_input() {
+  local t0=$1 t1 f=$D/record.input l; shift
+  [ $# -gt 0 ] && [ -f "$D/record" ] || return 0
+  t1=${EPOCHREALTIME//[!0-9]/}; [[ $t0 =~ ^[0-9]{1,17}$ ]] && [ "$t0" -le "$t1" ] || t0=$t1
+  [ ! -f "$f" ] || [ "$(stat -c %s "$f" 2>/dev/null || echo 0)" -le $REC_INPUT_MAX ] || return 0
+  (umask 077; for l; do printf '%s %s %s\n' "$t0" "$t1" "${l//[[:cntrl:]]/ }"; done >> "$f") 2>/dev/null || true
+}
+# The glide (ms) `record start --glide` set for this box's click, pointer and drag while it records;
+# fails when none.
+rec_glide() {
+  local g
+  [ -f "$D/record" ] && [ -f "$D/record.glide" ] && read -r g < "$D/record.glide" 2>/dev/null && [[ $g =~ ^[1-9][0-9]{0,4}$ ]] || return 1
+  echo "$g"
 }
 
 # The box dir and its HOME. A user manager (--systemd) leaves mode-000 entries in the runtime dir
@@ -5050,7 +5088,7 @@ REC_TAGS=(-pix_fmt yuv420p -color_range tv -colorspace bt709 -color_primaries bt
 REC_AAC=(-c:a aac -b:a 192k)
 cmd_record() {
   local name="" sub="" out="" monitor="" fps=30 hold=1000 ract=() nopointer=0 text=() video="" audio=0
-  local sheet=0 frames="" every="" fit="" w
+  local sheet=0 frames="" every="" fit="" w glide="" show=0 caps=0 cut=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -5058,6 +5096,14 @@ cmd_record() {
       --monitor) optarg "$@"; monitor=$2; shift ;;
       --no-pointer) nopointer=1 ;;
       --audio) audio=1 ;;
+      --glide) optarg "$@"; glide=$(glide_arg record "$2"); shift ;;
+      --show-input) show=1 ;;
+      --captions) caps=1 ;;
+      # --cut-idle [DURATION]: 1s unless a duration follows.
+      --cut-idle) cut=1000
+        if [ $# -ge 2 ] && [[ $2 =~ ^[0-9]{1,6}(\.[0-9]{1,3})?(ms|s|m)?$ ]]; then
+          cut=$(ms_duration "$2") && [ "$cut" -ge 100 ] && [ "$cut" -le 600000 ] || die "record: --cut-idle takes a duration from 100ms to 10m, like 1s, got $2"; shift
+        fi ;;
       --fps) optarg "$@"; fps=$2; shift ;;
       --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "record: --hold takes a duration up to 60s, like 500ms or 2s, got $2"; shift ;;
       --sheet) sheet=1 ;;
@@ -5093,6 +5139,8 @@ cmd_record() {
   fi
   case $sub in stop|status|mark|sheet) [ $nopointer = 0 ] || die "record $sub: --no-pointer goes with start or -- ACTION" ;; esac
   case $sub in stop|status|mark|sheet) [ $audio = 0 ] || die "record $sub: --audio goes with start or -- ACTION" ;; esac
+  case $sub in stop|status|mark|sheet) [ -z "$glide" ] || die "record $sub: --glide goes with start or -- ACTION" ;; esac
+  case $sub in start|status|mark|sheet) [ $show = 0 ] && [ $caps = 0 ] && [ -z "$cut" ] || die "record $sub: --show-input, --captions and --cut-idle go with stop or -- ACTION" ;; esac
   case $sub in start|status|mark) [ $sheet = 0 ] || die "record $sub: --sheet, --frames, --every and --fit go with stop, sheet or -- ACTION" ;; esac
   [ -z "$frames" ] || [ -z "$every" ] || die "record: --frames or --every, not both"
   case $sub in
@@ -5112,15 +5160,15 @@ cmd_record() {
     status) record_status; return ;;
     mark) record_mark "${text[*]}"; return ;;
     sheet) record_sheet_file "$video" "$out" "$frames" "$every" "$fit"; return ;;
-    stop) [ -z "$out$monitor" ] || die "record stop: -o and --monitor go with start"; record_stop "$sheet" "$frames" "$every" "$fit"; return ;;
+    stop) [ -z "$out$monitor" ] || die "record stop: -o and --monitor go with start"; record_stop "$sheet" "$frames" "$every" "$fit" "$show" "$caps" "$cut"; return ;;
   esac
-  record_start "$out" "$monitor" "$fps" "$nopointer" "$audio"
+  record_start "$out" "$monitor" "$fps" "$nopointer" "$audio" "$glide"
   # A recording that goes on past this omabox keeps the pointer hidden until `record stop`.
   [ ${#ract[@]} -gt 0 ] || { trap - EXIT INT TERM HUP; return 0; }
   local rc=0
   "$0" -b "$NAME" "${ract[@]}" >&2 || rc=$?
   sleep "$(awk -v ms="$hold" 'BEGIN { printf "%.3f", ms / 1000 }')"
-  record_stop "$sheet" "$frames" "$every" "$fit" || return $?
+  record_stop "$sheet" "$frames" "$every" "$fit" "$show" "$caps" "$cut" || return $?
   [ $rc = 0 ] || say "record: the action ended $rc (the recording is kept)"
   return $rc
 }
@@ -5155,17 +5203,17 @@ record_status() {
   else echo "box '$NAME': not recording"; fi
 }
 
-# record_start FILE MONITOR FPS NOPOINTER AUDIO (MONITOR all: the whole layout, #225; AUDIO 1: the
-# box's sound too, #226)
+# record_start FILE MONITOR FPS NOPOINTER AUDIO GLIDE_MS (MONITOR all: the whole layout, #225; AUDIO 1:
+# the box's sound too, #226; GLIDE_MS: click, pointer and drag glide while it records, #176)
 record_start() {
-  local file=$1 mon=$2 fps=$3 nopointer=${4:-0} audio=${5:-0} mons layout="" names=() i
+  local file=$1 mon=$2 fps=$3 nopointer=${4:-0} audio=${5:-0} glide=${6:-} mons layout="" names=() i geo
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then
     die "record: needs wf-recorder and ffmpeg (sudo pacman -S wf-recorder ffmpeg)"
   fi
   if record_running; then die "record: box '$NAME' is recording already, to $REC_FILE (omabox record stop)"; fi
   [ "$audio" = 0 ] || [ "$(meta audio)" = true ] ||
     die "record --audio: box '$NAME' has no audio: a box gets it at up (omabox up --audio; down first, or up --new --audio)"
-  rm -f "$D/record" "$D/record.marks" "$D/record.layout" "$D/record.audio"
+  rm -f "$D/record" "$D/record.marks" "$D/record.layout" "$D/record.audio" "$D/record.input" "$D/record.geo" "$D/record.glide"
   mons=$(hypr_json monitors)
   if [ "$mon" = all ]; then
     layout=$(record_layout <<<"$mons") && [ -n "$layout" ] || die "record: box '$NAME' has no monitor to record"
@@ -5180,6 +5228,16 @@ record_start() {
       die "record: box '$NAME' has no monitor $mon ($(jq -r 'map(.name) | join(", ")' <<<"$mons"))"
   fi
   [ -n "$layout" ] || names=("$mon")
+  # Where the layout's pixels are in the video (#176, for --show-input): "X0 Y0 K", the layout point at
+  # the video's top left and the video pixels a layout pixel (the monitor's scale; the layout's,
+  # times what it was scaled by to fit); in a layout's video, then "X Y W H", the main screen's place
+  # in it, where the captions go (else the whole video).
+  if [ -n "$layout" ]; then
+    local mainn; mainn=$(jq -r "$(main_screen) // empty | .name" <<<"$mons")
+    geo=$(jq -r "$JQ_MON"'[.[] | select((.disabled | not) and .width > 0 and .height > 0)] | "\(map(.x) | min) \(map(.y) | min)"' <<<"$mons")
+    geo+=" $(head -n 1 <<<"$layout" | awk '{ print $3 * $4 }')"
+    geo+=" $(tail -n +2 <<<"$layout" | awk -v m="$mainn" '$1 == m { print $2, $3, $4, $5; exit }')"
+  else geo=$(jq -r --arg n "$mon" '.[] | select(.name == $n) | "\(.x) \(.y) \(.scale)"' <<<"$mons" | head -n 1); fi
   [ -n "$file" ] || file=${TMPDIR:-/tmp}/omabox-$NAME-$(date +%H%M%S).mp4
   mkdir -p -- "$(dirname -- "$file")" || die "record: cannot make the directory $(dirname -- "$file")"
   file=$(readlink -f -- "$file")
@@ -5233,12 +5291,14 @@ record_start() {
   echo "$(IFS=,; echo "${pids[*]}") $(IFS=,; echo "${names[*]}") $fps $start $file" > "$D/record"
   [ -z "$apid" ] || echo "$apid" > "$D/record.audio"
   [ -z "$layout" ] || echo "$layout" > "$D/record.layout"
+  echo "$geo" > "$D/record.geo"
+  [ -z "$glide" ] || echo "$glide" > "$D/record.glide"
   # Still running half a second on: not ended at once (a bad output or codec). Its file is written
   # later (the muxer buffers it), but its frames are stamped from the first. One of the layout's
   # ended takes the others with it.
   # shellcheck disable=SC2016 # the inner sh's
   box_exec sh -c 'for i in 1 2 3 4 5; do sleep 0.1; for p; do kill -0 "$p" 2>/dev/null || exit 1; done; done' omabox-record "${pids[@]}" || {
-    rm -f "$D/record" "$D/record.layout" "$D/record.audio"
+    rm -f "$D/record" "$D/record.layout" "$D/record.audio" "$D/record.geo" "$D/record.glide"
     record_audio_end "$apid"
     [ ${#pids[@]} = 1 ] || box_exec kill -KILL "${pids[@]}" 2>/dev/null || true
     local dirs=(); for ((i = 0; i < ${#pairs[@]}; i += 2)); do dirs+=("${pairs[i]}"); done
@@ -5374,9 +5434,11 @@ record_mark() {
   else echo "before the first frame: $mtext"; fi
 }
 
-# record_stop SHEET FRAMES EVERY_MS FIT: the video, its marks beside it, and with SHEET its contact sheet.
+# record_stop SHEET FRAMES EVERY_MS FIT SHOW CAPTIONS CUT_MS: the video, its marks beside it, and with
+# SHEET its contact sheet; SHOW 1 the input drawn into it, CAPTIONS 1 the marks, CUT_MS its still
+# stretches cut to that (#176).
 record_stop() {
-  local sheet=${1:-0} frames=${2:-} every=${3:-} fit=${4:-} alive=0 apid=""
+  local sheet=${1:-0} frames=${2:-} every=${3:-} fit=${4:-} show=${5:-0} caps=${6:-0} cut=${7:-} alive=0 apid=""
   if record_running; then alive=1
   elif [ ! -f "$D/record" ]; then die "record stop: box '$NAME' is not recording"; fi
   [ ! -f "$D/record.audio" ] || apid=$(cat "$D/record.audio") || apid=""
@@ -5409,11 +5471,32 @@ record_stop() {
     else say "record: no sound came out (ffmpeg's log, $REC_DIR/audio.log in box '$NAME', is kept): a video without it"; fi
   fi
   local marks=""; [ ! -f "$D/record.marks" ] || marks=$(cat "$D/record.marks") || marks=""
-  rm -f "$D/record.marks"
+  rm -f "$D/record.marks" "$D/record.glide"
+  # The input it saw (#176): taken out of the box dir's name for it, so the next recording starts afresh.
+  local input="" geo=""
+  if [ -f "$D/record.input" ]; then input=$(mktemp) && mv -f "$D/record.input" "$input" || input=""; fi
+  [ ! -f "$D/record.geo" ] || read -r geo < "$D/record.geo" || geo=""
+  rm -f "$D/record.input" "$D/record.geo"
   # Its --no-pointer's hold given back (#228): the pointer as it was before.
   ! grep -qs '^hold record ' "$D/pointer" || ptr_change release record || ptr_fail "record stop"
+  # The video's clock: its first frame's wall-clock time.
+  local first=""
+  if [ -n "$marks" ] || [ "$show$caps" != 00 ] || [ -n "$cut" ]; then
+    first=$(record_first_us) || {
+      first=$REC_START
+      say "record: could not tell when the first frame came: the marks are timed from record start (late by up to a few tenths of a second)"; }
+  fi
+  # --show-input, --captions (#176): drawn by the ass filter at the end of the first pass, REC_VASS.
+  REC_VASS=""
+  if [ "$show$caps" != 00 ]; then
+    if [ "$show" = 1 ] && [ ! -s "$input" ]; then say "record --show-input: nothing to show (no click, scroll, pointer, drag or keys while it recorded)"; fi
+    if [ "$caps" = 1 ] && [ -z "$marks" ]; then say "record --captions: no marks to show (record mark TEXT while it records)"; fi
+    if { [ "$show" = 1 ] && [ -s "$input" ]; } || { [ "$caps" = 1 ] && [ -n "$marks" ]; }; then
+      record_ass "$input" "$marks" "$first" "$geo" "$show" "$caps" || say "record: could not draw the input or captions into the video: a video without them"
+    fi
+  fi
   if [ "$REC_N" -gt 1 ]; then
-    record_compose || die "record: ffmpeg could not make the video (the monitors' raw.mkv in $REC_DIR/m1 to m$REC_N in box '$NAME' are kept)"
+    REC_CUT=$cut record_compose || die "record: ffmpeg could not make the video (the monitors' raw.mkv in $REC_DIR/m1 to m$REC_N in box '$NAME' are kept)"
     rm -f "$D/record.layout"
   else
     # A steady REC_FPS (wf-recorder's frames come as the screen gives them), for any player and editor.
@@ -5421,24 +5504,23 @@ record_stop() {
     # the video's clock stays wf-recorder's, so a mark's time is still its time (finding 306).
     local ain=() aout=()
     [ -z "$REC_AFILT" ] || { ain=(-i "$REC_DIR/audio.mka"); aout=(-map 0:v:0 -map 1:a:0 -af "$REC_AFILT" "${REC_AAC[@]}" -shortest); }
-    box_exec ffmpeg -v error -y -i "$REC_DIR/raw.mkv" "${ain[@]}" -vf "fps=$REC_FPS,$REC_YUV" -c:v libx264 -preset medium -crf 18 \
+    box_exec ffmpeg -v error -y -i "$REC_DIR/raw.mkv" "${ain[@]}" -vf "fps=$REC_FPS,$REC_YUV$REC_VASS" -c:v libx264 -preset medium -crf "$(rec_crf "$cut")" \
       "${REC_TAGS[@]}" "${aout[@]}" -movflags +faststart "$REC_DIR/out.mp4" </dev/null >&2 ||
       die "record: ffmpeg could not make the video ($REC_DIR/raw.mkv in box '$NAME' is kept)"
   fi
+  # --cut-idle (#176): its still stretches cut short, REC_CUTS the frames taken out.
+  REC_CUTS=""
+  [ -z "$cut" ] || record_cut "$cut" "$first" "$input" "$marks" "$show" || say "record --cut-idle: could not cut it: the video as it was recorded"
+  [ -z "$input" ] || rm -f -- "$input"
   # (ffprobe in the box too: its file, never read on the host but as bytes.)
   local info dur=""; info=$(box_exec ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | paste -sd ' ') || info=""
   [[ ! $info =~ \ ([0-9]+)(\.([0-9]{1,3}))?[0-9]*$ ]] || dur=$((10#${BASH_REMATCH[1]} * 1000 + 10#$(printf '%-3s' "${BASH_REMATCH[3]}" | tr ' ' 0)))
   box_exec cat "$REC_DIR/out.mp4" > "$REC_FILE.part" || { rm -f -- "$REC_FILE.part"; die "record: could not copy the video out of box '$NAME'"; }
   mv -f -- "$REC_FILE.part" "$REC_FILE"
-  local first="" base=${REC_FILE%.mp4} sp=""
-  if [ -n "$marks" ]; then
-    first=$(record_first_us) || {
-      first=$REC_START
-      say "record: could not tell when the first frame came: the marks are timed from record start (late by up to a few tenths of a second)"; }
-  fi
-  record_marks "$marks" "$first" "$dur" "$base"
+  local base=${REC_FILE%.mp4} sp=""
+  record_marks "$marks" "$first" "$dur" "$base" "$REC_CUTS"
   [ "$sheet" = 0 ] || sp=$(record_sheet "$REC_DIR/out.mp4" "$base.marks.tsv" "$base.sheet.png" "$frames" "$every" "$fit") || sp=""
-  local rmd=("$REC_DIR/raw.mkv" "$REC_DIR/out.mp4" "$REC_DIR/first-frame")
+  local rmd=("$REC_DIR/raw.mkv" "$REC_DIR/out.mp4" "$REC_DIR/first-frame" "$REC_DIR/overlay.ass" "$REC_DIR/cut.mp4")
   [ -z "$REC_AFILT" ] || rmd+=("$REC_DIR/audio.mka" "$REC_DIR/audio.log")
   [ "$REC_N" = 1 ] || mapfile -t -O "${#rmd[@]}" rmd < <(rec_dirs)
   box_exec rm -rf "${rmd[@]}" 2>/dev/null || true
@@ -5493,14 +5575,14 @@ record_compose() {
   local tlim=()
   if awk -v e="$end" 'BEGIN { exit !(e > 0) }'; then tlim=(-t "$end")
   else fc=${fc//eof_action=pass/shortest=1}; fi
-  fc+="[$last]${REC_TAGS_F}[v]"
+  fc+="[$last]${REC_VASS#,}${REC_VASS:+,}${REC_TAGS_F}[v]"
   local amap=()
   # The sound (#226), the last input (-t after it: an output option, not its input's): in the clock of
   # the latest first frame, as the marks are.
   if [ -n "${REC_AFILT:-}" ]; then
     args+=(-i "$REC_DIR/audio.mka"); fc+=";[$((k + 1)):a]${REC_AFILT}[a]"; amap=(-map "[a]" "${REC_AAC[@]}" -shortest)
   fi
-  args+=(-filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf 18 "${REC_TAGS[@]}" "${amap[@]}" "${tlim[@]}" -movflags +faststart "$REC_DIR/out.mp4")
+  args+=(-filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf "$(rec_crf "${REC_CUT:-}")" "${REC_TAGS[@]}" "${amap[@]}" "${tlim[@]}" -movflags +faststart "$REC_DIR/out.mp4")
   box_exec ffmpeg "${args[@]}" </dev/null >&2
 }
 
@@ -5508,14 +5590,20 @@ record_compose() {
 # (ms from its first frame, at FIRST_US) as BASE.marks.tsv (ms, the wall-clock time as `events` has
 # it, the text) and BASE.vtt (WebVTT captions: each mark until the next, the last until the end). No
 # marks: no files, and an earlier take's at those names go, so they are never read as this one's.
+# CUTS (--cut-idle, record_cut's REC_CUTS): "FROM TO" frames taken out at REC_FPS; a mark after one is
+# that much earlier (one in one, at its start).
+# record_marks MARKS FIRST_US DURATION_MS BASE [CUTS]
 record_marks() {
-  local marks=$1 first=$2 dur=${3:-0} base=$4 tsv vtt n
+  local marks=$1 first=$2 dur=${3:-0} base=$4 cuts=${5:-} tsv vtt n
   tsv=$base.marks.tsv vtt=$base.vtt
   if [ -z "$marks" ]; then rm -f -- "$tsv" "$vtt"; return 0; fi
   # shellcheck disable=SC2016 # awk's
   { printf 'ms\ttime\ttext\n'
-    sort -t "$(printf '\t')" -k1,1n <<<"$marks" | awk -F '\t' -v t0="$first" '
-      $1 ~ /^[0-9]+$/ { ms = int(($1 - t0 + 500) / 1000); if (ms < 0) ms = 0
+    sort -t "$(printf '\t')" -k1,1n <<<"$marks" | awk -F '\t' -v t0="$first" -v cuts="$cuts" -v fps="${REC_FPS:-30}" '
+      BEGIN { nc = split(cuts, cl, "\n"); for (i = 1; i <= nc; i++) { split(cl[i], c, " "); c1[i] = c[1] * 1000 / fps; c2[i] = c[2] * 1000 / fps } }
+      $1 ~ /^[0-9]+$/ { m = ($1 - t0) / 1000; sh = 0
+        for (i = 1; i <= nc; i++) if (cl[i] != "") { if (m >= c2[i]) sh += c2[i] - c1[i]; else if (m > c1[i]) sh += m - c1[i] }
+        ms = int(m - sh + 0.5); if (ms < 0) ms = 0
         t = $1; sub(/^[^\t]*\t/, ""); printf "%d\t%d.%03d\t%s\n", ms, int(t / 1000000), int(t / 1000) % 1000, $0 }'
   } > "$tsv.part" || { rm -f -- "$tsv.part"; die "record: cannot write $tsv"; }
   mv -f -- "$tsv.part" "$tsv" || die "record: cannot write $tsv"
@@ -5531,6 +5619,254 @@ record_marks() {
   mv -f -- "$vtt.part" "$vtt" || die "record: cannot write $vtt"
   n=$(($(wc -l < "$tsv") - 1))
   say "record: $n mark$([ "$n" = 1 ] || echo s) in $tsv (ms in the video), and $vtt (captions)"
+}
+
+# The first pass's quality: 18, or 12 when --cut-idle encodes it once more (rec_crf CUT_MS).
+rec_crf() { if [ -n "${1:-}" ]; then echo 12; else echo 18; fi; }
+
+# The overlay script (record_overlay) for this recording, in the box as REC_DIR/overlay.ass, and
+# REC_VASS the filter that draws it. Fails saying nothing (the caller does) when it cannot.
+# record_ass INPUT MARKS FIRST_US GEO SHOW CAPTIONS
+record_ass() {
+  local input=$1 marks=$2 first=$3 geo=$4 x0 y0 k cx cy cw ch w="" h="" sz tmp rc=0
+  read -r x0 y0 k cx cy cw ch _ <<<"$geo"
+  [[ $x0 =~ ^-?[0-9]{1,6}$ && $y0 =~ ^-?[0-9]{1,6}$ && $k =~ ^[0-9]{1,3}(\.[0-9]{1,12})?$ ]] && [[ $first =~ ^[0-9]+$ ]] || return 1
+  if [ "$REC_N" -gt 1 ]; then sz=$(record_size); w=${sz%x*} h=${sz#*x}
+  else
+    sz=$(box_exec ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$REC_DIR/raw.mkv" 2>/dev/null | head -n 1) || sz=""
+    [[ $sz =~ ^([1-9][0-9]{0,4}),([1-9][0-9]{0,4})$ ]] || return 1
+    w=${BASH_REMATCH[1]} h=${BASH_REMATCH[2]}
+  fi
+  tmp=$(mktemp) || return 1
+  [[ "$cx $cy $cw $ch" =~ ^[0-9]{1,5}\ [0-9]{1,5}\ [1-9][0-9]{0,4}\ [1-9][0-9]{0,4}$ ]] || { cx=0 cy=0 cw=$w ch=$h; }
+  record_overlay "$input" "$marks" "$first" "$x0" "$y0" "$k" "$w" "$h" 359999990 "$5" "$6" "$cx $cy $cw $ch" > "$tmp" || rc=1
+  # shellcheck disable=SC2016 # the inner sh's
+  [ $rc = 1 ] || box_exec sh -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$REC_DIR/overlay.ass" < "$tmp" || rc=1
+  rm -f -- "$tmp"
+  [ $rc = 0 ] || return 1
+  REC_VASS=",ass=$REC_DIR/overlay.ass"
+}
+
+# --cut-idle (#176, finding 319): REC_DIR/out.mp4 with every still stretch longer than CUT_MS cut to
+# CUT_MS: still is no frame change (ffmpeg's freezedetect, -60 dB: a blinking caret or a clock's digit
+# is still, a click's effect is not), no input (rec_input's, each from when it began to when it ended,
+# and 3 s more with --show-input, while its marks are drawn), no mark and, with sound, no sound
+# (silencedetect, -50 dB). Whole frames are cut, the sound by the same times: what is kept is as it
+# was, so a mark after a cut lands on its frame. REC_CUTS: the cuts, "FROM TO" frames a line (TO not
+# kept), for record_marks. record_cut CUT_MS FIRST_US INPUT MARKS SHOW
+record_cut() {
+  local cut=$1 first=$2 input=$3 marks=$4 show=$5 nb fz sl="" act cuts
+  nb=$(box_exec ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | head -n 1) || nb=""
+  [[ $nb =~ ^[1-9][0-9]{0,8}$ ]] || return 1
+  # What ffmpeg says, a value a line at most: the host reads no more than that, and checks each.
+  fz=$(box_exec ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:v:0 \
+    -vf "freezedetect=n=-60dB:d=$(awk -v m="$cut" 'BEGIN { printf "%.3f", m / 1000 }')" -f null - 2>&1 </dev/null |
+    grep -oE 'freeze_(start|end): [0-9]{1,9}(\.[0-9]{1,9})?' | head -n 20000) || fz=""
+  if [ -n "$REC_AFILT" ]; then
+    sl=$(box_exec ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:a:0 -af silencedetect=n=-50dB:d=0.1 -f null - 2>&1 </dev/null |
+      grep -oE 'silence_(start|end): -?[0-9]{1,9}(\.[0-9]{1,9})?' | head -n 20000) || sl=""
+  fi
+  # The times something happened, ms in the video ("A FROM TO"): the input, the marks.
+  # shellcheck disable=SC2016 # awk's
+  act=$( { [ ! -s "$input" ] || awk -v f="$first" -v x="$([ "$show" = 1 ] && echo 3000 || echo 0)" \
+      '$1 ~ /^[0-9]{1,17}$/ && $2 ~ /^[0-9]{1,17}$/ { printf "A %.3f %.3f\n", ($1 - f) / 1000, ($2 - f) / 1000 + x }' "$input"
+    [ -z "$marks" ] || awk -F '\t' -v f="$first" '$1 ~ /^[0-9]{1,17}$/ { printf "A %.3f %.3f\n", ($1 - f) / 1000, ($1 - f) / 1000 }' <<<"$marks"; } )
+  # shellcheck disable=SC2016 # awk's
+  cuts=$( { echo "$act"; sed -n 's/^freeze_\(start\|end\): /F\1 /p' <<<"$fz"; sed -n 's/^silence_\(start\|end\): /S\1 /p' <<<"$sl"; } |
+    awk -v fps="$REC_FPS" -v nb="$nb" -v cut="$cut" '
+      function ins(arr, n, s, e,   i) { i = n; while (i > 0 && arr[i, 0] > s) { arr[i + 1, 0] = arr[i, 0]; arr[i + 1, 1] = arr[i, 1]; i-- }; arr[i + 1, 0] = s; arr[i + 1, 1] = e }
+      $1 == "A" { na++; ins(a, na - 1, $2 + 0, $3 + 0) }
+      $1 == "Fstart" { nf++; fs[nf] = $2 * 1000; fe[nf] = D }
+      $1 == "Fend" && nf { fe[nf] = $2 * 1000 }
+      $1 == "Sstart" { ns++; ss[ns] = $2 * 1000; se[ns] = -1 }
+      $1 == "Send" && ns { se[ns] = $2 * 1000 }
+      BEGIN { D = nb * 1000 / fps }
+      END {
+        for (i = 1; i <= nf; i++) if (fe[i] == "" || fe[i] == 0) fe[i] = D
+        # Sound: what is not silence is something happening.
+        p = 0
+        for (i = 1; i <= ns; i++) { if (ss[i] > p) { na++; ins(a, na - 1, p, ss[i]) }; p = se[i] < 0 ? D : se[i] }
+        if (ns && p < D) { na++; ins(a, na - 1, p, D) }
+        for (i = 1; i <= nf; i++) {
+          c = fs[i]
+          for (j = 1; j <= na + 1; j++) {
+            if (j <= na) { s = a[j, 0]; e = a[j, 1]; if (e < fs[i] || s > fe[i]) continue } else { s = fe[i]; e = fe[i] }
+            if (s > c) {
+              b = s < fe[i] ? s : fe[i]
+              if (b - c > cut) {
+                c1 = int((c + cut) * fps / 1000 + 0.999); c2 = int(b * fps / 1000 + 0.001)
+                if (c2 > nb) c2 = nb
+                if (c2 > c1) printf "%d %d\n", c1, c2 } }
+            if (e > c) c = e
+            if (c >= fe[i]) break } } }' | sort -n -u)
+  [ -n "$cuts" ] || { say "record --cut-idle: no still stretch longer than $(ms_s "$cut")"; return 0; }
+  local sel="" alist="" n=0 ac="" c1 c2 p=0 tot=0
+  while read -r c1 c2; do
+    [ "$c1" -ge "$p" ] || c1=$p
+    [ "$c2" -gt "$c1" ] || continue
+    sel+="${sel:++}between(n,$c1,$((c2 - 1)))"
+    if [ -n "$REC_AFILT" ]; then
+      ac+="[0:a]atrim=start=$(awk -v f="$p" -v r="$REC_FPS" 'BEGIN { printf "%.6f", f / r }'):end=$(awk -v f="$c1" -v r="$REC_FPS" 'BEGIN { printf "%.6f", f / r }'),asetpts=PTS-STARTPTS[a$n];"
+      alist+="[a$n]"
+    fi
+    n=$((n + 1)) tot=$((tot + c2 - c1)) p=$c2 REC_CUTS+="$c1 $c2"$'\n'
+  done <<<"$cuts"
+  [ "$n" -gt 0 ] || return 0
+  local fc="[0:v]select='not($sel)',setpts=N/FRAME_RATE/TB[v]" amap=()
+  if [ -n "$REC_AFILT" ]; then
+    ac+="[0:a]atrim=start=$(awk -v f="$p" -v r="$REC_FPS" 'BEGIN { printf "%.6f", f / r }'),asetpts=PTS-STARTPTS[a$n];"
+    alist+="[a$n]"
+    fc+=";$ac${alist}concat=n=$((n + 1)):v=0:a=1[a]"
+    amap=(-map "[a]" "${REC_AAC[@]}" -shortest)
+  fi
+  box_exec ffmpeg -v error -y -i "$REC_DIR/out.mp4" -filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf 18 \
+    "${REC_TAGS[@]}" "${amap[@]}" -movflags +faststart "$REC_DIR/cut.mp4" </dev/null >&2 || { REC_CUTS=""; return 1; }
+  box_exec mv -f "$REC_DIR/cut.mp4" "$REC_DIR/out.mp4" || { REC_CUTS=""; return 1; }
+  say "record: $n still stretch$([ "$n" = 1 ] || echo es) cut to $(ms_s "$cut") ($(ms_s $((tot * 1000 / REC_FPS))) out)"
+}
+
+# What `record stop --show-input` / `--captions` draw into the video (#176, finding 319), as an ASS
+# script for ffmpeg's ass filter (libass), in video pixels: peek's marks (tools/peek: its accent
+# #ff3cc8, ring sizes, captions and their timing) at the times the input really happened. From
+# $D/record.input (rec_input: host side, never the box's) and the recording's marks; numbers checked,
+# lines that are not as rec_input writes them dropped whole.
+#   pointer: a ring over it while it moves and 2.5 s after (fading out by 3 s), following every
+#     move the tool made at the time it made it (as the tool spends a line's time: 40 ms a move, 30
+#     a click, a sleep its own, at the end of it);
+#   a click or a press: a ripple from it (600 ms), and the button's name beside it but for left;
+#   keys: captions at the bottom, typed text a character at a time over the time it took, keys this
+#     close (1.5 s) in one caption, three at most, each gone 3 s after its last key; --pass as *;
+#   --captions: `record mark` texts at the top, each until the next (the last until the end).
+# record_overlay INPUT MARKS FIRST_US X0 Y0 K W H DUR_MS SHOW CAPTIONS [AREA] (K: video pixels a layout
+# pixel; AREA "X Y W H", where captions go: the whole video by default)
+record_overlay() {
+  local input=$1 marks=$2 area=${12:-0 0 $7 $8}
+  # shellcheck disable=SC2016 # awk's
+  { [ ! -f "$input" ] || [ "${10}" != 1 ] || sort -s -n -k1,1 -- "$input"
+    [ "${11}" != 1 ] || [ -z "$marks" ] || sort -s -t "$(printf '\t')" -k1,1n <<<"$marks" | sed 's/^/M /'
+  } | LC_ALL=C.UTF-8 awk -v first="$3" -v x0="$4" -v y0="$5" -v k="$6" -v W="$7" -v H="$8" -v dur="$9" -v area="$area" '
+    function ts(m) { m = int((m < 0 ? 0 : m) / 10 + 0.5); return sprintf("%d:%02d:%02d.%02d", int(m / 360000), int(m / 6000) % 60, int(m / 100) % 60, m % 100) }
+    function vt(us) { return (us - first) / 1000 }
+    function px(v) { return sprintf("%.1f", v) }
+    function q(v) { return int(v * 4 + (v < 0 ? -0.5 : 0.5)) }
+    # A circle of radius r around 0,0 (\p3: quarter pixels), clockwise, or the other way for a hole.
+    function circ(r, rev,   c) { c = r * 0.5523
+      if (!rev) return sprintf("m %d 0 b %d %d %d %d 0 %d b %d %d %d %d %d 0 b %d %d %d %d 0 %d b %d %d %d %d %d 0 ",
+        q(r), q(r), q(c), q(c), q(r), q(r), q(-c), q(r), q(-r), q(c), q(-r), q(-r), q(-c), q(-c), q(-r), q(-r), q(c), q(-r), q(r), q(-c), q(r))
+      return sprintf("m %d 0 b %d %d %d %d 0 %d b %d %d %d %d %d 0 b %d %d %d %d 0 %d b %d %d %d %d %d 0 ",
+        q(r), q(r), q(-c), q(c), q(-r), q(-r), q(-c), q(-r), q(-r), q(-c), q(-r), q(-r), q(c), q(-c), q(r), q(r), q(c), q(r), q(r), q(c), q(r)) }
+    function annulus(r, hw) { return r - hw > 0 ? circ(r + hw, 0) circ(r - hw, 1) : circ(r + hw, 0) }
+    function ev(layer, a, b, style, text) { if (b > dur) b = dur; if (a < 0) a = 0
+      if (b - a >= 1) printf "Dialogue: %d,%s,%s,%s,,0,0,0,,%s\n", layer, ts(a), ts(b), style, text }
+    # The pointer ring at a, still, or moving from (xa, ya) to (xb, yb), with a fade-out at its end.
+    function ring_ev(a, b, xa, ya, xb, yb, fade,   p, f) {
+      p = (xa == xb && ya == yb) ? "\\pos(" px(xa) "," px(ya) ")" : "\\move(" px(xa) "," px(ya) "," px(xb) "," px(yb) ")"
+      f = fade ? "\\fad(0," int(fade) ")" : ""
+      ev(1, a, b, "D", "{\\an7" p f "\\1c&H000000&\\1a&H80&\\p3}" annulus(12 * k, 3.5 * k))
+      ev(2, a, b, "D", "{\\an7" p f "\\1c&HC83CFF&\\p3}" annulus(12 * k, 2 * k))
+      ev(2, a, b, "D", "{\\an7" p f "\\1c&HC83CFF&\\p3}" circ(2 * k, 0)) }
+    # ASS reads { } as override blocks and \n \N \h as breaks: braces shown as their wide forms, a
+    # zero-width space after each backslash.
+    function esc(s) { gsub(/\\/, "\\\342\200\213", s); gsub(/\{/, "\357\275\233", s); gsub(/\}/, "\357\275\235", s); return s }
+    function plate(a, b, x, y, an, text, fa, fb, fs,   f) {
+      f = (fa != "") ? sprintf("\\fade(%d,%d,255,0,0,%d,%d)", fa, fa, fb < 0 ? 0 : fb, fs) : ""
+      ev(3, a, b, "E", "{\\an" an "\\pos(" px(x) "," px(y) ")" f "}" esc(text))
+      ev(4, a, b, "K", "{\\an" an "\\pos(" px(x) "," px(y) ")" f "}" esc(text)) }
+    # One caption piece at t (peek: a key or a secret stands apart; text runs on).
+    function piece(t, s, apart) { pn++; pt[pn] = t; ps[pn] = s; pa[pn] = apart }
+    # The pills on show from a to b (each until it is gone, fading 2.5 to 3 s after its last key).
+    function pills(a, b,   j, kk, e, al, t3) {
+      for (j = np; j >= 1; j--) {
+        kk = np - j; e = PT[j] + 3000; if (e > b) e = b; if (e <= a) continue
+        t3 = PT[j] + 2500 - a; al = 0
+        if (t3 < 0) { al = int(255 * (-t3) / 500); if (al > 255) al = 255; t3 = 0 }
+        plate(a, e, AX + AW / 2, AY + AH - 20 * k - kk * (FZ * 1.3 + 2 * PAD + 6 * k), 2, substr(P[j], length(P[j]) > 40 ? length(P[j]) - 39 : 1), al, t3, PT[j] + 3000 - a) } }
+    BEGIN { split(area, ar, " "); AX = ar[1]; AY = ar[2]; AW = ar[3]; AH = ar[4]; FZ = int(20 * k + 0.5); PAD = int(6 * k + 0.5); EDGE = int(2 * k + 0.5); if (EDGE < 1) EDGE = 1
+      print "[Script Info]"; print "ScriptType: v4.00+"; printf "PlayResX: %d\nPlayResY: %d\n", W, H
+      print "ScaledBorderAndShadow: yes"; print "WrapStyle: 2"; print ""
+      print "[V4+ Styles]"
+      print "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
+      printf "Style: D,monospace,%d,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1\n", FZ
+      printf "Style: K,monospace,%d,&H00FFFFFF,&H00FFFFFF,&H191E1616,&H00000000,0,0,0,0,100,100,0,0,3,%d,0,2,0,0,0,1\n", FZ, PAD
+      printf "Style: E,monospace,%d,&HFFFFFFFF,&HFFFFFFFF,&H00C83CFF,&H00000000,0,0,0,0,100,100,0,0,3,%d,0,2,0,0,0,1\n", FZ, PAD + EDGE
+      print ""; print "[Events]"; print "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"
+      nk = 0; nr = 0; pn = 0; nm = 0 }
+    # A mark (--captions): "M WALL_US<TAB>TEXT".
+    $1 == "M" { split($0, f, "\t"); sub(/^M /, "", f[1]); if (f[1] !~ /^[0-9]{1,17}$/) next
+      nm++; mt[nm] = vt(f[1]); mx[nm] = substr($0, length(f[1]) + 4); next }
+    $1 !~ /^[0-9]{1,17}$/ || $2 !~ /^[0-9]{1,17}$/ || $2 + 0 < $1 + 0 { next }
+    $3 == "ptr" {
+      if ($4 !~ /^[0-9]{1,5}x[0-9]{1,5}$/) next
+      t0 = vt($1); t1 = vt($2); n = 0; wt = 0
+      for (i = 5; i <= NF; i++) {
+        if ($i == "move") { if ($(i + 1) !~ /^[0-9]{1,5}$/ || $(i + 2) !~ /^[0-9]{1,5}$/) next; n++; op[n] = "move"; a1[n] = $(i + 1); a2[n] = $(i + 2); w[n] = 40; i += 2 }
+        else if ($i == "click" || $i == "down" || $i == "up") { n++; op[n] = $i; a1[n] = "left"; w[n] = ($i == "click") ? 30 : 0
+          if ($(i + 1) ~ /^(left|right|middle|side|back|extra|forward)$/) a1[n] = $(++i) }
+        else if ($i == "sleep") { if ($(i + 1) !~ /^[0-9]{1,6}$/) next; n++; op[n] = "sleep"; w[n] = $(++i) + 0 }
+        else if ($i == "scroll" || $i == "hscroll" || $i == "source") i++
+        else if ($i != "pause") next
+        wt += w[n] }
+      # The tool spends its time at the end of the line (before its first move it starts and
+      # connects): each step as long as it takes there, ending ~10 ms before T1; all of it squeezed
+      # in when the line is shorter. A motion shows in the next frame drawn (+8 ms); the ring
+      # travels to it over the 40 ms before (from the last point, when that was later).
+      sc = (wt > t1 - t0 && wt > 0) ? (t1 - t0) / wt : 1; c = 0
+      base = t1 - wt * sc; if (base - t0 > 10) base -= 10
+      for (j = 1; j <= n; j++) {
+        s = base + c * sc + 8; c += w[j]
+        if (op[j] == "move") {
+          x = (a1[j] + 0.5 - x0) * k; y = (a2[j] + 0.5 - y0) * k
+          if (!nk) { cx = x; cy = y }
+          st = s - 40; if (nk && st < kt[nk]) st = kt[nk]; if (nk && s < kt[nk]) s = kt[nk]
+          nk++; kt[nk] = st; kx[nk] = cx; ky[nk] = cy; ke[nk] = t1 + 3000
+          nk++; kt[nk] = s; kx[nk] = x; ky[nk] = y; ke[nk] = t1 + 3000; cx = x; cy = y }
+        else if ((op[j] == "click" || op[j] == "down") && nk) { nr++; rt[nr] = s; rx[nr] = cx; ry[nr] = cy; rb[nr] = a1[j] } }
+      if (nk) ke[nk] = t1 + 3000
+      next }
+    # Keys: the lines of one keys call (one T0 T1) share its time, a piece each (text, a character each).
+    $3 == "combo" || $3 == "text" || $3 == "secret" {
+      g = $1 " " $2; if (g != lastg) flush(); lastg = g; gt0 = vt($1); gt1 = vt($2)
+      rest = $0; sub(/^[^ ]+ [^ ]+ [^ ]+ /, "", rest)
+      if ($3 == "secret") { if (rest !~ /^[0-9]{1,6}$/) next; rest = substr("****************", 1, rest + 0 > 16 ? 16 : rest + 0) }
+      gn++; gk[gn] = $3; gs[gn] = rest; gw += ($3 == "text") ? length(rest) : 1
+      next }
+    function flush(   i, j, c, s) {
+      if (!gn) return
+      c = 0
+      for (i = 1; i <= gn; i++) {
+        if (gk[i] == "text") for (j = 1; j <= length(gs[i]); j++) { c++; piece(gt0 + (gt1 - gt0) * c / gw, substr(gs[i], j, 1), 0) }
+        else { c++; piece(gt0 + (gt1 - gt0) * c / gw, gs[i], 1) } }
+      gn = 0; gw = 0 }
+    END { flush()
+      # The pointer: from one point in time to the next, moving or still; still for longer than its
+      # 3 s, it fades and goes until the next.
+      for (i = 1; i < nk; i++) {
+        a = kt[i]; b = kt[i + 1]; if (b <= a) continue
+        if (kx[i] != kx[i + 1] || ky[i] != ky[i + 1]) { ring_ev(a, b, kx[i], ky[i], kx[i + 1], ky[i + 1], 0); continue }
+        e = ke[i] < b ? ke[i] : b
+        if (ke[i] < b) { if (e - 500 > a) ring_ev(a, e - 500, kx[i], ky[i], kx[i], ky[i], 0); s = e - 500 > a ? e - 500 : a; ring_ev(s, e, kx[i], ky[i], kx[i], ky[i], e - s) }
+        else ring_ev(a, b, kx[i], ky[i], kx[i], ky[i], 0) }
+      if (nk) { a = kt[nk]; e = ke[nk]; if (e - 500 > a) ring_ev(a, e - 500, kx[nk], ky[nk], kx[nk], ky[nk], 0); s = e - 500 > a ? e - 500 : a; ring_ev(s, e, kx[nk], ky[nk], kx[nk], ky[nk], e - s) }
+      # Ripples: 12 to 38 px out in 600 ms, fading; the button beside it for 3 s.
+      for (i = 1; i <= nr; i++) {
+        ev(0, rt[i], rt[i] + 600, "D", "{\\an7\\pos(" px(rx[i]) "," px(ry[i]) ")\\1c&HC83CFF&\\t(\\fscx317\\fscy317\\alpha&HFF&)\\p3}" annulus(12 * k, 1.5 * k))
+        tag = rb[i] == "side" ? "back" : rb[i] == "extra" ? "forward" : rb[i]
+        if (tag != "left") { ev(3, rt[i], rt[i] + 3000, "E", "{\\an7\\pos(" px(rx[i] + 16 * k) "," px(ry[i] + 14 * k) ")\\fad(0,500)}" tag)
+          ev(4, rt[i], rt[i] + 3000, "K", "{\\an7\\pos(" px(rx[i] + 16 * k) "," px(ry[i] + 14 * k) ")\\fad(0,500)}" tag) } }
+      # Key captions, as peek joins them.
+      np = 0; prev = -1
+      for (i = 1; i <= pn; i++) {
+        t = pt[i]
+        if (prev >= 0 && t > prev) pills(prev, t)
+        while (np && PT[1] + 3000 <= t) { for (j = 1; j < np; j++) { P[j] = P[j + 1]; PA[j] = PA[j + 1]; PT[j] = PT[j + 1] }; np-- }
+        if (!np || t - PT[np] >= 1500) {
+          if (np == 3) { for (j = 1; j < np; j++) { P[j] = P[j + 1]; PA[j] = PA[j + 1]; PT[j] = PT[j + 1] }; np-- }
+          np++; P[np] = "" }
+        else if (pa[i] || PA[np]) P[np] = P[np] " "
+        P[np] = P[np] ps[i]; PA[np] = pa[i]; PT[np] = t; prev = t }
+      if (prev >= 0) pills(prev, prev + 3000)
+      # Marks at the top, each until the next.
+      for (i = 1; i <= nm; i++) plate(mt[i], i < nm ? mt[i + 1] : dur, AX + AW / 2, AY + 20 * k, 8, mx[i], "", 0, 0) }'
 }
 
 # record sheet VIDEO (#176): the video copied into the box (ffmpeg reads it there, as stop's), its sheet
@@ -6409,6 +6745,7 @@ kb_tool() {
 # The keyboard tool (kb, pass: cmd_keys's), each --pass value on its stdin, NUL-terminated.
 keys_send() {
   local v
+  MARK_T0=${EPOCHREALTIME//[!0-9]/}   # when they began, for a recording (rec_input)
   for v in "${pass[@]}"; do caller_env "$v"; printf '\0'; done | on_box "${kb[@]}"
 }
 
@@ -6488,12 +6825,29 @@ steps_to() {
     SEQ+=(move "$(($1 + ($3 - $1) * n / $5))" "$(($2 + ($4 - $2) * n / $5))")
   done
 }
+# --glide DURATION (#176, finding 319): 1 ms to 10 s, as ms. glide_arg CMD DURATION
+glide_arg() {
+  local g; g=$(ms_duration "$2") && [ "$g" -le 10000 ] || die "$1: --glide takes a duration up to 10s, like 400ms or 1s, got $2"
+  echo "$g"
+}
+# A glide for a video: from X0,Y0 to X1,Y1 in about MS of real time, eased in and out (smoothstep), a
+# move each 40 ms (the tool waits that long after each, so each is drawn: ~25 a second, as a hand
+# moves), appended to SEQ. Nothing when it is there already. glide_to X0 Y0 X1 Y1 MS
+glide_to() {
+  [ "$1 $2" != "$3 $4" ] || return 0
+  local n=$((($5 + 20) / 40)) i
+  [ "$n" -ge 2 ] || n=2
+  # shellcheck disable=SC2016 # awk's
+  while read -r i; do SEQ+=(move "${i%,*}" "${i#*,}"); done < <(awk -v x0="$1" -v y0="$2" -v x1="$3" -v y1="$4" -v n="$n" 'BEGIN {
+      for (i = 1; i <= n; i++) { u = i / n; s = u * u * (3 - 2 * u)
+        printf "%d,%d\n", int(x0 + (x1 - x0) * s + 0.5), int(y0 + (y1 - y0) * s + 0.5) } }')
+}
 
 # X Y are screen pixels; with --window SEL the window's own (0,0 is its top left corner, as in its
 # `shot --window`), with --in SHOT that image's pixels (finding 81). --steps N travels there from
 # where the pointer is (#38); --mod MODS holds modifiers down across the click (#25).
 cmd_click() {
-  local name="" btn=left double=0 xy=() sels=() raise=1 in="" steps=1 mods=""
+  local name="" btn=left double=0 xy=() sels=() raise=1 in="" steps="" mods="" glide=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -6502,6 +6856,7 @@ cmd_click() {
       --no-raise) raise=0 ;;
       --double) double=1 ;;
       --steps) optarg "$@"; steps=$(steps_arg click "$2"); shift ;;
+      --glide) optarg "$@"; glide=$(glide_arg click "$2"); shift ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       left|right|middle|side|extra|back|forward) btn=$1 ;;
       -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "click: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
@@ -6513,7 +6868,10 @@ cmd_click() {
   [ ${#xy[@]} -eq 2 ] || die "click: need X Y"
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "click: --in or --window, not both"
   [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "click: --no-raise goes with --window or --in"
+  [ -z "$steps" ] || [ -z "$glide" ] || die "click: --steps or --glide, not both"
   select_box "$name"; need_box; shell_note
+  # A recording's glide (record start --glide) unless --steps says how to get there.
+  [ -n "$steps$glide" ] || glide=$(rec_glide) || glide=""
   local x=${xy[0]} y=${xy[1]} p
   if [ -n "$in" ]; then
     p=$(shot_point "$in" "$x" "$y")
@@ -6527,17 +6885,21 @@ cmd_click() {
   [ $double = 1 ] && seq+=(click "$btn")
   local ext; ext=$(extent)
   on_screen click "$x" "$y" "$ext"
-  # --steps: the way there first, on its own, so --wait watches what the click does, not the pointer
-  # crossing the screen, and --mod holds its modifiers for the click alone.
-  if [ "$steps" -gt 1 ]; then
-    local from; from=$(pointer_at)
-    SEQ=(); steps_to "${from% *}" "${from#* }" "$x" "$y" "$steps"
-    on_box "$BOX_POINTER" --extent "$ext" "${SEQ[@]}"
+  # --steps or --glide: the way there first, on its own, so --wait watches what the click does, not
+  # the pointer crossing the screen, and --mod holds its modifiers for the click alone.
+  if [ "${steps:-1}" -gt 1 ] || [ -n "$glide" ]; then
+    local from t0; from=$(pointer_at)
+    SEQ=()
+    if [ -n "$glide" ]; then glide_to "${from% *}" "${from#* }" "$x" "$y" "$glide"
+    else steps_to "${from% *}" "${from#* }" "$x" "$y" "$steps"; fi
+    t0=${EPOCHREALTIME//[!0-9]/}
+    [ ${#SEQ[@]} = 0 ] || { on_box "$BOX_POINTER" --extent "$ext" "${SEQ[@]}"; rec_input "$t0" "ptr $ext ${SEQ[*]}"; }
   fi
   # The mark (for a peek window) has the screen pixels the click went to, however they were given.
   local marks=("ptr $ext ${seq[*]}")
   [ -z "$mods" ] || marks+=("combo $mods+click")
   if [ "$SETTLE_WAIT" != 1 ]; then
+    MARK_T0=${EPOCHREALTIME//[!0-9]/}
     with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
     mark "${marks[@]}"
     return
@@ -6547,6 +6909,7 @@ cmd_click() {
   SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
   settle_begin settle "${SETTLE_ARGS[@]}"
   settle_ready "$SETTLE_JSON"
+  MARK_T0=${EPOCHREALTIME//[!0-9]/}
   settle_act with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
   mark "${marks[@]}"
   settle_end settle "$SETTLE_JSON" "the click was sent"
@@ -6603,6 +6966,7 @@ cmd_scroll() {
   # --mod (#167): Omarchy's SUPER+wheel binds (workspaces, groups), held as click and drag hold them.
   marks=("ptr $ext $(pointer_marks "${seq[@]}")")
   [ -z "$mods" ] || marks+=("combo $mods+scroll")
+  MARK_T0=${EPOCHREALTIME//[!0-9]/}
   if [ "$SETTLE_WAIT" != 1 ]; then
     with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
     mark "${marks[@]}"
@@ -6612,6 +6976,7 @@ cmd_scroll() {
   SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
   settle_begin settle "${SETTLE_ARGS[@]}"
   settle_ready "$SETTLE_JSON"
+  MARK_T0=${EPOCHREALTIME//[!0-9]/}
   settle_act with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
   mark "${marks[@]}"
   settle_end settle "$SETTLE_JSON" "the scroll was sent"
@@ -6670,13 +7035,14 @@ pointer_shown() {
 }
 
 cmd_pointer() {
-  local name="" in="" sels=() steps=1 mods=""
+  local name="" in="" sels=() steps="" mods="" glide=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift 2 ;;
       --in) optarg "$@"; in=$2; shift 2 ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift 2 ;;
       --steps) optarg "$@"; steps=$(steps_arg pointer "$2"); shift 2 ;;
+      --glide) optarg "$@"; glide=$(glide_arg pointer "$2"); shift 2 ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift 2 ;;
       --) shift; break ;;
       *) break ;;
@@ -6685,23 +7051,27 @@ cmd_pointer() {
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "pointer: --in or --window, not both"
   local a; for a; do [ "$a" != --hold ] || die "pointer: --hold is omabox's own (it never returns); to keep a button down: down, move ..., up (or omabox drag)"; done
   if [ "${1:-}" = hide ] || [ "${1:-}" = show ]; then
-    [ $# = 1 ] && [ -z "$in$mods" ] && [ ${#sels[@]} = 0 ] && [ "$steps" = 1 ] || die "pointer $1: nothing else with it"
+    [ $# = 1 ] && [ -z "$in$mods$glide" ] && [ ${#sels[@]} = 0 ] && [ "${steps:-1}" = 1 ] || die "pointer $1: nothing else with it"
     select_box "$name"; need_box
     pointer_shown "$1"; return
   fi
+  [ -z "$steps" ] || [ -z "$glide" ] || die "pointer: --steps or --glide, not both"
   select_box "$name"; need_box
+  # A recording's glide (record start --glide) unless --steps says how to get there.
+  [ -n "$steps$glide" ] || glide=$(rec_glide) || glide=""
+  steps=${steps:-1}
   # Moves to screen pixels (--in, --window), in steps from where the pointer was (--steps). The mark
   # has the moves as asked, in screen pixels: a step each would pass peek's 64 tokens.
-  local args=() marks=() p n cur="" mapped=0 ext
+  local args=() marks=() p n g cur="" mapped=0 ext
   ext=$(extent)
   [ -z "$in" ] && [ ${#sels[@]} = 0 ] || mapped=1
   while [ $# -gt 0 ]; do
     if [ "$1" = move ] && [ $# -ge 3 ]; then
-      n=$steps
-      if [ "${4:-}" = --steps ]; then [ $# -ge 5 ] || die "pointer: --steps needs a value"; n=$(steps_arg pointer "$5"); fi
+      n=$steps g=$glide
+      if [ "${4:-}" = --steps ]; then [ $# -ge 5 ] || die "pointer: --steps needs a value"; n=$(steps_arg pointer "$5") g=""; fi
       if ! [[ $2 =~ ^[0-9]+$ && $3 =~ ^[0-9]+$ ]]; then
         # Left to the tool, which refuses it, when nothing here needs the numbers.
-        [ $mapped = 0 ] && [ "$n" = 1 ] || die "pointer: move takes whole pixels, got $2 $3"
+        [ $mapped = 0 ] && [ "$n" = 1 ] && [ -z "$g" ] || die "pointer: move takes whole pixels, got $2 $3"
         args+=("$1" "$2" "$3"); marks+=("$1" "$2" "$3"); shift 3; continue
       fi
       p="$((10#$2)) $((10#$3))"
@@ -6715,7 +7085,12 @@ cmd_pointer() {
         else p=${p#screen }; fi
       fi
       on_screen pointer "${p% *}" "${p#* }" "$ext"
-      if [ "$n" -gt 1 ]; then
+      if [ -n "$g" ]; then
+        [ -n "$cur" ] || cur=$(pointer_at)
+        SEQ=(); glide_to "${cur% *}" "${cur#* }" "${p% *}" "${p#* }" "$g"
+        [ ${#SEQ[@]} -gt 0 ] || SEQ=(move "${p% *}" "${p#* }")
+        args+=("${SEQ[@]}")
+      elif [ "$n" -gt 1 ]; then
         [ -n "$cur" ] || cur=$(pointer_at)
         SEQ=(); steps_to "${cur% *}" "${cur#* }" "${p% *}" "${p#* }" "$n"
         args+=("${SEQ[@]}")
@@ -6725,7 +7100,11 @@ cmd_pointer() {
       if [ "${4:-}" = --steps ]; then shift 5; else shift 3; fi
     else args+=("$1"); marks+=("$1"); shift; fi
   done
+  local t0=${EPOCHREALTIME//[!0-9]/}
   with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${args[@]}"
+  # A recording has every move the tool made (a glide's steps); peek, the moves as asked.
+  rec_input "$t0" ${mods:+"combo $mods"} "ptr $ext $(pointer_marks "${args[@]}")"
+  local MARK_NOREC=1
   [ -z "$mods" ] || mark "combo $mods"
   mark "ptr $ext $(pointer_marks "${marks[@]}")"
 }
@@ -6735,7 +7114,7 @@ cmd_pointer() {
 # click; --shot FILE takes a shot while the button is still down (the pointer tool pauses for it);
 # --mod MODS holds modifiers down from the press to the release.
 cmd_drag() {
-  local name="" btn=left xy=() sels=() raise=1 in="" steps=10 hold=0 shot="" mods="" shot_args=()
+  local name="" btn=left xy=() sels=() raise=1 in="" steps="" hold=0 shot="" mods="" shot_args=() glide=""
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -6743,6 +7122,7 @@ cmd_drag() {
       --in) optarg "$@"; in=$2; shift ;;
       --no-raise) raise=0 ;;
       --steps) optarg "$@"; steps=$(steps_arg drag "$2"); shift ;;
+      --glide) optarg "$@"; glide=$(glide_arg drag "$2"); shift ;;
       --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "drag: --hold takes a duration up to 60s, like 300ms or 2s (a bare number is seconds), got $2"; shift ;;
       --shot) optarg "$@"; shot=$2; shift ;;
       # The held shot like any shot (#122): smaller, a part, one monitor; it says what it took, for --in.
@@ -6763,7 +7143,11 @@ cmd_drag() {
   [ -z "$shot" ] || [ "$SETTLE_WAIT" = 0 ] || die "drag: --shot or --wait, not both (the shot is the look)"
   [ ${#shot_args[@]} = 0 ] || [ -n "$shot" ] || die "drag: --shot-fit, --shot-g and --shot-monitor go with --shot FILE"
   [ -z "$shot" ] || ! in_jail || die "drag: --shot is not for an agent inside ai-jail yet: omabox shot after the drag, or --hold and a shot of its own"
+  [ -z "$steps" ] || [ -z "$glide" ] || die "drag: --steps or --glide, not both"
   select_box "$name"; need_box
+  # A recording's glide (record start --glide) unless --steps says how to get there.
+  [ -n "$steps$glide" ] || glide=$(rec_glide) || glide=""
+  steps=${steps:-10}
   # Both points to screen pixels: from a shot's image, then from a window's coordinates.
   local pts=() i p a
   for i in 0 2; do
@@ -6776,13 +7160,23 @@ cmd_drag() {
     pts+=("$x" "$y")
   done
   local x1=${pts[0]} y1=${pts[1]} x2=${pts[2]} y2=${pts[3]} seq
-  SEQ=(); steps_to "$x1" "$y1" "$x2" "$y2" "$steps"
+  SEQ=()
+  if [ -n "$glide" ]; then glide_to "$x1" "$y1" "$x2" "$y2" "$glide"; [ ${#SEQ[@]} -gt 0 ] || SEQ=(move "$x2" "$y2")
+  else steps_to "$x1" "$y1" "$x2" "$y2" "$steps"; fi
   seq=(move "$x1" "$y1" down "$btn" "${SEQ[@]}")
   [ "$hold" = 0 ] || seq+=(sleep "$hold")
   [ -z "$shot" ] || seq+=(pause)
   seq+=(up "$btn")
-  local ext; ext=$(extent)
+  local ext t0; ext=$(extent)
   on_screen drag "$x1" "$y1" "$ext"; on_screen drag "$x2" "$y2" "$ext"
+  # --glide: to the start first, gliding as the drag will.
+  if [ -n "$glide" ]; then
+    local from gseq=("${SEQ[@]}"); from=$(pointer_at)
+    SEQ=(); glide_to "${from% *}" "${from#* }" "$x1" "$y1" "$glide"
+    t0=${EPOCHREALTIME//[!0-9]/}
+    [ ${#SEQ[@]} = 0 ] || { on_box "$BOX_POINTER" --extent "$ext" "${SEQ[@]}"; rec_input "$t0" "ptr $ext ${SEQ[*]}"; }
+    SEQ=("${gseq[@]}")
+  fi
   # --wait (finding 172): the cursor is in every frame, and a drag moves it across the screen while
   # it is watched. To the start first, on its own (as click --steps, finding 111), then the cursor at
   # each point of the path is not the change looked for; what the drag does beside it is.
@@ -6793,6 +7187,7 @@ cmd_drag() {
     settle_begin settle "${SETTLE_ARGS[@]}"
     settle_ready "$SETTLE_JSON"
   fi
+  t0=${EPOCHREALTIME//[!0-9]/}
   if [ -z "$shot" ]; then
     if [ "$SETTLE_WAIT" = 1 ]; then settle_act with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"
     else with_mods "$mods" on_box "$BOX_POINTER" --extent "$ext" "${seq[@]}"; fi
@@ -6801,7 +7196,10 @@ cmd_drag() {
     with_mods "$mods" drag_shot || rc=$?
     [ $rc = 0 ] || exit $rc
   fi
-  # For a peek window: where it started and ended (its steps would pass the mark's 64 tokens).
+  # For a recording, the tool's whole sequence; for a peek window, where it started and ended (its
+  # steps would pass the mark's 64 tokens).
+  rec_input "$t0" ${mods:+"combo $mods+drag"} "ptr $ext ${seq[*]/pause/}"
+  local MARK_NOREC=1
   [ -z "$mods" ] || mark "combo $mods+drag"
   mark "ptr $ext move $x1 $y1 down $btn move $x2 $y2 up $btn"
   [ "$SETTLE_WAIT" != 1 ] || settle_end settle "$SETTLE_JSON" "the drag was sent"

@@ -3,6 +3,19 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Added
+
+- **Videos people can follow: `record stop --show-input`, `--captions`, `--cut-idle`, `--glide`.**
+  `--show-input` draws what omabox's clicks, pointer moves, drags and keys did into the video, as
+  `peek` shows them, at the times they happened: a ring over the pointer, a ripple from each click,
+  key captions at the bottom (a `--pass` as `*`). `--captions` puts the `record mark` texts at the
+  top. `--cut-idle [1s]` cuts every still stretch (no change on screen, no input, no mark, no sound)
+  down to that, and moves the marks and captions with it. `record start --glide 600ms` (or `--glide`
+  on `click`, `pointer`, `drag`) makes the pointer travel there in that time instead of jumping, while
+  agents' clicks stay instant otherwise (#176).
+
 ## 0.6.0 — 2026-10-14
 
 Agents can read a window as text (`omabox tree`), check how their model reads click points

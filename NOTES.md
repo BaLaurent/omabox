@@ -6408,6 +6408,48 @@ from them.
     empty image fails as before. Not for a jailed caller's `--to-fd` shot (its fd cannot be checked
     for size here). Why grim writes nothing is not known (Hyprland's log shows screencopy binding
     normally); not reproducible on demand, so the retry has no test of its own.
+319. **`record`'s polish: input drawn into the video, a gliding pointer, still stretches cut**
+    (2026-10-14, #176; findings 297, 306). The issue's scope: "...and it can record what it did,
+    cleanly", grown from `docs/demo.sh`, not a video editor. Three pieces, all at `record stop` (or
+    `record ... -- ACTION`), on what the recording already has:
+    - **Where the input comes from.** Hyprland's events (`omabox events`) carry no clicks or keys,
+      and the box can write its own events.log. What peek draws (finding 85) is omabox's own record
+      of its commands, in the box dir, out of the box's reach; while a box records, `mark()` also
+      writes each line to `$D/record.input` with the wall-clock times the command began and ended
+      (`rec_input`; a pointer line has the tool's whole sequence, every step of a glide, where peek
+      gets the moves as asked; `--pass` is its length there too). 4 MB at most. `run`'s app moving
+      its own windows is not input, by design.
+    - **`--show-input` / `--captions`** draw it with ffmpeg's `ass` filter (libass, in the box, at the
+      end of the pass that already makes the video: no second encode): `record_overlay` writes an ASS
+      script in video pixels, peek's look (accent #ff3cc8, its ring sizes, caption plates with the
+      accent edge, 1.5 s caption merging, 3 s fade), times in finding 306's video clock. libass
+      drawings make the rings (an annulus is two circles wound opposite ways; `\an7` puts a drawing's
+      0,0 at `\pos`, `\an5` centres its bounding box instead and was 12 px off), `\move` a ring moving,
+      BorderStyle 3 the plates (two layers: the accent box 2 px larger under the dark one, as peek
+      draws them). Text is UTF-8 (peek's font is ASCII); `{` `}` become their wide forms and a
+      zero-width space follows each backslash (ASS reads them as override blocks and `\n` breaks).
+      Timing: a pointer line's span starts with the tool connecting (tens of ms), so shared out from
+      its start the ring lagged the real cursor by ~2 glide steps; anchored at its end (40 ms a move,
+      30 a click, ~10 ms tail) it sits on the cursor in every frame checked. In a layout video the
+      captions go on the main screen's part (centred on the whole, they fell into the black gaps).
+    - **`--glide DURATION`** on click, pointer and drag (and `record start --glide`, the default
+      while it records): `glide_to` sends smoothstep-eased moves, one each 40 ms (the tool's own wait
+      after a move), so ~25 positions a second. Without it nothing changes for agents.
+    - **`--cut-idle [DURATION]`** cuts every still stretch longer than DURATION to DURATION.
+      freezedetect at its default -60 dB counts a typed character or a caret as still (a 10x20 px
+      change in 1280x720 is ~1e-4 of the frame), so input is "something happening" from its own
+      record, with --show-input for the 3 s it is drawn; marks split stretches (so one after a cut
+      lands on its frame); with sound, silencedetect's non-silence counts too (a 0.5 s tone in a
+      still gap was kept, in place). Whole frames go (`select` on frame numbers, `setpts=N/FRAME_RATE/TB`),
+      the sound by the same times (`atrim` + `concat`); marks and VTT are shifted by the frames cut
+      before them. The first pass is encoded at crf 12 then, so the second (crf 18) loses little.
+    Checked in a box (`t_record_input`, 1280x720 at scale 2): the ring's accent at the click point
+    just after it and not before; the keys' caption against the frame before with record_overlay's
+    caption drawn on it (7e-5 of the area off; with the --pass in clear it would be 80x that), the
+    box dir's input with `secret 7`, never the value; a 1 s glide's pointer rising through 15+ frames
+    over 0.6 s+; a 5 s gap cut by 4.00 s, the mark after it within a frame of its change. By hand: a
+    two-monitor layout (the ring on the scale-2 monitor's cursor, captions on the main screen), and
+    `--audio` with a cut.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

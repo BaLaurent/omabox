@@ -106,6 +106,7 @@ omabox record start -o demo.mp4        # a video of the screen; omabox record st
 omabox record start --monitor all      # ...of every monitor, laid out in one video as shot takes them
 omabox record mark "scene 2"           # a mark in the video's clock: demo.marks.tsv and demo.vtt captions
 omabox record stop --sheet             # ...and demo.sheet.png: frames with their times, to check a take
+omabox record stop --show-input --cut-idle   # clicks, pointer and keys drawn in, still stretches cut
 omabox audio 3                         # an up --audio box (sound nobody hears): did the app make one, how loud
 omabox record start --audio            # ...and the video with its sound, in step with the picture
 omabox shot --no-pointer               # a still for people (pointer hide: none until pointer show)
