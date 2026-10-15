@@ -6553,6 +6553,26 @@ from them.
     FIFO behind a stat that says a file given up in 10 s; a stop past OMABOX_RECORD_MAX=2000 refused,
     nothing written, the video kept in the box; the outside stop's file in the cache folder).
 
+324. **#224 after its rebase onto 0.6.0: main's new helpers by path, and a third review** (2026-10-14).
+    Rebased onto 41dd4f7 (findings 321-323 were 313-315 on the branch), the three commits squashed
+    into one: each conflicted in the same `record` code. What 0.6.0 added to `record` after the
+    branch forked (the sound's ffmpeg, the overlay's ffprobe and copy, `--cut-idle`'s ffmpeg and mv,
+    `omabox audio`, `omabox tree`'s timeout) ran through `box_exec`, on the box's PATH: all of it goes
+    through `box_sys` now, by path, what it prints read back bounded (finding 322's rule). With that
+    `record` checks `/usr/bin/wf-recorder` and `/usr/bin/ffmpeg` exist, not the caller's PATH (a
+    wf-recorder in /usr/local/bin passed the check and failed in the box). A third review of the
+    branch (`/code-review`, after the two of finding 322-323) found: `relay_record` kept `-b NAME`
+    for itself (its `pre`), so a jail with two boxes recorded the default one and the stop then
+    failed: `-b` goes to the broker for start, stop and sheet (unit check through a relay that prints
+    its arguments); `record_start` named the user's file to a jailed caller ("is recording already,
+    to FILE") where status and stop mask it; `record_mark` took a jail's marks into the user's
+    recording; a failed copy into the box for `record sheet` left `sheet-PID.mp4` in the box HOME
+    (a 16 GiB sparse file from a jail filled the disk and stayed); `box_exec`'s own-helper
+    environment read omabox.env three times a call (once now; `record stop` asks every 100 ms); and
+    the jail-side placing of a video, its marks and a sheet set the umask's mode while a shot stayed
+    at mktemp's 0600: `jail_place` does all four the same way (a jailed shot is 0644 under the usual
+    umask now, as a file made there would be).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

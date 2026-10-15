@@ -1184,11 +1184,17 @@ box_exec() {
   if [ -n "$sys" ]; then
     [[ ${1:-} == /* ]] || die "box_exec: omabox's own helper goes by its full path, got ${1:-nothing}"
     env=(HOME=/home/sbx LANG="${LANG:-C.UTF-8}" XDG_RUNTIME_DIR="/run/user/$UID" OMABOX_SYS=1)
-    for v in WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE; do
-      if v=$v=$(box_env "$v"); then env+=("$v"); fi
-    done
-    v=$(run_read omabox.env | tr '\0' '\n' | sed -n 's/^DBUS_SESSION_BUS_ADDRESS=//p' | head -n 1) || v=""
-    [[ ! $v =~ ^unix:[A-Za-z0-9_.=/,-]{1,200}$ ]] || env+=("DBUS_SESSION_BUS_ADDRESS=$v")
+    # The box's display, Hyprland and session bus from its omabox.env, read once (the first of each,
+    # as box_env takes them): record_stop asks every 100 ms while wf-recorder finishes.
+    local seen=" "
+    while IFS= read -r -d '' v; do
+      case $v in
+        WAYLAND_DISPLAY=*|HYPRLAND_INSTANCE_SIGNATURE=*)
+          if [[ $seen != *" ${v%%=*} "* && ${v#*=} =~ ^[A-Za-z0-9_.-]+$ ]]; then env+=("$v"); seen+="${v%%=*} "; fi ;;
+        DBUS_SESSION_BUS_ADDRESS=*)
+          if [[ $seen != *" ${v%%=*} "* && ${v#*=} =~ ^unix:[A-Za-z0-9_.=/,-]{1,200}$ ]]; then env+=("$v"); seen+="${v%%=*} "; fi ;;
+      esac
+    done < <(run_read omabox.env)
     wd=""
   else
     mapfile -d '' env < <(run_read omabox.env)
@@ -5391,10 +5397,15 @@ record_status() {
 # outside the jail, to a file of its own).
 record_start() {
   local file=$1 mon=$2 fps=$3 nopointer=${4:-0} audio=${5:-0} glide=${6:-} asname=${7:-} mons layout="" names=() i geo
-  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then
-    die "record: needs wf-recorder and ffmpeg (sudo pacman -S wf-recorder ffmpeg)"
+  # By their paths: the box runs them from /usr/bin (box_sys, finding 322), not the caller's PATH.
+  if [ ! -x /usr/bin/wf-recorder ] || [ ! -x /usr/bin/ffmpeg ]; then
+    die "record: needs wf-recorder and ffmpeg in /usr/bin (sudo pacman -S wf-recorder ffmpeg)"
   fi
-  if record_running; then die "record: box '$NAME' is recording already, to $REC_FILE (omabox record stop)"; fi
+  if record_running; then
+    # A jailed caller is not told the user's file (#224): record_status masks it the same way.
+    ! in_jail || [ -f "$D/record.as" ] || die "record: box '$NAME' is recording already (started outside the jail)"
+    die "record: box '$NAME' is recording already, to $REC_FILE (omabox record stop)"
+  fi
   [ "$audio" = 0 ] || [ "$(meta audio)" = true ] ||
     die "record --audio: box '$NAME' has no audio: a box gets it at up (omabox up --audio; down first, or up --new --audio)"
   rm -f "$D/record" "$D/record.marks" "$D/record.layout" "$D/record.audio" "$D/record.input" "$D/record.geo" "$D/record.glide" "$D/record.as"
@@ -5516,19 +5527,20 @@ record_start() {
 record_audio_start() {
   local apid t
   # shellcheck disable=SC2016 # the inner bash's
-  apid=$(box_exec bash -c 'd=$1
+  # (fd 3, the pid's way out, kept: box_exec passes a command only the fds it is given, finding 322.)
+  apid=$(BOX_KEEP=3 box_sys /usr/bin/bash -c 'd=$1
     mkdir -p "$d" && rm -f "$d/audio.mka" "$d/audio.log" || exit 125
     (exec >"$d/audio.log" 2>&1 3>&-; trap - INT QUIT
       exec setsid -- ffmpeg -nostdin -nostats -hide_banner -y -f pulse -name omabox-record -sample_rate 48000 -channels 2 -fragment_size 1920 \
         -i "$2.monitor" -c:a flac "$d/audio.mka") &
-    echo "$!" >&3' omabox-record "$REC_DIR" "$AUDIO_SINK" 3>&1 </dev/null >&2) || apid=""
+    echo "$!" >&3' omabox-record "$REC_DIR" "$AUDIO_SINK" 3>&1 </dev/null >&2 | head -c 64) || apid=""
   [[ $apid =~ ^[0-9]+$ ]] || die "record --audio: could not start ffmpeg in box '$NAME'"
   # shellcheck disable=SC2016 # the inner sh's
-  t=$(box_exec sh -c 'for i in $(seq 50); do grep -q " start: " "$1" 2>/dev/null && exit 0
+  t=$(box_sys /usr/bin/sh -c 'for i in $(seq 50); do grep -q " start: " "$1" 2>/dev/null && exit 0
       [ "$(cat "/proc/$2/comm" 2>/dev/null)" = ffmpeg ] || exit 1; sleep 0.1; done; exit 1' omabox-record "$REC_DIR/audio.log" "$apid" 2>/dev/null; echo $?) || t=1
   if [ "$t" != 0 ]; then
     record_audio_end "$apid"
-    die "record --audio: ffmpeg could not read box '$NAME''s sound: $(box_exec tail -n 3 "$REC_DIR/audio.log" 2>/dev/null | tr '\n' ' ')"
+    die "record --audio: ffmpeg could not read box '$NAME''s sound: $(box_sys /usr/bin/tail -n 3 "$REC_DIR/audio.log" 2>/dev/null | head -c 2000 | tr '\n' ' ')"
   fi
   echo "$apid"
 }
@@ -5537,7 +5549,7 @@ record_audio_start() {
 record_audio_end() {
   [[ ${1:-} =~ ^[0-9]+$ ]] || return 0
   # shellcheck disable=SC2016 # the inner sh's
-  box_exec sh -c 'p=$1; is() { case $(cat "/proc/$p/stat" 2>/dev/null) in "$p (ffmpeg) "[!Z]*) return 0 ;; esac; return 1; }
+  box_sys /usr/bin/sh -c 'p=$1; is() { case $(cat "/proc/$p/stat" 2>/dev/null) in "$p (ffmpeg) "[!Z]*) return 0 ;; esac; return 1; }
     is || exit 0; kill -INT "$p"
     for i in $(seq 50); do is || exit 0; sleep 0.1; done; kill -KILL "$p"' omabox-record "$1" 2>/dev/null || true
 }
@@ -5549,7 +5561,7 @@ record_audio_end() {
 # record_audio_filter FIRST_US
 record_audio_filter() {
   local a="" off ms
-  a=$(box_exec sed -n 's/.* start: \([0-9]\{1,12\}\)\.\([0-9]\{6\}\),.*/\1\2/p' "$REC_DIR/audio.log" 2>/dev/null | head -n 1) || a=""
+  a=$(box_sys /usr/bin/sed -n 's/.* start: \([0-9]\{1,12\}\)\.\([0-9]\{6\}\),.*/\1\2/p' "$REC_DIR/audio.log" 2>/dev/null | head -c 256 | head -n 1) || a=""
   [[ $a =~ ^[0-9]{7,18}$ ]] && [[ ${1:-} =~ ^[0-9]+$ ]] || return 1
   off=$((10#$a - $1))
   ms=$(awk -v o="${off#-}" 'BEGIN { printf "%.3f", o / 1000 }')
@@ -5621,6 +5633,7 @@ record_mark() {
     [ ! -f "$D/record" ] || die "record mark: box '$NAME''s recording stopped by itself (omabox record stop keeps what it has)"
     die "record mark: box '$NAME' is not recording (omabox record start)"
   fi
+  ! in_jail || [ -f "$D/record.as" ] || die "record mark: box '$NAME''s recording was started outside the jail: its marks are made there"
   # Bounded (#224): a mark 1000 characters at most, a recording's 1 MiB of them (a loop of marks from a
   # jail would otherwise fill the runtime dir, which is memory).
   [ ${#mtext} -le 1000 ] || mtext="${mtext:0:997}..."
@@ -5869,7 +5882,7 @@ record_ass() {
   [[ $x0 =~ ^-?[0-9]{1,6}$ && $y0 =~ ^-?[0-9]{1,6}$ && $k =~ ^[0-9]{1,3}(\.[0-9]{1,12})?$ ]] && [[ $first =~ ^[0-9]+$ ]] || return 1
   if [ "$REC_N" -gt 1 ]; then sz=$(record_size); w=${sz%x*} h=${sz#*x}
   else
-    sz=$(box_exec ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$REC_DIR/raw.mkv" 2>/dev/null | head -n 1) || sz=""
+    sz=$(box_sys /usr/bin/ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$REC_DIR/raw.mkv" 2>/dev/null | head -c 256 | head -n 1) || sz=""
     [[ $sz =~ ^([1-9][0-9]{0,4}),([1-9][0-9]{0,4})$ ]] || return 1
     w=${BASH_REMATCH[1]} h=${BASH_REMATCH[2]}
   fi
@@ -5877,7 +5890,7 @@ record_ass() {
   [[ "$cx $cy $cw $ch" =~ ^[0-9]{1,5}\ [0-9]{1,5}\ [1-9][0-9]{0,4}\ [1-9][0-9]{0,4}$ ]] || { cx=0 cy=0 cw=$w ch=$h; }
   record_overlay "$input" "$marks" "$first" "$x0" "$y0" "$k" "$w" "$h" 359999990 "$5" "$6" "$cx $cy $cw $ch" > "$tmp" || rc=1
   # shellcheck disable=SC2016 # the inner sh's
-  [ $rc = 1 ] || box_exec sh -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$REC_DIR/overlay.ass" < "$tmp" || rc=1
+  [ $rc = 1 ] || box_sys /usr/bin/sh -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$REC_DIR/overlay.ass" < "$tmp" || rc=1
   rm -f -- "$tmp"
   [ $rc = 0 ] || return 1
   REC_VASS=",ass=$REC_DIR/overlay.ass"
@@ -5892,14 +5905,14 @@ record_ass() {
 # kept), for record_marks. record_cut CUT_MS FIRST_US INPUT MARKS SHOW
 record_cut() {
   local cut=$1 first=$2 input=$3 marks=$4 show=$5 nb fz sl="" act cuts
-  nb=$(box_exec ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | head -n 1) || nb=""
+  nb=$(box_sys /usr/bin/ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | head -c 256 | head -n 1) || nb=""
   [[ $nb =~ ^[1-9][0-9]{0,8}$ ]] || return 1
   # What ffmpeg says, a value a line at most: the host reads no more than that, and checks each.
-  fz=$(box_exec ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:v:0 \
+  fz=$(box_sys /usr/bin/ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:v:0 \
     -vf "freezedetect=n=-60dB:d=$(awk -v m="$cut" 'BEGIN { printf "%.3f", m / 1000 }')" -f null - 2>&1 </dev/null |
     grep -oE 'freeze_(start|end): [0-9]{1,9}(\.[0-9]{1,9})?' | head -n 20000) || fz=""
   if [ -n "$REC_AFILT" ]; then
-    sl=$(box_exec ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:a:0 -af silencedetect=n=-50dB:d=0.1 -f null - 2>&1 </dev/null |
+    sl=$(box_sys /usr/bin/ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:a:0 -af silencedetect=n=-50dB:d=0.1 -f null - 2>&1 </dev/null |
       grep -oE 'silence_(start|end): -?[0-9]{1,9}(\.[0-9]{1,9})?' | head -n 20000) || sl=""
   fi
   # The times something happened, ms in the video ("A FROM TO"): the input, the marks.
@@ -5955,9 +5968,9 @@ record_cut() {
     fc+=";$ac${alist}concat=n=$((n + 1)):v=0:a=1[a]"
     amap=(-map "[a]" "${REC_AAC[@]}" -shortest)
   fi
-  box_exec ffmpeg -v error -y -i "$REC_DIR/out.mp4" -filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf 18 \
+  box_sys /usr/bin/ffmpeg -v error -y -i "$REC_DIR/out.mp4" -filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf 18 \
     "${REC_TAGS[@]}" "${amap[@]}" -movflags +faststart "$REC_DIR/cut.mp4" </dev/null >&2 || { REC_CUTS=""; return 1; }
-  box_exec mv -f "$REC_DIR/cut.mp4" "$REC_DIR/out.mp4" || { REC_CUTS=""; return 1; }
+  box_sys /usr/bin/mv -f -- "$REC_DIR/cut.mp4" "$REC_DIR/out.mp4" || { REC_CUTS=""; return 1; }
   say "record: $n still stretch$([ "$n" = 1 ] || echo es) cut to $(ms_s "$cut") ($(ms_s $((tot * 1000 / REC_FPS))) out)"
 }
 
@@ -6126,13 +6139,13 @@ record_sheet_file() {
     # Read from the fd as it is, never reopened; no more than its size said (a file that grows meanwhile).
     # shellcheck disable=SC2016 # the inner bash's
     head -c "$size" <&"$fromfd" | box_sys /usr/bin/bash -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$bv" ||
-      { rm -rf -- "$tmpd"; die "record sheet: could not copy the video into box '$NAME'"; }
+      { box_sys /usr/bin/rm -f -- "$bv" 2>/dev/null || true; rm -rf -- "$tmpd"; die "record sheet: could not copy the video into box '$NAME'"; }
   else
     [ -n "$out" ] || out=$base.sheet.png
     tsv=$base.marks.tsv
     # shellcheck disable=SC2016 # the inner bash's
     box_sys /usr/bin/bash -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$bv" < "$video" ||
-      die "record sheet: could not copy $video into box '$NAME'"
+      { box_sys /usr/bin/rm -f -- "$bv" 2>/dev/null || true; die "record sheet: could not copy $video into box '$NAME'"; }
   fi
   sp=$(record_sheet "$bv" "$tsv" "$out" "$3" "$4" "$5" "$as") || rc=$?
   box_sys /usr/bin/rm -f -- "$bv" 2>/dev/null || true
@@ -6757,7 +6770,7 @@ cmd_tree() {
   [ $json = 0 ] || args+=(--json)
   [ $all = 0 ] || args+=(--all)
   err=$(mktemp)
-  box_exec timeout 30 "$BOX_TREE" "${args[@]}" 2>"$err" || rc=$?
+  box_sys /usr/bin/timeout 30 "$BOX_TREE" "${args[@]}" 2>"$err" || rc=$?
   local why; why=$(sed 's/^omabox-tree: //' "$err"); rm -f "$err"
   case $rc in
     0) [ -z "$why" ] || say "tree: $why" ;;
@@ -9499,10 +9512,10 @@ cmd_audio() {
   done
   select_box "$name"; need_box
   [ "$(meta audio)" = true ] || die "audio: box '$NAME' has no audio: a box gets it at up (omabox up --audio; down first, or up --new --audio)"
-  raw=$(box_exec ffmpeg -nostdin -hide_banner -nostats -v error -f pulse -name omabox-audio -sample_rate 48000 -channels 2 \
+  raw=$(box_sys /usr/bin/ffmpeg -nostdin -hide_banner -nostats -v error -f pulse -name omabox-audio -sample_rate 48000 -channels 2 \
     -i "$AUDIO_SINK.monitor" -t "$secs" \
     -af "asetnsamples=n=4800:p=1,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=Peak_level+RMS_level,ametadata=mode=print:file=/dev/stdout" \
-    -f null - </dev/null) || die "audio: ffmpeg could not read box '$NAME''s sound (omabox log -b $NAME audio)"
+    -f null - </dev/null | head -c 4194304) || die "audio: ffmpeg could not read box '$NAME''s sound (omabox log -b $NAME audio)"
   # shellcheck disable=SC2016 # awk's
   res=$(awk -v floor="$AUDIO_FLOOR" -v secs="$secs" -v box="$NAME" '
     function db(v) { return (v ~ /^-?[0-9.]+$/) ? v + 0 : "x" }
@@ -11743,8 +11756,14 @@ relay_shot() {
   "$relay" call "$BROKER_SOCK" --fd "$fd" "${env[@]}" -- shot "${args[@]}" --to-fd 3 --as "$out" || rc=$?
   exec {fd}>&-
   # --changed with nothing changed writes no image: nothing at $out either.
-  if [ $rc = 0 ] && [ -s "$tmp" ]; then mv -f -- "$tmp" "$out"; else rm -f -- "$tmp"; fi
+  if [ $rc = 0 ] && [ -s "$tmp" ]; then jail_place "$tmp" "$out"; else rm -f -- "$tmp"; fi
   exit $rc
+}
+# jail_place TMP OUT: a file the broker wrote through an fd (mktemp's, 0600) put at OUT with the mode a
+# file made here would have (as the umask says), for a shot, a video, its marks and a sheet alike.
+jail_place() {
+  chmod "$(printf '%o' $((8#666 & ~8#$(umask))))" -- "$1" 2>/dev/null || true
+  mv -f -- "$1" "$2"
 }
 
 # record, from a jail (#224): every file is the jail's, made here as a temp beside where it goes,
@@ -11795,7 +11814,7 @@ relay_record() {
       # Written here at stop: said now if it cannot be.
       tmp=$(mktemp "$(dirname -- "$out")/.omabox-record.XXXXXX" 2>/dev/null) || die "record: cannot write in $(dirname -- "$out")"
       rm -f -- "$tmp"
-      exec "${call[@]}" "${env[@]}" -- record "${rest[@]}" --as "$out" ;;
+      exec "${call[@]}" "${env[@]}" -- record "${pre[@]}" "${rest[@]}" --as "$out" ;;
     "")
       # One action, checked as cmd_record does before anything starts; each step through this omabox.
       record_action_check "${ract[@]}"
@@ -11818,14 +11837,12 @@ relay_record() {
         tmp=$(mktemp "$dir/.omabox-record.XXXXXX" 2>/dev/null) || { rm -f -- "${tmps[@]}"; die "record stop: cannot write in $dir (the video goes to $out)"; }
         tmps+=("$tmp"); exec {fd}<>"$tmp"; fds+=(--fd "$fd")
       done
-      "${call[@]}" "${fds[@]}" "${env[@]}" -- record "${rest[@]}" --to-fd 3 --marks-fd 4 --vtt-fd 5 --as "$out" || rc=$?
+      "${call[@]}" "${fds[@]}" "${env[@]}" -- record "${pre[@]}" "${rest[@]}" --to-fd 3 --marks-fd 4 --vtt-fd 5 --as "$out" || rc=$?
       for ((i = 1; i < ${#fds[@]}; i += 2)); do fd=${fds[i]}; exec {fd}>&-; done
       if [ $rc != 0 ] || [ ! -s "${tmps[0]}" ]; then rm -f -- "${tmps[@]}"; exit $((rc ? rc : 1)); fi
-      # As a file made here would be (mktemp's are 0600).
-      chmod "$(printf '%o' $((8#666 & ~8#$(umask))))" -- "${tmps[@]}" 2>/dev/null || true
-      mv -f -- "${tmps[0]}" "$out"
+      jail_place "${tmps[0]}" "$out"
       # No marks: none beside it, and an earlier take's go (as record_marks does outside a jail).
-      if [ -s "${tmps[1]}" ]; then mv -f -- "${tmps[1]}" "$base.marks.tsv"; mv -f -- "${tmps[2]}" "$base.vtt"
+      if [ -s "${tmps[1]}" ]; then jail_place "${tmps[1]}" "$base.marks.tsv"; jail_place "${tmps[2]}" "$base.vtt"
       else rm -f -- "${tmps[1]}" "${tmps[2]}" "$base.marks.tsv" "$base.vtt"; fi
       [ $sheet = 0 ] || exec "$0" record "${pre[@]}" sheet "$out" "${sargs[@]}"
       exit 0 ;;
@@ -11840,9 +11857,9 @@ relay_record() {
       if [ -f "$base.marks.tsv" ]; then exec {fd}<"$base.marks.tsv"; fds+=(--fd "$fd"); a+=(--marks-from-fd 4); fi
       tmp=$(mktemp "$(dirname -- "$out")/.omabox-sheet.XXXXXX" 2>/dev/null) || die "record sheet: cannot write in $(dirname -- "$out")"
       exec {fd}<>"$tmp"; fds+=(--fd "$fd"); a+=(--to-fd $((${#fds[@]} / 2 + 2)) --as "$out")
-      "${call[@]}" "${fds[@]}" "${env[@]}" -- record "${rest[@]}" "${sargs[@]}" "${a[@]}" || rc=$?
+      "${call[@]}" "${fds[@]}" "${env[@]}" -- record "${pre[@]}" "${rest[@]}" "${sargs[@]}" "${a[@]}" || rc=$?
       for ((i = 1; i < ${#fds[@]}; i += 2)); do fd=${fds[i]}; exec {fd}>&-; done
-      if [ $rc = 0 ] && [ -s "$tmp" ]; then chmod "$(printf '%o' $((8#666 & ~8#$(umask))))" -- "$tmp" 2>/dev/null || true; mv -f -- "$tmp" "$out"; else rm -f -- "$tmp"; exit $((rc ? rc : 1)); fi
+      if [ $rc = 0 ] && [ -s "$tmp" ]; then jail_place "$tmp" "$out"; else rm -f -- "$tmp"; exit $((rc ? rc : 1)); fi
       exit 0 ;;
   esac
 }

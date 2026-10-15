@@ -598,6 +598,14 @@ t_unit_record() {
   check_match "shot --to-fd: a read-only fd refused too (fd_file)" "shot: fd 3 is not open for writing" "$(OMABOX_JAIL='{}' "$CLI" shot --to-fd 3 --as "$rj/s.png" 3<"$rj/f" 2>&1)"
   check_match "a jailed agent's omabox keeps the broker's own options to itself" "--to-fd is omabox's own" \
     "$(lib relay_record /bin/false -- stop --to-fd 3 2>&1)"
+  # -b NAME reaches the broker for start, stop and sheet (a jail with two boxes; finding 324): a relay
+  # that prints what it is given (and names a file for stop's status --file).
+  printf '#!/bin/sh\ncase "$*" in *" status --file") echo %s/b.mp4 ;; *) printf "%%s|" "$@" ;; esac\n' "$rj" > "$rj/relay"; chmod +x "$rj/relay"
+  check_match "relay_record start -b NAME: the broker gets -b NAME" "|record|-b|other|start|--as|$rj/b.mp4|" \
+    "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other start -o $rj/b.mp4" 2>/dev/null)"
+  check_match "...stop" "|record|-b|other|stop|--to-fd|3|" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other stop" 2>/dev/null)"
+  : > "$rj/b.mp4"
+  check_match "...sheet" "|record|-b|other|sheet|--frames|2|--from-fd|3|" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other sheet $rj/b.mp4 --frames 2" 2>/dev/null)"
   # record_marks: wall-clock µs to ms from the first frame (in order; one before it at 0), the
   # wall-clock time as events has it, WebVTT cues from each to the next (the last to the end), its
   # text escaped; none, and an earlier take's files go.
@@ -2548,6 +2556,11 @@ t_jail_record() {
   check_match "...status --file refused" "started outside the jail" "$(jo record -b "$N" status --file 2>&1)"
   check_match "...stop with fds refused" "started outside the jail" \
     "$(jo record -b "$N" stop --to-fd 3 --marks-fd 4 --vtt-fd 5 --as "$mine" 3<>"$d/v2" 4<>"$d/m2" 5<>"$d/c2" 2>&1)"
+  out=$(jo record -b "$N" start --as "$p/again.mp4" 2>&1)
+  check_match "...a start in the jail: refused, the file not named (finding 324)" "is recording already \\(started outside the jail\\)$" "$out"
+  check_fails "...(not $mine)" grep -qF "$mine" <<<"$out"
+  check_match "...a mark from the jail: refused" "started outside the jail: its marks are made there" "$(jo record -b "$N" mark hello 2>&1)"
+  check_eq "...none written" "" "$(cat "$XDG_RUNTIME_DIR/omabox/$N/record.marks" 2>/dev/null)"
   check_eq "...the user's stop writes it" "$mine" "$(env -u OMABOX_JAIL "$CLI" record -b "$N" stop 2>/dev/null)"
   # omabox's own helpers in the box are not the box's to choose (#224 review): a head, cat, sh,
   # stat, ffprobe and ffmpeg in the box HOME's ~/.local/bin (first on the session's PATH) that pour
