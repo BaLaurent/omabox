@@ -691,6 +691,32 @@ t_unit_duration() {
   check_eq "7200 reads 2h" 2h "$(lib human_duration 7200)"
 }
 
+# finding 325: which of a caller's fds a box could reach again through /proc, and so are relayed.
+t_unit_fd_exposed() {
+  local f=$TMP/fdx; echo x > "$f"
+  check "fd_exposed: a file" lib fd_exposed 0 < "$f"
+  echo x > "$f.d"; exec {fd}< "$f.d"; rm -f -- "$f.d"
+  check "...a deleted file still" lib fd_exposed 0 <&"$fd"; exec {fd}<&-
+  check "...a directory" lib fd_exposed 0 < "$TMP"
+  check "...a device (/dev/zero)" lib fd_exposed 0 < /dev/zero
+  check_fails "...not /dev/null" lib fd_exposed 0 < /dev/null
+  check_fails "...not a pipe" lib eval 'echo x | fd_exposed 0'
+  check_fails "...not a closed fd" lib eval 'exec 7>&-; fd_exposed 7'
+  check "...stdout: a file" lib eval "fd_exposed 1 > $f.out"
+  check_fails "...stdout: a pipe" lib eval 'fd_exposed 1 | cat'
+  # stdio_relay: the bytes both ways, the status, the drained output, and a writer of stdin that the
+  # command never reads is not waited for.
+  head -c 200000 /dev/urandom > "$f.rnd"
+  lib stdio_relay cat < "$f.rnd" > "$f.rnd.out"
+  check "stdio_relay: 200 kB through a relayed stdin and stdout, byte for byte" cmp -s "$f.rnd" "$f.rnd.out"
+  local rc=0; lib stdio_relay sh -c 'echo out; echo err >&2; exit 7' < "$f" > "$f.o" 2> "$f.e" || rc=$?
+  check_eq "...stdout, stderr and the exit status each its own" "out|err|7" "$(cat "$f.o")|$(cat "$f.e")|$rc"
+  local t0=$SECONDS
+  lib stdio_relay true < "$f.rnd" > "$f.o"
+  check "...a command that takes none of a 200 kB stdin returns at once ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 10
+  check_eq "...readlink of a relayed fd: a pipe" pipe "$(lib stdio_relay sh -c 'readlink /proc/self/fd/1' > "$f.o" < "$f"; cut -d: -f1 "$f.o")"
+}
+
 # finding 63: what may go into a box, and where.
 t_unit_mount_rules() {
   check "HOME refused" lib refuse_src "$HOME"
@@ -2505,6 +2531,48 @@ t_unit_jail_covers() {
 # the project not followed), the video, marks, captions and a sheet go only into the fds passed, a
 # wrong name or a read-only fd refused before the recording is stopped, and a jailed recording stopped
 # from outside the jail goes to a file of its own. Then the whole of it from inside a real ai-jail.
+# finding 325: a box command's stdin, stdout and stderr are never a file, a terminal or a device of
+# the host's: relayed through pipes held on the host (a terminal of its own for a caller at one), so
+# no box process can open them again through /proc.
+t_run_stdio() {
+  local d=$TMP/$P-stdio B=$P-stdio out rc=0
+  mkdir -p "$d"
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up for run's stdio" "failed"; return; }
+  echo hello > "$d/in"
+  ob run -b "$B" -- sh -c 'readlink /proc/self/fd/0 /proc/self/fd/1 /proc/self/fd/2 | cut -d: -f1 | paste -sd " "' < "$d/in" > "$d/out" 2> "$d/err"
+  check_eq "a command's stdin, stdout and stderr from files: pipes in the box (finding 325)" "pipe pipe pipe" "$(cat "$d/out")"
+  check_eq "...stderr apart from stdout" "" "$(cat "$d/err")"
+  head -c 3000000 /dev/urandom > "$d/rnd"
+  ob run -b "$B" -- cat < "$d/rnd" > "$d/rnd.out"
+  check "3 MB through stdin and stdout, byte for byte" cmp -s "$d/rnd" "$d/rnd.out"
+  ob run -b "$B" -- sh -c 'echo out; echo err >&2; exit 7' < "$d/in" > "$d/o2" 2> "$d/e2" || rc=$?
+  check_eq "...stdout, stderr and the exit status each its own" "out|err|7" "$(cat "$d/o2")|$(cat "$d/e2")|$rc"
+  local t0=$SECONDS
+  ob run -b "$B" -- true < "$d/rnd"
+  check "...a command that takes none of a 3 MB stdin returns at once ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 10
+  # From another box process: a `run` writing a host file is seen holding pipes, never the file.
+  ob run -b "$B" -- sh -c 'sleep 4' < "$d/in" > "$d/target" 2>&1 & local bp=$!
+  sleep 1.5
+  out=$(ob run -b "$B" -- sh -c 'for f in /proc/[0-9]*/fd/*; do readlink "$f"; done 2>/dev/null | grep -c "'"$d"'"') || true
+  check_eq "...no box process holds the host files of another command (every fd of every process read)" 0 "${out:-x}"
+  wait "$bp" 2>/dev/null || true
+  # A caller at a terminal: the box's command is on a pseudo-terminal of its own, not the caller's.
+  if [ -x /usr/bin/script ]; then
+    # (A stdin that stays open: one at EOF from the start makes the outer terminal send an EOF the
+    # inner one echoes as ^@.)
+    out=$( (sleep 3) | script -q -e -c "tty; $CLI run -b $B -- sh -c 'readlink /proc/self/fd/0; test -t 0 && test -t 1 && echo a tty'" /dev/null 2>&1 | tr -d '\r')
+    local hpts bpts; hpts=$(sed -n 1p <<<"$out"); bpts=$(sed -n 2p <<<"$out")
+    check_match "a caller at a terminal: the command has one (stdin and stdout)" "a tty" "$out"
+    check_match "...a pseudo-terminal ($bpts), not the caller's ($hpts)" '^/dev/pts/[0-9]+$' "$bpts"
+    check "...another one" test "$bpts" != "$hpts"
+    out=$( (sleep 3) | script -q -e -c "$CLI run -b $B -- sh -c 'echo out; echo err >&2; exit 5' 2>$d/e3" /dev/null 2>&1 | tr -d '\r'; echo "rc=${PIPESTATUS[1]}")
+    check_eq "...its stderr to a file stays in the file, the status kept" "out rc=5|err" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')|$(cat "$d/e3")"
+  fi
+  rc=0; out=$(printf 'echo typed\nexit 3\n' | ob run -b "$B" -- bash 2>&1) || rc=$?
+  check_eq "a shell fed by a pipe (no terminal): runs it, its status" "typed|3" "$out|$rc"
+  ob down "$B" >/dev/null 2>&1
+}
+
 t_jail_record() {
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record for a jailed agent" "no wf-recorder or ffmpeg"; return; fi
   local d=$TMP/jrec p jb J N=$P-jrs out v
@@ -10888,9 +10956,9 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
-BOX=(t_leak_control t_run_options t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

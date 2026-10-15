@@ -34,6 +34,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   clipboard, `up`'s checks) run the box's `/usr/bin` tools by their paths, not what the box's own
   PATH would pick, and what omabox reads back from a box is bounded on its side. A command in a box
   (`omabox run`) gets stdin, stdout and stderr, and no other file the caller has open.
+- **A box command's stdin, stdout and stderr are never your files.** They reach the box as pipes
+  held on the host (a terminal of its own when you run a command from one), so no process in the
+  box can open them again through `/proc` and read or write a host file you redirected `omabox run`
+  to, or your terminal. Since 0.1.0 it could, while the command ran.
 
 ## 0.6.0 — 2026-10-14
 

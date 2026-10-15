@@ -6573,6 +6573,35 @@ from them.
     at mktemp's 0600: `jail_place` does all four the same way (a jailed shot is 0644 under the usual
     umask now, as a file made there would be).
 
+325. **A box command's stdio is never a file of the host's** (2026-10-14, security; found by the #218
+    subagent, written up privately that day, finished on Diogo's word). The box's pid namespace is
+    the command's: every process in the box sees it in /proc, and as the same uid opens
+    `/proc/PID/fd/N` afresh, whatever mode it likes (a read-only fd of a file opens for writing).
+    So a host file the caller gave `omabox run` as stdin or stdout (`> hostfile`, `< hostfile`),
+    the caller's own terminal, a video being copied into the box for a sheet, or the jail's file
+    behind a `--to-fd` was reachable from any box process while the command ran: read and written,
+    though the box mounts none of it. Since 0.1.0; an agent's harness that keeps a tool's output in
+    a file exposed that file to the box on every `run`. The other fds a caller left open (a lock, a
+    directory fd: the way out of the box through `..`) went in too until finding 322's `fds_only`.
+    Now (`stdio_relay`, in `box_exec`): each of the command's stdin, stdout and stderr that is a
+    file, a directory, a terminal or a device but /dev/null (`fd_exposed`: a pipe or a socket is as
+    safe as it gets, nothing of the host's is behind it) is relayed through a pipe held on the host,
+    a `cat` each side of the namespace: the box sees pipes, the bytes move as they are, the caller's
+    files and exit status are the caller's, output is drained before `run` returns. The stdin relay
+    of a command that never read it is ended with the command (what it had read ahead is gone, as
+    to a `head`; a writer such as `(sleep 20; echo) | omabox run -- true` is not waited for). A
+    caller at a terminal (stdin and stdout both) gets the command a pseudo-terminal of its own
+    (`box_pty`: util-linux `script` on the host holds the real terminal and the master, raw mode and
+    resizes as `script` does them; the box gets the slave, which ends with the command, and its
+    `ttyname` is not the box's `/dev/pts`, `isatty` is); a stderr that is not that terminal stays
+    where it was. `gdb`'s and the hung shell's own `nsenter -p` lines go through the relay too.
+    Residual: PID 1 holds the box's own `box.log` in the box dir (a box process may read or append
+    to its own log), and nsenter's own stderr during startup is ns_held's unlinked temp file for
+    microseconds. Checked (`t_run_stdio`, `t_unit_fd_exposed`): pipes seen from the box, 3 MB byte
+    for byte, status and stderr apart, no fd of any box process naming a host file while another
+    `run` writes one, a pty of its own under `script`, a shell fed by a pipe. Cost: three `stat`s
+    and up to three `cat`s a `box_exec`.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
