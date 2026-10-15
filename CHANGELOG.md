@@ -3,7 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.6.1 — 2026-10-14
+
+Security fixes, and a fix pass over 0.6.0. A process in a box could reach the host files you gave
+`omabox run` as stdin, stdout or stderr, your terminal, and other files the caller had open,
+through the box's own view of `/proc`; omabox's own helpers in a box ran from the box's PATH; and
+a jailed agent's `shot --to-fd` took its own `/proc` files. Update. Also `omabox record` for agents
+inside ai-jail, and four fixes from a review of 0.6.0's new features.
 
 ### Added
 
