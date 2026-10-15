@@ -610,7 +610,8 @@ t_unit_record() {
   local ri=$TMP/rmarks/input ass
   printf '%s\n' "1000000100000 1000000160000 ptr 1280x720 move 100 50 click right" \
     "1000001000000 1000001400000 text a{b}" "1000001000000 1000001400000 secret 21" "1000001000000 1000001400000 combo Return" \
-    "x y ptr 1280x720 move 1 1" "1000002000000 1000002050000 ptr 1280x720 move 9999999 1 click" > "$ri"
+    "x y ptr 1280x720 move 1 1" "1000002000000 1000002050000 ptr 1280x720 move 9999999 1 click" \
+    "1000003000000 1000003100000 ptr 1280x720 move 200 100 scroll -5" "1000004000000 1000004100000 ptr 1280x720 move 300 100 pause" > "$ri"
   ass=$(lib record_overlay "$ri" $'1000000500000\tscene {one}' 1000000000000 0 0 2 2560 1440 5000 1 1)
   check_match "record_overlay: an ASS script at the video's size" $'^\\[Script Info\\].*PlayResX: 2560.PlayResY: 1440' "$(tr '\n' '.' <<<"$ass")"
   check_match "...the pointer ring at the click point, at scale 2 (the pixel's centre)" '\\pos\(201\.0,101\.0\)\\1c&HC83CFF&' "$ass"
@@ -620,6 +621,9 @@ t_unit_record() {
     grep -qE '\}a｛b｝ \*{16} Return$' <<<"$ass"
   check "...text a character at a time" grep -qE '\}a｛$' <<<"$ass"
   check_fails "...a line not as rec_input writes it is dropped (no move to 9999999, none from x y)" grep -qE 'pos\(3\.0,3\.0\)|20000' <<<"$ass"
+  check "...a scroll or a pause after a move takes no time of its own: the ring arrives 40 ms before the line's end (finding 320)" \
+    grep -qE '^Dialogue: 2,0:00:03\.06,0:00:04\.02,D,.*\\pos\(401\.0,201\.0\)' <<<"$ass"
+  check "...the pause line's move too" grep -qE '^Dialogue: 2,0:00:04\.02,0:00:04\.06,D,.*\\move\(401\.0,201\.0,601\.0,201\.0\)' <<<"$ass"
   check "...--captions: the mark at the top, until the end" grep -qE '^Dialogue: 4,0:00:00\.50,0:00:05\.00,K,,0,0,0,,\{\\an8\\pos\(1280\.0,40\.0\)\}scene ｛one｝$' <<<"$ass"
   check_eq "...with neither: no Dialogue" 0 "$(lib record_overlay "$ri" "" 1000000000000 0 0 2 2560 1440 5000 0 0 | grep -c '^Dialogue')"
   lib record_marks $'1000002500000\tafter\n1000000500000\tbefore\n1000001100000\tin' 1000000000000 4000 "$rb" $'30 60\n' 2>/dev/null
@@ -1542,8 +1546,11 @@ sneaky.json|a link to api-keys.env: a secret's name"
   # Content: a token-shaped string, a private key, a password line; not a plain config.
   printf 'x = "ghp_%s"\n' "$(printf 'a%.0s' {1..36})" > "$d/t1"; printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\n' > "$d/t2"
   printf 'password = hunter2\n' > "$d/t3"; printf '{"desk": "desk-shell-and-a-long-name", "count": 3, "theme": "sk"}\n' > "$d/t4"
-  check_eq "content refused: a token, a private key, a password; not a plain config" "0 0 0 1" \
-    "$(for i in 1 2 3 4; do lib desk_content_refused "$d/t$i" >/dev/null; printf '%s ' $?; done | sed 's/ $//')"
+  # Settings whose names only contain the words (finding 320), a bearer token, empty or short values.
+  printf '{"maxTokens": 4, "tokenizer": "chars", "password_hint_shown": false, "showAuthor": true, "secretsEnabled": true}\n' > "$d/t5"
+  printf 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123\n' > "$d/t6"; printf '{"token": "", "secret": "x", "apiKey": null}\n' > "$d/t7"
+  check_eq "content refused: a token, a private key, a password, a bearer token; not a plain config, settings named *Tokens or password_*, empty values" "0 0 0 1 1 0 1" \
+    "$(for i in 1 2 3 4 5 6 7; do lib desk_content_refused "$d/t$i" >/dev/null; printf '%s ' $?; done | sed 's/ $//')"
   # desk_plugins: each with a manifest and a name for an id, once; a --plugin of the same id wins.
   mkdir -p "$d/desk/plugins/nomani" "$d/desk/plugins/badid" "$d/desk/plugins/dup"
   echo '{"id": "../x"}' > "$d/desk/plugins/badid/manifest.json"; echo "{\"id\": \"$P.da\"}" > "$d/desk/plugins/dup/manifest.json"
@@ -9988,6 +9995,15 @@ no_pointer_on() {
     ob record -b "$B" stop >/dev/null 2>&1
     check_eq "...record stop shows it again" false "$(np_live "$B")"
     check "...nothing left that keeps it hidden" np_gone "$D"
+    # A `record --no-pointer -- ACTION` ended by a signal while the action runs (finding 320): the
+    # recording is kept, and so is the hold, until `record stop`.
+    ob record -b "$B" --no-pointer -o "$f-int.mp4" -- run -- sleep 20 >/dev/null 2>&1 & bp=$!
+    for _ in $(seq 50); do [ -f "$D/record" ] && break; sleep 0.1; done
+    sleep 0.3; kill -TERM "$bp"; wait "$bp" 2>/dev/null || true
+    check_match "record --no-pointer -- ACTION ended by a TERM: still recording" "^recording .* to $f-int.mp4" "$(ob record -b "$B" status 2>&1)"
+    check_eq "...the pointer still hidden" true "$(np_live "$B")"
+    ob record -b "$B" stop >/dev/null 2>&1
+    check_eq "...shown again by record stop" false "$(np_live "$B")"
   else
     skip "record --no-pointer" "no wf-recorder or ffmpeg here"
   fi

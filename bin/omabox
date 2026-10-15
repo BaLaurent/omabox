@@ -1966,13 +1966,15 @@ desk_name_refused() {
 }
 
 # Why a desk file stays out of a box by what it holds (prints it), or fails: a key, token, secret,
-# password or credential given a value (`"apiToken": "…"`, `password = …`), a private key, or a
-# token-shaped string (GitHub, GitLab, Slack, OpenAI and Anthropic, AWS). A file that cannot be read
-# stays out too. Nothing of what matched is printed.
+# password or credential given a value (`"apiToken": "…"`, `password = …`: the key ends in the word
+# and the value is 6+ characters; `"maxTokens": 4`, `"tokenizer"` and `"password_hint_shown"` are
+# settings, finding 320), a bearer token, a private key, or a token-shaped string (GitHub, GitLab,
+# Slack, OpenAI and Anthropic, AWS). A file that cannot be read stays out too. Nothing of what
+# matched is printed.
 desk_content_refused() {
   local rc=0
   # shellcheck disable=SC2016 # a regex
-  LC_ALL=C grep -aqiE -- '(api[_-]?key|secret|token|passw(or)?d|bearer|credential|authorization)[A-Za-z0-9_-]*["'\'']?[[:space:]]*[:=]|-----BEGIN [A-Z ]*PRIVATE KEY|(^|[^A-Za-z0-9])(ghp|gho|ghs|ghu|ghr|github_pat|glpat|xox[abpr]|sk|sk-ant)[-_][A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}' "$1" || rc=$?
+  LC_ALL=C grep -aqiE -- '(api[_-]?key|secret([_-]?key)?|token|passw(or)?d|credentials?|authorization)["'\'']?[[:space:]]*[:=][[:space:]]*["'\'']?[^"'\'',[:space:]]{6,}|bearer[[:space:]]+[A-Za-z0-9._-]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY|(^|[^A-Za-z0-9])(ghp|gho|ghs|ghu|ghr|github_pat|glpat|xox[abpr]|sk|sk-ant)[-_][A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{16}' "$1" || rc=$?
   case $rc in
     0) echo "it holds what looks like a key, token or password" ;;
     1) return 1 ;;
@@ -5163,8 +5165,10 @@ cmd_record() {
     stop) [ -z "$out$monitor" ] || die "record stop: -o and --monitor go with start"; record_stop "$sheet" "$frames" "$every" "$fit" "$show" "$caps" "$cut"; return ;;
   esac
   record_start "$out" "$monitor" "$fps" "$nopointer" "$audio" "$glide"
-  # A recording that goes on past this omabox keeps the pointer hidden until `record stop`.
-  [ ${#ract[@]} -gt 0 ] || { trap - EXIT INT TERM HUP; return 0; }
+  # Once it records, the pointer stays hidden until `record stop` (finding 320): a recording that goes
+  # on past this omabox, and one whose action a Ctrl-C ends (the recording is kept, so is the hold).
+  trap - EXIT INT TERM HUP
+  [ ${#ract[@]} -gt 0 ] || return 0
   local rc=0
   "$0" -b "$NAME" "${ract[@]}" >&2 || rc=$?
   sleep "$(awk -v ms="$hold" 'BEGIN { printf "%.3f", ms / 1000 }')"
@@ -5803,8 +5807,9 @@ record_overlay() {
         else if ($i == "click" || $i == "down" || $i == "up") { n++; op[n] = $i; a1[n] = "left"; w[n] = ($i == "click") ? 30 : 0
           if ($(i + 1) ~ /^(left|right|middle|side|back|extra|forward)$/) a1[n] = $(++i) }
         else if ($i == "sleep") { if ($(i + 1) !~ /^[0-9]{1,6}$/) next; n++; op[n] = "sleep"; w[n] = $(++i) + 0 }
-        else if ($i == "scroll" || $i == "hscroll" || $i == "source") i++
-        else if ($i != "pause") next
+        else if ($i == "scroll" || $i == "hscroll" || $i == "source") { i++; continue }
+        else if ($i == "pause") continue
+        else next
         wt += w[n] }
       # The tool spends its time at the end of the line (before its first move it starts and
       # connects): each step as long as it takes there, ending ~10 ms before T1; all of it squeezed

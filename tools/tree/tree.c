@@ -302,9 +302,11 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
         if (dup && *parent_name) goto done;
     }
 
+    int pushed = 0;
     if (printed) {
         emit(path_n, role, name, text, val, states, hasb ? b : NULL);
-        if (path_n < MAX_DEPTH) path[path_n++] = *name ? g_strdup_printf("%s \"%s\"", role, name) : g_strdup(role);
+        // Popped below only when pushed here: past MAX_DEPTH a pop would free an ancestor's slot.
+        if (path_n < MAX_DEPTH) { path[path_n++] = *name ? g_strdup_printf("%s \"%s\"", role, name) : g_strdup(role); pushed = 1; }
     }
     for (int i = 0; i < MIN(n, MAX_CHILDREN) && nodes < BUDGET; i++) {
         AtspiAccessible *ch = atspi_accessible_get_child_at_index(a, i, NULL);
@@ -313,7 +315,7 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
         g_object_unref(ch);
     }
     if (n > MAX_CHILDREN) truncated = 1;
-    if (printed && path_n > 0) g_free(path[--path_n]);
+    if (pushed) g_free(path[--path_n]);
 done:
 #undef HAS
     g_ptr_array_free(states, TRUE);

@@ -16,6 +16,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   on `click`, `pointer`, `drag`) makes the pointer travel there in that time instead of jumping, while
   agents' clicks stay instant otherwise (#176).
 
+### Fixed
+
+- `record --no-pointer -- ACTION` ended by Ctrl-C while the action ran showed the pointer again
+  although the recording went on; it stays hidden until `record stop`, as a plain `start`'s does.
+- `--show-input` drew the pointer's ring 40 ms early for each scroll or drag pause in a line.
+- `up --desk-shell` kept a plugin's config out of the box when a setting's name only contained a
+  word like token or password (`"maxTokens": 4`); only a key of that name with a value is a secret.
+- `omabox tree --find` paths lost an ancestor past 64 printed levels.
+
 ## 0.6.0 — 2026-10-14
 
 Agents can read a window as text (`omabox tree`), check how their model reads click points

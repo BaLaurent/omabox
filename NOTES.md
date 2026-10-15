@@ -6451,6 +6451,32 @@ from them.
     two-monitor layout (the ring on the scale-2 monitor's cursor, captions on the main screen), and
     `--audio` with a cut.
 
+320. **Review of the 0.6.0 run: four fixes** (2026-10-14; a code review of 2d28a4a..99aa9d9, high
+    effort, every finding). (1) `record --no-pointer -- ACTION` (finding 305) released its hold from
+    the traps `ptr_hold_until_exit` sets when a Ctrl-C or TERM ended this omabox during the action:
+    the recording went on (kept, as documented) with the pointer back in every frame until `record
+    stop`. Once `record_start` returned the hold is the recording's, so the traps are cleared there
+    for both shapes, not only for a plain `start`; t_no_pointer ends an action with a TERM and finds
+    the box still recording with the pointer hidden until `record stop`. (2) `record_overlay`'s
+    pointer-line parser (finding 319) added the previous step's time once more for each `scroll`,
+    `hscroll`, `source` and `pause` token, so a ring arrived 40 ms early for each of them (a drag
+    with `--shot` pauses, a scroll after a move); those tokens take no time now (unit check at 3.06
+    s where it drew 3.02). (3) `desk_content_refused` (finding 315) took any key whose name
+    *contained* token, secret, password... before a colon, so a plugin's `"maxTokens": 4`,
+    `"tokenizer"` or `"password_hint_shown"` kept its config out of a `--desk-shell` box with only a
+    line in the skipped list. The key must end in the word now and the value be 6+ characters
+    (`hunter2` still refused; `"token": ""` not), and a bearer token (`Authorization: Bearer ...`,
+    16+ chars) is its own pattern since `bearer` is 6 letters before a space. Not seen on the real
+    desk (the check of 61e481c, same day: nothing refused by content). (4) `tools/tree` popped its
+    printed-ancestor path for every printed node, pushed only up to MAX_DEPTH (64): past 64 printed
+    levels a pop freed an ancestor's slot and every later `--find` path lost an ancestor. The pop
+    now mirrors the push. Reported and left: `record_running` reads a 0.5.x record file (4 fields)
+    into the 0.6.0 layout, which matters only for a recording running across the upgrade (Diogo:
+    nobody has one); `WAYLAND_DEBUG=client` stays on for a recording's whole life for one `ready`
+    line, and the mark clock depends on libwayland's trace format (finding 306; `tools/burst` could
+    stamp the first frame itself); the contact-sheet montage exists in `record_sheet` and
+    `shot_burst` both.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
