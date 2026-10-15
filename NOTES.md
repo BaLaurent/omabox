@@ -6595,6 +6595,23 @@ from them.
     resizes as `script` does them; the box gets the slave, which ends with the command, and its
     `ttyname` is not the box's `/dev/pts`, `isatty` is); a stderr that is not that terminal stays
     where it was. `gdb`'s and the hung shell's own `nsenter -p` lines go through the relay too.
+    A review of the first version found what two relays do to one file: `> log 2>&1` makes stdout
+    and stderr one open file description, and two `cat`s writing it raced on its offset (600 lines
+    in, 592-599 out, `o1` overwritten every run): the two share one relay when `/dev/fd/1 -ef
+    /dev/fd/2`. It found the terminal cases too: `script` puts the terminal in raw mode, so an
+    `omabox run ... &` from a shell was stopped at once (SIGTTOU), and a relay `cat` reading a
+    terminal on stdin alone stopped a backgrounded run (SIGTTIN), fought a pager for keystrokes
+    (`run -- cmd | less`) and ate what was typed for the next prompt (every `box_sys` from a
+    terminal). So: the pty only in the foreground (`fg_tty`, pgrp = tpgid in /proc/self/stat), and
+    a terminal on stdin that is not that case gives the command /dev/null (it could read the
+    terminal before; nothing of omabox's does, and a command that must gets stdin and stdout at a
+    terminal). Also from the review: a later relay closes the earlier pipes' ends it inherits (else
+    the stdout relay saw no EOF before the stderr one ended, and `gdb --watch`'s daemon, started
+    through the relay without `fds_only`, kept both pipes open for its life), `fd_exposed` is bash's
+    own tests on /dev/fd/N (no `stat` forked three times a `box_exec`), `box_pty` replaces the first
+    `OMABOX_EFD=@EFD` word only, as ns_held does, and `disown` of a process substitution's pid is
+    not a thing (dropped: a relay a background child keeps is simply left; bash does not wait for
+    it at exit).
     Residual: PID 1 holds the box's own `box.log` in the box dir (a box process may read or append
     to its own log), and nsenter's own stderr during startup is ns_held's unlinked temp file for
     microseconds. Checked (`t_run_stdio`, `t_unit_fd_exposed`): pipes seen from the box, 3 MB byte

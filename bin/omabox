@@ -1245,9 +1245,10 @@ box_exec() {
       unset IFS OMABOX_CALLER_PATH; set +f; PATH=$p exec -- "$@"' bash "$cwd" "$@")
   # The command's stdin, stdout and stderr are never a file, a terminal or a device of the host's
   # (finding 325): the box shares its pid namespace with the command, and any process there could
-  # open them again through /proc/PID/fd. A caller at a terminal (stdin and stdout) gets the command
-  # a terminal of its own; everyone else's are relayed through pipes held here.
-  if [ -z "$sys" ] && [ -t 0 ] && [ -t 1 ] && [ -x /usr/bin/script ]; then
+  # open them again through /proc/PID/fd. A caller at a terminal (stdin and stdout, in the
+  # foreground) gets the command a terminal of its own; everyone else's are relayed through pipes
+  # held here (a terminal on stdin alone is not read: /dev/null).
+  if [ -z "$sys" ] && [ -t 0 ] && [ -t 1 ] && fg_tty && [ -x /usr/bin/script ]; then
     box_pty "${pfd:-} ${BOX_KEEP:-}" "${nsline[@]}" || rc=$?
   else
     stdio_relay ns_held fds_only "${pfd:-} ${BOX_KEEP:-}" nocore "${nsline[@]}" || rc=$?
@@ -1263,44 +1264,55 @@ box_sys() { BOX_SYS=1 box_exec "$@"; }
 # fd_exposed N: fd N of this process is one a box process could open again through /proc/PID/fd of a
 # command given it (finding 325): a file (deleted or not), a directory, a terminal, any device but
 # /dev/null. Not a pipe or a socket (nothing of the host's is behind them: a box reads or writes
-# only what the command's own stream holds), nor /dev/null, nor an fd that is not open.
+# only what the command's own stream holds), nor /dev/null, nor an fd that is not open. Bash's own
+# tests on /dev/fd/N: no process forked, and right inside a `$(...)` too (nothing is captured).
 fd_exposed() {
-  local t x
-  # (A copy of the fd first: inside the `$(...)` below fd 1 is the capture pipe, not the caller's;
-  # and an fd that is not open is not one, checked before the dup, which must not fail under set -e.)
-  [ -e "/dev/fd/$1" ] || return 1
-  exec {x}<&"$1"
-  t=$(stat -L -c '%F %d:%i' "/dev/fd/$x" 2>/dev/null) || { exec {x}<&-; return 1; }
-  exec {x}<&-
-  case $t in
-    fifo*|socket*) return 1 ;;
-    "character special file "*) [ "${t##* }" != "$(stat -L -c %d:%i /dev/null 2>/dev/null)" ] ;;
-    *) return 0 ;;
-  esac
+  local f=/dev/fd/$1
+  [ -e "$f" ] || return 1
+  ! [ -p "$f" ] && ! [ -S "$f" ] || return 1
+  ! [ -c "$f" ] || ! [ "$f" -ef /dev/null ]
+}
+# Whether this process is in its terminal's foreground process group: one in the background must
+# neither read the terminal (SIGTTIN would stop it) nor put it in raw mode (SIGTTOU).
+fg_tty() {
+  local st fields
+  read -r st < /proc/self/stat || return 1
+  st=${st##*) }; read -r -a fields <<<"$st"
+  [ "${fields[2]}" = "${fields[5]}" ]
 }
 # stdio_relay CMD...: CMD with each of its stdin, stdout and stderr that fd_exposed says a box could
 # reach relayed through a pipe held here: `cat`s on the host side move the bytes as they are, the
-# caller's files, terminal and exit status stay the caller's, and a box process that opens the
-# command's fds again finds the pipes. The one reading stdin for a command that never took it is
-# ended with the command (what it had read ahead is gone, as it would be to a `head`); KILL, since a
-# background job's read of a terminal stops it. Output is drained before this returns (relay_drain).
+# caller's files and exit status stay the caller's, and a box process that opens the command's fds
+# again finds the pipes. One stdout and stderr that are the same file (`> log 2>&1`) share one relay,
+# so their lines land in order (two writers would race on the file's offset). A terminal on stdin is
+# not read on the command's behalf (a relay reading it would eat what is typed for the next
+# command, and stop a backgrounded one): the command gets /dev/null there; one at a terminal with
+# its output goes through box_pty instead. The one reading a file for a command that never took it
+# is ended with the command (what it had read ahead is gone, as it would be to a `head`). Output is
+# drained before this returns (relay_drain).
 stdio_relay() {
   local ifd=0 ofd=1 efd=2 ipid="" opid="" epid="" rc=0
-  if fd_exposed 0; then exec {ifd}< <(cat); ipid=$!; fi
-  if fd_exposed 1; then exec {ofd}> >(cat); opid=$!; fi
-  if fd_exposed 2; then exec {efd}> >(cat >&2); epid=$!; fi
+  if [ -t 0 ]; then exec {ifd}</dev/null
+  elif fd_exposed 0; then exec {ifd}< <(cat); ipid=$!; fi
+  # (Each relay started later closes the earlier pipes' ends it was born with, or the earlier
+  # relay never sees its EOF before the later one ends.)
+  if fd_exposed 1; then exec {ofd}> >(if [ "$ifd" != 0 ]; then exec {ifd}<&-; fi; exec cat); opid=$!; fi
+  if fd_exposed 2; then
+    if [ "$ofd" != 1 ] && [ /dev/fd/1 -ef /dev/fd/2 ]; then efd=$ofd
+    else exec {efd}> >(if [ "$ifd" != 0 ]; then exec {ifd}<&-; fi; if [ "$ofd" != 1 ]; then exec {ofd}>&-; fi; exec cat >&2); epid=$!; fi
+  fi
   "$@" <&"$ifd" >&"$ofd" 2>&"$efd" || rc=$?
-  # This side's ends closed first, every one (a relay started later holds the earlier pipes' ends
-  # too: waiting on one before closing the others would wait for ever), then the output drained.
-  [ "$ifd" = 0 ] || { exec {ifd}<&-; kill -KILL "$ipid" 2>/dev/null || true; wait "$ipid" 2>/dev/null || true; }
+  # This side's ends closed first, every one, then the output drained.
+  [ "$ifd" = 0 ] || { exec {ifd}<&-; [ -z "$ipid" ] || { kill -KILL "$ipid" 2>/dev/null || true; wait "$ipid" 2>/dev/null || true; }; }
   [ "$ofd" = 1 ] || exec {ofd}>&-
-  [ "$efd" = 2 ] || exec {efd}>&-
+  [ "$efd" = 2 ] || [ "$efd" = "$ofd" ] || exec {efd}>&-
   relay_drain $opid $epid
   return $rc
 }
 # relay_drain PID...: each output relay given a second to end (it does when the command's side of
 # its pipe is closed: at once, as a rule); one a background process of the command's still writes
-# to is left to end with it, so a `run` is not held by what its command left behind.
+# to is left running (it ends with that process; bash does not wait for it at exit), so a `run` is
+# not held by what its command left behind.
 relay_drain() {
   local p st _ i
   for p; do
@@ -1309,7 +1321,7 @@ relay_drain() {
       [ "$st" != Z ] || break
       sleep 0.01
     done
-    if [ "$st" = Z ]; then wait "$p" 2>/dev/null || true; else disown "$p" 2>/dev/null || true; fi
+    [ "$st" != Z ] || wait "$p" 2>/dev/null || true
   done
 }
 # box_pty KEEP CMD...: CMD (box_exec's nsenter line) on a pseudo-terminal of its own, for a caller at
@@ -1324,7 +1336,10 @@ box_pty() {
     if fd_exposed 2; then exec {efd}> >(cat >&2); epid=$!; else exec {efd}>&2; fi
     keep+=" $efd"
   fi
-  for a; do if [ "$a" = OMABOX_EFD=@EFD ]; then nsline+=("OMABOX_EFD=${efd:--}"); else nsline+=("$a"); fi; done
+  local set=0
+  for a; do
+    if [ $set = 0 ] && [ "$a" = OMABOX_EFD=@EFD ]; then nsline+=("OMABOX_EFD=${efd:--}") set=1; else nsline+=("$a"); fi
+  done
   NS_HELD=""
   fds_only "$keep" nocore env SHELL=/usr/bin/bash /usr/bin/script -q -e -c "exec ${nsline[*]@Q}" /dev/null || rc=$?
   [ -z "$efd" ] || { exec {efd}>&-; [ -z "$epid" ] || relay_drain "$epid"; }
@@ -9418,7 +9433,7 @@ cmd_gdb() {
   if [ $watch = 0 ]; then
     [ ${#extra[@]} -gt 0 ] || extra=(-ex 'thread apply all bt')
     local rc=0
-    stdio_relay timeout 120 "${caps[@]}" "${gdb[@]}" -p "$pid" "${extra[@]}" || rc=$?
+    stdio_relay fds_only "" timeout 120 "${caps[@]}" "${gdb[@]}" -p "$pid" "${extra[@]}" || rc=$?
     [ $rc != 124 ] || die "gdb: no answer in 120 s"
     return $rc
   fi
@@ -9435,7 +9450,7 @@ cmd_gdb() {
   stdio_relay timeout 10 "${ns[@]}" sh -c '{ [ ! -L "$1" ] && [ ! -p "$1" ]; } || rm -f -- "$1"; printf "%s\n" "$2" >> "$1"' sh "$log" "$head" ||
     die "gdb: cannot write the box's gdb log"
   # shellcheck disable=SC2016 # the inner sh's
-  stdio_relay "${caps[@]}" setsid -f sh -c 'log=$1; shift; exec "$@" >> "$log" 2>&1 </dev/null' sh "$log" \
+  stdio_relay fds_only "" "${caps[@]}" setsid -f sh -c 'log=$1; shift; exec "$@" >> "$log" 2>&1 </dev/null' sh "$log" \
     "${gdb[@]}" -p "$pid" -ex 'handle all nostop noprint pass' \
     -ex 'handle SIGSEGV SIGABRT SIGBUS SIGFPE SIGILL stop print pass' -ex continue \
     -ex 'echo \n== omabox: a fatal signal; every thread:\n' -ex 'thread apply all bt' -ex 'echo == omabox: end\n'

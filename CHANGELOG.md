@@ -37,7 +37,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A box command's stdin, stdout and stderr are never your files.** They reach the box as pipes
   held on the host (a terminal of its own when you run a command from one), so no process in the
   box can open them again through `/proc` and read or write a host file you redirected `omabox run`
-  to, or your terminal. Since 0.1.0 it could, while the command ran.
+  to, or your terminal. Since 0.1.0 it could, while the command ran. A command run from a terminal
+  with its output elsewhere (`omabox run -- cmd > log`, `| less`) no longer reads the terminal.
 
 ## 0.6.0 — 2026-10-14
 

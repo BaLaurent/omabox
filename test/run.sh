@@ -715,6 +715,11 @@ t_unit_fd_exposed() {
   lib stdio_relay true < "$f.rnd" > "$f.o"
   check "...a command that takes none of a 200 kB stdin returns at once ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 10
   check_eq "...readlink of a relayed fd: a pipe" pipe "$(lib stdio_relay sh -c 'readlink /proc/self/fd/1' > "$f.o" < "$f"; cut -d: -f1 "$f.o")"
+  lib stdio_relay sh -c 'for i in $(seq 300); do echo o$i; echo e$i >&2; done' > "$f.both" 2>&1
+  check_eq "...stdout and stderr to one file (> f 2>&1): every line, in order (one relay for both)" "600|o1 e1 o2 e2|o300 e300" \
+    "$(wc -l < "$f.both")|$(head -n 4 "$f.both" | paste -sd ' ')|$(tail -n 2 "$f.both" | paste -sd ' ')"
+  check_eq "...a terminal on stdin alone: the command gets /dev/null, not a relay" "/dev/null" \
+    "$( (sleep 2) | script -q -e -c "bash -c 'source $TMP/lib/bin/omabox; stdio_relay sh -c \"readlink /proc/self/fd/0\" > $f.tty'" /dev/null >/dev/null 2>&1; cat "$f.tty")"
 }
 
 # finding 63: what may go into a box, and where.
@@ -2547,6 +2552,9 @@ t_run_stdio() {
   check "3 MB through stdin and stdout, byte for byte" cmp -s "$d/rnd" "$d/rnd.out"
   ob run -b "$B" -- sh -c 'echo out; echo err >&2; exit 7' < "$d/in" > "$d/o2" 2> "$d/e2" || rc=$?
   check_eq "...stdout, stderr and the exit status each its own" "out|err|7" "$(cat "$d/o2")|$(cat "$d/e2")|$rc"
+  ob run -b "$B" -- sh -c 'for i in $(seq 300); do echo o$i; echo e$i >&2; done' > "$d/both" 2>&1
+  check_eq "...stdout and stderr to one file (> f 2>&1): every line, in order" "600|o1 e1 o2 e2|o300 e300" \
+    "$(wc -l < "$d/both")|$(head -n 4 "$d/both" | paste -sd ' ')|$(tail -n 2 "$d/both" | paste -sd ' ')"
   local t0=$SECONDS
   ob run -b "$B" -- true < "$d/rnd"
   check "...a command that takes none of a 3 MB stdin returns at once ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 10
