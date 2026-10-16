@@ -4990,6 +4990,25 @@ journal_sink() {
   ob run -b "$B" -- /usr/bin/logger --journald <<<$'MESSAGE=omabox native entry\nSYSLOG_IDENTIFIER=omabox-t' >/dev/null 2>&1
   check "...a native entry (logger --journald) in omabox log journal" until_ok 5 \
     bash -c "'$CLI' log -b '$B' journal --grep 'omabox-t\[[0-9]+\]: omabox native entry$' | grep -q ."
+  # By the bare names (#248): the box's logger stand-in comes first on PATH. --journald and a plain
+  # logger (any tag but omarchy-shell) reach the journal; -t omarchy-shell stays in shell.log.
+  # shellcheck disable=SC2016 # the box's shell
+  ob run -b "$B" -- sh -c 'logger --journald <<EOF
+MESSAGE=bare journald entry
+SYSLOG_IDENTIFIER=omabox-bare
+EOF
+logger -t omabox-plain plain one; printf "stdin a\nstdin b\n" | logger -t omabox-plain; logger plain untagged
+logger -t omarchy-shell omabox shell route' >/dev/null 2>&1
+  check "...logger --journald by its bare name too (#248)" until_ok 5 \
+    bash -c "'$CLI' log -b '$B' journal --grep 'omabox-bare\[[0-9]+\]: bare journald entry$' | grep -q ."
+  check "...a plain logger: its arguments, its stdin's lines, under the tag (#248)" until_ok 5 \
+    bash -c "'$CLI' log -b '$B' journal --grep 'omabox-plain\[[0-9]+\]: (plain one|stdin a|stdin b)$' | wc -l | grep -qx 3"
+  check "...without -t, under the user's name, as logger's own default" until_ok 5 \
+    bash -c "'$CLI' log -b '$B' journal --grep '^[0-9-]+ [0-9:]+ $(id -un)\[[0-9]+\]: plain untagged$' | grep -q ."
+  check "...logger -t omarchy-shell still in shell.log (omabox log shell)" until_ok 5 \
+    bash -c "'$CLI' log -b '$B' shell --grep 'omarchy-shell: omabox shell route$' | grep -q ."
+  out=$(ob log -b "$B" journal --grep 'omabox shell route' 2>&1) || out="exit $?: $out"
+  check_eq "...and not in the journal" "" "$out"
   ob run -b "$B" -- /usr/bin/systemd-cat -t omabox-cat printf 'line one\nline two\n' >/dev/null 2>&1
   check "...the stdout stream (systemd-cat), line by line" until_ok 5 \
     bash -c "'$CLI' log -b '$B' journal -n 5 | grep -c 'omabox-cat\[[0-9]*\]: line \(one\|two\)$' | grep -qx 2"

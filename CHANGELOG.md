@@ -3,6 +3,18 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`logger` reaches the box's journal by name.** 0.7.0 said `logger --journald` lands in `omabox
+  log journal`, but in a box `logger` is omabox's own stand-in, which wrote `~/logger.log`, so the
+  journal stayed empty unless you typed `/usr/bin/logger`. Now `logger --journald` and a plain
+  `logger [-t TAG] MESSAGE` (or its stdin's lines) go to the journal, as on your desktop; `logger -t
+  omarchy-shell`, the shell launcher's, still goes to `omabox log shell`. `systemd-cat` by its bare
+  name still writes `~/IDENTIFIER.log` (the box's shell relies on it): use `/usr/bin/systemd-cat`
+  for the journal, as the help now says.
+
 ## 0.7.0 — 2026-10-16
 
 Hold keys across commands, a journal in every box, CPU per thread, and an opt-in skill for

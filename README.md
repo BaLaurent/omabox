@@ -669,7 +669,9 @@ dir, its `/run/user/$UID`: `omabox path --run`; the host's own is your real sess
   (apps start as plain processes, not units); their output lands in the box's `home/apps.log`.
   Logging out of the box ends it. Without `--systemd`, `systemd-run --user` (the browser bind) runs
   its command directly too, timers excepted, and `systemd-cat` writes to `~/IDENTIFIER.log`, so
-  `omarchy restart shell` works in a box.
+  `omarchy restart shell` works in a box. For the box's journal (`omabox log journal`), use
+  `/usr/bin/systemd-cat` by its full path; `logger` and `logger --journald` reach it by name
+  (`logger -t omarchy-shell`, the shell launcher's, goes to the shell's log).
 - A `run -d` job does not count as use for idle expiry: a server the agent only polls over HTTP needs
   `--idle 0` (or a longer one), and the agent then takes that box down itself when done. Nor does it
   keep an agent session's box once the agent exits.

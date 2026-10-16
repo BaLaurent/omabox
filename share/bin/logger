@@ -1,22 +1,41 @@
 #!/usr/bin/env bash
-# omabox stand-in for logger (#151), first on the box's PATH: a box has no syslog socket, so the real
-# one fails. omarchy-launch-shell says why it starts the shell again with `logger -t omarchy-shell`:
-# that goes to ~/shell.log, where systemd-cat's stand-in sends the shell's own output; another tag to
-# ~/TAG.log (~/logger.log without -t). The message is the arguments, or stdin's lines.
-tag=""
+# omabox stand-in for logger (#151), first on the box's PATH: a box has no syslog socket (/dev/log), so
+# the real one fails. omarchy-launch-shell says why it starts the shell again with `logger -t
+# omarchy-shell`: that goes to ~/shell.log, where systemd-cat's stand-in sends the shell's own output
+# (`omabox log shell`). Anything else goes to the box's journal (#234, `omabox log journal`), where it
+# lands on a desktop: `--journald` to the real logger, the rest as lines through /usr/bin/systemd-cat
+# under the tag (the user's name without -t, as logger's own default). A box without the journal's
+# sockets (no python3) gets ~/TAG.log (~/logger.log without -t). The message is the arguments, or the
+# lines of stdin (-f FILE: of FILE). The priority is dropped: the box's journal keeps only the text.
+journal=/run/systemd/journal
+tag="" file="" journald=""
+args=("$@")
 while [ $# -gt 0 ]; do
   case $1 in
     --) shift; break ;;
     -t|--tag) tag=$2; shift ;;
     --tag=*) tag=${1#*=} ;;
-    -p|--priority|-n|--server|-P|--port|-f|--file|--id=*|--socket-errors=*) [[ $1 == *=* ]] || shift ;;
-    -h|--help) echo "logger (omabox stand-in): to ~/TAG.log; logger [-t TAG] [MESSAGE...]"; exit 0 ;;
+    -f|--file) file=$2; shift ;;
+    --file=*) file=${1#*=} ;;
+    --journald|--journald=*) journald=1 ;;
+    -p|--priority|-n|--server|-P|--port|-u|--socket|-S|--size|--msgid|--sd-id|--sd-param) shift ;;
+    -h|--help) echo "logger (omabox stand-in): -t omarchy-shell to ~/shell.log, the rest to the box's journal (omabox log journal); logger [-t TAG] [-f FILE] [--journald[=FILE]] [MESSAGE...]"; exit 0 ;;
     -*) ;;
     *) break ;;
   esac
   shift
 done
+if [ "$tag" != omarchy-shell ]; then
+  [ -z "$journald" ] || [ ! -S $journal/socket ] || exec /usr/bin/logger "${args[@]}"
+  if [ -z "$journald" ] && [ -S $journal/stdout ] && [ -x /usr/bin/systemd-cat ]; then
+    [ -n "$tag" ] || tag=$(id -un 2>/dev/null || echo logger)
+    [ $# = 0 ] || exec /usr/bin/systemd-cat -t "$tag" printf '%s\n' "$*"
+    [ -z "$file" ] || exec < "$file"
+    exec /usr/bin/systemd-cat -t "$tag"
+  fi
+fi
 log=$HOME/${tag:-logger}.log
 [ "$tag" != omarchy-shell ] || log=$HOME/shell.log
+[ -z "$file" ] || [ $# -gt 0 ] || exec < "$file"
 line() { printf '%s %s: %s\n' "$(date '+%F %T')" "${tag:-logger}" "$1" >> "$log"; }
 if [ $# -gt 0 ]; then line "$*"; else while IFS= read -r l; do line "$l"; done; fi

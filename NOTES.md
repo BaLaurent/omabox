@@ -7119,6 +7119,24 @@ from them.
     `dead` once labwc went on; an interactive box in a stand-in host: crashed (SIGSEGV) in 0.1 s.
     `crashed` itself (labwc's line written, the box not gone yet) only in t_unit_hypr_lost: the window
     is too short to catch. Tests: t_hyprland_crash, t_unit_hypr_lost.
+351. **`logger` reaches the box's journal by its bare name** (2026-10-16, #248). Finding 344 gave
+    every box journal sockets and documented `logger --journald` as landing in `omabox log journal`,
+    but the box's PATH has the `logger` stand-in of #151 first, which wrote `~/logger.log` (`--journald`
+    was an ignored option, the `MESSAGE=` fields its text): only `/usr/bin/logger`, as the test typed
+    it, reached the journal. The stand-in now hands `--journald` to `/usr/bin/logger` (the native
+    socket), and sends a plain call's arguments or stdin lines (`-f FILE`: the file's) through
+    `/usr/bin/systemd-cat -t TAG` (the stream socket; the stand-in's pid, the user's name without
+    `-t`, as logger's own default tag). `-t omarchy-shell` still appends to `~/shell.log` (`omabox
+    log shell`, the launcher's "relaunching" line), and a box without the sockets (no python3) still
+    gets `~/TAG.log`. *Decided*: plain `logger` to the journal too, not only `--journald`. Omarchy's
+    only caller (`omarchy-launch-shell`) uses `-t omarchy-shell`, which keeps its route; on a desktop
+    a plain `logger` lands in the journal, where an agent then looks (`omabox log journal`), and
+    `~/TAG.log` was named nowhere. The priority (`-p`) is dropped: journal.py keeps only the text.
+    `systemd-cat`'s stand-in still writes `~/ID.log` (the shell's own output and pid file rely on it);
+    the help, README and reference now say `/usr/bin/systemd-cat` for the journal. Seen in a box:
+    each route, and with the sockets renamed away the `~/TAG.log` fallback. Test: `journal_sink` in
+    t_dbus_user_app (bare `logger --journald`, plain `logger` by tag, stdin and untagged,
+    `-t omarchy-shell` in shell.log and not in the journal).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

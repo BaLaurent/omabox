@@ -341,7 +341,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors), `apps` (what the
   launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
   `--systemd`), `audio` (PipeWire's, with `--audio`), `events` (Hyprland's events, which `omabox events` reads), `journal` (what programs
-  sent the box's journal sockets: dbus-broker, `logger --journald`, Qt with `QT_FORCE_STDERR_LOGGING=0`, units' output; at most 4 MB, then
+  sent the box's journal sockets: dbus-broker, `logger` and `logger --journald` (not `-t omarchy-shell`: `shell`), `/usr/bin/systemd-cat` (the bare name writes `~/ID.log`), Qt with `QT_FORCE_STDERR_LOGGING=0`, units' output; at most 4 MB, then
   `journal.1.log`), `box` (bwrap), `reap` (the
   reaper's: idle and agent checks, the down it did). A box that died keeps its logs until `down`: read them to see why.
   `-f` follows until the box goes down (exit 0). `-i` (ignore case) goes anywhere, `--grep -i RE`
@@ -437,8 +437,10 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   stand-in, `--systemd` or not: apps start as plain processes, not units (output in
   `<box dir>/home/apps.log`). Without `--systemd`, `systemd-run --user CMD` runs CMD the same way
   (`--wait`/`--pipe`/`--scope` in the foreground), but timers (`--on-active=...`) need `--systemd`;
-  `systemd-cat -t ID` writes to `~/ID.log` (no journald in any box; `/usr/bin/systemd-cat` and other
-  journal clients reach the box's own sockets at `/run/systemd/journal`: `omabox log journal`).
+  `systemd-cat -t ID` writes to `~/ID.log` (no journald in any box; `/usr/bin/systemd-cat`, by its full
+  path, and other journal clients reach the box's own sockets at `/run/systemd/journal`: `omabox log
+  journal`). `logger` and `logger --journald` reach them by name, but `logger -t omarchy-shell`
+  (Omarchy's shell launcher) goes to `~/shell.log` (`omabox log shell`).
 - The XDG base dirs are set as in a session (`XDG_DATA_HOME=/home/sbx/.local/share`, ...). An app
   installed into the box HOME the per-user way (`~/.local/share/applications`, a D-Bus service in
   `~/.local/share/dbus-1/services`) starts from the launcher and by D-Bus activation, as on the host.

@@ -485,8 +485,9 @@ hl.timer) that runs later is logged nowhere: catch it with pcall.
 @ log
 \`log\` prints the last -n lines (100) of each log named, of a box that died too; run is the latest
 \`run -d\`'s, apps what Omarchy's launcher started, journal what programs sent the box's journal
-sockets (/run/systemd/journal: dbus-broker, \`logger --journald\`, units' output; at most 4 MB, then
-journal.1.log), box bwrap's. -f follows them until the box goes
+sockets (/run/systemd/journal: dbus-broker, \`logger\` and \`logger --journald\` (\`-t omarchy-shell\`
+goes to shell), \`/usr/bin/systemd-cat\` (the bare name writes ~/ID.log), units' output; at most 4 MB,
+then journal.1.log), box bwrap's. -f follows them until the box goes
 down (-n then counts lines before --grep). Hyprland writes its log in pieces: its newest lines can
 come late. \`log gdb --crash\`: only each crash's signal and the backtrace of the thread it hit
 (-n and --grep then apply to those).
