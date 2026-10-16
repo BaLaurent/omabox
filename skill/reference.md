@@ -41,7 +41,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   with `--find`. `--json` for a script; exit 1 when nothing holds TEXT. GTK, Qt and egui/winit
   (AccessKit) apps have a tree (`tree` turns Qt's and AccessKit's on); Chromium and Electron only
   when started with `--force-renderer-accessibility` (start them so when you will ask); terminals (foot), the Omarchy shell, its plugins and bar widgets
-  have none and say "no accessibility tree": shots for those. An unnamed control (a switch beside its
+  have none and say "no accessibility tree": shots for those. (`tree` reads windows only: the shell's
+  bar and panels are layer surfaces, out of its reach even on a Quickshell with AT-SPI, 0.3.2 or
+  `--quickshell` a build: "A Quickshell build of your own".) An unnamed control (a switch beside its
   label) matches by its role (`--find switch`), or read the whole tree.
 - `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a
   title, failing those a hyphen-separated part of the class (`portal` for `xdg-desktop-portal-gtk`);
@@ -542,6 +544,37 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   (`log gdb --crash`: that thread alone; the box writes no core and no Hyprland crash report). `--shell` for the shell, `--pid PID` for any process of the box. A gdb run
   with `omabox run` is refused (`ptrace: Operation not permitted`). Symbols: what the binaries carry
   (a debug build has them); Arch's are on debuginfod, offline from the addresses.
+
+## A Quickshell build of your own
+
+- `omabox up [NAME] --quickshell PATH` (and `run --quickshell PATH -- CMD` for a throwaway) runs the
+  box's shell on PATH instead of `/usr/bin/quickshell`: a Quickshell fix not in the installed
+  package (e.g. `cmake -GNinja -B build && cmake --build build`, then `--quickshell
+  build/src/quickshell`, the ELF itself, not a wrapper). Its folder is mounted read-only at its own
+  path, refused as `--ro-bind`'s are; inside ai-jail, as `--hyprland`'s. Not with `--no-shell`.
+- Quickshell uses Qt's private API, so the build must be one against the installed Qt: `up` refuses
+  a build against another Qt minor (it reads the build's `qt_version_tag`) or needing a library the
+  box lacks, before the box starts; another patch release ends the box as it starts ("died while
+  starting (--quickshell: built against Qt X, the box has Qt Y ...)"). Rebuild against the
+  installed Qt then. A shell that dies anyway is said with the build named: `omabox log shell`.
+- In the box the build is `quickshell` and `qs` by name (Omarchy's `omarchy-shell` and `omarchy
+  restart shell`, `omabox run -- qs ipc ...`), and `restart-shell` keeps it. Check which binary
+  runs: `omabox run -- sh -c 'readlink /proc/$(cat $XDG_RUNTIME_DIR/omabox-shell.pid)/exe'`.
+- `omabox ls` shows the build under the box's line, `ls --json` has `quickshell` (null for the
+  installed one) and `quickshell_version` (`quickshell --version` in the box, every box's), `omabox
+  windows` starts with it; a save records it and `up --from` notes a different one.
+- **The version is not proof of a fix**: a build of an unreleased commit says the last release's
+  number (a build with 0.3.2's fix says "Quickshell 0.3.1 (revision fae96f1..., ...)"). The revision
+  in that line, when there is one, is the commit: check it contains the fix (`git merge-base
+  --is-ancestor FIX REVISION` in the Quickshell checkout).
+- Testing a shell plugin's accessibility tree: `omabox tree` reads windows, not the shell's layer
+  surfaces, so it says no window matches. Read AT-SPI yourself with a python3 `gi.repository.Atspi`
+  script run by `omabox run` (set `org.a11y.Status` `IsEnabled` on the a11y bus first; Qt Quick
+  publishes only items with an `Accessible.role`, so Omarchy's own bar shows empty frames). Under
+  Omarchy the shell's pid has two applications named `quickshell`: an empty `gtk` one listed first
+  and the `Qt` one: select by `get_toolkit_name()`. Its `frame`s have no names and sit at 0,0 in
+  their own surface's coordinates; match them to `hyprctl -j layers` by size (and add that layer's
+  x, y for screen coordinates).
 
 ## The Omarchy shell's IPC (direct routes)
 

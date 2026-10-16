@@ -5,6 +5,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **`up --quickshell PATH`: the box's shell on a Quickshell build of yours** (and `run --quickshell
+  PATH` for a throwaway), for a Quickshell fix your installed package does not have yet, such as
+  0.3.2's accessibility tree. The box's shell, `restart-shell`, Omarchy's own restart and anything
+  calling `quickshell`/`qs` in the box run the build; its folder is mounted read-only. Quickshell
+  uses Qt's private API, so a build against another Qt than the installed one is refused (naming
+  both versions), as is one needing a library the box lacks. `ls`, `ls --json`, `windows` and
+  `save` name it. Every box's `ls --json` now has `quickshell_version`; it is the last release's
+  number even for a build of a newer commit, so it is no proof that a fix is in.
+
 ### Fixed
 
 - **A config error no longer hangs a box.** Under load, `hyprctl reload` in a box whose config had
