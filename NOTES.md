@@ -90,8 +90,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    (installed beside the old one, then swapped in). It must provide the soname the installed Hyprland
    links (`ldd $(command -v Hyprland)`), or `up` skips it for the system's; only the nested Hyprland
    loads it. Outside a checkout it goes to `~/.local/share/omabox/aquamarine`.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `burst`, `tree`, `relay`, `events`
-   (need `wayland-scanner`; protocol XML is vendored).
+3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `burst`, `tree`, `relay`, `events`,
+   `clock` (need `wayland-scanner`; protocol XML is vendored).
 4. `omabox setup` (finding 126): links `~/.local/bin/omabox` → `bin/omabox`; `skill/` as
    `skills/omabox` in `~/.agents` and `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when
    those exist; `skill-feedback/` as `skills/omabox-feedback` beside it only with `--feedback-skill`,

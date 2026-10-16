@@ -56,7 +56,7 @@ tools_ready() {
   for m in "$ROOT"/tools/*/Makefile; do
     t=${m%/Makefile}; t=${t##*/}
     if [ "${1:-}" = installed ]; then
-      [ -x "$ROOT/tools/$t/omabox-$t" ] || { echo "tools/$t/omabox-$t is missing from this install"; return 1; }
+      [ -x "$ROOT/tools/$t/omabox-$t" ] || [ -f "$ROOT/tools/$t/omabox-$t.so" ] || { echo "tools/$t/omabox-$t is missing from this install"; return 1; }
       continue
     fi
     make -q -C "$ROOT/tools/$t" >/dev/null 2>&1 && continue
@@ -7261,7 +7261,7 @@ t_unit_install() {
   rmdir "$h/.claude/skills/omabox"
   check "install.sh in a clean HOME" env HOME="$h" PATH="$stub:$PATH" "$c/install.sh"
   check_eq "...built every tool in its own ROOT" "$(cd "$c/tools" && printf '%s\n' */Makefile | sed 's|\(.*\)/Makefile|\1/omabox-\1|')" \
-    "$(cd "$c/tools" && for f in */omabox-*; do [ -x "$f" ] && echo "$f"; done)"
+    "$(cd "$c/tools" && for f in */omabox-*; do [ -x "$f" ] && echo "${f%.so}"; done)"   # (tools/clock's is a library)
   check_eq "...and nothing in the checkout under test (#187)" "$tools0" "$(stat -c '%n %.9Y' "$ROOT"/tools/*/omabox-* 2>&1)"
   check_eq "the skill is a link" "$c/skill" "$(readlink "$h/.claude/skills/omabox")"
   check_fails "...not the feedback skill: opt-in (finding 326)" test -L "$h/.claude/skills/omabox-feedback"

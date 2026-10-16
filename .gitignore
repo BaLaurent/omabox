@@ -16,6 +16,7 @@ tools/burst/*-protocol.[ch]
 tools/relay/omabox-relay
 tools/events/omabox-events
 tools/tree/omabox-tree
+tools/clock/omabox-clock.so
 
 # release.sh output
 dist/
