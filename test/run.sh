@@ -11087,7 +11087,7 @@ t_inspect() {
   check_match "keys ü: -t named for a character outside the layout" "no key for 'ü' in this layout \(omabox keys -t 'ü' types" "$(ob keys -b "$B" ü 2>&1)"
   check_match "click off the screen: said" "click: 99999,99999 is off the 1920x1080 screen" "$(ob click -b "$B" 99999 99999 2>&1)"
   check_match "...pointer and drag too" "pointer: 1920,5 is off.*drag: 5,5000 is off" "$(ob pointer -b "$B" -- move 1920 5 2>&1; ob drag -b "$B" 5 5 5 5000 2>&1)"
-  check_match "shot -g off the screen: grim's reason" "shot: grim failed: .*did not intersect" "$(ob shot -b "$B" -g "5000,5000 10x10" 2>&1)"
+  check_match "shot -g off the screen: said (#240: nothing inside is refused before grim)" "shot: -g 5000,5000 10x10 has nothing on the screen \\(1920x1080\\)" "$(ob shot -b "$B" -g "5000,5000 10x10" 2>&1)"
   # #111, finding 180: shot FILE as an argument, events --grep -i, mode host on a box (then back).
   ob shot -b "$B" "$TMP/positional.png" >/dev/null 2>&1
   check_match "shot FILE (an argument, not -o)" "PNG image data, 1920 x 1080" "$(file "$TMP/positional.png")"
