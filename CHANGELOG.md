@@ -3,7 +3,12 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.6.2 — 2026-10-16
+
+A security fix over 0.6.1, and nothing else. A process in a box could write into what omabox printed
+of nsenter's own messages on a call into the box (any amount, control characters included), and
+reach files the caller of `omabox gdb` or `restart-shell` had open above fd 2 through omabox's own
+steps in the box. Update.
 
 ### Fixed
 
