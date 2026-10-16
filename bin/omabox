@@ -163,6 +163,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox clip [-b NAME] [--from-box]                     your clipboard into an interactive box, or back
   omabox broker [on|off]                                 let agents inside ai-jail drive their own boxes
   omabox setup [--remove]                                your links (skill, bar widget), settings dir, agent guard
+  omabox setup --feedback-skill|--no-feedback-skill      opt in to the omabox-feedback skill, or out again
   omabox setup --aquamarine [--force]                    build omabox's aquamarine: the fix, and its own patches
   omabox --version                                       and which aquamarine new boxes use
 
@@ -503,6 +504,11 @@ boxes already use this omabox's build (--force rebuilds it). \`omabox --version\
 boxes use: a private build, or the system's (with the fix, patched with it, or without it). A git
 worktree of omabox with no build of its own uses its main checkout's build/prefix, and says so.
 OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
+@ setup
+\`omabox setup --feedback-skill\` links the omabox-feedback skill next to the omabox one, for people
+who want to report what omabox got wrong from their own agent sessions: it runs only when you ask
+(/omabox-feedback), shows the drafts it would file and asks before posting anything. Off unless you
+opt in; a later \`omabox setup\` keeps it, \`--no-feedback-skill\` (or \`--remove\`) takes it out.
 @ up keys-to-box
 $PASS_KEY toggles sending SUPER keys to an interactive box, once:
 until focus leaves it, or a key is pressed with the pointer off it. \`keys-to-box on\` makes them
@@ -3707,21 +3713,25 @@ AQ_OWN="keys held when an interactive box's window loses focus, the pointer and 
 # package or install.sh puts on the system. Idempotent; --remove undoes it; --aquamarine is the
 # optional build (finding 125).
 cmd_setup() {
-  local aq=0 force=0 remove=0
+  local aq=0 force=0 remove=0 fb=""
   while [ $# -gt 0 ]; do
     case $1 in
       --aquamarine) aq=1 ;;
       --force) force=1 ;;
       --remove) remove=1 ;;
+      --feedback-skill) fb=on ;;
+      --no-feedback-skill) fb=off ;;
       -h|--help) usage setup; return ;;
       *) die "setup: unknown option $1" ;;
     esac
     shift
   done
-  [ $((aq + remove)) -le 1 ] || die "setup: --aquamarine or --remove, not both"
+  local n=$((aq + remove)); [ -z "$fb" ] || n=$((n + 1))
+  [ $n -le 1 ] || die "setup: one of --aquamarine, --remove, --feedback-skill or --no-feedback-skill"
   [ $force = 0 ] || [ $aq = 1 ] || die "setup: --force is for --aquamarine"
   if [ $aq = 1 ]; then setup_aquamarine "$force"
   elif [ $remove = 1 ]; then setup_remove
+  elif [ -n "$fb" ]; then setup_feedback "$fb"
   else setup_user; fi
 }
 
@@ -3741,6 +3751,27 @@ setup_unlink() {
 # and Hermes when they are installed (their dir exists).
 SKILL_DIRS=(.agents .claude .codex .pi/agent .hermes)
 
+# The omabox-feedback skill (skill-feedback/, finding 326) files what omabox got wrong in a session as
+# issues: opt-in only, never linked by a plain setup (no "call home"). on: linked where the omabox
+# skill goes; off: unlinked; refresh (a plain setup): a link of an omabox's skill-feedback/ already
+# there is pointed here (a moved checkout, a package after a checkout), none made.
+setup_feedback() {
+  local dir l linked=()
+  for dir in "${SKILL_DIRS[@]}"; do
+    l=$HOME/$dir/skills/omabox-feedback
+    case $1 in
+      on) case $dir in .agents|.claude) ;; *) [ -d "$HOME/$dir" ] || continue ;; esac ;;
+      off) setup_unlink "$l" "$ROOT/skill-feedback"; continue ;;
+      refresh) [ -L "$l" ] && [ "$(basename -- "$(readlink -- "$l")")" = skill-feedback ] || continue ;;
+    esac
+    setup_link "$ROOT/skill-feedback" "$l"
+    # shellcheck disable=SC2088 # display text, not a path
+    linked+=("~/$dir")
+  done
+  [ ${#linked[@]} = 0 ] || echo "agent skill 'omabox-feedback' (opted in) -> ${linked[*]} (skills/)"
+  [ "$1" != on ] || echo "it runs only when asked (/omabox-feedback) and asks before posting; omabox setup --no-feedback-skill takes it out"
+}
+
 setup_user() {
   # A system install (a package: /usr/bin/omabox is the command) needs no link of its own; one left
   # from a checkout is said, and offered to go (finding 133).
@@ -3756,6 +3787,7 @@ setup_user() {
     linked+=("~/$dir")
   done
   echo "agent skill 'omabox' -> ${linked[*]} (skills/)"
+  setup_feedback refresh
   # The bar widget: only ~/.config/omarchy/plugins holds third-party plugins (Omarchy's shell, finding
   # 126), so a link per user; setup_widget offers to put it in the bar.
   setup_link "$ROOT/plugin" "$HOME/.config/omarchy/plugins/chaves.omabox"
@@ -3908,6 +3940,7 @@ setup_remove() {
   fi
   setup_unlink "$HOME/.config/omarchy/plugins/chaves.omabox" "$ROOT/plugin"
   for dir in "${SKILL_DIRS[@]}"; do setup_unlink "$HOME/$dir/skills/omabox" "$ROOT/skill"; done
+  setup_feedback off
   setup_unlink "$HOME/.local/bin/omabox" "$ROOT/bin/omabox"
   local cache=${XDG_CACHE_HOME:-$HOME/.cache}/omabox-aquamarine
   if [ -e "$AQ_USER" ] || [ -e "$cache" ]; then rm -rf "$AQ_USER" "$cache"; echo "removed the aquamarine build in $AQ_USER"; fi

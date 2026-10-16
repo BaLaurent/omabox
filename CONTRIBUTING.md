@@ -15,6 +15,14 @@ Open an issue with:
   they are (`box.log`, `home/*.log`, `run/hypr/*/hyprland.log`). Look them over before you attach
   them: they can hold paths and names from your machine.
 
+If you use omabox with an agent, it can do the reporting. `omabox setup --feedback-skill` adds the
+`omabox-feedback` skill next to the `omabox` one (Claude Code, Codex, OpenCode, pi, Hermes); it is off
+unless you add it. It runs only when you ask (`/omabox-feedback`, or "anything for omabox?"): the
+agent looks back through the session for what omabox got wrong, got in the way of or lacked, checks
+the existing issues, and drafts each one with your paths, names, projects and the session's content
+taken out. It shows you a short list, prints any draft you want to see, takes your changes, and
+posts nothing until you say yes. `omabox setup --no-feedback-skill` takes it out again.
+
 A problem with safety (a box reaching your real desktop, your files or your session) matters most:
 report it privately, as [SECURITY.md](SECURITY.md) says, not in an issue.
 

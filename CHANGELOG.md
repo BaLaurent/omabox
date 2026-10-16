@@ -3,6 +3,19 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Added
+
+- **`omabox-feedback`, an opt-in skill for reporting what omabox got wrong.** Off unless you run
+  `omabox setup --feedback-skill` (`--no-feedback-skill` takes it out; a plain `omabox setup` never
+  adds it). Then `/omabox-feedback` has your agent look back through the session (in Claude Code,
+  every subagent's transcript too) for omabox failures, refusals, workarounds, missing commands and
+  misleading docs, check them against the issues, and file them on your yes, after a short list you
+  can ask to see in full or change. Your paths, names, hosts, tokens, projects and the session's
+  content are taken out of every draft first; a safety problem is never filed, only pointed to
+  SECURITY.md. It runs only when you ask; `/omabox-feedback auto` files without the question.
+
 ## 0.6.1 — 2026-10-14
 
 Security fixes, and a fix pass over 0.6.0. A process in a box could reach the host files you gave

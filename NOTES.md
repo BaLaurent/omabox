@@ -94,7 +94,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    (need `wayland-scanner`; protocol XML is vendored).
 4. `omabox setup` (finding 126): links `~/.local/bin/omabox` → `bin/omabox`; `skill/` as
    `skills/omabox` in `~/.agents` and `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when
-   those exist); `plugin/` as `~/.config/omarchy/plugins/chaves.omabox`; makes `~/.config/omabox`;
+   those exist; `skill-feedback/` as `skills/omabox-feedback` beside it only with `--feedback-skill`,
+   finding 326); `plugin/` as `~/.config/omarchy/plugins/chaves.omabox`; makes `~/.config/omabox`;
    asks about the agent guard. A real directory where a link goes stops it. `omabox setup --remove`
    undoes it.
 5. Try it: `omabox up && omabox shot`, then `omabox down`. The spike's hand-run scripts (`spike/*.sh`,
@@ -6618,6 +6619,34 @@ from them.
     for byte, status and stderr apart, no fd of any box process naming a host file while another
     `run` writes one, a pty of its own under `script`, a shell fed by a pipe. Cost: three `stat`s
     and up to three `cat`s a `box_exec`.
+
+326. **`omabox-feedback`: an opt-in skill, for reporting what got in the way** (2026-10-15). The
+    maintainer used an end-of-session sweep of his own: read back through the session for
+    every omabox failure, refusal, workaround, missing command and misleading doc, check each against
+    the issues, draft it. It found what no one would have reported by hand (most rough edges cost an
+    agent a retry, and the agent says nothing). Now it ships as `skill-feedback/` (skill name
+    `omabox-feedback`), **opt-in**: a skill that files issues from every user's sessions by default
+    would be a "call home" that benefits no one, so a plain `omabox setup` (a fresh install, an
+    update) never links it. `omabox setup --feedback-skill` links it where `skill/` goes;
+    `--no-feedback-skill` and `--remove` unlink it; a later plain setup keeps a link it finds (one to
+    any omabox's `skill-feedback/`, pointed at this one: a moved checkout, a package after a checkout)
+    and makes none (`setup_feedback`). The `omabox` skill does not mention it, and it runs only when
+    the user asks for it, never at the end of a session on the agent's own initiative. Not in
+    `broker`'s ai-jail recipe: a jail reaches no GitHub. Its rules: nothing posted before one yes from
+    the user (`/omabox-feedback auto` skips the question),
+    a short table first and each draft shown only on request, every draft scrubbed before it is shown
+    (home paths, names, hosts, emails, tokens, private repos and projects, and the session's content:
+    file names, window titles, documents, media), then grepped for `$HOME`, `$USER`, the hostname,
+    the git email and the user's private repo names; a safety finding is never filed, the user is
+    pointed at SECURITY.md. `digest.py` cuts Claude Code's transcripts (the session and each subagent's,
+    `~/.claude/projects/<cwd>/<session>/subagents/`) to the omabox moments, standard library only,
+    so the sweep sees the subagents' work, which never reaches the conversation; other agents sweep
+    the conversation alone. Its `GUARD` tag is the guard's own `omabox guard: ` line or a display
+    failure as a program prints it (at most a short prefix, no quote, pipe or backtick before it):
+    reading a file that quotes those messages (the omabox skill's description, this script) is not
+    one. Checked: `digest.py` on a real session of 27 transcripts (26 subagents, ~285 K of digests),
+    no false `GUARD`; `t_unit_setup` (no link from a plain setup, opt in, kept, opt out, `--remove`)
+    and `t_unit_install` (none from install.sh), `t_unit_version` for the description and `--help`. The skill's flow itself (asking, filing) is not exercised by the suite.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -1763,10 +1763,16 @@ t_unit_version() {
   # some parse the frontmatter as strict YAML: there an unquoted one with `: ` in it is an error and
   # the skill is skipped without a word (pi did, finding 145). A double-quoted string, \" escapes only,
   # reads the same as JSON.
-  local desc; desc=$(sed -n 's/^description: //p' "$ROOT/skill/SKILL.md" | head -n 1 |
-    python3 -c 'import json, sys; v = sys.stdin.read().strip(); assert v.startswith("\""); print(len(json.loads(v)))' 2>&1)
-  check_match "the skill's description is a quoted string" '^[0-9]+$' "$desc"
-  check "...of at most 1024 characters" test "$desc" -le 1024
+  local desc sk
+  for sk in skill skill-feedback; do
+    desc=$(sed -n 's/^description: //p' "$ROOT/$sk/SKILL.md" | head -n 1 |
+      python3 -c 'import json, sys; v = sys.stdin.read().strip(); assert v.startswith("\""); print(len(json.loads(v)))' 2>&1)
+    check_match "$sk/: the skill's description is a quoted string" '^[0-9]+$' "$desc"
+    check "...of at most 1024 characters" test "$desc" -le 1024
+  done
+  # finding 326: the feedback skill's digest.py runs as its SKILL.md says, standard library only.
+  check_match "skill-feedback/digest.py --help runs under python3 -I" "^usage: digest.py" \
+    "$(python3 -I "$ROOT/skill-feedback/digest.py" --help 2>&1 | head -n 1)"
   # #143, finding 215: SKILL.md is short and names the rest as "ref: SECTION", a heading of reference.md.
   local refs="" r gone=""
   while read -r r; do refs+="$r|"; grep -qxF "## $r" "$ROOT/skill/reference.md" || gone+="$r; "; done \
@@ -5030,22 +5036,43 @@ t_unit_setup() {
   check_fails "...not for an agent that is not installed" test -e "$h/.hermes"
   check "...the settings dir" test -d "$h/.config/omabox"
   check_match "...the guard not turned on without a terminal" "not asked \(no terminal\): omabox guard on" "$out"
+  # finding 326: the feedback skill is opt-in. No link from a plain setup; --feedback-skill links it
+  # where the omabox skill goes, a later plain setup keeps it, --no-feedback-skill takes it out.
+  local fbl=(.claude/skills/omabox-feedback .agents/skills/omabox-feedback .codex/skills/omabox-feedback) l
+  fb_links() { local o=""; for l in "${fbl[@]}"; do o+="$(readlink "$h/$l" || echo -) "; done; echo "${o% }"; }
+  check_eq "plain setup: no feedback skill link, it is opt-in (finding 326)" "- - -" "$(fb_links)"
+  out=$(in_h setup --feedback-skill)
+  check_eq "setup --feedback-skill: linked where the omabox skill is" \
+    "$ROOT/skill-feedback $ROOT/skill-feedback $ROOT/skill-feedback" "$(fb_links)"
+  check_match "...saying it asks before posting, and how to take it out" "asks before posting; omabox setup --no-feedback-skill" "$out"
+  ln -sfn /old/checkout/skill-feedback "$h/.codex/skills/omabox-feedback"
+  in_h setup >/dev/null
+  check_eq "...a later plain setup keeps it (one an older omabox linked, pointed here)" \
+    "$ROOT/skill-feedback $ROOT/skill-feedback $ROOT/skill-feedback" "$(fb_links)"
+  out=$(in_h setup --no-feedback-skill)
+  check_eq "setup --no-feedback-skill: unlinked" "- - -" "$(fb_links)"
+  check_eq "...the omabox skill kept" "$ROOT/skill" "$(readlink "$h/.claude/skills/omabox")"
+  in_h setup >/dev/null
+  check_eq "...and a plain setup does not bring it back" "- - -" "$(fb_links)"
+  in_h setup --feedback-skill >/dev/null
   check_eq "setup again: the same (idempotent)" 0 "$(in_h setup >/dev/null; echo $?)"
   check_match "setup --force alone is refused" "--force is for --aquamarine" "$(in_h setup --force)"
-  check_match "...and --aquamarine with --remove" "--aquamarine or --remove, not both" "$(in_h setup --aquamarine --remove)"
+  check_match "...and --aquamarine with --remove" "one of --aquamarine, --remove," "$(in_h setup --aquamarine --remove)"
+  check_match "...and --feedback-skill with --remove" "one of --aquamarine, --remove," "$(in_h setup --feedback-skill --remove)"
   # What --remove takes away, and what it leaves: a link moved elsewhere, a real dir, the settings.
   in_h guard on claude >/dev/null
   ln -sfn /elsewhere "$h/.codex/skills/omabox"
+  ln -sfn /elsewhere "$h/.codex/skills/omabox-feedback"
   mkdir -p "$h/.pi/agent/skills/omabox" "$h/.local/share/omabox/aquamarine/lib" "$h/.cache/omabox-aquamarine" "$h/.local/share/omabox/saves/s1" "$h/.cache/omabox"
   echo bar-icon=auto > "$h/.config/omabox/config"
   out=$(in_h setup --remove); rc=$?
   check_eq "setup --remove" 0 "$rc"
   local f gone=""
-  for f in .local/bin/omabox .claude/skills/omabox .agents/skills/omabox .config/omarchy/plugins/chaves.omabox .local/share/omabox/aquamarine .cache/omabox-aquamarine; do
+  for f in .local/bin/omabox .claude/skills/omabox .agents/skills/omabox .claude/skills/omabox-feedback .agents/skills/omabox-feedback .config/omarchy/plugins/chaves.omabox .local/share/omabox/aquamarine .cache/omabox-aquamarine; do
     [ -e "$h/$f" ] || [ -L "$h/$f" ] || gone+="$f "
   done
-  check_eq "...removes the links and the user's aquamarine build" ".local/bin/omabox .claude/skills/omabox .agents/skills/omabox .config/omarchy/plugins/chaves.omabox .local/share/omabox/aquamarine .cache/omabox-aquamarine " "$gone"
-  check_eq "...not a link that points elsewhere now" /elsewhere "$(readlink "$h/.codex/skills/omabox")"
+  check_eq "...removes the links and the user's aquamarine build" ".local/bin/omabox .claude/skills/omabox .agents/skills/omabox .claude/skills/omabox-feedback .agents/skills/omabox-feedback .config/omarchy/plugins/chaves.omabox .local/share/omabox/aquamarine .cache/omabox-aquamarine " "$gone"
+  check_eq "...not a link that points elsewhere now" "/elsewhere /elsewhere" "$(readlink "$h/.codex/skills/omabox" "$h/.codex/skills/omabox-feedback" | tr '\n' ' ' | sed 's/ $//')"
   check "...nor a real dir" test -d "$h/.pi/agent/skills/omabox"
   check_eq "...keeps the settings and saves, saying so" "bar-icon=auto|yes" \
     "$(cat "$h/.config/omabox/config")|$([ -d "$h/.local/share/omabox/saves/s1" ] && grep -q "kept: your settings" <<<"$out" && echo yes)"
@@ -6440,6 +6467,7 @@ t_unit_install() {
     "$(cd "$c/tools" && for f in */omabox-*; do [ -x "$f" ] && echo "$f"; done)"
   check_eq "...and nothing in the checkout under test (#187)" "$tools0" "$(stat -c '%n %.9Y' "$ROOT"/tools/*/omabox-* 2>&1)"
   check_eq "the skill is a link" "$c/skill" "$(readlink "$h/.claude/skills/omabox")"
+  check_fails "...not the feedback skill: opt-in (finding 326)" test -L "$h/.claude/skills/omabox-feedback"
   check "...of the directory: the reference SKILL.md points to comes with it, for every agent" \
     bash -c "grep -q 'reference.md' '$h/.agents/skills/omabox/SKILL.md' && test -f '$h/.agents/skills/omabox/reference.md' && test -f '$h/.claude/skills/omabox/reference.md'"
   check_fails "no dir for an agent that is not installed" test -e "$h/.codex"

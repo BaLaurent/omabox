@@ -629,6 +629,7 @@ Wayland connection.
 | `tools/events` | records a box's Hyprland events, stamped, from its start (`omabox events`) |
 | `tools/relay` | carries an omabox command from inside ai-jail to the broker outside (`omabox broker`) |
 | `skill/` | the agent skill (Claude Code, Codex, OpenCode, pi, Hermes) that sends agents here |
+| `skill-feedback/` | opt-in: the `omabox-feedback` skill, to report what omabox got wrong in your sessions ([CONTRIBUTING](CONTRIBUTING.md#reporting-a-problem)) |
 | `plugin/` | the bar widget |
 | `test/run.sh` | the regression suite: real boxes, never the real desktop (`test/run.sh unit` is fast) |
 | `NOTES.md` | design notes: architecture, findings (cited in the code as "finding N"), dead ends |
