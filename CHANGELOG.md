@@ -26,6 +26,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   prints "seeded extensions/NAME.json from your desk: plugin ID reads it" for each such file, and
   `--no-seed extensions` gives the box a new Omarchy user's `extensions` instead. The skill now lists
   everything `up` copies from your desktop.
+- **`up` and `run` say when a path in the repo links out of it, to what the box does not have.** A
+  build cache that turns `target/` into a link to `~/.cache/…` left it dangling in the box (your HOME
+  is not mounted), and `run -- target/debug/app` said only "No such file or directory". Now `up` names
+  each such link at the top of the repo, and `run` each argument that goes through one, with the
+  `--ro-bind` that mounts its target.
 
 ### Fixed
 

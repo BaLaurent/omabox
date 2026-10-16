@@ -11226,12 +11226,70 @@ t_inspect() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# #235: a path in the repo reached through a link out of it (a build cache's target/ -> ~/.cache/...),
+# which dangles in a box (HOME is not mounted). repo_link_out finds the link on a path's way, with where
+# it leads and where the path is then; one that stays in the repo is walked through; one that dangles on
+# the host too, or a path outside the repo, is nothing. link_note gives the mount, or a box's refusal.
+t_unit_link_out() {
+  local d=$TMP/ulo r o
+  r=$d/repo o=$d/out; mkdir -p "$r/sub/in" "$o/debug" "$d/h/.ssh"; : > "$o/debug/app"; : > "$r/sub/in/f"
+  ln -s "$o" "$r/target"; ln -s ../out "$r/rel"; ln -s sub "$r/inside"; ln -s "$o" "$r/sub/in/deep"
+  ln -s "$d/nothing" "$r/gone"; ln -s "$d/h/.ssh" "$r/keys"
+  check_eq "a path through a link out of the repo: the link, where it leads, the path resolved" \
+    "$r/target"$'\t'"$o"$'\t'"$o/debug/app" "$(lib repo_link_out "$r" "$r/target/debug/app")"
+  check_eq "...the link itself" "$r/target"$'\t'"$o"$'\t'"$o" "$(lib repo_link_out "$r" "$r/target")"
+  check_eq "...a relative link out (../out)" "$r/rel"$'\t'"$o"$'\t'"$o/debug" "$(lib repo_link_out "$r" "$r/rel/debug")"
+  check_eq "...through a link that stays in the repo first" "$r/inside/in/deep"$'\t'"$o"$'\t'"$o/debug" \
+    "$(lib repo_link_out "$r" "$r/inside/in/deep/debug")"
+  check_eq "...a path with .. in it, normalized" "$r/target"$'\t'"$o"$'\t'"$o/debug" "$(lib repo_link_out "$r" "$r/sub/../target/debug")"
+  check_fails "a link that stays in the repo: nothing" lib repo_link_out "$r" "$r/inside/in/f"
+  check_fails "a plain path in the repo: nothing" lib repo_link_out "$r" "$r/sub/in/f"
+  check_fails "a link that dangles on the host too: nothing" lib repo_link_out "$r" "$r/gone"
+  check_fails "a path not there on the host: nothing" lib repo_link_out "$r" "$r/target/debug/nope"
+  check_fails "a path outside the repo: nothing" lib repo_link_out "$r" "$o/debug/app"
+  check_fails "...nor the repo's own top" lib repo_link_out "$r" "$r"
+  check_match "link_note: the mount that gives it" "^omabox: note: $r/target -> $o: outside the box, where the link dangles; up --ro-bind $o mounts it$" \
+    "$(HOME=$d/h lib link_note "" "$r/target" "$o" up 2>&1)"
+  check_match "...one a box may not mount: why, no mount offered" "^omabox: note: $r/keys -> $d/h/.ssh: outside the box, where the link dangles; a box may not mount it \(it is inside $d/h/.ssh/ " \
+    "$(HOME=$d/h lib link_note "" "$r/keys" "$d/h/.ssh" up 2>&1)"
+}
+
+# #235: a link at the top of the repo out of it, to a scratch folder (not the real HOME), named by `up`
+# with the --ro-bind that gives it, and by `run` for a word that goes through it (the command still runs);
+# none for a link that stays in the repo, one that dangles on the host too, or once --ro-bind has it. A
+# throwaway's up says it with run --ro-bind, once (not again for the word).
+t_link_out() {
+  local B=$P-lo repo out=$TMP/lo-out err rc
+  repo=$(tmp_repo lo); mkdir -p "$out/debug" "$repo/sub"; printf 'app\n' > "$out/debug/app"; echo hi > "$repo/README"
+  ln -s "$out" "$repo/target"; ln -s sub "$repo/inside"; ln -s "$TMP/lo-nothing" "$repo/gone"
+  err=$(cd "$repo" && ob up "$B" --no-shell 2>&1 >/dev/null) || { no "up from a repo with a link out" "$err"; return; }
+  check_match "up: the link out named, with the mount" "note: $repo/target -> $out: outside the box, where the link dangles; up --ro-bind $out mounts it" "$err"
+  check_eq "...that link only (not one in the repo, nor one dangling on the host too)" 1 "$(grep -c 'outside the box' <<<"$err")"
+  err=$(cd "$repo" && ob run -b "$B" -- cat target/debug/app 2>&1); rc=$?
+  check_match "run: a word through it named" "note: target/debug/app leads through $repo/target -> $out: outside the box, where the link dangles; down, then up --ro-bind $out mounts it" "$err"
+  check_match "...and the command still ran (cat's own error, its status)" "cat: target/debug/app: No such file or directory" "$err"
+  check_eq "...its status" 1 "$rc"
+  err=$(cd "$repo" && ob run -b "$B" -- cat "$repo/README" inside 2>&1 >/dev/null)
+  check_fails "run: no note for words in the repo that stay in it" grep -q 'outside the box' <<<"$err"
+  ob down "$B" >/dev/null 2>&1
+  err=$(cd "$repo" && ob up "$B" --no-shell --ro-bind "$out" 2>&1 >/dev/null) || { no "up --ro-bind the link's target" "$err"; return; }
+  check_fails "up --ro-bind the target: no note" grep -q 'outside the box' <<<"$err"
+  check_eq "...run: it is there, no note" "app" "$(cd "$repo" && ob run -b "$B" -- cat target/debug/app 2>"$TMP/lo.err")"
+  check_eq "...nothing said" "" "$(cat "$TMP/lo.err")"
+  ob down "$B" >/dev/null 2>&1
+  err=$(cd "$repo" && env -u OMABOX "$CLI" run --no-shell -- cat target/debug/app 2>&1)
+  check_match "a throwaway: its up names it, with run --ro-bind" "note: $repo/target -> $out: outside the box, where the link dangles; run --ro-bind $out mounts it" "$err"
+  check_eq "...once" 1 "$(grep -c 'outside the box' <<<"$err")"
+  check_eq "a throwaway with --ro-bind: there, nothing said" "app" "$(cd "$repo" && env -u OMABOX "$CLI" run --no-shell --ro-bind "$out" -- cat target/debug/app 2>"$TMP/lo.err")"
+  check_fails "...no note" grep -q 'outside the box' "$TMP/lo.err"
+}
+
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_fd_exposed t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

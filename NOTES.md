@@ -6822,3 +6822,24 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     parsing and refusals), t_no_seed (a box on a fake desk: the line and the desk's copy; with
     `--no-seed extensions` none, skel's file and a `--seed`; `ls --json`, `up` again both ways). On the
     real desk: `up --plugin` of the hotkey wheel says its `hotkey-wheel.json`.
+336. **A repo path through a link out of the repo dangled in the box unsaid; `up` and `run` name it**
+    (2026-10-16, #235). A build cache had swapped a Rust repo's `target/` for a link to
+    `~/.cache/<cache>/targets/<hash>`; HOME is not mounted, so in the box the link dangled and `run --
+    target/debug/app` said only "No such file or directory". `up` now names each link at the top of
+    the repo it mounted whose target the box lacks: "note: REPO/target -> TARGET: outside the box,
+    where the link dangles; up --ro-bind TARGET mounts it" (a throwaway's up: `run --ro-bind`; a target
+    refuse_src keeps out: why, no mount offered; 5 at most, then a count). The top only: a walk of a big
+    repo is slow. `run` names each word of its command that is a path in the repo (absolute, or
+    relative to the caller's dir; not `--opt=PATH`) reached through such a link ("WORD leads through
+    LINK -> TARGET: …; down, then up --ro-bind TARGET mounts it"), then runs the command all the same
+    (`-q` does not hide it); a throwaway leaves the top-level links to its up's note. `repo_link_out`
+    walks the path with builtins, `readlink` only at a link; whether the box has it is read from the
+    host through `/proc/PID/root` (the link there, its resolved target not), no command in the box, so
+    the target is "outside" whatever mount would have it (a `--ro-bind`, mise's, `/usr`) and a word in
+    another repo than the box's is not taken for one. A link of the box's own on the way could lead
+    that look to the host's files: a note missed, never a false one. Not for a jailed caller: where its
+    links lead outside its jail is not for it to learn, nor its to mount. Tests: t_unit_link_out (the
+    walk: a link out, relative, through an in-repo link, `..`, one that stays in, one dangling on the
+    host, outside the repo; the note and a refused target), t_link_out (a scratch repo whose `target`
+    links to a scratch folder: up's and run's notes, the command still run, none for in-repo words or
+    with `--ro-bind` of it, a throwaway's note once with `run --ro-bind`).

@@ -2675,6 +2675,90 @@ own_path_visible() {
   return $seen
 }
 
+# repo_link_out TOP PATH (#235): PATH (absolute, under the repo TOP, there on the host) reached through
+# a link in TOP that leads out of it (a build cache's target/ -> ~/.cache/...): prints that link, where
+# it leads and where PATH is then, resolved, tab-separated. Fails for a path with no such link on its
+# way, or whose link leads nowhere (it dangles on the host too). The first such link only; one that
+# stays in TOP is walked through. Builtins until a link is met: `run` checks its words with it.
+repo_link_out() {
+  local top=$1 p=$2 rest c cur r rp
+  [[ $p == "$top"/* ]] && [ -e "$p" ] || return 1
+  case /$p/ in */../*|*/./*) p=$(realpath -ms -- "$p") && [[ $p == "$top"/* ]] || return 1 ;; esac
+  rest=${p#"$top"/} cur=$top
+  while [ -n "$rest" ]; do
+    c=${rest%%/*}
+    if [ "$c" = "$rest" ]; then rest=""; else rest=${rest#*/}; fi
+    [ -n "$c" ] || continue
+    cur=$cur/$c
+    [ -L "$cur" ] || continue
+    r=$(readlink -e -- "$cur") || return 1
+    [ "$r" = "$top" ] || [[ $r == "$top"/* ]] && continue
+    rp=$(readlink -e -- "$p") || return 1
+    printf '%s\t%s\t%s\n' "$cur" "$r" "$rp"
+    return 0
+  done
+  return 1
+}
+# link_dangles PID LINK RESOLVED (#235): the box whose PID 1 is PID has LINK (the repo is mounted) but
+# not RESOLVED, where it leads on the host: read through the box's own root from here, no command in
+# the box. (A link of the box's own on the way may lead the look out to the host's files: then it says
+# no, and a note is missed, never a false one made.)
+link_dangles() { [ -L "/proc/$1/root$2" ] && [ ! -e "/proc/$1/root$3" ]; }
+# The words of link_note (#235): LINK -> TARGET outside the box, and the mount that gives it, or why a
+# box may not have it. link_note WHAT LINK TARGET HOW
+link_note() {
+  local why
+  if why=$(refuse_src "$3"); then say "note: $1$2 -> $3: outside the box, where the link dangles; a box may not mount it ($why)"
+  else say "note: $1$2 -> $3: outside the box, where the link dangles; $4 --ro-bind $3 mounts it"; fi
+}
+# up_link_notes HOW (#235): each link at the top of the repo `up` mounted that leads out of it to what
+# the box does not have (HOME is not mounted: a build cache's target/ -> ~/.cache/...), said with the
+# mount that gives it (HOW: `up`, or `run` for a throwaway's); 5 at most. The top only: a walk of the
+# whole repo could take long. Not for a jailed caller: where its links lead outside its jail is not
+# for it to learn, nor its to mount (--ro-bind takes the jail's folders whole).
+up_link_notes() {
+  local top pid e x c r rp n=0 more=0
+  ! in_jail || return 0
+  top=$(repo_top) && ! refuse_src "$top" >/dev/null || return 0
+  pid=$(box_pid) && [ -n "$pid" ] && [ -d "/proc/$pid/root/usr" ] || return 0
+  for e in "$top"/* "$top"/.[!.]* "$top"/..?*; do
+    [ -L "$e" ] || continue
+    x=$(repo_link_out "$top" "$e") || continue
+    IFS=$'\t' read -r c r rp <<<"$x"
+    link_dangles "$pid" "$c" "$rp" || continue
+    if [ $n -ge 5 ]; then more=$((more + 1)); continue; fi
+    n=$((n + 1)); link_note "" "$c" "$r" "$1"
+  done
+  [ $more = 0 ] || say "note: and $more more links at the top of the repo that lead out of the box"
+}
+# run_link_notes HOW TOP-SAID WORD... (#235): each word of the command that is a path in the repo
+# (absolute, or relative to here) there on the host, reached through a link out of the repo to what
+# box NAME does not have, said before the command runs (it still runs: an `ls` of it may be the point).
+# HOW: what gives it (`down, then up`; `run` for a throwaway). TOP-SAID 1: links at the top of the repo
+# are left out, a throwaway's `up` said them. Not for a jailed caller (up_link_notes). No command in the
+# box; only a word that is a path in the repo costs more than a test.
+run_link_notes() {
+  local how=$1 tops=$2 top="" pid="" here w p x c r rp; shift 2
+  local -A said=()
+  ! in_jail || return 0
+  here=$(pwd -P) || return 0
+  for w; do
+    case $w in ''|-*) continue ;; /*) p=$w ;; *) p=$here/$w ;; esac
+    [ -e "$p" ] || continue
+    if [ -z "$top" ]; then
+      top=$(repo_top) || return 0
+      pid=$(box_pid) && [ -n "$pid" ] && [ -d "/proc/$pid/root/usr" ] || return 0
+    fi
+    x=$(repo_link_out "$top" "$p") || continue
+    IFS=$'\t' read -r c r rp <<<"$x"
+    [ -z "${said[$c]:-}" ] || continue
+    [ "$tops" = 0 ] || [ "${c%/*}" != "$top" ] || continue
+    link_dangles "$pid" "$c" "$rp" || continue
+    said[$c]=1
+    link_note "$w leads through " "$c" "$r" "$how"
+  done
+}
+
 # up --seed SRC:DEST (#80): a file or folder of the host's, copied into the box HOME at DEST before the
 # session starts (a plugin that reads its config once at start finds it there). DEST is in the box HOME:
 # `.config/x`, `~/.config/x` or `/home/sbx/.config/x`, never above it. Prints "src<TAB>dest" (SRC
@@ -3692,6 +3776,9 @@ cmd_up() {
     say "note: box '$NAME' has no idle limit and goes with no agent: nothing takes it down but omabox down $NAME;" \
       "once what started it$by is gone, ls calls it an orphan"
   fi
+  # Links at the top of the repo out of it, to what the box lacks (#235); a throwaway's: run --ro-bind.
+  local lhow=up; [ -z "$owner" ] || lhow=run
+  up_link_notes "$lhow"
   if [ $json = 1 ]; then box_json
   elif [ $new = 1 ]; then echo "$NAME"; fi
   [ -z "$crashed" ] || { say "$crashed"; exit 1; }
@@ -4746,6 +4833,7 @@ cmd_run() {
     ENVKV+=("${envs[@]}")   # after --env-file's, so the flag wins; --pass wins over both
     touch "$D/used" 2>/dev/null || true   # use, for idle expiry (so is its end, below)
     take_over || need_box   # gone while it waited: says so
+    run_link_notes "down, then up" 0 "$@"   # its words through a link out of the repo (#235)
     if [ $detach = 1 ]; then
       # --replace: the earlier job of this command stopped and its windows gone before the screen is
       # watched (their closing is not what --wait waits for) and before it starts again (finding 110).
@@ -4826,6 +4914,7 @@ cmd_run() {
   fi
   # Its warnings and notes still reach the caller (another Hyprland version than hyprctl's, finding 116).
   printf '%s\n' "$err" | grep -E '^omabox: (warning|note):' >&2 || true
+  run_link_notes run 1 "$@"   # (links at the top of the repo: its up said them)
   local rc=0
   box_exec "$@" || rc=$?
   run_gone $rc
