@@ -30,7 +30,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   build cache that turns `target/` into a link to `~/.cache/…` left it dangling in the box (your HOME
   is not mounted), and `run -- target/debug/app` said only "No such file or directory". Now `up` names
   each such link at the top of the repo, and `run` each argument that goes through one, with the
-  `--ro-bind` that mounts its target.
+  `--ro-bind` that mounts its target when that is a cache, outside your HOME or in no hidden folder of
+  it (a repo's link may lead anywhere: elsewhere no mount is offered).
+- **A box refuses the coding agents' and the browsers' own stores**, as it does the other secret
+  stores: `~/.claude`, `~/.codex`, OpenCode's, pi's, Hermes' and Gemini's, the browser profiles
+  (`~/.mozilla`, Chromium, Chrome, Brave, Vivaldi, Edge) and `~/.pki`, whether by `--ro-bind`,
+  `--seed`, `--overlay` or a plugin.
 - **`cpu --threads`: CPU per thread.** With `--app NAME` or `--pid PID`, each of the app's threads
   is listed under it by name, over the same window: a Qt Quick app's main thread apart from its
   `QSGRenderThread`, each thread of a pool on its own row. `--json` gives them as

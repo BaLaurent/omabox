@@ -2738,6 +2738,7 @@ repo_link_out() {
     r=$(readlink -e -- "$cur") || return 1
     [ "$r" = "$top" ] || [[ $r == "$top"/* ]] && continue
     rp=$(readlink -e -- "$p") || return 1
+    [[ $cur$r$rp != *[$'\t\n']* ]] || return 1   # (a tab or newline in a name: not one line of three)
     printf '%s\t%s\t%s\n' "$cur" "$r" "$rp"
     return 0
   done
@@ -2745,15 +2746,39 @@ repo_link_out() {
 }
 # link_dangles PID LINK RESOLVED (#235): the box whose PID 1 is PID has LINK (the repo is mounted) but
 # not RESOLVED, where it leads on the host: read through the box's own root from here, no command in
-# the box. (A link of the box's own on the way may lead the look out to the host's files: then it says
-# no, and a note is missed, never a false one made.)
+# the box. What the look sees is the box's to arrange (it can move its mounts, or plant links that lead
+# the look to the host's own files), so its answer can be wrong either way: a note missed or one made
+# for a link the box does have. Only these two tests are made, and nothing of the box reaches the note.
 link_dangles() { [ -L "/proc/$1/root$2" ] && [ ! -e "/proc/$1/root$3" ]; }
+# link_mountable TARGET (#235): a link's target the note may offer to mount (prints nothing; fails, saying
+# why, when not). The link is the repo's, and a repo may be anyone's clone: a target a box may have at
+# all (refuse_src) is offered only outside HOME, under the cache dir (~/.cache/..., a build cache's
+# targets), or under HOME in no hidden folder (another checkout's target/); not in a dot-dir of HOME
+# (settings, keys and tokens live there) nor in the XDG config, data or state dirs.
+link_mountable() {
+  local t=${1%/}/ h hr c x
+  c=${XDG_CACHE_HOME:-$HOME/.cache}; c=${c%/}/
+  hr=$(readlink -f -- "$HOME" 2>/dev/null) || hr=$HOME
+  case $t in "$c"?*) return 0 ;; esac
+  for h in "$HOME" "$hr"; do
+    h=${h%/}/
+    case $t in "$h"*) ;; *) continue ;; esac
+    case /${t#"$h"} in */.*) echo "it is in a hidden folder of your HOME, where settings and keys live"; return 1 ;; esac
+  done
+  for x in "${XDG_CONFIG_HOME:-}" "${XDG_DATA_HOME:-}" "${XDG_STATE_HOME:-}"; do
+    [ -n "$x" ] || continue
+    case $t in "${x%/}"/*) echo "it is in $x, where settings and keys live"; return 1 ;; esac
+  done
+  return 0
+}
 # The words of link_note (#235): LINK -> TARGET outside the box, and the mount that gives it, or why a
-# box may not have it. link_note WHAT LINK TARGET HOW
+# box may not have it, or (link_mountable) why none is offered. Names as the repo has them are printed
+# with their control characters as `?`. link_note WHAT LINK TARGET HOW
 link_note() {
-  local why
-  if why=$(refuse_src "$3"); then say "note: $1$2 -> $3: outside the box, where the link dangles; a box may not mount it ($why)"
-  else say "note: $1$2 -> $3: outside the box, where the link dangles; $4 --ro-bind $3 mounts it"; fi
+  local why w=${1//[[:cntrl:]]/?} l=${2//[[:cntrl:]]/?} t=${3//[[:cntrl:]]/?}
+  if why=$(refuse_src "$3"); then say "note: $w$l -> $t: outside the box, where the link dangles; a box may not mount it ($why)"
+  elif ! why=$(link_mountable "$3"); then say "note: $w$l -> $t: outside the box, where the link dangles; no mount is offered for it ($why)"
+  else say "note: $w$l -> $t: outside the box, where the link dangles; $4 --ro-bind $t mounts it"; fi
 }
 # up_link_notes HOW (#235): each link at the top of the repo `up` mounted that leads out of it to what
 # the box does not have (HOME is not mounted: a build cache's target/ -> ~/.cache/...), said with the
@@ -2889,7 +2914,8 @@ robind_spec() {
 # 63). Read-only mounts, overlays and plugin dirs are files the box's code can read, and sockets it can
 # connect() to whatever the network mode. Refused: anything that contains HOME, ~/.config/omarchy
 # (api-keys.env) or /tmp; anything inside or containing the secret stores (with the token dirs of gh,
-# gcloud, azure and 1Password's op), omabox's own data dir (saves hold a box's keyring) and box HOMEs,
+# gcloud, azure and 1Password's op; the coding agents' and the browsers' own stores, finding 336),
+# omabox's own data dir (saves hold a box's keyring) and box HOMEs,
 # the runtime dir (omabox's box dirs too), /run, the kernel's trees, or /tmp's socket dirs (X11, tmux,
 # ssh-agent). A repo in /tmp is fine. Inside ~/.config/omarchy (where a dotfiles link puts it too), only
 # plugins/ and themes/ (finding 228: api-keys.env itself went in, and hooks/ are the user's scripts);
@@ -2921,9 +2947,14 @@ refuse_path() {
            "$HOME/.aws" "$HOME/.kube" "$HOME/.docker" "$HOME/.netrc" "$HOME/.config/gh" \
            "$HOME/.config/gcloud" "$HOME/.azure" "$HOME/.config/op" "$HOME/.git-credentials" \
            "$HOME/.config/git/credentials" "${SAVES%/saves}" "$HOMES" \
+           "$HOME/.claude" "$HOME/.claude.json" "${CLAUDE_CONFIG_DIR:-}" "$HOME/.codex" "${CODEX_HOME:-}" \
+           "$HOME/.config/opencode" "$HOME/.local/share/opencode" "$HOME/.pi" "$HOME/.hermes" "$HOME/.gemini" \
+           "$HOME/.mozilla" "$HOME/.config/chromium" "$HOME/.config/google-chrome" "$HOME/.config/BraveSoftware" \
+           "$HOME/.config/vivaldi" "$HOME/.config/microsoft-edge" "$HOME/.pki" \
            "${XDG_RUNTIME_DIR:-/run/user/$UID}" /run /dev /proc /sys /tmp/.X11-unix /tmp/.ICE-unix \
            /tmp/tmux-* /tmp/ssh-* /tmp/gpg-*; do
     [[ $x == *\** ]] && continue   # a glob that matched nothing
+    [ -n "$x" ] || continue         # an agent's config dir variable that is not set
     x=${x%/}/
     case "$s" in "$x"*) echo "it is inside $x (secrets or live sockets)"; return 0 ;; esac
     case "$x" in "$s"*) echo "it contains $x (secrets or live sockets)"; return 0 ;; esac

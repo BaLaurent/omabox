@@ -352,7 +352,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   Outside a repo a throwaway `run` mounts nothing of the current dir.
 - A link in the repo that leads out of it (a build cache's `target/ -> ~/.cache/…`) dangles in the
   box: `up` names each at the top of the repo, `run` each argument through one ("outside the box,
-  where the link dangles"), with the `--ro-bind TARGET` that mounts it (`down`, then `up` with it).
+  where the link dangles"), with the `--ro-bind TARGET` that mounts it (`down`, then `up` with it)
+  when TARGET is a cache, outside HOME or in no hidden folder of it; else no mount is offered.
 - **Copied from the desk into the box HOME at `up`** (copies: edits after `up` do not reach the box;
   hidden files and `node_modules` left out, links inside stay links), on top of a new Omarchy user's
   HOME (`/etc/skel`): `shell.json` (the bar's settings, with only built-in widgets and the mounted

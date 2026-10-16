@@ -428,7 +428,9 @@ blocks the network and every other socket, omabox's included), or see
   is or contains HOME, `~/.config/omarchy` or `/tmp`, anything inside `~/.config/omarchy` but
   `plugins/` and `themes/` (`api-keys.env`, your hooks), the secret stores (`~/.ssh`, `~/.gnupg`, keyrings,
   `~/.password-store`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, gh's,
-  gcloud's, azure's and 1Password's `op` config), omabox's own saves and box HOMEs
+  gcloud's, azure's and 1Password's `op` config; the coding agents' own, `~/.claude`, `~/.codex`, OpenCode's,
+  pi's, Hermes' and Gemini's; the browsers' profiles, `~/.mozilla`, Chromium's, Chrome's, Brave's, Vivaldi's,
+  Edge's, and `~/.pki`), omabox's own saves and box HOMEs
   (`~/.local/share/omabox`, `~/.cache/omabox`), your runtime dir, `/run`, `/dev`, `/proc`, `/sys`.
 - **Its HOME** is fake, seeded with your theme and shell settings and nothing secret (no API keys,
   keyrings or tokens), and `omabox down` deletes it with whatever a plugin or app changed there.

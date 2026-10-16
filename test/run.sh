@@ -784,6 +784,15 @@ t_unit_mount_rules() {
            .config/op .git-credentials .config/git/credentials; do
     check "HOME/$x refused" lib refuse_src "$HOME/$x"
   done
+  # finding 336: the coding agents' and the browsers' own stores (their logins), said as a secret store's
+  for x in .claude .claude.json .codex .config/opencode .local/share/opencode .pi .hermes .gemini .mozilla \
+           .config/chromium .config/google-chrome .config/BraveSoftware .config/vivaldi .config/microsoft-edge .pki; do
+    check "HOME/$x refused" lib refuse_src "$HOME/$x/x"
+  done
+  check_match "...said as the other stores are" "^it is inside $HOME/\.claude/ \(secrets or live sockets\)$" "$(lib refuse_src "$HOME/.claude")"
+  check "...CLAUDE_CONFIG_DIR and CODEX_HOME where they are set" \
+    env CLAUDE_CONFIG_DIR="$TMP/mr-cc" CODEX_HOME="$TMP/mr-cx" bash -c 'source "$1"; refuse_src "$2/mr-cc/x" && refuse_src "$2/mr-cx"' _ "$TMP/lib/bin/omabox" "$TMP"
+  check_fails "...unset, nothing more refused" env -u CLAUDE_CONFIG_DIR -u CODEX_HOME bash -c 'source "$1"; refuse_src "$2"' _ "$TMP/lib/bin/omabox" "$TMP"
   check_fails "HOME/code is fine" lib refuse_src "$HOME/code"
   check "/ refused" lib refuse_src /
   check_fails "a repo is fine" lib refuse_src "$ROOT"
@@ -11380,6 +11389,31 @@ t_unit_link_out() {
     "$(HOME=$d/h lib link_note "" "$r/target" "$o" up 2>&1)"
   check_match "...one a box may not mount: why, no mount offered" "^omabox: note: $r/keys -> $d/h/.ssh: outside the box, where the link dangles; a box may not mount it \(it is inside $d/h/.ssh/ " \
     "$(HOME=$d/h lib link_note "" "$r/keys" "$d/h/.ssh" up 2>&1)"
+  # The repo may be anyone's: its link is offered a mount only to a cache, outside HOME, or in no hidden
+  # folder of HOME; elsewhere (settings, logins) the note says so and offers none.
+  # shellcheck disable=SC2329 # called below
+  lmlib() { env -u XDG_CACHE_HOME -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME HOME="$d/h" bash -c 'source "$1"; shift; "$@"' lib "$TMP/lib/bin/omabox" "$@"; }
+  check "link_mountable: under ~/.cache (a build cache's targets)" lmlib link_mountable "$d/h/.cache/cc/targets/ab12"
+  check "...under HOME in no hidden folder (another checkout's target)" lmlib link_mountable "$d/h/code/other/target"
+  check "...outside HOME" lmlib link_mountable "$o"
+  check_fails "...not ~/.cache itself" lmlib link_mountable "$d/h/.cache"
+  check_fails "...not a dot-dir of HOME" lmlib link_mountable "$d/h/.config/someapp"
+  check_fails "...nor a hidden folder deeper in HOME" lmlib link_mountable "$d/h/code/app/.secrets"
+  check_fails "...nor XDG_CONFIG_HOME elsewhere" env HOME="$d/h" XDG_CONFIG_HOME="$d/cfg" bash -c 'source "$1"; link_mountable "$2"' _ "$TMP/lib/bin/omabox" "$d/cfg/app"
+  mkdir -p "$d/h/.config/someapp"
+  check_match "link_note: a dot-dir of HOME is said outside the box, no mount offered" \
+    "^omabox: note: $r/conf -> $d/h/.config/someapp: outside the box, where the link dangles; no mount is offered for it \(it is in a hidden folder of your HOME, where settings and keys live\)$" \
+    "$(lmlib link_note "" "$r/conf" "$d/h/.config/someapp" up 2>&1)"
+  check_match "...an agent's store: refused, as a secret store" "^omabox: note: $r/ag -> $d/h/.claude: outside the box, where the link dangles; a box may not mount it \(it is inside $d/h/.claude/ " \
+    "$(HOME=$d/h lib link_note "" "$r/ag" "$d/h/.claude" up 2>&1)"
+  # Names as the repo has them: control characters printed as ?, and one with a tab or newline skipped.
+  local esc=$'e\e[31mRED\e[0m'
+  check_eq "link_note: a control character in a name or target printed as ?" \
+    "omabox: note: w?x leads through $r/e?[31mRED?[0m -> $o/e?[0m: outside the box, where the link dangles; up --ro-bind $o/e?[0m mounts it" \
+    "$(HOME=$d/h lib link_note $'w\ax leads through ' "$r/$esc" "$o/"$'e\e[0m' up 2>&1)"
+  ln -s "$o" "$r/"$'new\nline'; ln -s "$o" "$r/"$'a\tb'
+  check_fails "repo_link_out: a link with a newline in its name: nothing" lib repo_link_out "$r" "$r/"$'new\nline'
+  check_fails "...a tab: nothing" lib repo_link_out "$r" "$r/"$'a\tb'
 }
 
 # #235: a link at the top of the repo out of it, to a scratch folder (not the real HOME), named by `up`
@@ -11399,6 +11433,12 @@ t_link_out() {
   check_eq "...its status" 1 "$rc"
   err=$(cd "$repo" && ob run -b "$B" -- cat "$repo/README" inside 2>&1 >/dev/null)
   check_fails "run: no note for words in the repo that stay in it" grep -q 'outside the box' <<<"$err"
+  # A link's name as the repo has it: an escape sequence in it is not printed as one.
+  ln -s "$out" "$repo/"$'e\e[31mRED'
+  err=$(cd "$repo" && ob run -b "$B" -- true $'e\e[31mRED/debug/app' 2>&1)
+  check_match "run: a link named with an escape: named, its control character as ?" "note: e\?\[31mRED/debug/app leads through $repo/e\?\[31mRED -> $out:" "$err"
+  check_fails "...no escape character printed" grep -q $'\e' <<<"$err"
+  rm -f -- "$repo/"$'e\e[31mRED'
   ob down "$B" >/dev/null 2>&1
   err=$(cd "$repo" && ob up "$B" --no-shell --ro-bind "$out" 2>&1 >/dev/null) || { no "up --ro-bind the link's target" "$err"; return; }
   check_fails "up --ro-bind the target: no note" grep -q 'outside the box' <<<"$err"

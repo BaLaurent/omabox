@@ -6797,13 +6797,28 @@ from them.
     walks the path with builtins, `readlink` only at a link; whether the box has it is read from the
     host through `/proc/PID/root` (the link there, its resolved target not), no command in the box, so
     the target is "outside" whatever mount would have it (a `--ro-bind`, mise's, `/usr`) and a word in
-    another repo than the box's is not taken for one. A link of the box's own on the way could lead
-    that look to the host's files: a note missed, never a false one. Not for a jailed caller: where its
-    links lead outside its jail is not for it to learn, nor its to mount. Tests: t_unit_link_out (the
-    walk: a link out, relative, through an in-repo link, `..`, one that stays in, one dangling on the
-    host, outside the repo; the note and a refused target), t_link_out (a scratch repo whose `target`
-    links to a scratch folder: up's and run's notes, the command still run, none for in-repo words or
-    with `--ro-bind` of it, a throwaway's note once with `run --ro-bind`).
+    another repo than the box's is not taken for one. What that look sees is the box's to arrange (it
+    can move its own mounts, or plant links that lead the look to the host's files), so it can be
+    wrong either way: a note missed, or one made for a link the box does have. Only the two stats are
+    made, and nothing of the box reaches the note. Not for a jailed caller: where its links lead
+    outside its jail is not for it to learn, nor its to mount. A repo may be anyone's clone, and git
+    keeps a link to any target, so the note offers the mount only where it is reasonable
+    (`link_mountable`): under the cache dir (`~/.cache/…`, not itself), outside HOME, or under HOME in
+    no hidden folder (another checkout's `target/`); a target in a dot-dir of HOME, or in the XDG
+    config, data or state dirs, gets "no mount is offered for it (it is in a hidden folder of your
+    HOME, where settings and keys live)". refuse_src also keeps out the coding agents' and the
+    browsers' own stores now (`~/.claude`, `~/.claude.json`, `$CLAUDE_CONFIG_DIR`, `~/.codex`,
+    `$CODEX_HOME`, OpenCode's `~/.config/opencode` and `~/.local/share/opencode`, `~/.pi`,
+    `~/.hermes`, `~/.gemini`, `~/.mozilla`, `~/.config/{chromium,google-chrome,BraveSoftware,vivaldi,
+    microsoft-edge}`, `~/.pki`), said as the other secret stores are, for every mount. Names and
+    targets are the repo's: the note prints their control characters as `?`, and a link whose name or
+    target holds a tab or newline is skipped (not one line of three for the walk). Tests:
+    t_unit_link_out (the walk: a link out, relative, through an in-repo link, `..`, one that stays in,
+    one dangling on the host, outside the repo; the note and a refused target; link_mountable's cases;
+    an agent's store; `?` for an escape; a tab or newline skipped), t_unit_mount_rules (each new
+    store, the two variables), t_link_out (a scratch repo whose `target` links to a scratch folder:
+    up's and run's notes, the command still run, none for in-repo words or with `--ro-bind` of it, a
+    link named with an escape sequence said with `?`, a throwaway's note once with `run --ro-bind`).
 
 337. **`run -- wl-copy TEXT` never returned to a `$(...)` or a pipe: the fork held the output**
     (2026-10-16, #239). `wl-copy` forks a server that serves the item until the next copy; the server
