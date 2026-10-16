@@ -158,6 +158,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - `omabox host -- CMD` examples, once the user asked for their real desktop: `omabox host -- hyprctl
   reload`, `omabox host -- omarchy-theme-set NAME`. Testing, screenshots and anything the user did not
   ask to see on their desktop stay in a box: `shot` works on a hidden interactive box.
+- "this hook is outdated (omabox changed it)" at session start: tell the user to run `omabox guard on`
+  (it rewrites your own settings, so leave it to them).
 
 ## Screen size and rendering cost
 

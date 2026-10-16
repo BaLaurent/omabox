@@ -7025,6 +7025,27 @@ from them.
     logs `dbus-broker-launch[PID]: Ready`. Test: `journal_sink` in t_dbus_user_app (the tmpfs mount,
     the sink's name, `logger --journald`, `/usr/bin/systemd-cat`, at-spi-bus-launcher from `env -i` on
     a private bus and runtime dir, the 4 KB bound of a second sink), and t_systemd (a unit's output).
+346. **The guard's hooks say when an upgrade changed them** (2026-10-16). What `guard on` writes is
+    literal text, compared whole by `omabox guard` ("outdated"). When an upgrade changed it (#243's
+    rewrite), the old hook went on working and nobody was told: the package's `post_upgrade` only says
+    to run setup if the changelog asks. Now `share/guard/hook-version` holds one stamp per agent
+    (Claude Code's, then Codex's: their state is apart, so a Codex-only change leaves Claude Code's
+    hook quiet), each the first 12 hex of a sha256 of what `guard on` writes for it, built with no
+    stamps and `$ROOT` made `@ROOT@` (Claude Code: the hook; Codex: its hook and the config.toml
+    block). omabox reads the file (one `read`) and embeds each stamp in its hook, so the stamp cannot
+    differ from the file it ships with; t_unit_guard_settings computes the hash again and fails with the
+    new value when the hook changed and the file did not. At session start the hook reads the file
+    under its own `share/guard` with the `read` builtin (no process; ~1 ms with the rest) and, when it
+    holds another stamp, prints one more line after the note (or after "NOT applied"): "this hook is
+    outdated (omabox changed it): tell the user to run omabox guard on to renew it". An empty or
+    missing file says nothing: in ai-jail the checkout is not mapped (#203), and a checkout that is gone
+    is the existing "omabox is gone" branch. *Decided*: tell the user, not run `guard on` itself (it
+    rewrites the agent's own settings); CI's and CONTRIBUTING's shellcheck take `share/guard`'s
+    scripts by their `#!` (the stamp file is not one). This change itself changes both hooks, so every
+    installed guard reads outdated once without the line, as before. Test: t_unit_guard_settings (the
+    hash, both hooks carry their stamps, a current stamp adds nothing, a changed one adds the line for
+    each agent apart, no file adds nothing). Seen with `sh` (bash's POSIX mode; no dash here), not in a
+    live Claude Code or Codex session.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -59,6 +59,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `processes[].threads[]` (`tid` as the box numbers it, `host_tid`, `name`, `cpu`). Without `--app`
   or `--pid` it is refused: every process's threads would bury the app's.
 
+- **The guard's hooks say when an omabox update changed them.** What `omabox guard on` writes into
+  Claude Code's and Codex's settings changes now and then, and the old hook kept working, so nobody
+  was told: only `omabox guard` read it as outdated. Now each hook carries a stamp, and at session
+  start, when its omabox ships another, it adds one line to its note: "this hook is outdated (omabox
+  changed it): tell the user to run omabox guard on to renew it". This version changes both hooks
+  itself, so run `omabox guard on` (or `omabox setup`) once after updating: the last time a change to
+  them goes unannounced.
+
 ### Fixed
 
 - **`omabox tree` reads egui and other winit (AccessKit) apps.** An egui app on eframe 0.36 or older
@@ -115,7 +123,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **The guard no longer piles its line into Claude Code's session environment.** Its hook added the
   line again on every resume and compaction, so a long session sourced it many times before each
   command. It is written once now, an older omabox's replaced. `omabox guard` reads the hook as
-  outdated: `omabox guard on claude` renews it.
+  outdated: `omabox guard on` renews it.
 
 ## 0.6.1 — 2026-10-14
 

@@ -8381,9 +8381,31 @@ t_unit_guard_settings() {
   check "CLAUDE_CONFIG_DIR is honoured" jq -e '.hooks.SessionStart' "$h/alt/settings.json"
   # The hooks of an omabox at $co (a copy of the CLI, as a checkout or package would have it).
   local co=$TMP/guard-co hook chook f=$TMP/envfile
-  mkdir -p "$co/bin"; cp "$TMP/lib/bin/omabox" "$co/bin/omabox"; chmod +x "$co/bin/omabox"
+  mkdir -p "$co/bin" "$co/share/guard"; cp "$TMP/lib/bin/omabox" "$co/bin/omabox"; chmod +x "$co/bin/omabox"
+  # Finding 346: share/guard/hook-version is a hash of what `guard on` writes for each agent, its
+  # path and stamps left out (here: a copy with no stamps, its ROOT made a placeholder), so a change to
+  # the hook that does not bump it fails here.
+  local stamps; stamps=$(bash -c 'source "$1"; for t in "$GUARD_HOOK" "$GUARD_CODEX_HOOK
+$GUARD_CODEX"; do printf %s "${t//"$ROOT"/@ROOT@}" | sha256sum | cut -c1-12; done' _ "$co/bin/omabox" | paste -sd' ')
+  check_eq "share/guard/hook-version is the hash of what guard on writes (changed the hook? write [$stamps] there)" \
+    "$stamps" "$(cat "$ROOT/share/guard/hook-version")"
+  cp "$ROOT/share/guard/hook-version" "$co/share/guard/"
   hook=$(bash -c 'source "$1"; printf %s "$GUARD_HOOK"' _ "$co/bin/omabox")
   chook=$(bash -c 'source "$1"; printf %s "$GUARD_CODEX_HOOK"' _ "$co/bin/omabox")
+  check_eq "the hooks carry the stamps" 2 "$(grep -cF -e "= '${stamps% *}' ]" -e "= '${stamps#* }' ]" <<<"$hook
+$chook")"
+  local stale='omabox guard: this hook is outdated \(omabox changed it\): tell the user to run omabox guard on to renew it$'
+  check_eq "a current stamp: the hook's note alone" "1 1" "$(CLAUDE_ENV_FILE=$f sh -c "$hook" | wc -l) $(sh -c "$chook" | wc -l)"
+  echo "0123456789ab ba9876543210" > "$co/share/guard/hook-version"
+  check_match "an upgrade that changed the hook: it says it is outdated, after the note" "omabox host -- CMD"$'\n'"$stale" \
+    "$(CLAUDE_ENV_FILE=$f sh -c "$hook")"
+  check_match "...when it cannot apply the guard too" "NOT applied.*"$'\n'"$stale" "$(env -u CLAUDE_ENV_FILE sh -c "$hook")"
+  check_match "...and Codex's" "omabox host -- CMD"$'\n'"$stale" "$(sh -c "$chook")"
+  echo "${stamps% *} ba9876543210" > "$co/share/guard/hook-version"
+  check_eq "...each by its own stamp" "1 2" "$(CLAUDE_ENV_FILE=$f sh -c "$hook" | wc -l) $(sh -c "$chook" | wc -l)"
+  mv "$co/share/guard/hook-version" "$co/hook-version"
+  check_eq "...no stamp there (ai-jail: no checkout, #203): nothing extra" "1 1" "$(CLAUDE_ENV_FILE=$f sh -c "$hook" | wc -l) $(sh -c "$chook" | wc -l)"
+  mv "$co/hook-version" "$co/share/guard/hook-version"; cp "$ROOT/share/guard/hook-version" "$co/share/guard/"; rm -f "$f"
   check_match "the hook says so when it cannot apply the guard (finding 74)" "NOT applied" "$(env -u CLAUDE_ENV_FILE sh -c "$hook")"
   check_eq "...and applies it when it can" 1 "$(CLAUDE_ENV_FILE=$f sh -c "$hook" >/dev/null; grep -c 'WAYLAND_DISPLAY=omabox-guard' "$f")"
   check_eq "...with the guard's xdg-open first on PATH (finding 92)" "$co/share/guard" \

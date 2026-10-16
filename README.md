@@ -387,6 +387,9 @@ PATH puts `share/guard/quickshell` and `qs` first, which refuse `kill` and `ipc`
   gets a session of its own (`OMABOX_SESSION`), so its default box is its own, as in Claude Code and
   Codex.
 
+When an omabox update changes what `guard on` writes, the Claude Code and Codex hooks say so at
+session start, in one more line, until `omabox guard on` renews them.
+
 omabox keeps working under the guard: boxes have their own display, and `up --interactive`, `peek`
 and `--size host` find your session by themselves. Work you ask for on your real desktop ("switch my
 theme", `hyprctl reload` after editing your config) goes through `omabox host -- CMD`: your session's

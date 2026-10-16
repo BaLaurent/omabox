@@ -35,7 +35,7 @@ test/run.sh            # the whole suite in real, headless boxes, side by side (
 test/run.sh -j 1       # the same, one test at a time (~8.5 min): what a leak is pinned to, exactly
 OMABOX_AQUAMARINE=system test/run.sh   # on the system's aquamarine, as a package without the fix runs
 test/run.sh --installed   # against omabox installed read-only at /usr/lib/omabox, as a package would (a throwaway namespace)
-shellcheck bin/omabox install.sh docs/demo.sh test/run.sh share/*.sh share/bin/* share/guard/*
+shellcheck bin/omabox install.sh docs/demo.sh test/run.sh share/*.sh share/bin/* $(grep -l "^#!" share/guard/*)
 ```
 
 CI runs that shellcheck (version 0.11.0) on every pull request. It cannot run the suite: that needs
