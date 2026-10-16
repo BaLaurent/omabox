@@ -6712,3 +6712,16 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     kept, in the file Claude Code gave (no rename). The hook's text changed, so an installed one reads
     `outdated` until `omabox guard on claude` (or setup's "Update it?") renews it; until then it keeps
     appending as before. `t_unit_guard_settings`.
+329. **`ls --json` has every box's Hyprland version** (2026-10-16, #238). `hypr_version` ran only
+    for a `--hyprland` box, so a box on the installed Hyprland had `"hyprland_version": null`, and
+    the skill's "Reporting what a box showed" sent agents there for it (five in one session got
+    `None`; one reported the host's `pacman -Q hyprland` instead, which is not the box's answer). Now
+    `up` records `hyprctl version`'s first line from inside every box once its Hyprland is up; the
+    warning about another version than the installed hyprctl's stays a `--hyprland` box's (the
+    installed one's hyprctl is its own, and `Hyprland --version-json` is not run for it). `hyprland`
+    stays the build's path, null for the installed one, so `ls` and `windows` print their "runs
+    Hyprland" line for a build only. A box an older omabox started has no key until it is up again:
+    the skill names the keys (`omarchy_version`, `hyprland_version`), says `omabox hyprctl version`
+    when one is null, and that the commit to report is the project's own (`ls --json` has none).
+    `t_unit_hyprland` (both kinds of box, stubbed), `t_uwsm_app` (a stock box's key against its own
+    `hyprctl version`, no `Hyprland:` line under it in `ls`).

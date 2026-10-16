@@ -5423,12 +5423,17 @@ t_unit_hyprland() {
   out=$(cd "$d/proj" && bash -c 'source "$1"; RELAY=$2; relay_call up --hyprland build/Hyprland' _ "$TMP/lib/bin/omabox" "$d/relay")
   check_match "relay: --hyprland goes absolute" "\|up\|--hyprland\|$d/proj/build/Hyprland\|" "$out"
   # Another version than the installed hyprctl's: a warning (the box's answers stubbed).
-  mkdir -p "$d/box"; echo '{}' > "$d/box/box.json"
-  out=$(bash -c 'source "$1"; D=$2 NAME=x
+  mkdir -p "$d/box"; echo '{"hyprland": "/b/Hyprland"}' > "$d/box/box.json"
+  hv() { bash -c 'source "$1"; D=$2 NAME=x
     on_box() { if [ "${!#}" = -j ]; then echo "{\"version\": \"0.0.1\"}"; else echo "Hyprland 0.0.1 built from branch x"; fi; }
-    hypr_version' _ "$TMP/lib/bin/omabox" "$d/box" 2>&1)
+    hypr_version' _ "$TMP/lib/bin/omabox" "$d/box" 2>&1; }
+  out=$(hv)
   check_match "another Hyprland version than hyprctl's: a warning" "warning: box 'x' runs Hyprland 0.0.1, but hyprctl and hyprpm are the installed" "$out"
   check_eq "...and box.json has its version line" "Hyprland 0.0.1 built from branch x" "$(jq -r .hyprland_version "$d/box/box.json")"
+  # A box on the installed Hyprland (#238): its version line too, and no warning (hyprctl is its own).
+  echo '{}' > "$d/box/box.json"; out=$(hv)
+  check_eq "a box on the installed Hyprland: no warning" "" "$out"
+  check_eq "...and box.json has its version line too (#238)" "Hyprland 0.0.1 built from branch x" "$(jq -r .hyprland_version "$d/box/box.json")"
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-h[12]$" || true)
   check_eq "refusals left no box behind" 0 "$left"
 }
@@ -6562,6 +6567,11 @@ t_uwsm_app() {
   check_eq "omarchy-version says the installed Omarchy's version" "${ov#* }" "$(ob run -b "$B" -- omarchy-version)"
   check_eq "...in a terminal's bash too (Omarchy's bin is on its PATH)" "${ov#* }" "$(ob run -b "$B" -- bash -ic omarchy-version 2>/dev/null)"
   check_eq "...and ls --json has it (finding 139)" "${ov#* }" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version')"
+  # #238: the installed Hyprland's version too, as the box's says it; `hyprland` (a build's path) null.
+  local hj; hj=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | [.hyprland, .hyprland_version]')
+  check_eq "ls --json has the installed Hyprland's version line, hyprland null (#238)" \
+    "$(jq -nc --arg v "$(ob hyprctl -b "$B" version | head -n 1)" '[null, $v]')" "$hj"
+  check_fails "...and ls says no Hyprland line for it" bash -c "'$CLI' ls | grep -A1 '^$B ' | grep -q '^  Hyprland:'"
   ob down "$B" >/dev/null
 }
 

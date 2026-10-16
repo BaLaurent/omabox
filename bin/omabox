@@ -3511,7 +3511,7 @@ cmd_up() {
     rm -f "$D/covers-pending"
     exec {go}<>"$D/go"; printf go >&"$go"; exec {go}>&-
   fi
-  if [ -n "$hyprland" ]; then wait_hyprland; hypr_version; fi
+  wait_hyprland; hypr_version
   wait_ready "$shell"
   # More monitors (#122), as `monitor add` makes them: one at a time, each placed by what the last one
   # really became (Hyprland may round a scale), the shell giving each its bar as it comes.
@@ -4047,15 +4047,17 @@ hypr_bin() {
   printf '%s\n' "$p"
 }
 
-# A box on its own Hyprland (finding 116): its version, as the box's Hyprland says it (the first line
-# of `hyprctl version`), into box.json for `ls` and `windows`, and a warning when the host's hyprctl
-# (and hyprpm, the installed Hyprland's) is of another version: their IPC may not match.
+# The box's Hyprland version, as it says it (the first line of `hyprctl version`), into box.json for
+# `ls` and `windows`: every box's (#238), the installed one's too. A box on its own Hyprland (finding
+# 116) also gets a warning when the host's hyprctl (and hyprpm, the installed Hyprland's) is of another
+# version: their IPC may not match.
 hypr_version() {
-  local line ver host
+  local line ver host own; own=$(meta hyprland) || own=""
   line=$(on_box timeout 6 hyprctl version 2>/dev/null | head -c 65536 | head -n 1) || line=""
-  ver=$(on_box timeout 6 hyprctl version -j 2>/dev/null | head -c 65536 | jq -r '.version // empty' 2>/dev/null) || ver=""
-  [ -n "$line" ] || { say "box '$NAME': its Hyprland ($(meta hyprland)) did not say its version (hyprctl version)"; return 0; }
+  [ -n "$line" ] || { say "box '$NAME': its Hyprland (${own:-the installed one}) did not say its version (hyprctl version)"; return 0; }
   jq --arg v "$line" '.hyprland_version = $v' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+  [ -n "$own" ] || return 0
+  ver=$(on_box timeout 6 hyprctl version -j 2>/dev/null | head -c 65536 | jq -r '.version // empty' 2>/dev/null) || ver=""
   host=$(/usr/bin/Hyprland --version-json 2>/dev/null | jq -r '.version // empty' 2>/dev/null) || host=""
   [ -z "$ver" ] || [ -z "$host" ] || [ "$ver" = "$host" ] ||
     say "warning: box '$NAME' runs Hyprland $ver, but hyprctl and hyprpm are the installed $host's: their IPC may not match (omabox hyprctl, the shell's calls)"

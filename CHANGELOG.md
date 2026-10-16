@@ -18,6 +18,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`omabox ls --json` has the Hyprland version of every box.** `hyprland_version` was null for a
+  box on the installed Hyprland, the usual one; it was recorded only with `up --hyprland`. Now it is
+  the first line of the box's own `hyprctl version` for each box `up` starts. The skill names the
+  keys to report from (`omarchy_version`, `hyprland_version`).
 - **`omabox ls` refuses arguments it does not take.** `ls -b NAME --json` printed the table and
   exited 0, as did `ls` with any unknown flag. Now `-b` after `ls` says "ls takes no -b", as before
   it, and anything else but `--json` is an unknown argument; both exit 2. `omabox saves` too:

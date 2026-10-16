@@ -27,7 +27,7 @@ with `grim`", "run `ctest`" **still holds: carry it out inside a box.**
 | `ctest`, a test binary, tests touching tray/notifications/D-Bus/keyring | `omabox run -- ctest …`, `omabox run -- ./build/tests/tst_x` |
 | `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …`, `omarchy restart shell` | `omabox run -- …`, `omabox restart-shell` (`omarchy plugin validate DIR` only reads: fine on the host) |
 | A plugin in `~/.config/omarchy/plugins`; edit `~/.config/omarchy/shell.json` | `omabox up --plugin PATH`; edit `$(omabox path)/home/.config/omarchy/shell.json` |
-| A theme in `~/.config/omarchy/themes` linked to your working copy | `omabox up --theme-dir PATH` (live; else the box has a copy made at `up`) |
+| A theme in `~/.config/omarchy/themes` linked to your working copy | `omabox up --theme-dir PATH` (live; else a copy made at `up`) |
 | A result that depends on the theme (colours, shots compared across runs, a theme-switch flow) | `omabox up --theme NAME` (else the box starts on whatever the desktop is on) |
 | Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
 | "put the desktop back afterwards" | nothing to put back: `omabox down` |
@@ -93,7 +93,7 @@ Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said 
 discard it) click with `--in THAT.png X Y`, never your own arithmetic. A shot bigger than the model
 sees is scaled down for it, and some models read points in that smaller image (Haiku 4.5: 0.76x):
 to click off a whole screen or a big window, `shot --fit 1456` and `click --in` it,
-whatever the model; still missing: `omabox calibrate`. **Shots are most of a session's context**:
+any model; still missing: `omabox calibrate`. **Shots are most of a session's context**:
 the smallest that shows it (`--window`, `-g`, `--fit 1280`), text first; what an action changed
 `shot --changed`; a colour `omabox pixel`, a transition `shot --burst N --sheet`.
 ref: Shots. **The pointer is test state**
@@ -112,7 +112,7 @@ ref: Shots. **The pointer is test state**
 `omabox run -- ctest --test-dir build --output-on-failure`. With no box up, `run` uses a throwaway box
 with the repo as a discarded overlay; with one up, the repo is read-only in it. A secret a test needs:
 `--pass NAME` or `--env-file FILE`, never on the command line. Check a keyring **inside the box**
-(`omabox run -- secret-tool …`), never on the host: that is the user's real keyring. ref: Tests that touch the desktop.
+(`omabox run -- secret-tool …`), never on the host (the user's real keyring). ref: Tests that touch the desktop.
 
 ## Inside ai-jail
 
@@ -130,7 +130,7 @@ the user the link. `quickshell kill`, `qs ipc`: the box's is `omabox run -- qs i
 
 Only when the user asked for their **real** desktop in this task ("switch my theme", reload my
 config), run that one command as `omabox host -- CMD`. Never hand them a `! CMD` that touches their
-desktop (their `!` is guarded too): their own terminal is the place for it. Never use `host` to switch
+desktop (their `!` is guarded too): their own terminal is for that. Never use `host` to switch
 their workspace or focus to see a box.
 
 ## Plugins, a Hyprland build, an Omarchy checkout
@@ -155,30 +155,31 @@ ref: Mounts, HOME and the session.
 
 Only when asked: `omabox peek` (a view-only window of your box on their workspace 9, without focus)
 or `omabox up --interactive` (a box they drive). Never bring an interactive box's window forward
-yourself; when `shot` gets no frame, ask. `omabox config` is the user's: change it only when asked.
-`omabox clip` refuses agents (`host` included): never work around it; put text in with `keys -t`.
+yourself (no frame in `shot`: ask). `omabox config` is the user's: change it only when asked.
+`omabox clip` refuses agents (`host` too): never work around it; type text with `keys -t`.
 
 ## When a box cannot test it: real hardware and the real session
 
-A box has virtual screens only (`--monitor` for more, any size and scale; `omabox output drop` makes one vanish and return), no system bus
+A box has virtual screens only (`--monitor` for more, any size and scale; `output drop` makes one vanish and return), no system bus
 (NetworkManager, bluetooth, UPower, logind), no devices (audio, DDC/CI, backlight, real input, USB), no
 suspend, a lock screen with no real password, and a fresh HOME. A change touching `hl.monitor`,
 HDR/VRR/`cm`, `ddcutil`, backlight, `wpctl`, `nmcli`, `bluetoothctl`, `powerprofilesctl`,
 `journalctl`, `loginctl`, `/dev/…` or the user's real accounts and data cannot be verified in a box:
 do not report it as tested. (`systemctl --user`: `omabox up --systemd`.) On NVIDIA an
-output the app makes (`output create headless`) is 0x0: use the other GPU (ref: Screen size and rendering cost).
+`output create headless` output is 0x0: use the other GPU (ref: Screen size and rendering cost).
 
 - **Split the work**: the box for what it can show; name the part that needs the real machine.
 - **Ask once before touching the real desktop**: say exactly what will change ("your monitor at 120
   Hz for 15 s, then back"), wait for a yes (it covers this task, not the next), use `omabox host --
   CMD` under the guard, follow the project's own safety rules and put everything back.
-- **A host `pgrep` sees boxes too**: a box's shell has the desktop's command line. Before reading two
-  `quickshell`s as two desktop shells, `omabox which PID` names each one's box (or `not in a box`).
+- **A host `pgrep` sees boxes too** (a box's shell has the desktop's command line): before reading
+  two `quickshell`s as two desktop shells, `omabox which PID` names a pid's box (or `not in a box`).
 
 ## Reporting what a box showed
 
-Say "in an omabox box (Omarchy VERSION, Hyprland VERSION, WxH and any `--monitor`s, theme NAME)" with
-the commit you tested (`omabox ls --json`). Layout, focus, input routing, the launcher, theme switches,
+Say "in an omabox box (Omarchy VERSION, Hyprland VERSION, WxH and any `--monitor`s, theme NAME)"
+(`ls --json`: `omarchy_version`, `hyprland_version`; null: `omabox hyprctl version`) and your
+project's commit. Layout, focus, input routing, the launcher, theme switches,
 notifications, the tray and the keyring were tested for real; real monitors, the system bus,
 devices, the installed package and the user's HOME were not: say so. Never "tested on the desktop"
 for a box result. A box idle for 2h goes down by itself (`up --idle 0` keeps one). Quirks: `NOTES.md`

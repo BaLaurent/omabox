@@ -457,9 +457,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   version (as it says over IPC) differs from theirs: the IPC may not match then. A patched build of
   the installed version is fine.
 - `omabox ls` shows the build under the box's line with `hyprctl version`'s first line (commit,
-  dirty or clean), `ls --json` has `hyprland` (null for the installed one) and `hyprland_version`,
-  `omabox windows` starts with it, and `<box dir>/box.log` has that line as the box's Hyprland said
-  it. A save records it, and `up --from` notes a different one. Check which binary runs:
+  dirty or clean), `ls --json` has `hyprland` (null for the installed one) and `hyprland_version`
+  (every box's, the installed one's too), `omabox windows` starts with it, and `<box dir>/box.log`
+  has that line as the box's Hyprland said it. A save records it, and `up --from` notes a different one. Check which binary runs:
   `omabox run -- sh -c 'readlink /proc/$(pgrep -x Hyprland)/exe'`.
 - What a box proves: compositor logic runs for real on a virtual output with virtual input devices
   (layouts, focus, input routing, the Lua config, IPC, protocols). What it never runs: the DRM/KMS
