@@ -1902,6 +1902,10 @@ omarchy_contract() {
   oc "default.hypr.paths' omarchy_path (share/hyprland.lua puts omabox's stand-ins before its bin)" "not in default/hypr/paths.lua" \
     oc_has "$o/default/hypr/paths.lua" omarchy_path
   oc "default/hypr/toggles.lua (share/hyprland.lua requires default.hypr.toggles)" "missing" test -f "$o/default/hypr/toggles.lua"
+  oc "config/hypr/hyprland.lua's user modules: hypr.monitors, input, bindings, looknfeel, autostart (share/hyprland.lua loads input, bindings and looknfeel, skips monitors and autostart, #246)" \
+    "it requires other hypr.* modules now: a box would not load one a user edits" \
+    bash -c '[ "$(grep -oE "^require\(\"hypr\.[a-z_]+\"\)" "$1" | sort | paste -sd " ")" = "$2" ]' _ "$o/config/hypr/hyprland.lua" \
+    'require("hypr.autostart") require("hypr.bindings") require("hypr.input") require("hypr.looknfeel") require("hypr.monitors")'
   oc "default/hypr/envs.lua (caller_path tells an Omarchy checkout's bin by it, finding 149)" "missing" test -f "$o/default/hypr/envs.lua"
   oc "default/uwsm/default (share/session.sh: TERMINAL, EDITOR)" "missing" test -f "$o/default/uwsm/default"
   oc "shell/shell.qml (share/shell.sh runs quickshell -p \$OMARCHY_PATH/shell)" "missing" test -f "$s/shell.qml"
@@ -4522,6 +4526,43 @@ t_no_seed() {
     "$(ob run -b "$B" -- sh -c "ls $c 2>/dev/null" | LC_ALL=C sort | paste -sd ' ')"
   check_eq "...ls --json: no_seed" '["extensions"]' "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | .no_seed')"
   check_match "...up again with it: already up" "already up" "$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --no-seed extensions 2>&1)"
+  ob down "$B" >/dev/null 2>&1
+}
+
+# #246: the box HOME's ~/.config/hypr modules load as stock Omarchy loads them: an edit to looknfeel.lua
+# or bindings.lua takes effect on `hyprctl reload`; monitors.lua and autostart.lua are not loaded (the
+# box's screen stays as omabox made it); a module that fails is said, and the rest of the config loads.
+t_user_hypr() {
+  local B=$P-uh H out m c=/home/sbx/.config/hypr
+  out=$(ob up "$B" --no-shell 2>&1) || { no "up" "$out"; return; }
+  check_fails "a new box: no config errors said" grep -q "config has errors" <<<"$out"
+  check_eq "...none in Hyprland (the skel's modules load cleanly)" "" "$(ob hyprctl -b "$B" configerrors | tr -d '[:space:]')"
+  H=$(ob path "$B")/home
+  printf '\nhl.config({ general = { gaps_out = 33 } })\n' >> "$H/.config/hypr/looknfeel.lua"
+  printf '\nhl.bind("SUPER + F12", function() end, { description = "%s-probe" })\n' "$P" >> "$H/.config/hypr/bindings.lua"
+  printf '\nio.open("%s/ran-monitors", "w"):close()\n' "$c" >> "$H/.config/hypr/monitors.lua"
+  for m in HEADLESS-2 WAYLAND-1; do
+    printf 'hl.monitor({ output = "%s", mode = "800x600@60", position = "0x0", scale = 2 })\n' "$m" >> "$H/.config/hypr/monitors.lua"
+  done
+  printf '\nio.open("%s/ran-autostart", "w"):close()\n' "$c" >> "$H/.config/hypr/autostart.lua"
+  out=$(ob hyprctl -b "$B" reload 2>&1)
+  check_eq "hyprctl reload after the edits: ok, nothing more said" "ok" "$out"
+  check_eq "looknfeel.lua's gaps_out applies" "33 33 33 33" "$(ob hyprctl -b "$B" -j getoption general:gaps_out | jq -r .css)"
+  check_eq "bindings.lua's bind is there" "1" \
+    "$(ob hyprctl -b "$B" -j binds | jq --arg d "$P-probe" '[.[] | select(.description == $d)] | length')"
+  check_fails "autostart.lua not run" test -e "$H/.config/hypr/ran-autostart"
+  check_fails "monitors.lua not run" test -e "$H/.config/hypr/ran-monitors"
+  check_eq "...the box's screen as omabox made it" "1920x1080 1" \
+    "$(ob hyprctl -b "$B" -j monitors | jq -r '.[0] | "\(.width)x\(.height) \(.scale)"')"
+  printf '\nhl.config({ input = { kb_layout = "us" }\n' >> "$H/.config/hypr/input.lua"
+  out=$(ob hyprctl -b "$B" reload 2>&1)
+  check_match "a module with a syntax error: hyprctl reload says it" "its config has errors.*hypr\.input.*input\.lua:[0-9]+: '\}' expected" "${out//$'\n'/ }"
+  check "...the box goes on" ob lua -b "$B" 'return 1'
+  check_eq "...and the rest of the config loads (bindings.lua, after it)" "1" \
+    "$(ob hyprctl -b "$B" -j binds | jq --arg d "$P-probe" '[.[] | select(.description == $d)] | length')"
+  check_match "...omabox reload says it too" "its config has errors" "$(ob reload -b "$B" 2>&1)"
+  sed -i '$d' "$H/.config/hypr/input.lua"
+  check_eq "fixed: hyprctl reload says nothing more" "ok" "$(ob hyprctl -b "$B" reload 2>&1)"
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -11376,7 +11417,7 @@ t_link_out() {
 UNIT=(t_unit_fd_exposed t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

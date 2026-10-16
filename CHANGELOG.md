@@ -39,6 +39,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A box loads `~/.config/hypr/bindings.lua`, `input.lua` and `looknfeel.lua` from its HOME**, as
+  Omarchy does. An edit there, then `omabox hyprctl reload`, did nothing: a box never loaded them, so
+  a plugin's "add this line to `bindings.lua`" (or its own Set up button) bound nothing, and the
+  reload still answered `ok`. A new box's are Omarchy's comment-only files, so nothing changes until
+  you write to them. `monitors.lua` and `autostart.lua` stay unloaded: the box's screen is the one
+  `--size`, `--monitor` and `mode` give it, and nothing autostarts. A file with an error does not
+  stop the rest of the config loading, and `up`, `reload` and `hyprctl reload` now print the
+  config's errors (what the red bar at the top of the box's screen says) instead of answering only
+  `ok`. A box started before this update loads them after `omabox reload`.
+
 - **`run -- wl-copy TEXT` returns.** A command that left a process running (`wl-copy`'s server, a
   `daemon &`) kept `run`'s output open, so `$(omabox run -- wl-copy TEXT)`, or a run whose output went
   to a pipe, waited until that process ended, and every `run` writing to a file paid a second for it.

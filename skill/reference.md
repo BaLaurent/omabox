@@ -312,6 +312,13 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   off, so an update of omabox or Omarchy leaves it as it is; `omabox reload` takes the newer one.
   A test that must see what a file change does, as a desktop would (a helper that rewrites a file
   the config loads, on a Hyprland event, reloads for ever there): `omabox up --autoreload`.
+- The box HOME's `~/.config/hypr/bindings.lua`, `input.lua` and `looknfeel.lua` (`$(omabox
+  path)/home/.config/hypr/`) load as on a desktop: append a bind or a setting, `omabox hyprctl
+  reload`, and it applies (a plugin's "add this to bindings.lua", its Set up button). A new box's are
+  Omarchy's comment-only files, not your desktop's. Never loaded: `monitors.lua` (the screen is
+  `--size`/`--monitor`/`mode`'s), `autostart.lua`, and `hyprland.lua` itself. A file with an error
+  does not stop the rest loading; `up`, `reload` and `hyprctl reload` print the config's errors (the
+  red bar on the box's screen; `omabox hyprctl configerrors`).
 - An error inside a callback (`hl.on`, `hl.timer`) is not in `lua`'s answer, and when the callback
   runs later (a timer, an app's event) it is logged nowhere, not even in the Hyprland log: seen
   nothing, check with `pcall` inside the callback and keep the error in a global to read with

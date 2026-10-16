@@ -924,6 +924,9 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     purpose: the user's `~/.config/hypr` (monitors, binds), `~/.XCompose` (may carry name/email),
     Omarchy hooks. A box HOME is ~13 MB.
     Verified on the laptop too (after a pull): About in an interactive box floats, centred and themed.
+    Correction (finding 339): the skel's `monitors.lua` is not comments only (GDK_SCALE=2, a catch-all
+    rule at scale auto), and a test or a plugin's Set up writes to the others; the box now loads
+    `hypr.input`, `hypr.bindings` and `hypr.looknfeel` as stock does, never monitors or autostart.
 70. **Settings: where windows open, confirm before closing** (2026-09-25, asked for by the maintainer).
     `~/.config/omabox/config` (KEY=VALUE), changed with `omabox config`, and by the bar widget's
     panel through the same command, so the two never disagree. The installed Omarchy (4.0.4) has no
@@ -6896,3 +6899,36 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     whose main thread sleeps, one thread busy and two idle named alike (each writes its own
     `/proc/self/task/TID/comm`): the busy one 98.9%, the main thread (tid = pid) 0.0%, the two idle
     ones two rows, the tids those of the box's `/proc/PID/task`, the threads within 5% of the process.
+339. **A box loads the box HOME's `~/.config/hypr` user modules** (2026-10-16, #246). A box never
+    loaded them: `omabox-hyprland.lua` stands in for stock `~/.config/hypr/hyprland.lua` and required
+    only Omarchy's bootstrap, `default.hypr.omarchy` and the toggles (finding 69). So appending a
+    bind to `bindings.lua` or `gaps_out` to `looknfeel.lua`, then `hyprctl reload`, answered `ok`
+    and changed nothing; a plugin's "add this to bindings.lua" (erikrjohansson/omarchy-hotkey-wheel's
+    Set up button) bound nothing in a box. Now `share/hyprland.lua` requires `hypr.input`,
+    `hypr.bindings` and `hypr.looknfeel` where stock does (after `default.hypr.omarchy`, before the
+    toggles), and before everything omabox sets (PATH, the screen's rules, debug/misc/xwayland, the
+    hidden pointer), which therefore wins. A module with no file is skipped. Not loaded: stock's
+    `hyprland.lua` itself, `hypr.autostart` (as `default.hypr.autostart`), and `hypr.monitors`:
+    Omarchy's skel one sets `GDK_SCALE=2` and `hl.monitor({ output = "", ..., scale = "auto" })`,
+    which would change every fresh box (GTK apps at 2x; a catch-all rule over a `monitor add`'s
+    output), and its rules are for real screens. *Decided*: skipped rather than loaded before the
+    box's own rules (a later specific rule wins for its output, but the catch-all and the env would
+    not be overridden). Hyprland 0.56's `require` is its own (a C function): a module that fails to
+    parse or raises is caught, becomes a config error (`hyprctl configerrors`, the red "Your config
+    has errors" bar on the box's screen, as on a desktop) and returns `{}`; what the module did
+    before a runtime error stays, and the load goes on. It never reaches Hyprland's log. The pcall
+    around each require is for a build whose `require` raises; it logs to Hyprland's log. *Decided*
+    for the warning: `up`, `reload` and `hyprctl reload` print `hyprctl configerrors` when it is not
+    empty (every config error, not only the user modules': what the red bar shows), nothing
+    otherwise; a reload's `ok` alone hid them. Who gets non-skel files: the box HOME's
+    `~/.config/hypr` comes from `/etc/skel` only (`seed_home`; `--desk-shell` copies
+    `~/.config/omarchy`, never `~/.config/hypr`), so a desk's own bindings/input never reach a box;
+    only a `--seed …:.config/hypr/…`, a save (`up --from`) of a box that wrote there, or a write in
+    the box (a test, a plugin's Set up) does. On this machine the skel's input, bindings, looknfeel
+    and autostart are comments only (and equal Omarchy's `config/hypr`), so a fresh box is unchanged:
+    `configerrors` empty, every box test touching the config passes. An `input.lua` `kb_layout` is
+    the box's layout, which `omabox keys` reads (finding 13). The Omarchy contract checks stock's
+    list of user requires is still these five. Verified in a box (t_user_hypr): gaps_out 33 and a
+    probe bind after `hyprctl reload`; monitors.lua and autostart.lua not run, the screen 1920x1080
+    at 1; a syntax error in input.lua said by `hyprctl reload` and `reload`, the box alive, the bind
+    of bindings.lua (loaded after it) still there; fixed, nothing said.

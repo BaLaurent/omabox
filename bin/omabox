@@ -1031,6 +1031,20 @@ box_env() {
 # swapped between the check and the read is not caught.
 run_read() { local f=$D/run/$1; [ ! -L "$f" ] && [ -f "$f" ] && head -c 65536 -- "$f"; }
 
+# The config's errors at its last load (#246), said after `up`, `reload` and `hyprctl reload`, which
+# answer ok whatever they are: a box HOME's ~/.config/hypr module that failed (share/hyprland.lua loads
+# input, bindings and looknfeel; Hyprland's require makes an error in one a config error and goes on)
+# or any other, what a desktop's red bar shows. Nothing when there are none. Hyprland's answer, from
+# what the box's files say: control characters dropped, 20 lines and 300 bytes a line at most.
+hypr_errors_note() {
+  local t l
+  t=$(on_box timeout "$HYPR_LIMIT" hyprctl configerrors 2>/dev/null | LC_ALL=C tr -d '\000-\010\013-\037\177' |
+    grep -v '^[[:space:]]*$' | head -n 20) || t=""
+  [ -n "$t" ] || return 0
+  say "box '$NAME': its config has errors (the red bar at the top of its screen; the rest of the config loaded):"
+  while IFS= read -r l; do say "  ${l:0:300}"; done <<<"$t"
+}
+
 # Tools the box has at /opt/omabox/bin (bound read-only by `up`).
 BOX_KEYBOARD=/opt/omabox/bin/omabox-keyboard
 BOX_POINTER=/opt/omabox/bin/omabox-pointer
@@ -3799,6 +3813,7 @@ cmd_up() {
   rm -f "$D/starting"; touch "$D/used"
   local screen live_sc; screen=$(box_screen); live_sc=$(main_scale_live) || live_sc=""
   say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")) in $D"
+  hypr_errors_note
   # No idle limit and no agent or owner to go with (#220): it outlives its caller, said to the caller
   # that is not a person at a terminal (an agent whose own process `up` could not find, a script).
   if [ $interactive = 0 ] && [ "$idle_s" = 0 ] && [ -z "$owner$agent" ] && [ "$at_term" = false ]; then
@@ -8538,6 +8553,10 @@ cmd_hyprctl() {
   fi
   cat <&"$i"
   exec {i}<&-
+  # A reload loads the box HOME's ~/.config/hypr modules again (#246): the config's errors are said.
+  if [ $rc = 0 ]; then
+    for a; do case $a in -*) ;; reload) hypr_errors_note; break ;; *) break ;; esac; done
+  fi
   return $rc
 }
 
@@ -10623,6 +10642,7 @@ cmd_reload() {
     die "reload: hyprctl reload failed (exit $rc)"
   fi
   say "box '$NAME': config reloaded from $ROOT/share/hyprland.lua (binds, rules and Lua state added since are gone)"
+  hypr_errors_note
 }
 
 # share/shell.sh keeps the shell's pid in the box's omabox-shell.pid: a pid there once shell.sh wrote
