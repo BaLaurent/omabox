@@ -10067,6 +10067,35 @@ t_cpu() {
   check_match "cpu --pid not in the box: refused before the window" "has no process 4999999" "$(ob cpu -b "$B" 5 --pid 4999999 2>&1)"
   check_match "cpu --app not there: said" "ran no process nope" "$(ob cpu -b "$B" 0.5 --app nope 2>&1)"
   ob run -b "$B" -- pkill -x sh >/dev/null 2>&1
+  # --threads (#242): a python3 whose main thread sleeps, one thread busy and two idle of one name,
+  # each naming itself through its own /proc comm (Thread(name=) sets none before 3.14).
+  local prog='import threading, time
+def named(n):
+    open("/proc/self/task/%d/comm" % threading.get_native_id(), "w").write(n)
+def burn():
+    named("omaburn")
+    while True: pass
+def idle():
+    named("omaidle")
+    while True: time.sleep(1)
+for f in (burn, idle, idle): threading.Thread(target=f, daemon=True).start()
+while True: time.sleep(1)'
+  ob run -b "$B" -d -q -- python3 -c "$prog" >/dev/null 2>&1
+  until_ok 5 ob run -b "$B" -- sh -c 'grep -qx omaburn /proc/$(pgrep -xn python3)/task/*/comm'
+  bp=$(ob run -b "$B" -- pgrep -xn python3) || bp=0
+  j=$(ob cpu -b "$B" 2 --app python3 --threads --json)
+  check "cpu --threads --json: python3's threads, each with tid, host_tid, name, cpu, started, exited" jq -e --argjson p "$bp" \
+    '.processes | length == 1 and .[0].pid == $p and ([.[0].threads[] | keys == ["cpu","exited","host_tid","name","started","tid"]] | all)' <<<"$j"
+  check_eq "...every thread, by the box's tids" "$(ob run -b "$B" -- ls "/proc/$bp/task" | sort -n | tr '\n' ' ')" \
+    "$(jq -r '[.processes[0].threads[].tid] | sort | map(tostring + " ") | add' <<<"$j")"
+  check "...the busy thread by its name, more than a fifth of a core" jq -e '[.processes[0].threads[] | select(.name == "omaburn" and .cpu > 20)] | length == 1' <<<"$j"
+  check "...the main thread (tid = pid) apart from it, under a tenth" jq -e --argjson p "$bp" \
+    '[.processes[0].threads[] | select(.tid == $p and .name == "python3" and .cpu < 10)] | length == 1' <<<"$j"
+  check "...two threads of one name: two rows" jq -e '[.processes[0].threads[] | select(.name == "omaidle")] | length == 2' <<<"$j"
+  check "...the threads add up to about the process" jq -e '.processes[0] | ([.threads[].cpu] | add) as $s | $s >= .cpu - 5 and $s <= .cpu + 5' <<<"$j"
+  out=$(ob cpu -b "$B" 1 --pid "$bp" --threads)
+  check_match "cpu --pid --threads: the table, threads under the process" $'\n  python3 +'"$bp"$' +[0-9.]+%.*\n    omaburn +[0-9]+ +[0-9.]+%\n' "$out"
+  ob run -b "$B" -- pkill -x python3 >/dev/null 2>&1
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -10387,6 +10416,28 @@ t_unit_cpu() {
   check_match "cpu_table: a header, then the rows" $'^  PROCESS +PID +CPU +RSS +PSS\n  a +7 +50.0% +4.0M +1.0M\n' "$out"
   check_match "...one that started, and one that exited, said" $'\n  c +12 +25.0% +0.1M +-  \\(started in the window\\)\n.*\n  b +11 +0.0% +0.0M +-  \\(exited in the window\\)' "$out"
   check_match "...the total last" $'\n  total +80.0% +4.1M +1.0M$' "$out"
+  # --threads (#242): each thread's own stat under task/, its tid in the box from its status.
+  mkdir -p "$f/10/task/10" "$f/10/task/14"
+  printf '10 (my (odd) app) S 1 10 10 0 -1 4194304 100 0 0 0 20 10 0 0 20 0 3 0 5000 1000000 300 18446744073709551615\n' > "$f/10/task/10/stat"
+  printf 'Name:\tx\nNSpid:\t10\t7\n' > "$f/10/task/10/status"
+  printf '14 (QSG Render) S 1 10 10 0 -1 4194304 100 0 0 0 200 20 0 0 20 0 3 0 5100 1000000 300 18446744073709551615\n' > "$f/10/task/14/stat"
+  printf 'NSpid:\t14\t9\n' > "$f/10/task/14/status"
+  check_eq "cpu_threads: the process's key, tid, start, utime+stime, tid in the box, the name as one field" \
+    $'t 10 5000 10 5000 30 7 my_?odd?_app\nt 10 5000 14 5100 220 9 QSG_Render' "$(lib cpu_threads "$f" 10 12)"
+  # Process 10's threads over the same 2 s: tid 14 60 ticks (30%), 16 started (10%), 15 exited, two
+  # named R kept apart; they follow their process, busiest first, before the next process.
+  printf '%s\n' 'S 1000000000' '10 5000 300 2048 1024 7 a' 't 10 5000 10 5000 100 7 a' 't 10 5000 14 5100 100 9 R' \
+    't 10 5000 15 5200 50 10 R' '11 6000 3 0 - 11 b' 'S 3000000000' '10 5000 400 2048 1024 7 a' 't 10 5000 10 5000 110 7 a' \
+    't 10 5000 14 5100 160 9 R' 't 10 5000 16 5300 20 11 R' '11 6000 4 0 - 11 b' > "$f/t"
+  check_eq "cpu_report --threads: each thread under its process, busiest first, one that started or exited said" \
+    $'p 10 7 a 50.0 2048 1024 0 0\nt 14 9 R 30.0 0 0\nt 16 11 R 10.0 1 0\nt 10 7 a 5.0 0 0\nt 15 10 R 0.0 0 1\np 11 11 b 0.5 0 - 0 0\ntotal 50.5 2048 1024' \
+    "$(lib cpu_report 100 < "$f/t")"
+  check_eq "...--pid: that process and its threads" 5 "$(lib cpu_report 100 7 < "$f/t" | grep -c '^[pt] ')"
+  out=$(lib cpu_report 100 < "$f/t" | lib cpu_table)
+  check_match "cpu_table: threads indented under their process, by the box's tid, no memory" \
+    $'\n  a +7 +50.0% +2.0M +1.0M\n    R +9 +30.0%\n    R +11 +10.0%  \\(started in the window\\)\n    a +7 +5.0%\n    R +10 +0.0%  \\(exited in the window\\)\n  b +11 ' "$out"
+  check_match "cpu --threads alone: refused, with what to name" "--threads is for one app's threads: name it with --pid PID or --app NAME" \
+    "$(ob cpu -b "$P-x" --threads 2>&1)"
   check_match "cpu: SECONDS above 0" "SECONDS is a number above 0" "$(ob cpu -b "$P-x" 0 2>&1)"
   check_match "cpu: --pid or --app" "--pid or --app, not both" "$(ob cpu -b "$P-x" --pid 1 --app x 2>&1)"
   check_match "cpu: --pid junk refused" "--pid takes a pid" "$(ob cpu -b "$P-x" --pid x 2>&1)"

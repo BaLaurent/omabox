@@ -6875,3 +6875,24 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     leftover's 4 s), t_run_stdio (`$(run -- sh -c 'sleep 30 & echo hi')` in ~140 ms with 0, then 3;
     3 MB through a held pipe byte for byte; `run -- wl-copy TEXT` in ~140 ms and `wl-paste -n` gives
     TEXT back; the same on a terminal of its own, stderr to a file, in ~50 ms).
+338. **`omabox cpu --threads`: CPU per thread, an app's main thread apart from its render thread**
+    (2026-10-16, #242). Measuring what an animation costs needs a Qt Quick app's GUI thread apart from
+    its `QSGRenderThread`; `cpu` gave per-process figures only, so an agent wrote its own sampler (a
+    host `pgrep -f`, which sees other boxes and the desktop, a `sleep` for `--settle`, then
+    `/proc/PID/task/*/stat`). Now `cpu --threads` with `--pid` or `--app`: in each of `cpu`'s samples
+    (same window, same settle), the processes `cpu_report` keeps (by either numbering for `--pid`, by
+    tamed name for `--app`, so one that starts in the window is followed too) also have each thread's
+    utime+stime read from `/proc/PID/task/TID/stat` (`cpu_threads`, builtins as `cpu_sample`), keyed
+    on the process's host pid and start time plus the thread's tid and start time; a thread is
+    figured as a process is (all its ticks if first seen later, up to its last sample if gone, both
+    said). Rows follow their process, busiest first, one per tid even when names repeat (worker pools,
+    several render threads); the tid is the box's (NSpid's last in the thread's status), as `pid` is,
+    the host's as `host_tid`. `--json`: `processes[].threads[]` {tid, host_tid, name, cpu, started,
+    exited}, the key only with `--threads` (the process objects keep their shape without it); no
+    memory per thread (threads share it). A thread that exits between samples loses its ticks since
+    the last one, so the threads can add up to a little under the process. *Decided*: `--threads`
+    without `--pid`/`--app` is refused with what to name (a box's Hyprland and shell have dozens of
+    threads each: every process's threads would bury the app's). Verified in a box (t_cpu): a python3
+    whose main thread sleeps, one thread busy and two idle named alike (each writes its own
+    `/proc/self/task/TID/comm`): the busy one 98.9%, the main thread (tid = pid) 0.0%, the two idle
+    ones two rows, the tids those of the box's `/proc/PID/task`, the threads within 5% of the process.

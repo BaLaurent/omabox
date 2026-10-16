@@ -201,7 +201,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - **Measuring CPU and memory** (an app's idle cost, a busy loop, a leak): `omabox cpu 30 --settle 5
   --app NAME` (or `--pid PID`, as `omabox run -- ps -e` numbers it, or the host's; neither: every
   process of the box), CPU as % of one core over the window, RSS and PSS as last seen (`--json`:
-  `processes[]`, `total`). `--settle` stands for the `sleep` you would put before measuring. Not
+  `processes[]`, `total`). `--settle` stands for the `sleep` you would put before measuring.
+  `--threads` (with `--app`/`--pid`): each thread's CPU by name, an app's main thread apart from its
+  render thread (`QSGRenderThread`); `--json`: `processes[].threads[]` (`tid`, `name`, `cpu`). Not
   `top`/`pgrep` on the host: they mix the box's processes with the user's (`omabox which PID`).
 - Which GPU: headless boxes render on the one the user's `omabox config gpu` names (`auto`: the first;
   `up` says when it fell back because that GPU is gone, and why; `omabox gpu` names the box's; `ls

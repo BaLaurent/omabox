@@ -137,7 +137,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
   omabox audio [-b NAME] [SECONDS] [--json]              an up --audio box's sound over SECONDS (3s): when, how loud
-  omabox cpu [-b NAME] [SECONDS] [--settle S] [--pid PID | --app NAME] [--json]
+  omabox cpu [-b NAME] [SECONDS] [--settle S] [--pid PID | --app NAME] [--threads] [--json]
                                                          CPU (% of one core) and memory of this box's processes (default 5s)
   omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
@@ -608,8 +608,12 @@ sharing them: the total is what the box holds) as last seen. Sampled every secon
 started in the window counts all its time, one that exited keeps what was seen up to its last sample
 (both said). --settle S waits S seconds before the window (an app's start-up left out). --pid PID: one
 process, as the box numbers it (\`omabox run -- ps -e\`) or its host pid; --app NAME: the processes of
-that name (their /proc comm, the first 15 bytes). --json: percent by name (as \`gpu\`'s), processes
-(pid, host_pid, name, cpu, rss_kb, pss_kb, started, exited) and total.
+that name (their /proc comm, the first 15 bytes). --threads, with --pid or --app: each of their
+threads too, under its process, by its name (comm: a Qt Quick app's GUI thread apart from its
+QSGRenderThread), over the same window; one row per thread, names repeated or not, its tid as the box
+numbers it, started or exited said as for processes. --json: percent by name (as \`gpu\`'s), processes
+(pid, host_pid, name, cpu, rss_kb, pss_kb, started, exited; with --threads, threads: tid, host_tid,
+name, cpu, started, exited) and total.
 @ output
 \`output drop [OUT]\` removes one of a headless box's screens, as a monitor that drops off on wake
 (standby, a KVM, a dock) does: the shell and apps lose their per-screen windows and rebuild them on
@@ -10093,14 +10097,17 @@ gpu_rows() {
 # 242); a box's are the ones in its pid namespace, as for gpu (box_pids). utime+stime from
 # /proc/PID/stat, sampled every second of the window (and at its ends), so a process that exits
 # during it keeps the time seen up to its last sample, and one that starts counts all of its own.
+# --threads (#242): each thread of the --pid or --app processes too, from /proc/PID/task/TID/stat in
+# the same samples.
 cmd_cpu() {
-  local name="" secs=5 settle=0 pid="" app="" json=0
+  local name="" secs=5 settle=0 pid="" app="" json=0 threads=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --settle) optarg "$@"; [[ $2 =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "cpu: --settle takes seconds (a number), got $2"; settle=$2; shift ;;
       --pid) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{0,6}$ ]] || die "cpu: --pid takes a pid in the box (omabox run -- ps -e) or its host pid, got $2"; pid=$2; shift ;;
       --app) optarg "$@"; app=$2; shift ;;
+      --threads) threads=1 ;;
       --json) json=1 ;;
       -h|--help) usage cpu; return ;;
       -*) die "cpu: unknown option $1" ;;
@@ -10109,17 +10116,31 @@ cmd_cpu() {
     shift
   done
   [ -z "$pid" ] || [ -z "$app" ] || die "cpu: --pid or --app, not both"
+  # Every process's threads would bury the one app's: Hyprland and the shell have dozens each.
+  [ $threads = 0 ] || [ -n "$pid$app" ] ||
+    die "cpu: --threads is for one app's threads: name it with --pid PID or --app NAME (omabox run -- ps -e)"
   select_box "$name"; need_box
   box_pids >/dev/null || die "cpu: cannot read the box's pid namespace"
   local clk; clk=$(getconf CLK_TCK) && [[ $clk =~ ^[1-9][0-9]*$ ]] || die "cpu: getconf CLK_TCK gave no tick rate"
   [ "$settle" = 0 ] || sleep "$settle"
   # Global, not local: the EXIT trap runs after this function has returned (or on Ctrl-C).
   CPU_TMP=$(mktemp -d); trap 'rm -rf "$CPU_TMP"' EXIT
-  local s=$CPU_TMP/s t0 now left ns
-  cpu_snap() { local pids=(); mapfile -t pids < <(box_pids || true); echo "S $(date +%s%N)"; cpu_sample /proc "${pids[@]}"; }
+  local s=$CPU_TMP/s t0 now left ns tapp; tapp=$(cpu_tame "${app:0:15}")
+  # --threads: the threads of the processes cpu_report keeps (by --pid, either numbering, or by name).
+  cpu_snap() {
+    local pids=() lines=() tp=() l hp bp nm; mapfile -t pids < <(box_pids || true); echo "S $(date +%s%N)"
+    if [ $threads = 0 ]; then cpu_sample /proc "${pids[@]}"; return; fi
+    mapfile -t lines < <(cpu_sample /proc "${pids[@]}")
+    for l in "${lines[@]}"; do
+      echo "$l"; read -r hp _ _ _ _ bp nm <<<"$l"
+      if [ -n "$pid" ]; then [ "$bp" != "$pid" ] && [ "$hp" != "$pid" ] || tp+=("$hp")
+      elif [ "$nm" = "$tapp" ]; then tp+=("$hp"); fi
+    done
+    cpu_threads /proc "${tp[@]}"
+  }
   cpu_snap > "$s"
   # --pid: there before the window, not after it (gone by then, it is a process that exited).
-  if [ -n "$pid" ] && ! awk -v p="$pid" '!/^S / && ($6 == p || $1 == p) { f = 1 } END { exit !f }' "$s"; then
+  if [ -n "$pid" ] && ! awk -v p="$pid" '!/^[St] / && ($6 == p || $1 == p) { f = 1 } END { exit !f }' "$s"; then
     die "cpu: box '$NAME' has no process $pid (omabox run -b $NAME -- ps -e)"
   fi
   t0=$(sed -n '1s/^S //p' "$s")
@@ -10128,7 +10149,7 @@ cmd_cpu() {
     sleep "$(awk -v l="$left" 'BEGIN { printf "%.3f", (l > 1e9 ? 1e9 : l) / 1e9 }')"
     cpu_snap >> "$s"
   done
-  cpu_report "$clk" "$pid" "$(cpu_tame "${app:0:15}")" < "$s" > "$CPU_TMP/r"
+  cpu_report "$clk" "$pid" "$tapp" < "$s" > "$CPU_TMP/r"
   if ! grep -q '^p ' "$CPU_TMP/r"; then
     [ -z "$app" ] || die "cpu: box '$NAME' ran no process $app in the window (its name in omabox run -b $NAME -- ps -e)"
   fi
@@ -10136,11 +10157,16 @@ cmd_cpu() {
   cores=$(getconf _NPROCESSORS_ONLN) || cores=null
   if [ $json = 1 ]; then
     jq -Rn --arg box "$NAME" --arg screen "$screen" --argjson secs "$secs" --argjson settle "$settle" \
-      --argjson cores "$cores" --argjson aq "$aq" --argjson render "$rj" --argjson cr "$cr" '
+      --argjson cores "$cores" --argjson aq "$aq" --argjson render "$rj" --argjson cr "$cr" --argjson threads "$threads" '
       def n: if . == "-" then null else tonumber end;
       [inputs | split(" ")] as $r |
-      [$r[] | select(.[0] == "p") | {pid: (.[2] | tonumber), host_pid: (.[1] | tonumber), name: .[3], cpu: (.[4] | tonumber),
-        rss_kb: (.[5] | tonumber), pss_kb: (.[6] | n), started: (.[7] == "1"), exited: (.[8] == "1")}] as $p |
+      reduce ($r[] | select(.[0] == "p" or .[0] == "t")) as $x ([];
+        if $x[0] == "p" then
+          . + [{pid: ($x[2] | tonumber), host_pid: ($x[1] | tonumber), name: $x[3], cpu: ($x[4] | tonumber),
+            rss_kb: ($x[5] | tonumber), pss_kb: ($x[6] | n), started: ($x[7] == "1"), exited: ($x[8] == "1")}
+            + (if $threads == 1 then {threads: []} else {} end)]
+        else .[length - 1].threads += [{tid: ($x[2] | tonumber), host_tid: ($x[1] | tonumber), name: $x[3], cpu: ($x[4] | tonumber),
+          started: ($x[5] == "1"), exited: ($x[6] == "1")}] end) as $p |
       first($r[] | select(.[0] == "total")) as $t |
       { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, settle: $settle,
         cores: $cores, aquamarine: $aq, render: $render, client_render: $cr,
@@ -10184,6 +10210,30 @@ cpu_sample() {
   done
 }
 
+# The threads of processes PID... under PROC (#242), a line each: "t", the process's host pid and
+# start time (its key in cpu_sample's lines), the thread's host tid and start time (a reused tid is
+# another thread), its utime+stime, its tid in the box (NSpid's last), its name (comm, as cpu_tame).
+cpu_threads() {
+  local LC_ALL=C proc=$1 p d tid l comm pst bt f=() st=(); shift
+  for p; do
+    { read -r l < "$proc/$p/stat"; } 2>/dev/null || continue
+    read -ra st <<<"${l##*) }"; [ ${#st[@]} -ge 20 ] || continue
+    pst=${st[19]}
+    for d in "$proc/$p/task/"*; do
+      tid=${d##*/}
+      { read -r l < "$d/stat"; } 2>/dev/null || continue
+      comm=${l#*\(}; comm=${comm%) *}
+      read -ra st <<<"${l##*) }"; [ ${#st[@]} -ge 20 ] || continue
+      bt=$tid
+      while read -ra f; do
+        [ "${f[0]:-}" != NSpid: ] || { bt=${f[-1]}; break; }
+      done 2>/dev/null < "$d/status" || true
+      comm=${comm//[[:space:]]/_}; comm=${comm//[^A-Za-z0-9_.:+@-]/?}; [ -n "$comm" ] || comm='?'
+      echo "t $p $pst $tid ${st[19]} $((st[11] + st[12])) $bt $comm"
+    done
+  done
+}
+
 # Samples (an "S NANOSECONDS" line, then cpu_sample's lines, for each) into `cpu`'s figures: a line per
 # process, "p HOSTPID PID NAME CPU RSS PSS STARTED EXITED", busiest first, then "total CPU RSS PSS".
 # CPU: % of one core over the whole window (first sample to last), so the rows add up to the total.
@@ -10191,14 +10241,20 @@ cpu_sample() {
 # before the last sample: its ticks up to the last sample it was in, its memory as then.
 # cpu_report CLK_TCK [PID] [NAME]: only process PID (a pid in the box, else a host pid; as in the
 # first sample), or the processes named NAME (cpu_tame'd: the first 15 bytes).
+# cpu_threads' lines among the samples (--threads): after each process, its threads, busiest first,
+# "t HOSTPID TID NAME CPU STARTED EXITED" (HOSTPID: the thread's; TID: the box's), as processes are.
 cpu_report() {
   awk -v clk="$1" -v want="${2:-}" -v app="${3:-}" '
     /^S / { t[++k] = $2; next }
+    /^t / { key = $2 " " $3 " " $4 " " $5
+      if (!(key in tfirst)) { tfirst[key] = k; tbase[key] = k == 1 ? $6 : 0; tkeys[++tn] = key; tpar[key] = $2 " " $3 }
+      tlast[key] = k; ttk[key] = $6; tbt[key] = $7; tnm[key] = $8; next }
     { key = $1 " " $2
       if (!(key in first)) { first[key] = k; base[key] = k == 1 ? $3 : 0; keys[++n] = key }
       last[key] = k; tk[key] = $3; rss[key] = $4; pss[key] = $5; bp[key] = $6; nm[key] = $7 }
     END {
       wall = k > 1 ? (t[k] - t[1]) / 1e9 : 0
+      sorted = "sort -k1,1rn -k2,2n -k3,3n -k4,4rn -k5,5n | cut -d\" \" -f6-"
       if (want != "") {   # the box numbering first, as gdb --pid
         for (i = 1; i <= n; i++) if (first[keys[i]] == 1 && bp[keys[i]] == want) only = keys[i]
         if (only == "") for (i = 1; i <= n; i++) if (first[keys[i]] == 1 && keys[i] ~ ("^" want " ")) only = keys[i]
@@ -10210,22 +10266,32 @@ cpu_report() {
         c = wall > 0 ? (tk[key] - base[key]) / clk / wall * 100 : 0
         if (c < 0) c = 0
         started = first[key] > 1; exited = last[key] < k
-        printf "p %s %s %s %.1f %d %s %d %d\n", substr(key, 1, index(key, " ") - 1), bp[key], nm[key], c, rss[key], pss[key],
-          started, exited | "sort -k5,5 -rn -s"
+        # Sorted on a prefix (cut off): the CPU and order of the process, then its threads by CPU.
+        printf "%.1f %d 0 0 0 p %s %s %s %.1f %d %s %d %d\n", c, i, substr(key, 1, index(key, " ") - 1), bp[key], nm[key], c,
+          rss[key], pss[key], started, exited | sorted
+        for (j = 1; j <= tn; j++) {
+          tq = tkeys[j]; if (tpar[tq] != key) continue
+          d = wall > 0 ? (ttk[tq] - tbase[tq]) / clk / wall * 100 : 0
+          if (d < 0) d = 0
+          split(tq, f, " ")
+          printf "%.1f %d 1 %.1f %d t %s %s %s %.1f %d %d\n", c, i, d, j, f[3], tbt[tq], tnm[tq], d, (tfirst[tq] > 1), (tlast[tq] < k) | sorted
+        }
         tc += c; tr += rss[key]; if (pss[key] != "-") { tp += pss[key]; np++ }
       }
-      close("sort -k5,5 -rn -s")
+      close(sorted)
       printf "total %.1f %d %s\n", tc, tr, np ? tp : "-"
     }'
 }
 
 # cpu_report's lines as `cpu`'s table: memory in MiB (GiB from 1 GiB); a process seen for part of the
-# window says so.
+# window says so. Threads (--threads) under their process, indented, with no memory (they share it).
 cpu_table() {
   awk 'function mem(k) { if (k == "-") return "-"; return k >= 1048576 ? sprintf("%.2fG", k / 1048576) : sprintf("%.1fM", k / 1024) }
     BEGIN { printf "  %-20s %8s %7s %9s %9s\n", "PROCESS", "PID", "CPU", "RSS", "PSS" }
     $1 == "p" { note = $8 && $9 ? "  (started and exited in the window)" : $8 ? "  (started in the window)" : $9 ? "  (exited in the window)" : ""
       printf "  %-20s %8s %6.1f%% %9s %9s%s\n", $4, $3, $5, mem($6), mem($7), note; rows++ }
+    $1 == "t" { note = $6 && $7 ? "  (started and exited in the window)" : $6 ? "  (started in the window)" : $7 ? "  (exited in the window)" : ""
+      printf "    %-18s %8s %6.1f%%%s\n", $4, $3, $5, note }
     $1 == "total" { if (!rows) print "  (no processes)"
       printf "  %-20s %8s %6.1f%% %9s %9s\n", "total", "", $2, mem($3), mem($4) }'
 }
