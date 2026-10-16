@@ -5208,6 +5208,26 @@ t_hyprland_crash() {
     "^omabox: box '$B'( went down: its Hyprland crashed \\(SIGSEGV\\) \\(its backtrace|: its Hyprland crashed \\(SIGSEGV\\), held by gdb --watch).*omabox log -b $B gdb --crash" "$out"
   check "...which has it" until_ok 15 bash -c "'$CLI' log -b '$B' gdb --crash 2>/dev/null | grep -q 'received signal SIGSEGV'"
   ob down "$B" >/dev/null 2>&1
+  # The moment between the crash and the box going down (finding 350), held open: labwc stopped, so
+  # nothing reaps the Hyprland and the box stays up. ls: going, not hung.
+  check "up again" ob up "$B" --no-shell --net isolated
+  ob run -b "$B" -- pkill -STOP -x omabox-labwc
+  timeout 30 "$CLI" lua -b "$B" "$crash" >/dev/null 2>&1
+  check_eq "ls in the moment before a crashed box ends: going, not hung" going "$(ob ls | awk -v n="$B" '$1 == n { print $4 }')"
+  check_eq "...ls --json too: hung false" "going false" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | "\(.state) \(.hung)"')"
+  ob run -b "$B" -- pkill -CONT -x omabox-labwc
+  check "...then dead, once labwc has reaped it" until_ok 10 bash -c "'$CLI' ls | awk -v n='$B' '\$1 == n { print \$4 }' | grep -qx dead"
+  ob down "$B" >/dev/null 2>&1
+  # An interactive box has no labwc: session.sh writes how its Hyprland ended (in a box standing in
+  # for the host, finding 26).
+  check "up (the stand-in host)" ob up "$B" --no-shell --net isolated
+  local in=("$CLI" run -b "$B" -- "$CLI")
+  if "${in[@]}" up hc --interactive --no-shell >/dev/null 2>&1; then
+    rc=0; out=$(timeout 30 "${in[@]}" lua -b hc "$crash" 2>&1) || rc=$?
+    check_match "an interactive box's crash: said with its signal" "^omabox: box 'hc' went down: its Hyprland crashed \\(SIGSEGV\\)" "$out"
+    "${in[@]}" down hc >/dev/null 2>&1
+  else no "up --interactive in the stand-in" "failed"; fi
+  ob down "$B" >/dev/null 2>&1
 }
 
 # A box whose pasta died (OOM, a killall) ends with it rather than stay up with no network (finding 89).
@@ -10456,8 +10476,13 @@ t_unit_hypr_lost() {
   check_match "...held by gdb --watch at a signal: crashed, held, and where the backtrace goes" \
     "^box 'u': its Hyprland crashed \\(SIGSEGV\\), held by gdb --watch .*omabox log -b u gdb --crash" "$(hl "t (tracing stop)")"
   check_match "...traced but not stopped at a signal: hung" "did not answer \\(hung" "$(hl "S (sleeping)")"
+  # hypr_gone: ls's one look (finding 350).
+  hgone() { timeout 10 bash -c 'source "$1"; NAME=u D=$2 SP=$3; box_pids() { echo "$SP"; }; hypr_gone' _ "$TMP/lib/bin/omabox" "$d" "$sp" 2>&1; }
+  check_fails "hypr_gone: a Hyprland that runs is not gone (hung, for ls)" hgone
   kill "$sp"; wait "$sp" 2>/dev/null
+  check_eq "...gone, no line yet: going" going "$(hgone)"
   printf '[ERROR] [../labwc/src/server.c:207] spawned child %s terminated with signal 11 (Segmentation fault)\n' "$sp" > "$d/home/labwc.log"
+  check_eq "...labwc's line: crashed" crashed "$(hgone)"
   check_match "...gone, labwc's line: went down, crashed (SIGSEGV), the gdb log's backtrace named" \
     "^box 'u' went down: its Hyprland crashed \\(SIGSEGV\\) \\(its backtrace: omabox log -b u gdb --crash; clear it with: omabox down u\\)" "$(hl "")"
   rm "$d/home/gdb.log"
@@ -10465,8 +10490,14 @@ t_unit_hypr_lost() {
     "^box 'u' went down: its Hyprland crashed \\(SIGSEGV\\) \\(a backtrace: .*omabox gdb --watch; boxes keep no core dumps;" "$(hl "")"
   printf 'x spawned child 9 exited with 1\n' > "$d/home/labwc.log"
   check_eq "hypr_end: an exit's status" "exited (status 1)" "$(D=$d lib hypr_end)"
+  check_eq "hypr_gone: an exit: exited" exited "$(hgone)"
   : > "$d/home/labwc.log"
   check_match "...no line, gone for 2 s: went down, in the usual words" "^box 'u' went down \\(why: omabox log -b u all; clear it with: omabox down u\\)"$'\nin [23]s$' "$(hl "")"
+  printf 'Hyprland says\nomabox: Hyprland terminated with signal 6\n' > "$d/home/hyprland.log"
+  check_eq "hypr_end: an interactive box's (session.sh's line in hyprland.log)" "crashed (SIGABRT)" "$(D=$d lib hypr_end)"
+  printf 'omabox: Hyprland exited with 0\n' > "$d/home/hyprland.log"
+  check_eq "...an exit" "exited (status 0)" "$(D=$d lib hypr_end)"
+  rm "$d/home/hyprland.log"
   ln -sf /etc/passwd "$d/home/labwc.log"
   check_fails "hypr_end: a link is not read" lib eval "D='$d'; hypr_end"
 }

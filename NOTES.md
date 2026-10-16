@@ -6756,7 +6756,8 @@ from them.
     Hyprland that runs (twice, 0.2 s apart: a SIGSTOPped one is `T`, not gdb's `t`) is hung as before,
     0.2 s later. The callers' own "went down" (box gone already) and a later call's "is dead" name
     labwc's line too ("exited (status N)" for an exit). Not for an interactive box: no labwc, so no line
-    (a gone Hyprland there is "went down" without the signal, after the 2 s). In a box: the repro
+    (a gone Hyprland there is "went down" without the signal, after the 2 s; since finding 350
+    session.sh writes the line). In a box: the repro
     plain (crashed, SIGSEGV, the gdb --watch hint, 0.1 s) and under gdb --watch (the gdb log's
     backtrace named; the held branch not hit there: gdb wrote its backtraces before lua looked).
     `t_unit_hypr_lost` (stopped, held, traced but running, gone with and without a watch, an exit's
@@ -7076,6 +7077,23 @@ from them.
     that embeds itself in the registry and has no objects made the old helper print the warning on
     every read of a zenity window, the new one only on a failed read (pid 1). Test: t_tree (that app;
     a failed `--find` shows the warning, a read tree has none).
+350. **`ls` says a crashed Hyprland's box `crashed`/`going`, not `hung`; interactive boxes name the
+    signal** (2026-10-16, finding 334's loose ends). Between a crash of the box's Hyprland and the box
+    ending (labwc reaps it, then PID 1 goes), its IPC is gone while the box is up, so `ls` (hung_boxes:
+    no answer in 1 s) said `hung`. hung_boxes now asks `hypr_gone` for one that does not answer: one
+    look, no wait, at the Hyprland its instance lock names (`hypr_host_pid`, split out of hypr_lost).
+    None running is `crashed` or `exited` by labwc's line, `going` with none yet; `ls`'s STATE and
+    `ls --json`'s `state` say it (`hung` false; the widget offers Down for any state but `up`). A
+    stopped or deadlocked Hyprland (a `save`'s pause too) still runs: `hung` as before. Interactive
+    boxes have no labwc: `session.sh` now appends Hyprland's wait status to `hyprland.log` ("omabox:
+    Hyprland terminated with signal N" for 128+N, else "exited with N"), which `hypr_end` reads when
+    there is no labwc line, so their crash is "went down: its Hyprland crashed (SIGSEGV)" at once (it
+    was "went down", no signal, after 2 s). *Decided*: the word goes in `state` rather than a new
+    field (a crashed box is not up, and its next state is `dead`). Seen in a box: labwc SIGSTOPped
+    (nothing reaps the Hyprland, the box stays up), the crash: `ls` `going`, `--json` `going false`,
+    `dead` once labwc went on; an interactive box in a stand-in host: crashed (SIGSEGV) in 0.1 s.
+    `crashed` itself (labwc's line written, the box not gone yet) only in t_unit_hypr_lost: the window
+    is too short to catch. Tests: t_hyprland_crash, t_unit_hypr_lost.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

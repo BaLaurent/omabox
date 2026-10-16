@@ -122,6 +122,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox tree` no longer prints libatspi's warnings after a tree it read.** A warning about
   another app on the box's accessibility bus came out as a stray `omabox: tree:` line; now they show
   only when `tree` fails.
+- **`omabox ls` no longer calls a box whose Hyprland just crashed `hung`.** In the moment before the
+  box goes down it says `crashed` (or `going`), in `ls --json`'s `state` too. An interactive box's
+  crash now names its signal at once, as a headless box's does.
 - **The skill shows `wait change` again**, for an app that redraws later by itself (a sync, a
   timer): `omabox wait change --window APP`, then `wait still`. Without it agents slept with
   `wait cmd -- false`. `omabox help wait` says what `change` waits for.

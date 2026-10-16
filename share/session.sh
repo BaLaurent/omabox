@@ -153,7 +153,10 @@ if [ "${OMABOX_INTERACTIVE:-0}" = 1 ]; then
   WAYLAND_SOCKET=$host_fd WAYLAND_DISPLAY=omabox-host /opt/omabox/share/start-hyprland.sh > "$HOME/hyprland.log" 2>&1 &
   hypr_pid=$!
   exec {host_fd}>&-   # Hyprland has it now
-  wait "$hypr_pid"    # Hyprland only: with --systemd the user manager is a child too, and never exits
+  rc=0; wait "$hypr_pid" || rc=$?   # Hyprland only: with --systemd the user manager is a child too, and never exits
+  # How it ended, at the end of its log, as labwc says it of a headless box's: omabox says a crash with
+  # its signal (bin/omabox hypr_end, finding 350). 128+N is a signal (Hyprland's own exits are small).
+  if [ "$rc" -gt 128 ]; then echo "omabox: Hyprland terminated with signal $((rc - 128))"; else echo "omabox: Hyprland exited with $rc"; fi >> "$HOME/hyprland.log"
   # The window was closed (share/hyprland.lua exits on it) or Hyprland died. bwrap's PID 1 only exits
   # once it has no children left, and the shell's helpers would keep the box alive, screenless: end
   # everything else in the box's pid namespace.

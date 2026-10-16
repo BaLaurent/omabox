@@ -1141,19 +1141,10 @@ hung_text() {
 # the box or labwc's line to say how it ended; a Hyprland that runs (twice, 0.2 s apart: a stopped one
 # too) is not lost. Prints what happened: 0; 1 for one that runs, or a box it cannot tell of.
 hypr_lost() {
-  local i pids p hp is lock run=0 st sig
+  local i hp run=0 st sig
   for i in 1 2 3 4 5 6 7 8 9 10; do
     box_alive || { hypr_down_text; return 0; }
-    pids=$(box_pids) && [ -n "$pids" ] || return 1
-    # Its pid as the box numbers it, from its instance lock (a box-written file: only a number taken),
-    # matched to the host's through NSpid; none running (or no lock: removed as it exits) is gone.
-    hp="" is=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || return 1
-    lock=""; [ -L "$D/run/hypr" ] || [ -L "$D/run/hypr/$is" ] || lock=$(run_read "hypr/$is/hyprland.lock" | head -n 1) || lock=""
-    if [[ $lock =~ ^[1-9][0-9]{0,6}$ ]]; then
-      for p in $pids; do
-        [ "$(awk '/^NSpid:/ { print $NF }' "/proc/$p/status" 2>/dev/null)" = "$lock" ] && running "$p" && { hp=$p; break; }
-      done
-    fi
+    hp=$(hypr_host_pid) || return 1
     if [ -n "$hp" ]; then
       st=$(pid_state "$hp")
       # gdb --watch stops it at the signal (tracing stop, t) while it writes the backtraces.
@@ -1167,18 +1158,48 @@ hypr_lost() {
     fi
     sleep 0.2
   done
-  # Gone, and the box not down yet (an interactive box's has no labwc to say how).
+  # Gone, and the box not down yet, with no line saying how.
   [ -n "$hp" ] && return 1
   hypr_down_text
+}
+# The host pid of the box's Hyprland, nothing when none runs; 1 when it cannot tell. Its pid as the
+# box numbers it, from its instance lock (a box-written file: only a number taken), matched to the
+# host's through NSpid; none running (or no lock: removed as it exits) is gone.
+hypr_host_pid() {
+  local pids p is lock
+  pids=$(box_pids) && [ -n "$pids" ] || return 1
+  is=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || return 1
+  lock=""; [ -L "$D/run/hypr" ] || [ -L "$D/run/hypr/$is" ] || lock=$(run_read "hypr/$is/hyprland.lock" | head -n 1) || lock=""
+  if [[ $lock =~ ^[1-9][0-9]{0,6}$ ]]; then
+    for p in $pids; do
+      [ "$(awk '/^NSpid:/ { print $NF }' "/proc/$p/status" 2>/dev/null)" = "$lock" ] && running "$p" && { echo "$p"; return 0; }
+    done
+  fi
+  return 0
+}
+# For `ls`, at one look (no wait): a box up whose Hyprland did not answer because it is gone, in the
+# moment before the box ends with it (finding 350): crashed or exited when labwc (or, in an
+# interactive box, session.sh) said how, else going. A failure for one that runs, or a box it cannot tell of.
+hypr_gone() {
+  local hp end
+  hp=$(hypr_host_pid) && [ -z "$hp" ] || return 1
+  end=$(hypr_end) || { echo going; return 0; }
+  echo "${end%% *}"
 }
 # A process's state as /proc/PID/status says it ("S (sleeping)", "t (tracing stop)"), nothing for none.
 pid_state() { sed -n 's/^State:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null || true; }
 # How the box's Hyprland ended, from labwc's line (headless boxes: labwc's -S child is Hyprland): crashed
 # (SIGSEGV), exited (status N), or a failure for none. The box writes its log: only that line read.
 hypr_end() {
-  local f line n
-  f=$(box_home_file labwc.log) || return 1
-  line=$(tail -c 65536 -- "$f" | grep -aoE 'spawned child [0-9]+ (terminated with signal [0-9]{1,2}|exited with -?[0-9]{1,3})' | tail -n 1) || line=""
+  local f line=""
+  if f=$(box_home_file labwc.log); then
+    line=$(tail -c 65536 -- "$f" | grep -aoE 'spawned child [0-9]+ (terminated with signal [0-9]{1,2}|exited with -?[0-9]{1,3})' | tail -n 1) || line=""
+  fi
+  # An interactive box has no labwc: session.sh writes its own line at the end of hyprland.log (finding 350).
+  if [ -z "$line" ] && f=$(box_home_file hyprland.log); then
+    line=$(tail -c 4096 -- "$f" | grep -aoE '^omabox: Hyprland (terminated with signal [0-9]{1,2}|exited with -?[0-9]{1,3})$' | tail -n 1) || line=""
+  fi
+  local n
   if [[ $line =~ signal\ ([0-9]+)$ ]]; then
     n=$(kill -l "${BASH_REMATCH[1]}" 2>/dev/null) || n=""
     if [ -n "$n" ]; then echo "crashed (SIG$n)"; else echo "crashed (signal ${BASH_REMATCH[1]})"; fi
@@ -11540,31 +11561,38 @@ box_theme() {
 }
 
 # The boxes up whose Hyprland does not answer within 1 s (#125, finding 182), as `hypr NAME` lines, and
-# those whose Hyprland answers but whose shell is hung (shell_hung, #209), as `shell NAME`. All asked
-# at once, so `ls` takes 1 s at most for them (3 s with a hung shell). One still starting (no
-# omabox.env) is not asked.
+# those whose Hyprland answers but whose shell is hung (shell_hung, #209), as `shell NAME`, and those
+# whose Hyprland is gone in the moment before the box ends with it (hypr_gone: a crash is no hang,
+# finding 350), as `gone NAME crashed|exited|going`. All asked at once, so `ls` takes 1 s at most for
+# them (3 s with a hung shell). One still starting (no omabox.env) is not asked.
 hung_boxes() {
-  local n p dir; dir=$(mktemp -d) && mkdir -- "$dir/hypr" "$dir/shell" || return 0
+  local n p w dir; dir=$(mktemp -d) && mkdir -- "$dir/hypr" "$dir/shell" "$dir/gone" || return 0
   for n in $(list_names); do
     select_box "$n"
     [ "$(box_state)" = up ] && [ -s "$D/run/omabox.env" ] || continue
     { if hypr_answers 1; then
         [ "$(meta shell)" != true ] || ! p=$(shell_pid) || ! shell_running "$p" || ! shell_hung "$p" || : > "$dir/shell/$n"
+      elif w=$(hypr_gone); then echo "$w" > "$dir/gone/$n"
       else : > "$dir/hypr/$n"; fi; } 2>/dev/null &
   done
   wait
   for p in "$dir"/hypr/* "$dir"/shell/*; do [ ! -e "$p" ] || { p=${p#"$dir"/}; echo "${p%%/*} ${p#*/}"; }; done
+  for p in "$dir"/gone/*; do [ ! -e "$p" ] || echo "gone ${p##*/} $(cat -- "$p")"; done
   rm -rf -- "${dir:?}"
 }
+# What hung_boxes said of box N's gone Hyprland (crashed, exited, going), nothing if nothing. gone_word HUNG N
+gone_word() { awk -v n="$2" '$1 == "gone" && $2 == n { print $3 }' <<<"$1"; }
 
 # The selected box as one line of JSON, as `ls --json` lists it (and `up --json` prints it). HUNG: true
 # when hung_boxes named it. Its state stays `up`: the bar widget offers Down for any other state, as
 # for a dead box, and a box `save` has paused answers no IPC either. SHELL: shell_state's hung or ok,
-# when hung_boxes asked already. `orphan` (#220): box_orphan's, for a box up; `starter`: as `up` recorded it.
-# box_json [HUNG [SHELL]]
+# when hung_boxes asked already. GONE: hung_boxes's word for a Hyprland gone (crashed, exited, going),
+# its state while the box ends (finding 350). `orphan` (#220): box_orphan's, for a box up; `starter`: as
+# `up` recorded it. box_json [HUNG [SHELL [GONE]]]
 box_json() {
   local state peeking=false keys=false hung=${1:-false}
   state=$(box_state)
+  [ -z "${3:-}" ] || [ "$state" != up ] || { state=$3; hung=false; }
   peek_pid >/dev/null && peeking=true
   [ ! -f "$D/keys-to-box" ] || keys=true
   local theme; theme=$(box_theme)
@@ -11612,7 +11640,7 @@ cmd_ls() {
     for n in $(list_names); do
       select_box "$n"
       box_json "$(grep -qFx -- "hypr $n" <<<"$hung" && echo true || echo false)" \
-        "$(grep -qFx -- "shell $n" <<<"$hung" && echo hung || echo ok)"
+        "$(grep -qFx -- "shell $n" <<<"$hung" && echo hung || echo ok)" "$(gone_word "$hung" "$n")"
     done | jq -s -c .
     return
   fi
@@ -11626,6 +11654,7 @@ cmd_ls() {
     # list (under errexit a failed lookup here ended `ls` there; seen with the suite's boxes in parallel).
     local state idle; state=$(box_state)
     [ "$state" != up ] || ! grep -qFx -- "hypr $n" <<<"$hung" || state=hung
+    local gw; gw=$(gone_word "$hung" "$n"); [ "$state" != up ] || [ -z "$gw" ] || state=$gw
     idle=$(meta idle) || continue
     if [ "${idle:-0}" -gt 0 ] && used=$(stat -c %Y "$D/used" 2>/dev/null); then
       idle="$((($(date +%s) - used) / 60))m/$(human_duration "$idle")"
