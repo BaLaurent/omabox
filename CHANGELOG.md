@@ -3,7 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.7.0 — 2026-10-16
+
+Hold keys across commands, a journal in every box, CPU per thread, and an opt-in skill for
+reporting what omabox got wrong. Print no longer kills a box on NVIDIA, `tree` reads egui apps, a
+box loads your Hyprland bindings and input settings, and a crash says it crashed, with the signal.
+A box refuses the coding agents' and the browsers' own stores, as it does other secrets. Includes
+0.6.2's security fix. The guard's hooks changed and now say when an update changes them: run
+`omabox guard on` (or `omabox setup`) once.
 
 ### Added
 
