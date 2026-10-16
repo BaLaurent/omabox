@@ -6697,7 +6697,10 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     takes no -b: it is not about one box", exit 2, from one helper both use (`not_one_box`); any other
     argument is "ls: unknown argument X (omabox ls [--json])", exit 2 as well (the issue asked for 2;
     other commands' unknown options exit 1 through `die`). `--json` anywhere, or twice, is still
-    `--json`. `t_unit_cli`.
+    `--json`. `t_unit_cli`. `saves` had the same hole (`saves --json --bogus` printed the JSON and
+    exited 0, as it matched only its first argument): every argument but `rm`'s is read now, `-b`
+    is `not_one_box`, anything but `--json`/`-h` is "saves: unknown argument X", exit 2 (a bare
+    `saves junk` was `die`, exit 1, before). `t_unit_saves`.
 
 328. **The guard's line goes into `$CLAUDE_ENV_FILE` once** (2026-10-16, #243). The Claude Code
     hook appended it with `>>` every time SessionStart fired, and that is on resume and compact too:

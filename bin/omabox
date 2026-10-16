@@ -12158,8 +12158,21 @@ cmd_save() {
     say "save '$save' is $size: a build or a download in the box HOME? (omabox saves rm $save)"
 }
 
+# Arguments it does not take are refused, as ls's are (finding 327): `saves --json --bogus` printed the
+# JSON and exited 0.
 cmd_saves() {
-  local d n
+  local d n json=""
+  if [ "${1:-}" != rm ]; then
+    for n; do
+      case $n in
+        --json) json=--json ;;
+        -h|--help) usage saves; return ;;
+        -b|--box) not_one_box saves ;;
+        *) say "saves: unknown argument $n (omabox saves [--json] | saves rm SAVE...)"; exit 2 ;;
+      esac
+    done
+    set -- ${json:+"$json"}
+  fi
   case ${1:-} in
     rm)
       shift; [ $# -gt 0 ] || die "saves rm: which? (omabox saves lists them)"
@@ -12181,8 +12194,6 @@ cmd_saves() {
           "$(jq -r '.saved // "?" | sub("T"; " ") | .[0:16]' "$d/save.json" 2>/dev/null)" \
           "$(jq -r '.box // "?"' "$d/save.json" 2>/dev/null)" "$k"
       done ;;
-    -h|--help) usage saves ;;
-    *) die "saves: rm SAVE... or --json, got $1" ;;
   esac
 }
 

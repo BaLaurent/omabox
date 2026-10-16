@@ -4548,6 +4548,11 @@ t_unit_saves() {
   check_fails "...before the box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$P-nf"
   check_match "saves rm of none says so" "no save" "$(sv saves rm "$P-none" 2>&1)"
   check_match "saves: an unknown word refused" "rm SAVE" "$(sv saves junk 2>&1)"
+  # As ls's (finding 327): --json with anything else after it printed the JSON and exited 0.
+  check_eq "...after --json too, exit 2, no JSON" "omabox: saves: unknown argument --bogus (omabox saves [--json] | saves rm SAVE...) 2" \
+    "$(o=$(sv saves --json --bogus 2>&1); echo "$o $?")"
+  check_eq "...-b after saves: the line -b before it gives" "omabox: saves takes no -b: it is not about one box 2" "$(o=$(sv saves -b "$P-x" 2>&1); echo "$o $?")"
+  check_eq "...--json twice is --json" "[]" "$(sv saves --json --json)"
 }
 t_saves() {
   local B=$P-sv B2=$P-sv2 S=$P-s d=$TMP/data/omabox/saves/$P-s
