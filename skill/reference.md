@@ -118,12 +118,13 @@ omabox check point settings --window myapp --ignore "10,400 120x20"   # its own 
 ```
 
 `omabox check run --approve [--plugin PATH]... -- ./visual.sh` runs it three times, each in a fresh
-`up --clean` box (Omarchy's bar on tokyo-night, a `#ff00ff` wallpaper, the clock frozen, no pointer,
-no network, no animations; `--keep` takes any back, `--theme`/`--size`/`--net connected` as `up`), and
+`up --clean` box (Omarchy's bar on tokyo-night, a `#ff00ff` wallpaper, every process's clock from
+Friday 12:00 as the box starts, so an app's own times match too, no pointer, no network, no
+animations; `--keep` takes any back, `--theme`/`--size`/`--net connected` as `up`), and
 writes the baseline to `./omabox-check` (`--base DIR`; commit it with the project). "unstable ID"
 names what was not the same from one run to the next, left out from then on: one run of three
 differing is the app (a layout that changes from start to start: worth a look) or a minute that
-ticked; every run differing is data or a time the scenario does not pin (a random port, a time the
+ticked (the clock runs from 12:00: a step about a minute into the run); every run differing is data or a time the scenario does not pin (a random port, a time the
 app shows): pin it in the scenario's data or `--ignore` it. Then `omabox check run -- ./visual.sh`
 (same UP OPTIONS) after a change: `same ID`, or `changed ID` with each region (`at X,Y WxH`, drawn on
 `ID.diff.png` beside the run's shots: Read that, not the whole shot) and the tree's
