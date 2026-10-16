@@ -2840,6 +2840,9 @@ signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGURG}); os.execv(sys.argv[1],
 }
 # HELD_WRITER, in a box: writes other output (escapes, 64 KiB) to nsenter's stderr of the box's
 # commands as they start (finding 345), and keeps it open. Each one is a line in /tmp/held-hits.
+# Only nsenter's: the box's bash may make the command's own stderr its fd 2 between the check and the
+# open (under load it did, #249), and that one is the caller's, whose bytes are meant to reach it. So
+# what was opened is written to only when it is the pipe the check saw.
 HELD_WRITER='
 import os
 me = os.getpid(); held = []; hits = open("/tmp/held-hits", "a", buffering=1)
@@ -2851,9 +2854,11 @@ while True:
             env = open("/proc/%s/environ" % p, "rb").read().split(b"\0")
             efd = [e[11:] for e in env if e.startswith(b"OMABOX_EFD=")]
             if not efd or not efd[0].isdigit(): continue
-            if os.readlink("/proc/%s/fd/2" % p) == os.readlink("/proc/%s/fd/%s" % (p, efd[0].decode())): continue
+            l2 = os.readlink("/proc/%s/fd/2" % p)
+            if l2 == os.readlink("/proc/%s/fd/%s" % (p, efd[0].decode())): continue
             fd = os.open("/proc/%s/fd/2" % p, os.O_WRONLY | os.O_NONBLOCK)
         except OSError: continue
+        if os.readlink("/proc/self/fd/%d" % fd) != l2: os.close(fd); continue
         try: os.write(fd, msg)
         except OSError: pass
         hits.write(p + "\n"); held.append(fd)
