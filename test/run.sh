@@ -7225,6 +7225,13 @@ scale_on() {
     check_eq "shot --window -g 200x200 --fit 300 (a 400x400 image): 300 px long" 300x300 "$(magick identify -format '%wx%h' "$wg" 2>&1)"
     check "...click --in it" ob click -b "$B" --in "$wg" 150 150
     check_eq "...the pointer at the crop's point in the window" "$((wx + 300 + 100)), $((wy + 250 + 100))" "$(ob hyprctl -b "$B" cursorpos)"
+    # -g past the window's corner (#240): cut in the window's coordinates, then scaled to its buffer.
+    err=$(ob shot -b "$B" --window class:t227 -g "$((ww - 100)),$((wh - 50)) 200x200" -o "$wg" 2>&1 >/dev/null)
+    check_match "shot --window -g past the corner at scale 2: said in the window's coordinates" \
+      "clipped to $((ww - 100)),$((wh - 50)) 100x50 of window .*: 100 px past the right edge, 150 px past the bottom edge" "$err"
+    check_eq "...its 100x50 a 200x100 image" 200x100 "$(magick identify -format '%wx%h' "$wg" 2>&1)"
+    check_eq "...the whole shot's corner" 0 \
+      "$(magick "$wf" -crop 200x100+$((2 * ww - 200))+$((2 * wh - 100)) +repage "$wg" -alpha off -metric AE -compare -format '%[distortion]' info: 2>&1)"
     # shot --burst through one client (#196, finding 314): frames the size and pixels of grim's shot,
     # at scale 2: the screen --fit, a -g --fit, a window, a window's -g --fit.
     local a r args; for a in "--fit|2000" "-g|100,100 400x300|--fit|600" "--window|class:t227" "--window|class:t227|-g|300,250 200x200|--fit|300"; do
@@ -9330,6 +9337,11 @@ t_window() {
   check_match "-g says it is cropped" "400x100 image of the screen's 400x100 at 300,200" "$err"
   ob click -b "$B" --in "$o/g.png" 7 9 >/dev/null 2>&1
   check_eq "click --in a -g shot: from its origin" "307, 209" "$(pos)"
+  # Past the screen (#240): cut to it, as a window's (grim padded the image with transparent pixels).
+  err=$(ob shot -b "$B" -g "1900,1000 50x100" -o "$o/gc.png" 2>&1 >/dev/null)
+  check_match "-g past the screen: the part on it" "20 x 80," "$(file "$o/gc.png")"
+  check_match "...said, by edge" "-g clipped to 1900,1000 20x80 of the screen \(1920x1080\): 30 px past the right edge, 20 px past the bottom edge" "$err"
+  check_match "-g with nothing on the screen refused in words" "has nothing on the screen \(1920x1080\)" "$(ob shot -b "$B" -g "1920,0 10x10" 2>&1)"
   check_match "--in a file that is not a shot: refused" "not a shot of box" "$(ob click -b "$B" --in /etc/hostname 1 1 2>&1)"
   check_match "--in outside the image: refused" "outside the image" "$(ob click -b "$B" --in "$o/g.png" 400 1 2>&1)"
   touch "$o/g.png"
@@ -9346,7 +9358,14 @@ t_window() {
   check_match "...stderr says where in the window" "100x50 of it at 10,20" "$err"
   ob click -b "$B" --in "$o/new/dir/cg.png" 5 6 >/dev/null 2>&1
   check_eq "click --in a window crop: from the crop's origin in the window" "715, 326" "$(pos)"
-  check_match "-g outside the window refused" "not inside window" "$(ob shot -b "$B" -w 'title:^C$' -g "390,10 20x20" 2>&1)"
+  # -g past the window (#240): cut to it and said so, exit 0; only one with nothing inside is refused.
+  err=$(ob shot -b "$B" -w 'title:^C$' -g "390,10 20x20" -o "$o/cl.png" 2>&1 >/dev/null)
+  check_eq "shot -w -g 10 px past the right edge: exit 0" 0 "$?"
+  check_match "...the image is the part inside" "10 x 20," "$(file "$o/cl.png")"
+  check_match "...said on stderr, with the edge and how far past" "-g clipped to 390,10 10x20 of window .* \(400x300; -g is in the window's coordinates\): 10 px past the right edge" "$err"
+  ob click -b "$B" --in "$o/cl.png" 5 6 >/dev/null 2>&1
+  check_eq "...click --in it: from the clipped crop's origin" "1095, 316" "$(pos)"
+  check_match "-g with nothing inside the window refused" "has nothing inside window" "$(ob shot -b "$B" -w 'title:^C$' -g "400,10 20x20" 2>&1)"
   # pointer --window (#25): moves in the window's coordinates; --hold is omabox's own.
   ob pointer -b "$B" --window 'title:^C$' -- move 3 4 >/dev/null 2>&1
   check_eq "pointer --window: window coordinates" "703, 304" "$(pos)"
@@ -10557,6 +10576,13 @@ t_unit_wait() {
   check_eq "-g X,Y,W,H" "1 2 30 40" "$(lib geom_parse "1,2,30,40")"
   check_eq "-g X,Y W,H" "-1 2 30 40" "$(lib geom_parse "-1,2 30,40")"
   check_fails "-g junk refused" lib geom_parse "1,2 0x4"
+  # geom_clip (#240): a region past the window or screen cut to it, and what was cut, by edge.
+  check_eq "geom_clip: inside, nothing cut" "10 20 30 40"$'\t' "$(lib geom_clip 10 20 30 40 100 100)"
+  check_eq "geom_clip: 6 px past the right edge" "1380 40 474 330"$'\t'"6 px past the right edge" "$(lib geom_clip 1380 40 480 330 1854 1056)"
+  check_eq "geom_clip: every edge" "0 0 100 50"$'\t'"5 px past the left edge, 3 px past the top edge, 15 px past the right edge, 7 px past the bottom edge" \
+    "$(lib geom_clip -5 -3 120 60 100 50)"
+  check_fails "geom_clip: nothing inside (right of it)" lib geom_clip 100 0 10 10 100 50
+  check_fails "geom_clip: nothing inside (above it)" lib geom_clip 0 -10 10 10 100 50
   check_eq "300ms" 300 "$(lib ms_duration 300ms)"
   check_eq "1.5s" 1500 "$(lib ms_duration 1.5s)"
   check_eq "2m" 120000 "$(lib ms_duration 2m)"

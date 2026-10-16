@@ -47,7 +47,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   title, failing those a hyphen-separated part of the class (`portal` for `xdg-desktop-portal-gtk`);
   `title:RE`, `class:RE`, `pid:N` or an address (`0x…`) narrow it; `wait window SEL` is satisfied by
   any window it matches. `shot --window SEL -g "X,Y WxH"` crops the window in its own
-  coordinates.
+  coordinates; a `-g` past the window (or the screen) is cut to it, said on stderr.
 - Coordinates are screenshot pixels. A cropped, scaled or zoomed shot says so on stderr: then `click
   --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image. Screen
   shots show the pointer (hover evidence: a `-g` crop of the screen; `--no-pointer` leaves it out of

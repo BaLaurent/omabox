@@ -22,6 +22,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`shot -g` past the window or the screen is cut to it.** `shot --window SEL -g` a few pixels past
+  the window was refused ("not inside window"), and `-g` past the screen gave an image padded with
+  transparent pixels. Both now take the part inside and say so on stderr, by edge (`-g clipped to
+  1380,40 474x330 of window …: 6 px past the right edge`), exit 0; only a region with nothing
+  inside is refused.
+
 - **`omabox ls --json` has the Hyprland version of every box.** `hyprland_version` was null for a
   box on the installed Hyprland, the usual one; it was recorded only with `up --hyprland`. Now it is
   the first line of the box's own `hyprctl version` for each box `up` starts. The skill names the

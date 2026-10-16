@@ -6747,3 +6747,16 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     "matches 2 windows". Within the tier several matches are refused as before (`portal` for a gtk
     and a kde portal), and `wait window`/`gone` count the same way (one jq, `WIN_SEL_JQ`).
     `t_unit_window_select` checks it on made-up windows.
+332. **`shot -g` past the window or the screen is cut to it** (2026-10-16, #240). `shot --window SEL
+    -g` refused a region a few pixels past the window ("not inside window", exit 1): agents retried
+    by hand, or gave up on a footer taken with the screen's width. Past the screen, grim itself
+    gave the requested size with the part off the layout transparent (and failed, "did not intersect
+    with any outputs", with nothing on it). `geom_clip` now cuts either to the window (its logical
+    size, before `win_buf_geom` scales the rest to its buffer, finding 300) or to the layout's extent,
+    and says so on stderr by edge (`-g clipped to 1380,40 474x330 of window …: 6 px past the right
+    edge`), exit 0, stdout still the path; the shot record has the clipped region, so `click --in`
+    maps from its origin. Only a region with nothing inside is refused ("has nothing inside window",
+    "has nothing on the screen"). Not clipped: `pixel` (a point cannot be), `wait -g` (a region
+    watched), gaps between monitors inside the extent (grim's, as before). `record` has no `-g`.
+    `t_unit_wait` (geom_clip), `t_window` (window and screen, `click --in` the clipped crop),
+    `t_scale`/`t_scale_nvidia` (past a window's corner at scale 2, against its whole shot).
