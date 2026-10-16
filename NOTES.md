@@ -7396,60 +7396,51 @@ from them.
     --json), t_check (a Qt Quick window: approve with an unstable random label, same, a button moved
     6 px: region and `moved +6,+0 button "Save"`, a new checkpoint, a failing scenario: exit 3).
 
-360. **`up --clean`'s clock: every process's wall clock from Friday 12:00** (2026-10-16, #252, built on
-    findings 357-359). The bar's literal format froze only the bar's text: an app's own times followed
-    the real clock (the subject stamped an item "added today 16:37" and showed it, so a check made a
-    minute later read a change). `tools/clock`, a library of omabox's own (no libfaketime here, no
-    sudo to install it): `omabox-clock.so` in a clean box's own `/etc/ld.so.preload` (`$D/etc`, which
-    makes `/etc` the read-only overlay `--omarchy` used; the host's lines first when it has some), so
-    every dynamically linked process of the box has it: the session, the shell, `run`'s commands
-    (which start with a clean environment: LD_PRELOAD would not reach them), D-Bus-activated services
-    (xdg-desktop-portal's maps), a `--systemd` box's units (`systemd-run --user --pipe date`). It reads
-    `/opt/omabox/clock/instant`, which only such a box has: CLEAN_CLOCK_AT (2026-01-02 12:00, a
-    Friday) in the box's timezone (the host's /etc/localtime, or a `--env TZ`) and CLOCK_BOOTTIME at
-    `up`. Outside a box (the system bus there, or no /opt/omabox/share mount), in /opt/omabox/bin's
-    tools (`events` stamps lines the host compares: `--since 30s`) and with `OMABOX_REAL_CLOCK=1`
-    (on_box and box_sys: `record`'s first frame and audio are put in step with the host's marks) it
-    leaves the clock alone. CLOCK_REALTIME and its relatives as clock_gettime, gettimeofday, time,
-    timespec_get and syscall() read them; CLOCK_MONOTONIC stays the kernel's. **Running, not frozen.**
-    Frozen, the shell, a Qt Quick app (qml6), a GTK 4 app and a headless Qt daemon with a web API all
-    idled once the deadlines below were moved (`cpu` 0.0-0.2% each), their timers fired (a 1 s Timer
-    and a GLib timeout counted on; the bar's minute timer fired and kept 12:00), the daemon's API
-    answered and stamped what it made with the instant. But bash's `$SECONDS` stood still (`sleep 2`:
-    0) and python's `time.time()` too: a wait measured on the wall clock never ends, and Omarchy's
-    scripts have them (omarchy-launch-shell's relaunch budget, omarchy-restart-shell's 30 s relock
-    deadline; 20 of its scripts use `$SECONDS` or `date +%s`), as share/shell.sh's 5 s does. So it
-    runs from the instant at the box's start: the bar's own clock (the literal format is gone; its
-    code runs) reads "Friday 12:00" for the box's first minute, then 12:01; a check step about a
-    minute in can see that minute tick in one run of three, approve's "unstable". **Absolute
-    deadlines** on those clocks are moved into the real one (left alone they are months back, and the
-    kernel returns at once): clock_nanosleep, timerfd_settime and timer_settime with ABSTIME,
-    pthread_cond_timedwait on a condition left on CLOCK_REALTIME (glibc's `__wrefs` bit 1), sem_timedwait,
-    the timed and clock locks and joins, mq, futex WAIT_BITSET/WAIT_REQUEUE_PI with CLOCK_REALTIME and
-    LOCK_PI by syscall(). A deadline that means never is left as it is: systemd's TIME_T_MAX timerfd
-    (how it hears of a clock set) overflowed when moved, fired at once, and a `--systemd` box's
-    manager looped ("Looping too fast"; its Hyprland never came up). Found on the way, frozen or
-    running alike: the GTK app's NVIDIA driver threads (`[vkps] Update`, `[vkrt] Analysis`) at 100%
-    each, 400% in all. libnvidia-eglcore dlopens libc and looks up pthread_cond_timedwait with dlvsym
-    at GLIBC_2.2.5 (the compat version), then waits on deadlines made from the box's gettimeofday; the
-    library's dlsym and dlvsym now hand back its own for libc's functions (and a wrapper for that
-    compat one): 0.1%. They find libc's own dlsym and dlvsym in libc's symbol table (dl_iterate_phdr),
-    not with dlopen: jemalloc calls syscall() from its constructor before the library's has run, and
-    dlopen's allocation came back into it (every Quickshell crashed at start). The GTK app's
-    VK_ERROR_UNKNOWN warnings are there on the real clock too. Measured on the subject: approve (3
-    boxes, nothing unstable), then a check 2 minutes later: 4 of 4 same, its item's time 12:00 in
-    both. Limits: static binaries and Go programs read the vDSO themselves, as a raw syscall
-    instruction does; io_uring timeouts; 32-bit programs (the library is 64-bit: their ld.so says it
-    skips it); Flatpak apps (an /etc of their own); what the kernel stamps (file times, so a file
-    written in the box is in its future; socket timestamps; `ps`'s start times); TLS certificates are
-    judged at the box's date (a clean box has no network unless `--net connected`: with it, `--keep
-    clock`); the box's own logs (journal, apps.log) carry its clock. Tests: t_unit_clock
-    (clock_instant_file with and without a TZ; in a bwrap standing in for a box: date, `$SECONDS`
-    running, the real clock without the instant file, with OMABOX_REAL_CLOCK, for a tool in
-    /opt/omabox/bin, with the host's bus, without the share mount; a probe: each CLOCK_REALTIME
-    deadline waits its 0.3 s, the 2.2.5 one by dlvsym too, a never one does not fire), t_clean (the
-    bar's format kept, `run`'s date, `$SECONDS`, the portal's and the shell's maps, `events` on the
-    host's clock; `--keep clock`: the real clock, no ld.so.preload).
+360. **`up --clean`'s clock: a library that set every process's wall clock, built and left out**
+    (2026-10-16, #252, built on findings 357-359). The bar's literal format freezes only the bar's
+    text: an app's own times follow the real clock (the subject stamped an item "added today 16:37"
+    and showed it, so a check made a minute later read a change). **What was built**: `tools/clock`,
+    a library of omabox's own (no libfaketime here, no sudo to install it), `omabox-clock.so` in a
+    clean box's own `/etc/ld.so.preload` (through `$D/etc` and the /etc overlay), so every
+    dynamically linked process had it: the session, the shell, `run`'s commands (a clean
+    environment: LD_PRELOAD would not reach them), D-Bus-activated services, a `--systemd` box's
+    units. It read an instant file (Friday 2026-01-02 12:00 in the box's zone, and CLOCK_BOOTTIME at
+    `up`) and ran CLOCK_REALTIME and its relatives from it (clock_gettime, gettimeofday, time,
+    timespec_get, syscall()); CLOCK_MONOTONIC stayed the kernel's; omabox's own helpers kept the
+    real clock (their stamps are compared with the host's). **Measured**: frozen, the shell, a Qt
+    Quick app, a GTK 4 app and a headless Qt daemon idled (0.0-0.2% each) and their timers fired,
+    but bash's `$SECONDS` and python's `time.time()` stood still, and a wait measured on the wall
+    clock never ended (Omarchy has 20 scripts using `$SECONDS` or `date +%s`): so it ran from the
+    instant, and the bar read "Friday 12:00" for the box's first minute only. Absolute deadlines on
+    those clocks had to be moved into the real one, or the kernel returned at once (a busy loop):
+    clock_nanosleep, timerfd_settime and timer_settime with ABSTIME, pthread_cond_timedwait,
+    sem_timedwait, the timed locks and joins, mq, futex WAIT_BITSET/LOCK_PI by syscall(). On the
+    subject: approve (3 boxes, nothing unstable), a check 2 minutes later 4 of 4 same, its item's
+    time 12:00 in both. **Three bugs it found**, worth knowing for any preload of the kind: (1)
+    systemd's TIME_T_MAX timerfd (how it hears of a clock set) overflowed when moved, fired at once,
+    and a `--systemd` box's manager looped ("Looping too fast"; its Hyprland never came up): a
+    deadline that means never must be left alone. (2) A GTK app's NVIDIA driver threads (`[vkps]
+    Update`, `[vkrt] Analysis`) spun at 100% each, 400% in all: libnvidia-eglcore dlopens libc and
+    looks up pthread_cond_timedwait with dlvsym at GLIBC_2.2.5, the compat version, past any
+    interposed symbol; the library had to hand back its own from dlsym and dlvsym (0.1% then). (3)
+    Those lookups first went through dlopen, whose allocation came back into jemalloc, which calls
+    syscall() from its constructor before the library's had run: every Quickshell crashed at start;
+    libc's dlsym and dlvsym had to be found in libc's symbol table (dl_iterate_phdr) instead.
+    **Why it was left out**: it runs inside the app under test, which then is not the app users
+    run; it needed those three crash and spin fixes to work at all, and each new runtime (another
+    driver, allocator, a dlvsym of its own) could need another; it dates TLS (certificates judged at
+    2026-01-02) and the box's logs (journal, apps.log); static binaries, Go programs, io_uring
+    timeouts, 32-bit programs, Flatpak apps and what the kernel stamps (file times, socket stamps)
+    kept the real clock anyway. What it bought can be had without it: data seeded relative to the
+    real time when the scenario runs (`touch -d "9 months ago"`, a reset time of now + 2h10), an
+    app's times `--ignore`d where a daemon in the box stamps them, an app's own test hooks. **Only it
+    covers** absolute dates and "today" displays (a date column, a calendar's month, "added today
+    16:37"), which drift from run to run without it; no project has needed one yet, so they are
+    `--ignore`d. The library and its tests (t_unit_clock: a probe of every deadline call, the
+    never one; t_clean's maps of the shell and the portal) are parked on the `visual-clock` branch,
+    to come back opt-in (never `up --clean`'s default) when a project needs it.
+    `up --clean` freezes the bar's clock with the literal format again; `--keep clock` keeps the
+    bar's real one.
 361. **`check run`'s report: every change in one image** (2026-10-16, #252, after finding 359). A
     changed checkpoint's `ID.diff.png` is the whole shot marked, ~1.5k image tokens apiece (finding
     243's count), mostly of what did not change, and an agent read each. Now, when anything changed,
@@ -7572,14 +7563,13 @@ from them.
     with that LANG for what reads the file (a `--systemd` box's user manager), and `/etc/localtime` a
     link to UTC. Both in the box's /etc (`$D/etc`); the link goes in through the overlay, never a bind:
     a bind follows the link at its destination, and would have mounted UTC's data over the host's zone
-    file under its name, which Qt reads the zone's id from. The clock (finding 360): clock_instant_file
-    takes CLEAN_ZONE when no `--env TZ` is given, so the instant is Friday 12:00 UTC and the bar reads
-    "Friday 12:00" (a shot); `--env TZ` still wins, for both. `--keep locale` gives the host's LANG,
+    file under its name, which Qt reads the zone's id from. A `--env TZ` still wins over the zone (and
+    is what box.json records). `--keep locale` gives the host's LANG,
     LC_* and /etc/localtime back. box.json's `clean` and the baseline's check.json have `locale` and
     `timezone`; the comparison's note names them when they differ and the baseline has them (one from
-    before has not). **Relative dates** ("9 months ago") come from files' mtimes, which the kernel
-    stamps on the real clock: `omabox run -- touch -d "9 months ago" F` in the box stamps 2025-04-02
-    12:00, the same each run. **Timing**: each run says `check: run N of M: box up in N s` (a first box
+    before has not). **Relative dates** ("9 months ago") come from files' mtimes: `omabox run -- touch
+    -d "9 months ago" F`, run by the scenario, is relative to the real time then, as the app's "now"
+    is, so each run reads the same; an absolute date drifts (finding 360). **Timing**: each run says `check: run N of M: box up in N s` (a first box
     took 31 s, the next 4, with nothing said before). **Output**: the last line counts every kind
     (`check: 2 of 5 same, 2 changed, 1 new`; missing ones count in the total, holes-only ones as `with
     new holes`); a check without a baseline exits 4, not 1 as `changed` does; a tree element with no
@@ -7602,7 +7592,7 @@ from them.
     specks (16 at least), 8 where the runs agreed, `--speck`, a window's shared, the image;
     check_compare: same with what it left out, a 10 px part changed at 8 and the same at 16, 32 for a
     baseline without, `--speck 0` by hand, new and missing counted, locale and timezone said only when
-    the baseline has them; clean_locale, clock_instant_file's zone; exit 4), t_clean (the session's
+    the baseline has them; clean_locale; exit 4), t_clean (the session's
     LANG, no LC_* under a host LC_TIME, UTC, locale.conf, the shell's environment; --keep locale: the
     host's LC_TIME and zone, recorded), t_check (box up said, a crop of the window: plain baseline, its
     tree's move, the baseline's image inside one look, specks in every .point, check.json's locale and
@@ -7627,9 +7617,10 @@ of them, nor wayvnc (finding 34). It needs labwc.
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
 - Visual checks (findings 357-363, #252): a checkpoint's speck comes from its --approve runs (3):
-  noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; a clean box's clock runs from Friday 12:00 at its
-  start, so a step about a minute into a run can see a minute tick, and static and Go programs (and anything
-  else that skips libc's clock calls) keep the real clock; holes (finding 362) show only where the
+  noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; only the
+  bar's clock is frozen, so an app's absolute dates and "today" displays drift from run to run and are
+  `--ignore`d (the preload library that pinned every process's clock is parked on the `visual-clock`
+  branch until a project needs it, finding 360); holes (finding 362) show only where the
   wallpaper is behind (a popup over a window hides them) and not where a gap opens onto the open
   wallpaper; an exploratory mode (an agent walking the UI, getting only flagged changes) is not
   built; not inside ai-jail.

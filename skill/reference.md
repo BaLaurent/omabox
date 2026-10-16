@@ -114,7 +114,7 @@ coordinates, its tree then only the elements touching that part; nothing: the sc
 set -euo pipefail
 H=$(omabox path)/home                                 # the box HOME, /home/sbx inside
 cp -r tests/fixtures/library "$H/library"             # data the app reads, before it starts
-omabox run -- touch -d "9 months ago" /home/sbx/library/old.txt   # on the box's clock: "9 months ago" each run
+omabox run -- touch -d "9 months ago" /home/sbx/library/old.txt   # relative to now: "9 months ago" each run
 omabox check point bar -g "1700,0 220x26"            # the widget, before anything runs
 omabox run -d --wait -- ./build/myapp
 omabox wait --timeout 20s window myapp
@@ -124,19 +124,31 @@ omabox keys --window myapp --wait ctrl+comma
 omabox check point settings --window myapp --ignore "10,400 120x20"   # its own clock: left out
 ```
 
-Files go in from the host under `$(omabox path)/home`, or through stdin: `omabox run -- bash -s <
-setup.sh` runs a script of yours in the box. Dates an app shows relative to now ("9 months ago",
-"yesterday") come from the files' mtimes, which the kernel stamps on the real clock while the box's
-runs from Friday 12:00 (2026-01-02, UTC): set them inside the box, `omabox run -- touch -d "9 months
-ago" FILE` (or an absolute date before 2026-01-02), so each run reads the same. Seed data before the
-app starts: a redraw it does on its own can finish before a `wait change` after it starts, and that
-wait then times out; else `omabox wait still`. A popup (a bar widget's, a menu) goes over an empty
-workspace for its checkpoint: holes (below) show only where the wallpaper is behind.
+The scenario runs on the host with `OMABOX` naming its box, so a bare `omabox` command goes there
+(and is the omabox running the check: its bin comes first on PATH). Files go in from the host under `$(omabox
+path)/home`, or through stdin: `omabox run -- bash -s < setup.sh` runs a script of yours in the box.
+Seed data before the app starts: a redraw it does on its own can finish before a `wait change` after
+it starts, and that wait then times out; else `omabox wait still`. `check point` waits until the
+shot is still (15 s, `--timeout`; then takes it anyway, noted). A popup (a bar widget's, a menu)
+goes over an empty workspace for its checkpoint: holes (below) show only where the wallpaper is
+behind.
 
-`omabox check run --approve [--plugin PATH]... -- ./visual.sh` runs it three times, each in a fresh
-`up --clean` box (Omarchy's bar on tokyo-night, a `#ff00ff` wallpaper, every process's clock from
-Friday 12:00 as the box starts, so an app's own times match too, English (en_US.UTF-8, else
-C.UTF-8) in UTC whatever your locale and zone, no pointer, no network, no animations; `--keep` takes
+Times: only the bar's clock is frozen ("Friday 12:00", by its format); the box's processes run on
+the real clock, in UTC. So make every time the app shows relative to when the scenario runs:
+
+- Seed data relative to now, in the scenario: `omabox run -- touch -d "9 months ago" FILE` for a
+  "9 months ago" (mtimes), a reset time of `$(date -d "+2 hours 10 minutes" +%s)` for "resets in
+  2h 10m", never a fixed date.
+- A time a daemon in the box stamps as it runs ("added 16:37", a log line's time): `--ignore` its
+  region at that checkpoint.
+- An app with test hooks of its own (a fixed "now", a fake clock): use them.
+- Absolute dates and "today" displays (a date column, a calendar's month, "added today") drift from
+  run to run whatever you seed: `--ignore` them.
+
+`omabox check run --approve [--plugin PATH]... -- ./visual.sh` runs it three times (`--runs N`), each
+in a fresh `up --clean` box (Omarchy's bar on tokyo-night, a `#ff00ff` wallpaper, the bar's clock
+frozen, English (en_US.UTF-8, else C.UTF-8) in UTC whatever your locale and zone, no pointer, no
+network, no animations; `--keep` takes
 any back, `--keep locale` your locale and timezone; `--theme`/`--size`/`--net connected` as `up`),
 says how long each box took to start, and writes the baseline to `./omabox-check` (`--base DIR`;
 commit it with the project). It also writes `baseline.png` (path printed): every checkpoint as kept,
@@ -145,8 +157,8 @@ baseline is what most runs showed, so a screen that was wrong in most of them (a
 page that had not loaded, an empty list) is kept as right. "unstable ID"
 names what was not the same from one run to the next, left out from then on: one run of three
 differing is the app (a layout that changes from start to start: worth a look) or a minute that
-ticked (the clock runs from 12:00: a step about a minute into the run); every run differing is data or a time the scenario does not pin (a random port, a time the
-app shows): pin it in the scenario's data or `--ignore` it. Then `omabox check run -- ./visual.sh`
+ticked; every run differing is data or a time the scenario does not pin (a random port, a time the
+app shows): pin it in the scenario's data or `--ignore` it (Times, above). Then `omabox check run -- ./visual.sh`
 (same UP OPTIONS) after a change: `same ID` (with what it left out, `(12 specks left out, the
 largest 9 px)`), or `changed ID` with each region (`at X,Y WxH`) and the tree's
 `moved/resized/name/text/state/appeared/vanished` lines (an element with no name says where it is:
@@ -167,7 +179,8 @@ caught. `--speck N` sets one for all
 (a baseline from before this: 32). A change smaller than the speck shows only in the tree.
 Baselines are per GPU: another GPU, omabox, Hyprland, Omarchy, theme, size, locale or timezone is
 said in the report. The Omarchy shell and its plugins have no tree: their checks are pixels only. `omabox check
-diff A.png B.png [--ignore G] [--report R.png]` compares two shots of yours the same way. Not inside ai-jail yet.
+diff A.png B.png [--ignore G] [--speck N] [--report R.png]` compares two shots of yours the same way
+(32 px specks unless `--speck`; exit 0 same, 1 not). Not inside ai-jail yet.
 
 Each checkpoint is also searched for holes: the `#ff00ff` wallpaper showing through inside a window,
 the bar or a popup (a transparent part, a gap, a card that forgot its background), and in a
