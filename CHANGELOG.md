@@ -19,7 +19,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   of the image tokens of looking at each changed shot or less. Shots are compared exactly, as users
   see them, leaving out only specks: stray parts smaller than what that checkpoint's approve runs
   differed by (twice their largest, 16 px at least; Qt Quick's text varies by a few pixels a glyph
-  from one start of an app to the next), and nothing where the runs agreed to the pixel (the bar,
+  from one start of an app to the next), and under 8 px where the runs agreed to the pixel (the bar,
   most apps), so a 2 px spacing change in a bar widget or a vanished sort arrow is caught, and a
   colour a few levels off too; `same` says what it left out. `--approve` also writes one image of
   the whole baseline, what is left out marked, to look at before keeping it (what most runs showed

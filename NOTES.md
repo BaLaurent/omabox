@@ -7462,71 +7462,74 @@ from them.
     13 px at most on NVIDIA, 7 on AMD), applied to everything. Now each checkpoint has its own, measured
     at --approve: the baseline run against each other run with the unstable regions painted out (a part
     inside one is not noise; a part of 32 px or more is a region, so unstable), the largest part left
-    twice over, CHECK_SPECK_MIN (16) at least and CHECK_SPECK at most; 0 when the runs agreed to the
-    pixel, then the checkpoint is compared exactly. The floor: three runs see the text noise (it comes
-    with every start of the app) but not its tail; on AMD they saw 5 px and the next check a 10 px part,
-    read as changed at twice 5. And every checkpoint of one window (`of window SEL`, its crops too)
-    takes the window's largest, since the noise is the app's: a crop holding one button agreed to the
-    pixel in three runs and showed a 1 px part in the fourth. `speck N` in the baseline's ID.point
-    (check.py regions prints the largest speck now); `--speck N` by hand wins, at --approve too
-    (stored); a baseline without it keeps 32. --approve says it (`baseline ID (specks under 22 px left
-    out: the runs' largest stray part was 11 px)`, `(compared exactly: the runs agreed to the pixel)`,
-    `speck    ID: under 22 px, as the other checkpoints of its window`), and a `same` line says what it
-    left out (`same     app (121 specks left out, the largest 10 px)`): nothing is dropped without a
-    word. **Measured**, a scenario of the bar, its clock (160x26), a Qt Quick window of 8 text rows and
-    a button, a crop of it holding the button and the screen: on NVIDIA the window's runs differed by 11
-    px at most (speck 22, the screen too); on AMD by 5 (speck 16); the bar and its clock agreed to the
-    pixel on both (0, compared exactly), so a bar widget's 2 px spacing (16 px) is caught. Four checks
-    after each approve: all same (the window's largest speck 10-11 px on NVIDIA, 5-6 on AMD); the rows'
-    spacing 1 px wider: changed on both (1 region; the tree, 7 rows moved). **Approve could bless a
-    broken state**: the baseline is what most runs showed, so a wrong screen in most of them (an error,
-    a page not loaded yet) becomes it, unseen. Now --approve writes `baseline.png` in the runs' folder
-    (check.py `overview`, through check_report): every checkpoint as kept, each scaled to the sheet's
-    width and all of them down together until they fit one look (finding 360's 1456 px, 1.15 MP, 1568
-    high), unstable regions amber (a see-through fill, so what is under them reads), holes red; prints
-    `overview: PATH` and `check: look at it before you keep this baseline`. Five checkpoints (the bar,
-    its clock, a window, a crop of it, the screen): 1100x1015, each legible. **The clean desktop did not
-    pin the locale**: the box took the host's LC_TIME=pt_BR (launch.sh passes LANG and every LC_*,
-    finding 58) and an app's dates read "Há 9 meses". `up --clean` now gives the session
-    LANG=en_US.UTF-8 (when `locale -a` has it, else C.UTF-8) and none of the host's LC_* or LANGUAGE
-    (`run`'s commands take the session's: omabox.env), `/etc/locale.conf` with that LANG for what reads
-    the file (a `--systemd` box's user manager), and `/etc/localtime` a link to UTC. Both in the box's
-    /etc (`$D/etc`); the link goes in through the overlay, never a bind: a bind follows the link at its
-    destination, and would have mounted UTC's data over the host's zone file under its name, which Qt
-    reads the zone's id from. The clock (finding 359): clock_instant_file takes CLEAN_ZONE when no
-    `--env TZ` is given, so the instant is Friday 12:00 UTC and the bar reads "Friday 12:00" (a shot);
-    `--env TZ` still wins, for both. `--keep locale` gives the host's LANG, LC_* and /etc/localtime
-    back. box.json's `clean` and the baseline's check.json have `locale` and `timezone`; the
-    comparison's note names them when they differ and the baseline has them (one from before has not).
-    **Relative dates** ("9 months ago") come from files' mtimes, which the kernel stamps on the real
-    clock: `omabox run -- touch -d "9 months ago" F` in the box stamps 2025-04-02 12:00, the same each
-    run. **Timing**: each run says `check: run N of M: box up in N s` (a first box took 31 s, the next
-    4, with nothing said before). **Output**: the last line counts every kind (`check: 2 of 5 same, 2
-    changed, 1 new`; missing ones count in the total, holes-only ones as `with new holes`); a check
-    without a baseline exits 4, not 1 as `changed` does; a tree element with no name says where it is
-    (`appeared  button  (in frame "W" > panel#1 > button#2)`: its nearest named ancestor, then each
-    place). **`check point --window SEL -g "X,Y WxH"`**, refused before: a crop of the window in its
-    coordinates, as `shot --window -g` takes it; `wait still` on the whole window (it takes a window or
-    a region); the tree only the elements touching the crop and their ancestors (check.py `crop-tree`,
-    an element without bounds going with its nearest ancestor that has some), each with its key from the
-    whole window (`key`, which `load` takes as it is), so one outside the crop that moves or goes
-    changes nothing inside, nor shifts the places of those inside; the window's node carries the crop,
-    and the report's blue marks are drawn in the crop's pixels. `crop GEOM` in ID.point. Holes from the
-    crop's own alpha. **t_check's unstable label** sat on the window's background: when the two approve
-    runs' random numbers shared their first digit, that digit was in no unstable region and the next
-    check read it as changed (seen once here, 7 failures); it now sits on a backdrop of a random colour,
-    all of it unstable. Its 5 px hole test runs at `--speck 32`, the hole a speck to the shots'
-    comparison as before; at the window's own speck it is a region as well (both checked). Seen by the
-    user, not omabox's: a bar widget sometimes missed a record seeded just after it started. Tests:
-    t_unit_check (regions' largest speck; a nameless element appeared and vanished, where; crop-tree's
-    elements and keys, a move inside and one outside; check_approve on made runs: the specks (16 at
-    least), exact, `--speck`, a window's shared, the image; check_compare: same with what it left out,
-    exact, 32 for a baseline without, `--speck 0` by hand, new and missing counted, locale and timezone
-    said only when the baseline has them; clean_locale, clock_instant_file's zone; exit 4), t_clean (the
-    session's LANG, no LC_* under a host LC_TIME, UTC, locale.conf, the shell's environment; --keep
-    locale: the host's LC_TIME and zone, recorded), t_check (box up said, a crop of the window: plain
-    baseline, its tree's move, the baseline's image inside one look, specks in every .point,
-    check.json's locale and timezone, counts).
+    twice over, CHECK_SPECK_MIN (16) at least and CHECK_SPECK at most; CHECK_SPECK_AGREED (8) when the
+    runs agreed to the pixel. That one was 0 (compared exactly) first, and read noise as changes twice:
+    a crop of a Qt Quick window holding one button agreed in three runs on AMD and showed a 1 px part in
+    the next check, and t_check's window agreed over its 2 runs and showed 2 px of its button's text; 8
+    is under what the changes 32 dropped made (16 px, 26). The 16: three runs see the text noise (it
+    comes with every start of the app) but not its tail; on AMD they saw 5 px and the next check a 10 px
+    part, read as changed at twice 5. And every checkpoint of one window (`of window SEL`, its crops
+    too) takes the window's largest, since the noise is the app's (that crop's window had 16). `speck N`
+    in the baseline's ID.point (check.py regions prints the largest speck now); `--speck N` by hand
+    wins, at --approve too (stored); a baseline without it keeps 32. --approve says it (`baseline ID
+    (specks under 22 px left out: the runs' largest stray part was 11 px)`, `(specks under 8 px left
+    out: the runs agreed to the pixel)`, `speck    ID: under 22 px, as the other checkpoints of its
+    window`), and a `same` line says what it left out (`same     app (121 specks left out, the largest
+    10 px)`): nothing is dropped without a word. **Measured**, a scenario of the bar, its clock
+    (160x26), a Qt Quick window of 8 text rows and a button, a crop of it holding the button and the
+    screen: on NVIDIA the window's runs differed by 11 px at most (speck 22, the screen too); on AMD by
+    5 (speck 16); the bar and its clock agreed to the pixel on both (8), so a bar widget's 2 px spacing
+    (16 px) is caught. Four checks after each approve: all same (the window's largest speck 10-11 px on
+    NVIDIA, 5-6 on AMD); the rows' spacing 1 px wider: changed on both (1 region; the tree, 7 rows
+    moved). **Approve could bless a broken state**: the baseline is what most runs showed, so a wrong
+    screen in most of them (an error, a page not loaded yet) becomes it, unseen. Now --approve writes
+    `baseline.png` in the runs' folder (check.py `overview`, through check_report): every checkpoint as
+    kept, each scaled to the sheet's width and all of them down together until they fit one look
+    (finding 360's 1456 px, 1.15 MP, 1568 high), unstable regions amber (a see-through fill, so what is
+    under them reads), holes red; prints `overview: PATH` and `check: look at it before you keep this
+    baseline`. Five checkpoints (the bar, its clock, a window, a crop of it, the screen): 1100x1015,
+    each legible. **The clean desktop did not pin the locale**: the box took the host's LC_TIME=pt_BR
+    (launch.sh passes LANG and every LC_*, finding 58) and an app's dates read "Há 9 meses". `up
+    --clean` now gives the session LANG=en_US.UTF-8 (when `locale -a` has it, else C.UTF-8) and none of
+    the host's LC_* or LANGUAGE (`run`'s commands take the session's: omabox.env), `/etc/locale.conf`
+    with that LANG for what reads the file (a `--systemd` box's user manager), and `/etc/localtime` a
+    link to UTC. Both in the box's /etc (`$D/etc`); the link goes in through the overlay, never a bind:
+    a bind follows the link at its destination, and would have mounted UTC's data over the host's zone
+    file under its name, which Qt reads the zone's id from. The clock (finding 359): clock_instant_file
+    takes CLEAN_ZONE when no `--env TZ` is given, so the instant is Friday 12:00 UTC and the bar reads
+    "Friday 12:00" (a shot); `--env TZ` still wins, for both. `--keep locale` gives the host's LANG,
+    LC_* and /etc/localtime back. box.json's `clean` and the baseline's check.json have `locale` and
+    `timezone`; the comparison's note names them when they differ and the baseline has them (one from
+    before has not). **Relative dates** ("9 months ago") come from files' mtimes, which the kernel
+    stamps on the real clock: `omabox run -- touch -d "9 months ago" F` in the box stamps 2025-04-02
+    12:00, the same each run. **Timing**: each run says `check: run N of M: box up in N s` (a first box
+    took 31 s, the next 4, with nothing said before). **Output**: the last line counts every kind
+    (`check: 2 of 5 same, 2 changed, 1 new`; missing ones count in the total, holes-only ones as `with
+    new holes`); a check without a baseline exits 4, not 1 as `changed` does; a tree element with no
+    name says where it is (`appeared  button  (in frame "W" > panel#1 > button#2)`: its nearest named
+    ancestor, then each place). **`check point --window SEL -g "X,Y WxH"`**, refused before: a crop of
+    the window in its coordinates, as `shot --window -g` takes it; `wait still` on the whole window (it
+    takes a window or a region); the tree only the elements touching the crop and their ancestors
+    (check.py `crop-tree`, an element without bounds going with its nearest ancestor that has some),
+    each with its key from the whole window (`key`, which `load` takes as it is), so one outside the
+    crop that moves or goes changes nothing inside, nor shifts the places of those inside; the window's
+    node carries the crop, and the report's blue marks are drawn in the crop's pixels. `crop GEOM` in
+    ID.point. Holes from the crop's own alpha. **t_check's unstable label** sat on the window's
+    background: when the two approve runs' random numbers shared their first digit, that digit was in no
+    unstable region and the next check read it as changed (seen once here, 7 failures); it now sits on a
+    backdrop of a random colour, all of it unstable. Its 5 px hole test runs at `--speck 32`, the hole a
+    speck to the shots' comparison as before; at the window's own speck it is a region as well (both
+    checked). Seen by the user, not omabox's: a bar widget sometimes missed a record seeded just after
+    it started. Tests: t_unit_check (regions' largest speck; a nameless element appeared and vanished,
+    where; crop-tree's elements and keys, a move inside and one outside; check_approve on made runs: the
+    specks (16 at least), 8 where the runs agreed, `--speck`, a window's shared, the image;
+    check_compare: same with what it left out, a 10 px part changed at 8 and the same at 16, 32 for a
+    baseline without, `--speck 0` by hand, new and missing counted, locale and timezone said only when
+    the baseline has them; clean_locale, clock_instant_file's zone; exit 4), t_clean (the session's
+    LANG, no LC_* under a host LC_TIME, UTC, locale.conf, the shell's environment; --keep locale: the
+    host's LC_TIME and zone, recorded), t_check (box up said, a crop of the window: plain baseline, its
+    tree's move, the baseline's image inside one look, specks in every .point, check.json's locale and
+    timezone, counts).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -7547,8 +7550,7 @@ of them, nor wayvnc (finding 34). It needs labwc.
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
 - Visual checks (findings 357-362, #252): a checkpoint's speck comes from its --approve runs (3):
-  noise past twice what they saw (16 px at least) reads as a change, and a checkpoint outside any
-  window whose runs agreed is compared exactly; a clean box's clock runs from Friday 12:00 at its
+  noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; a clean box's clock runs from Friday 12:00 at its
   start, so a step about a minute into a run can see a minute tick, and static and Go programs (and anything
   else that skips libc's clock calls) keep the real clock; holes (finding 361) show only where the
   wallpaper is behind (a popup over a window hides them) and not where a gap opens onto the open

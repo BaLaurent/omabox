@@ -159,8 +159,9 @@ named. `ID.diff.png` is the whole shot marked (~1.5k tokens each): for the conte
 than each checkpoint's own speck, measured at `--approve` as twice the largest stray part between
 its runs (Qt Quick's text varies by a few pixels a glyph from one start to the next: 22 px for an
 app on NVIDIA; 16 at least, 32 at most; every checkpoint of one window takes the window's largest),
-and 0 where the runs agreed to the pixel (the bar, a GTK app): those are compared exactly, so a 2 px
-spacing change in a bar widget is caught. `--speck N` sets one for all
+and 8 where the runs agreed to the pixel (the bar, a GTK app: a few runs can agree on a window with
+little text, and the next show a pixel of it), so a 2 px spacing change in a bar widget (16 px) is
+caught. `--speck N` sets one for all
 (a baseline from before this: 32). A change smaller than the speck shows only in the tree.
 Baselines are per GPU: another GPU, omabox, Hyprland, Omarchy, theme, size, locale or timezone is
 said in the report. The Omarchy shell and its plugins have no tree: their checks are pixels only. `omabox check
