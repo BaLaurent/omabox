@@ -3060,7 +3060,8 @@ sys.stdout.write(subprocess.run(sys.argv[1:], stdin=a, capture_output=True, text
   check "the command goes when its caller does" until_ok 5 bash -c "! kill -0 \$(cat '$d/cmd') 2>/dev/null"
   # Callers killed as soon as they start (#109): some go before the command's setsid(), whose group a
   # kill then did not find. None of the commands left once the relay's 3 s grace is over.
-  local i; for i in $(seq 20); do "$R" call "$d/sock" -- sleepq >/dev/null 2>&1 & kill -KILL $! 2>/dev/null; done
+  # (Each reaped at once, its "Killed" job line with it.)
+  local i; for i in $(seq 20); do "$R" call "$d/sock" -- sleepq >/dev/null 2>&1 & kill -KILL $! 2>/dev/null; wait $! 2>/dev/null; done
   check "callers killed at once: none of their commands left" until_ok 5 bash -c "! pgrep -f '^omabox-t109-$P' >/dev/null"
   # At most 64 connections served at once (#109): a same-uid flood no longer forks without bound.
   python3 -I -c 'import socket, sys, time
@@ -6074,7 +6075,7 @@ t_throwaway_killed() {
   # every 0.25 s from the kill, its up (`starting`) and the reaper's last word. The box dir goes with
   # the box, its reap.log too.
   local d=${j[0]%/box.json} tl=$TMP/tk-timeline
-  kill -KILL "$r"
+  kill -KILL "$r"; wait "$r" 2>/dev/null   # reaped here: no "Killed" job line from bash later
   (t0=$(date +%s%3N); while [ -d "$d" ]; do
      printf '%s ms: starting=[%s] reap=[%s]\n' $(($(date +%s%3N) - t0)) "$(cat "$d/starting" 2>/dev/null)" "$(tail -n 1 "$d/reap.log" 2>/dev/null)"
      sleep 0.25; done) > "$tl" 2>&1 & local tp=$!
@@ -6747,7 +6748,7 @@ t_throwaway_dead() {
   # The box's PID 1 as the CLI finds it: behind pasta, info.json's child-pid is pasta's numbering (2,
   # which on the host is kthreadd), and the box would stay up for the reaper's "run is gone" branch.
   local pid; pid=$(D=$XDG_RUNTIME_DIR/omabox/$n lib box_pid)
-  kill -KILL "$r"
+  kill -KILL "$r"; wait "$r" 2>/dev/null   # reaped here: no "Killed" job line from bash later
   check "its box is killed before the reaper sees it" kill -KILL "$pid"
   check "the dead box goes within 15 s" until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$n\")'"
 }
