@@ -1834,6 +1834,23 @@ for path in sys.argv[1:]:
 '
 rich_text() { python3 -c "$RICH_TEXT" "$@"; }
 
+# The skill's references (#143, finding 215): each `ref: NAME` of SKILL.md (its lines joined, so one may
+# wrap) is a `## NAME` of reference.md, ended by . : ) , ; or the end. A quoted "ref: ..." is the
+# intro's placeholder, not one. Prints each that names no section (as `ref: TEXT`, to its end), and `refs N` last.
+SKILL_REFS='
+import re, sys
+skill = " ".join(open(sys.argv[1]).read().split())
+heads = sorted((l[3:].strip() for l in open(sys.argv[2]) if l.startswith("## ")), key=len, reverse=True)
+n = 0
+for m in re.finditer(r"(?<![\"\w])ref: ", skill):
+    n += 1
+    rest = skill[m.end():]
+    if not any(rest.startswith(h) and (len(rest) == len(h) or rest[len(h)] in ".:),;") for h in heads):
+        print("ref: " + re.match(r"[^.:),;]{0,60}", rest).group())
+print("refs", n)
+'
+skill_refs() { python3 -I -c "$SKILL_REFS" "$@"; }
+
 t_unit_version() {
   local v; v=$(cat "$ROOT/VERSION")
   check_eq "omabox --version" "omabox $v" "$("$CLI" --version | head -1)"
@@ -1874,13 +1891,17 @@ t_unit_version() {
   check_match "skill-feedback/digest.py --help runs under python3 -I" "^usage: digest.py" \
     "$(python3 -I "$ROOT/skill-feedback/digest.py" --help 2>&1 | head -n 1)"
   # #143, finding 215: SKILL.md is short and names the rest as "ref: SECTION", a heading of reference.md.
-  # Its intro writes that placeholder literally: not a reference, however the line wraps; a name ends
-  # before a quote too.
-  local refs="" r gone=""
-  while read -r r; do refs+="$r|"; grep -qxF "## $r" "$ROOT/skill/reference.md" || gone+="$r; "; done \
-    < <(grep -oE 'ref: [A-Z][^.:)"]*[a-z]' "$ROOT/skill/SKILL.md" | sed 's/^ref: //' | grep -vxE 'SECTION( .*)?' | sort -u)
-  check "SKILL.md points to reference.md by section" test -n "$refs"
-  check_eq "...every section it names is there" "" "$gone"
+  local refs; refs=$(skill_refs "$ROOT/skill/SKILL.md" "$ROOT/skill/reference.md" 2>&1)
+  check_match "SKILL.md points to reference.md by section" "^refs [1-9][0-9]*$" "$(tail -n 1 <<<"$refs")"
+  check_eq "...every section it names is there" "" "$(sed '$d' <<<"$refs")"
+  # The check itself, on a page of its own: a wrapped ref and the quoted placeholder pass, an unknown
+  # section, a heading's prefix or an unquoted SECTION do not.
+  printf '## Shots\n## Pointer, in detail\n' > "$TMP/refs-ref.md"
+  printf '%s\n' 'The rest ("ref:' 'SECTION" below). A shot: ref: Shots. Clicks (ref: Pointer,' 'in detail).' \
+    'ref: Pointer. ref: Nope: x' 'ref: SECTION, then ref: Shots' > "$TMP/refs-skill.md"
+  check_eq "...the check: what it reads as a reference, and what it misses" \
+    "ref: Pointer|ref: Nope|ref: SECTION|refs 6" \
+    "$(skill_refs "$TMP/refs-skill.md" "$TMP/refs-ref.md" 2>&1 | paste -sd '|')"
   check "...and stays short (under 14 KB: #143)" test "$(wc -c < "$ROOT/skill/SKILL.md")" -lt 14000
   # #241, finding 330: without wait change in the loop, agents slept with wait cmd -- false.
   check "...and its loop has wait change" grep -qE '^omabox wait change --window ' "$ROOT/skill/SKILL.md"
