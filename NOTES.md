@@ -7360,7 +7360,7 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   folder finds those libraries on the host (`ldd` passes) but not in the box.
 - `tree` reads windows only (finding 358): the shell's layer surfaces, which a Quickshell with
   AT-SPI (0.3.2, or a build with 916a0dd) publishes as frames, are out of its reach. What it would
-  take is in finding 358; a separate issue when a project needs it.
+  take is in finding 358; → #254.
 - Portals (findings 12, 148): ScreenCast needs PipeWire in the box (started by hand it worked; an
   `up --audio` box has it now, finding 313, ScreenCast there not rechecked); portal
   errors are not logged (dbus-daemon drops an activated service's stderr).
