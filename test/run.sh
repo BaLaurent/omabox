@@ -5325,8 +5325,8 @@ t_unit_check() {
     rc=0; out=$(lib eval "$cp; check_approve $ap $d/apbase '' 3" 2>&1) || rc=$?
     check_match "approve: a checkpoint whose runs differ by a pixel: specks under 16 px (twice 1, 16 at least)" \
       '(^|'$'\n'')baseline p \(specks under 16 px left out: the runs. largest stray part was 1 px\)' "$out"
-    check_match "...one whose runs agreed: compared exactly" '(^|'$'\n'')baseline q \(compared exactly' "$out"
-    check_eq "...kept in its .point" "speck 16|speck 0" "$(grep '^speck' "$d/apbase/p.point")|$(grep '^speck' "$d/apbase/q.point")"
+    check_match "...one whose runs agreed: specks under 8 px" '(^|'$'\n'')baseline q \(specks under 8 px left out: the runs agreed to the pixel\)' "$out"
+    check_eq "...kept in its .point" "speck 16|speck 8" "$(grep '^speck' "$d/apbase/p.point")|$(grep '^speck' "$d/apbase/q.point")"
     check_match "...the baseline's image, and to look at it" $'overview: [^\n]*/ap/baseline.png [^\n]*\ncheck: look at it before you keep this baseline' "$out"
     check "...written" test -s "$ap/baseline.png"
     rc=0; out=$(lib eval "$cp; check_approve $ap $d/apbase2 5 3" 2>&1) || rc=$?
@@ -5344,21 +5344,25 @@ t_unit_check() {
     check_match "...a crop of a window whose runs agreed takes the window's speck, said" \
       $'(^|\n)speck    w2: under 16 px, as the other checkpoints of its window' "$out"
     check_eq "...in its .point" "speck 16" "$(grep '^speck' "$d/awbase/w2.point")"
-    # A check with each checkpoint's speck: the stray pixel is 1 px, so p (speck 16) is the same and
-    # says what it left out, q (exact) changes; a baseline from before specks were measured: 32.
+    for k in 1 2 3; do cp "$d/a.png" "$d/aw/run$k/w1.png"; done
+    rc=0; out=$(lib eval "$cp; check_approve $d/aw $d/awbase0 '' 3" 2>&1) || rc=$?
+    check_eq "...a window whose checkpoints all agreed: 8 for both, exit 0" "speck 8|speck 8|0" \
+      "$(grep '^speck' "$d/awbase0/w1.point")|$(grep '^speck' "$d/awbase0/w2.point")|$rc"
+    # A check with each checkpoint's speck: a 10 px part, so p (speck 16) is the same and says what it
+    # left out, q (8, its runs agreed) changes; a baseline from before specks were measured: 32.
     mkdir -p "$ap/c/run1"
     cp "$ap/run1/p.point" "$ap/run1/q.point" "$ap/c/run1/"
-    cp "$d/specks.png" "$ap/c/run1/p.png"; cp "$d/specks.png" "$ap/c/run1/q.png"
+    magick "$d/a.png" -fill '#c1c0d0' -draw 'rectangle 150,80 154,81' "$ap/c/run1/p.png"; cp "$ap/c/run1/p.png" "$ap/c/run1/q.png"
     cp "$ap/env.json" "$ap/c/"
     rc=0; out=$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1) || rc=$?
-    check_match "check: the same, saying what it left out" $'(^|\n)same     p \(2 specks left out, the largest 1 px\)\n' "$out"
-    check_match "...exact where the runs agreed: changed" $'(^|\n)changed  q: 2 regions' "$out"
+    check_match "check: the same, saying what it left out" $'(^|\n)same     p \(1 speck left out, the largest 10 px\)\n' "$out"
+    check_match "...where the runs agreed (8): changed" $'(^|\n)changed  q: 1 region' "$out"
     check_match "...counted, exit 1" $'check: 1 of 2 same, 1 changed;[^|]*\|1$' "$out|$rc"
     sed -i '/^speck /d' "$d/apbase/q.point"
     rc=0; out=$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1) || rc=$?
-    check_match "...a baseline without a speck: 32, as before" $'(^|\n)same     q \(2 specks left out, the largest 1 px\)' "$out"
+    check_match "...a baseline without a speck: 32, as before" $'(^|\n)same     q \(1 speck left out, the largest 10 px\)' "$out"
     rc=0; out=$(lib eval "$cp; check_compare $ap/c $d/apbase 0" 2>&1) || rc=$?
-    check_match "...--speck 0 by hand wins" $'(^|\n)changed  p: 2 regions' "$out"
+    check_match "...--speck 0 by hand wins" $'(^|\n)changed  p: 1 region' "$out"
     rm -f "$ap/c/run1/q.point"
     printf 'of screen\nsettled yes\ntree none\nholes off: test\n' > "$ap/c/run1/r.point"; cp "$d/a.png" "$ap/c/run1/r.png"
     rc=0; out=$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1) || rc=$?

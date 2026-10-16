@@ -493,7 +493,7 @@ failed, 4 when there is no baseline. When any changed, report.png: each change c
 baseline, in one image (look first). Shots are compared exactly, as users see them, leaving out
 specks: parts of the difference smaller than twice the largest stray part the --approve runs
 differed by (Qt Quick's text varies from one start of an app to the next; 16 to 32 px, a window's
-largest for each checkpoint of it; none when the runs agreed to the pixel; --speck N for all);
+largest for each checkpoint of it; 8 when the runs agreed to the pixel; --speck N for all);
 "same" says what it left out. A change smaller than that can only show in the tree. A scenario puts
 files in the box under \$(omabox path)/home (/home/sbx in it); a date shown relative ("9 months
 ago") needs its file's mtime fixed (\`omabox run -- touch -d ...\`, on the box's clock).
@@ -7851,10 +7851,14 @@ shot_burst() {
 # Parts CHECK_GAP px apart or less are one region.
 CHECK_SPECK=32
 CHECK_GAP=12
-# A checkpoint's own speck (finding 362), measured at --approve, is at least this when its runs
-# differed at all: three runs see the text noise but not its tail (5 px in them, 10 in the next
-# check on AMD; 13 the most seen on NVIDIA).
+# A checkpoint's own speck (finding 362), measured at --approve, is at least CHECK_SPECK_MIN when its
+# runs differed at all: three runs see the text noise but not its tail (5 px in them, 10 in the next
+# check on AMD; 13 the most seen on NVIDIA). When they agreed to the pixel, CHECK_SPECK_AGREED: a
+# window with little text can agree in its runs and show a 1-2 px part of its glyphs in the next one
+# (a crop holding a button, on AMD; t_check's window over 2 runs). Both are under what the changes
+# 32 dropped made (a bar widget's 2 px spacing, 16 px; a vanished sort arrow, 26).
 CHECK_SPECK_MIN=16
+CHECK_SPECK_AGREED=8
 CHECK_PY=$ROOT/share/check.py
 CHECK_ID_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
 
@@ -8272,7 +8276,7 @@ check_run() {
 # What a checkpoint's speck is, said at --approve: check_speck_text SPECK LARGEST GIVEN
 check_speck_text() {
   if [ -n "$3" ]; then echo "specks under $1 px left out (--speck)"
-  elif [ "$1" = 0 ]; then echo "compared exactly: the runs agreed to the pixel"
+  elif [ "$2" = 0 ]; then echo "specks under $1 px left out: the runs agreed to the pixel"
   else echo "specks under $1 px left out: the runs' largest stray part was $2 px"; fi
 }
 
@@ -8282,7 +8286,7 @@ check_speck_text() {
 # not pin. Each checkpoint's speck (its .point's "speck N") is measured here: twice the largest part
 # of the difference left between the baseline and the other runs once the unstable regions are out
 # (the noise of that checkpoint: Qt Quick's text), CHECK_SPECK_MIN at least and CHECK_SPECK at most;
-# 0 when the runs agreed to the pixel (then it is compared exactly). A fixed speck hid
+# CHECK_SPECK_AGREED when the runs agreed to the pixel. A fixed speck hid
 # real changes: a bar widget's 2 px spacing made a 16 px part, a vanished sort arrow 26. The noise is
 # the app's, so checkpoints of one window (--window SEL, a crop of it too) take the largest of theirs:
 # a crop holding one button agreed in three runs and showed a pixel in the fourth. SPECK given
@@ -8347,7 +8351,7 @@ check_approve() {
     if [ -n "$speck" ]; then ps=$speck
     else
       ps=$((2 * big))
-      [ "$big" = 0 ] || [ $ps -ge "$CHECK_SPECK_MIN" ] || ps=$CHECK_SPECK_MIN
+      if [ "$big" = 0 ]; then ps=$CHECK_SPECK_AGREED; elif [ $ps -lt "$CHECK_SPECK_MIN" ]; then ps=$CHECK_SPECK_MIN; fi
       [ $ps -le "$CHECK_SPECK" ] || ps=$CHECK_SPECK
     fi
     cp -- "$out/run$best/$id.png" "$out/run$best/$id.point" "$base/"
@@ -8400,7 +8404,7 @@ check_approve() {
   # Each checkpoint's speck in its .point, a window's largest for each of its checkpoints.
   for id in $(check_ids "$out/run1"); do
     ps=${pspeck[$id]}
-    if [ -z "$speck" ] && [ -n "${wof[$id]:-}" ] && [ "${wspeck[${wof[$id]}]}" -gt "$ps" ]; then
+    if [ -z "$speck" ] && [ -n "${wof[$id]:-}" ] && [ "${wspeck[${wof[$id]}]:-0}" -gt "$ps" ]; then
       ps=${wspeck[${wof[$id]}]}
       echo "speck    $id: under $ps px, as the other checkpoints of its window (the app's noise; its own runs differed by less)"
     fi
