@@ -5290,6 +5290,44 @@ t_unit_check() {
     printf 'of screen\nholes checked\nhole 12,12 5x5 25\nhole 100,100 5x5 25\n' > "$d/hn.point"
     check_eq "...new holes: those the baseline has none overlapping" "100,100 5x5 25" "$(lib check_new_holes "$d/hb.point" "$d/hn.point" 2>&1)"
     check_eq "...a baseline from before holes: all of them" $'12,12 5x5 25\n100,100 5x5 25' "$(lib check_new_holes "$d/a.json" "$d/hn.point" 2>&1)"
+    # The report (finding 360): every change in one image, each region cropped beside its baseline.
+    magick -size 1920x1080 xc:'#202030' -fill '#c0c0d0' -draw 'rectangle 100,100 300,140' -draw 'rectangle 1500,900 1700,940' "$d/big.png"
+    magick "$d/big.png" -fill '#c0c0d0' -draw 'rectangle 100,100 306,140' -draw 'rectangle 1500,950 1700,990' "$d/big2.png"
+    rc=0; out=$(ob check diff "$d/big.png" "$d/big2.png" --report "$d/r.png") || rc=$?
+    check_match "check diff --report: the regions, then the report's path, exit 1" \
+      $'^301,100 6x41 [^\n]*\n1500,950 201x41 [^\n]*\nspecks: 0, 0 px\nreport: [^\n]*/r.png\\|1$' "$out|$rc"
+    local wh
+    wh=$(magick identify -format '%w %h' "$d/r.png" 2>/dev/null) || wh="0 0"
+    check "...inside one look (1456 px wide at most, under 1.15 MP), a tenth of the shot's area at most" \
+      test "${wh% *}" -le 1456 -a $((${wh% *} * ${wh#* })) -le 1150000 -a $((${wh% *} * ${wh#* } * 10)) -le $((1920 * 1080))
+    # The grown block's crop (54x89, so 2x) at the first card's image row (y 60): the baseline's
+    # (x 16) dark where the block grew, the new shot's (16 + 108 + 8) light there.
+    check_eq "...the baseline left, the new shot right, a small crop at 2x" "202030 C0C0D0" \
+      "$(magick "$d/r.png" -format '%[hex:p{68,148}] %[hex:p{184,148}]' info: 2>/dev/null)"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/wide.png" --report "$d/rs.png") || rc=$?
+    check_match "...another size: a report too (both whole)" "^size 200x100 -> 201x100"$'\n'"report: .*/rs.png\\|1$" "$out|$rc"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/a.png" --report "$d/rn.png") || rc=$?
+    check_eq "...nothing changed: no report" "same (specks: 0, 0 px)|0|no" "$out|$rc|$([ -e "$d/rn.png" ] && echo yes || echo no)"
+    # check.py sheet: the plan's cards. A tree's line for a region's element, a move only the tree has
+    # (blue), what -annotate would read as escapes; seven crops: the whole shots; too many: left out.
+    printf '%s' '[{"depth":0,"role":"frame","name":"W","states":[],"x":0,"y":0,"w":1920,"h":1080},
+      {"depth":1,"role":"button","name":"Save 50%","states":[],"x":100,"y":100,"w":200,"h":40},
+      {"depth":1,"role":"button","name":"Dots","states":[],"x":900,"y":500,"w":20,"h":8}]' > "$d/ta.json"
+    sed 's/"x":100,"y":100,"w":200/"x":100,"y":100,"w":206/; s/"x":900,"y":500/"x":902,"y":500/' "$d/ta.json" > "$d/tb.json"
+    printf 'title\tT\npoint\tp1\t%s\t%s\t%s\t%s\t\nregion\t301\t100\t6\t41\n' "$d/big.png" "$d/big2.png" "$d/ta.json" "$d/tb.json" > "$d/plan"
+    out=$(python3 -I "$ROOT/share/check.py" sheet "$d/plan" "$d/s.png" | tr '\0' '\n')
+    check_match "sheet: a region's tree line, its element's change (a % doubled for -annotate)" 'tree: resized \+6x\+0  button "Save 50%%"' "$out"
+    check_match "...a move under a speck's size, from the tree, blue" $'#1a6fe0\n-annotate\n[^\n]*\ntree: moved \\+2,\\+0  button "Dots"' "$out"
+    check_eq "...nothing left out" "" "$(head -n 1 <<<"$out")"
+    { printf 'title\tT\npoint\tp1\t%s\t%s\t\t\t\n' "$d/big.png" "$d/big2.png"
+      for i in 0 1 2 3 4 5 6; do printf 'region\t%d\t%d\t20\t20\n' $((i * 250)) $((i * 140)); done; } > "$d/plan"
+    out=$(python3 -I "$ROOT/share/check.py" sheet "$d/plan" "$d/s.png" | tr '\0' '\n')
+    check_match "...seven crops in one checkpoint: the whole shots instead" 'p1: 7 regions \(the whole shots, at [0-9]+%%\)' "$out"
+    { printf 'title\tT\n'
+      for i in $(seq 1 12); do printf 'point\tc%d\t%s\t%s\t\t\t\nregion\t%d\t300\t600\t300\n' "$i" "$d/big.png" "$d/big2.png" $((i * 10)); done; } > "$d/plan"
+    out=$(python3 -I "$ROOT/share/check.py" sheet "$d/plan" "$d/s.png" | tr '\0' '\n')
+    check_match "...twelve big crops: at half size what fits, what does not named" '^c7, c8, c9, c10, c11, c12$' "$(head -n 1 <<<"$out")"
+    check_match "...and said in the image" $'not shown, no room [^\n]*\n-stroke\nnone\n-fill\n#111111\n-annotate\n[^\n]*\nc7, c8' "$out"
   else
     skip "check diff on made images" "no magick (imagemagick)"
   fi
@@ -5417,6 +5455,13 @@ SH
   check_match "...changed, a region at the button" $'changed  demo: [0-9]+ regions? \\(marked: [^\n]*demo.diff.png\\)\n  at [0-9]+,[0-9]+ ' "$out"
   check_match "...the tree names it" 'tree: moved \+6,\+0  button "Save"' "$out"
   check "...marked" test -s "$d/c/demo.diff.png"
+  # The report (finding 360): every change in one image, its path said; none when all are the same.
+  check_match "...the report's path" $'\nreport:  [^\n]*/c/report.png \\(' "$out"
+  local wh
+  wh=$(magick identify -format '%w %h' "$d/c/report.png" 2>/dev/null) || wh="0 0"
+  check "...the report inside one look ($wh)" test "${wh% *}" -gt 0 -a "${wh% *}" -le 1456 -a $((${wh% *} * ${wh#* })) -le 1150000
+  check_eq "...no report, no plan left when nothing changed" "no no" \
+    "$([ -e "$d/b/report.png" ] && echo yes || echo no) $(compgen -G "$d/[bc]/report.plan*" >/dev/null && echo yes || echo no)"
   rc=0; out=$(EXTRA=1 ob check run --base "$d/base" -o "$d/e" -- "$d/scenario.sh" 2>&1) || rc=$?
   check_match "a checkpoint the baseline lacks: new, exit 1" "new      extra: no baseline.*\|1$" "$out|$rc"
   rc=0; out=$(ob check run --base "$d/base" -o "$d/f" -- false 2>&1) || rc=$?

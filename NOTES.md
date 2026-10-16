@@ -7319,6 +7319,45 @@ from them.
     --json), t_check (a Qt Quick window: approve with an unstable random label, same, a button moved
     6 px: region and `moved +6,+0 button "Save"`, a new checkpoint, a failing scenario: exit 3).
 
+360. **`check run`'s report: every change in one image** (2026-10-16, #252, after finding 358). A
+    changed checkpoint's `ID.diff.png` is the whole shot marked, ~1.5k image tokens apiece (finding
+    243's count), mostly of what did not change, and an agent read each. Now, when anything changed,
+    `check run` also writes `report.png` and prints `report:  PATH` before its last line
+    (check_report; share/check.py `sheet` lays it out and prints magick's arguments, the first what
+    was left out). Inside one look: 1456 px wide at most, under 1.15 MP and 1568 high. Per changed
+    checkpoint, each region with 24 px around it, its tree element too when that stays within
+    400x120 (a label whose last word changed is read whole), crops of one checkpoint merged when
+    under 24 px apart and within one side (706x360; a card's lines cost more than the pixels
+    between), a crop of 160x120 or less at 2x (a 2 px move is 4 there); the baseline's crop, then
+    this run's, each marked; above them the ID, the regions and up to 3 tree lines (the smallest
+    changed element over a region, else the smallest element there; "+N more"). A mark is its four
+    corners: a whole rectangle hid the digit beside a changed time ("16:37"). Blue marks a tree
+    change with bounds no region covers: the subject's ⋯ button's 2 px move, a tree line only
+    until now, is drawn (tree bounds used only when the tree's frame is the shot's size). A size
+    change: both whole at one scale; more than 6 crops in one checkpoint (another GPU's 203
+    regions): the whole shots, scaled, marked. When not all fit: each checkpoint's first crop before
+    any's second, at full size, then with each side at half if that shows more; the rest named in
+    the image and on stdout ("not in it, no room: ID, ID (2 of 5 crops)"). The legend wraps to the
+    cards' width (360 px at least): unwrapped it made a small report wider than its cards. Texts
+    go through -annotate, which reads % and \ as escapes and a leading @ as a file: escaped, the
+    app's names made printable. Font: fc-match monospace, magick's default without one.
+    `ID.diff.png` stays the full-size record. **Measured** (image tokens, w x h / 750 scaled as
+    finding 243 says): t_check's shape (its window tiled to 1896x1030, the button moved 6 px, 3
+    regions) 559x196, 146 against 1533 (10x less); a Qt Quick window with a toolbar whose spacing
+    grew 2 px and a renamed row, checkpoints of the window and the screen (8 regions each)
+    1242x320, 530 against 3066 (17%); the subject's 2 px spacing change (3 checkpoints, 10 regions)
+    1329x482, 854 against 4599 (19%), each change legible at 1x, read by looking at it. `check diff
+    A B --report R.png` takes the same layout, one pair named after B: an agent comparing two shots
+    of its own read the marked whole shot just the same, and the plan is check run's with one
+    point; `-o` stays the marked shot. Not in the report: a `new` checkpoint (no pair); the same
+    change in two checkpoints (the subject's app and help) is shown twice. Seen once in t_check, not
+    looked into (its files went with the suite's TMP): the bar's checkpoint changed by one region
+    on the check right after --approve, in 1 of 3 runs. Tests: t_unit_check (check diff --report on
+    made images: the path after the regions, inside one look and a tenth of the shot, the
+    baseline's crop left and the new right at 2x by their pixels, a size, no report when same;
+    check.py sheet: a region's tree line with a % doubled, a blue move under a speck, 7 crops as the
+    whole shots, 12 big crops at half size and the 6 left named in the image), t_check (the report's
+    path, inside one look, none and no plan left when same).
 361. **`check point` finds holes: the sentinel wallpaper inside a surface** (2026-10-16, #252, built
     on finding 358). `up --clean`'s `#ff00ff` is no theme's colour, so any of it inside a window, the
     bar or a popup is a defect, and nothing looked for it. Hyprland's rectangles cannot say where: a

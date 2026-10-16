@@ -14,13 +14,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   saying what was not the same from one run to the next (and leaving that out from then on); `check
   run -- SCENARIO` then says, for each checkpoint, same or changed: each region that changed, marked
   on a copy of the shot, and, for an app with an accessibility tree, which element moved, resized,
-  changed its text or state, appeared or vanished (`moved -6,+0 button "Save"`). Shots are
+  changed its text or state, appeared or vanished (`moved -6,+0 button "Save"`), and one report
+  image of every change, each cropped from the baseline beside the new shot and labelled, a fifth
+  of the image tokens of looking at each changed shot or less. Shots are
   compared exactly, as users see them, leaving out only specks a few pixels big (what Qt Quick's
   text varies by from one start of an app to the next), so a colour a few levels off is still
   caught. Each checkpoint is searched for holes too: the clean wallpaper showing through inside a
   window, the bar or a popup (a transparent part, a gap, a surface that did not draw), not around
   them or at rounded corners; `--approve` says each, and a check fails on any the baseline lacks.
-  `check diff A.png B.png` compares two shots of yours the same way.
+  `check diff A.png B.png` compares two shots of yours the same way (`--report` too).
 - **`up --clean`: a desktop where only what is tested moves.** Omarchy's own bar on tokyo-night, a
   solid `#ff00ff` wallpaper (any of it inside a window or the bar is a hole), the clock frozen at
   "Friday 12:00" in its usual place, no pointer, no network and no animations (over reloads too).
