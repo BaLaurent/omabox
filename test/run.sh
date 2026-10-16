@@ -9044,6 +9044,71 @@ t_keys_to_box() {
 # held down in the box while the stand-in's focus moves to its foot, released there. aquamarine never
 # heard the release, so the box's Hyprland kept SUPER down and a later W was SUPER+W (closed the window).
 # omabox's aquamarine build releases what is held when the keyboard leaves.
+# keys down:KEY / up:KEY (#230, finding 343): a key held across other commands by a holder the keyboard
+# tool forks off in the box. The issue's case: a press bind and a release bind on one key, the pointer
+# moved in between, each bind fired once and in order; modifiers held join another keyboard's keys
+# (binds and the app); the release reaches the app (a held letter stops repeating); a key still held
+# goes with the box.
+t_keys_down_up() {
+  local B=$P-kdu
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  check_box_safety "$B"
+  ob lua -b "$B" 'hl.bind("XF86Tools", hl.dsp.event("tools-press"))
+    hl.bind("XF86Tools", hl.dsp.event("tools-release"), { release = true })
+    hl.bind("SUPER + A", hl.dsp.event("super-a"))' >/dev/null
+  ob events -b "$B" --mark kdu >/dev/null 2>&1
+  # shellcheck disable=SC2329 # called through until_ok and $(...)
+  evs() { ob events -b "$B" --since kdu --grep '^custom>>' | awk '{ printf "%s%s", (NR > 1 ? " " : ""), $2 }'; }
+  # shellcheck disable=SC2329
+  evs_are() { [ "$(evs)" = "$1" ]; }
+  check "keys down:XF86Tools" ob keys -b "$B" down:XF86Tools
+  check "...its press bind fires" until_ok 5 evs_are custom'>>'tools-press
+  check "...the holder runs in the box (its pid namespace)" ob run -b "$B" -- pgrep -f 'omabox-keyboard .*down:XF86Tools'
+  check "pointer move with the key held" ob pointer -b "$B" -- move 100 100 move 400 300
+  check_eq "...no release yet" "custom>>tools-press" "$(evs)"
+  check_match "a second down: of it: refused" "down:XF86Tools: held already \(up:XF86Tools lets go\)" "$(ob keys -b "$B" down:XF86Tools 2>&1)"
+  check "keys up:XF86Tools" ob keys -b "$B" up:XF86Tools
+  check "...its release bind fires, once, after the press, and nothing else" until_ok 5 evs_are "custom>>tools-press custom>>tools-release"
+  check_fails "...the holder is gone with the last held key" ob run -b "$B" -- pgrep -f 'omabox-keyboard .*down:'
+  local out; out=$(ob keys -b "$B" up:XF86Tools 2>&1); local rc=$?
+  check_eq "up: of a key not held: exit 1" 1 "$rc"
+  check_match "...said" "up:XF86Tools: no key is held" "$out"
+  check_match "a combo refused" "down:ctrl\+c: one key each" "$(ob keys -b "$B" down:ctrl+c 2>&1)"
+  check_match "...no key refused" "down:: which key" "$(ob keys -b "$B" down: 2>&1)"
+  check_match "...--pass with them refused" "down:/up: and --pass in calls of their own" "$(T_X=x "$CLI" keys -b "$B" --pass T_X down:a 2>&1)"
+  # SUPER held by the holder, a from another keyboard: Hyprland joins them (SUPER+A).
+  ob keys -b "$B" down:super >/dev/null
+  ob keys -b "$B" a >/dev/null
+  check_match "up:KEY not held, with another held: names what is" "up:shift: not held \(held: Super_L\)" "$(ob keys -b "$B" up:shift 2>&1)"
+  ob keys -b "$B" up:super >/dev/null
+  check "down:super, then keys a: SUPER+A" until_ok 5 evs_are "custom>>tools-press custom>>tools-release custom>>super-a"
+  # The app: shift held types capitals; a held letter repeats in it, and stops once let go.
+  ob run -b "$B" -d -q -- foot --app-id=omabox.typed sh -c 'stty raw -echo; exec cat > /tmp/typed'
+  until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j activewindow | jq -e '.class == \"omabox.typed\"'" >/dev/null
+  # shellcheck disable=SC2329
+  typed() { [ "$(ob run -b "$B" -- cat /tmp/typed 2>/dev/null)" = "$1" ]; }
+  ob keys -b "$B" down:shift a >/dev/null; ob keys -b "$B" b up:shift c >/dev/null
+  check "down:shift a, b, up:shift c: ABc" until_ok 5 typed ABc
+  # shellcheck disable=SC2329
+  size() { ob run -b "$B" -- stat -c %s /tmp/typed; }
+  # shellcheck disable=SC2329
+  grown() { [ "$(size)" -ge "$1" ]; }
+  ob keys -b "$B" down:x >/dev/null
+  check "a held x repeats in the app" until_ok 5 grown 8
+  ob keys -b "$B" up:x >/dev/null
+  sleep 0.3; local n1 n2; n1=$(size); sleep 1; n2=$(size)
+  check_eq "...and stops once let go (the release reaches it)" "$n1" "$n2"
+  # Held at down: gone with the box; the next box of that name has none.
+  ob keys -b "$B" down:XF86Tools >/dev/null
+  local hp; hp=$(pgrep -f 'omabox-keyboard .*down:XF86Tools' | head -1)
+  check "a key held at down: its holder seen" test -n "$hp"
+  ob down "$B" >/dev/null
+  check_fails "...gone with the box" test -e "/proc/${hp:-0}"
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up again" "failed"; return; }
+  check_match "...the next box of that name holds nothing" "up:XF86Tools: no key is held" "$(ob keys -b "$B" up:XF86Tools 2>&1)"
+  ob down "$B" >/dev/null
+}
+
 t_held_keys() {
   local B=$P-hk
   ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
@@ -11529,7 +11594,7 @@ t_link_out() {
 UNIT=(t_unit_fd_exposed t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

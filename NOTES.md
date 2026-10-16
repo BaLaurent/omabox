@@ -6974,6 +6974,30 @@ from them.
     for anything else. *Decided*: no per-level tolerance in omabox-still (it would change what every
     `wait still` counts). Verified: t_wait 3 runs, 109/0 each; a forced failure wrote both dumps
     and the 1920x1080 screen.
+343. **`keys down:KEY` / `up:KEY`: a key held across other commands** (2026-10-16, #230; #81's parked
+    line). `keys` only tapped, so a bind on a key's release (`hl.bind(KEY, fn, {release = true})`) or
+    a gesture made while a key is held (a wheel opened on a held key, a slot picked with the pointer,
+    run on the release) could not be tested. A virtual keyboard's key is released only by that
+    keyboard, so the keyboard tool forks off a holder on the first `down:`: it keeps a keyboard of its
+    own on the seat, presses and releases keys on it as asked over a unix socket in the box's runtime
+    dir (`omabox-held-keys`; a request a connection, answered once the compositor has it), and ends
+    with the last `up:`, letting go of anything still down on SIGTERM, SIGINT or SIGHUP. A run with
+    `down:`/`up:` goes through `box_sys`, so the holder is in the box's pid namespace and ends with it
+    (`down`; for a box named after the agent's session, the agent exiting); not with `--pass` (finding
+    307). A run of `down:`/`up:` (and `-s`) alone puts no keyboard of its own on the seat. *Decided*:
+    a second `down:` of a held key and an `up:` of one not held are exit 1 (naming what is held); no
+    time limit on a hold (a kept box keeps it until `up:`); KEY is one key, a letter its key (`down:A`
+    holds a), a symbol that needs a modifier refused. Seen in a box: Hyprland joins the modifiers of
+    every keyboard on the seat, for binds and for the client: SUPER held by one keyboard and `a` from
+    another fired SUPER+A, shift held typed `AB` in foot. A held letter repeats in the app (Omarchy's
+    40/s after 250 ms) until another keyboard's key, as on a real keyboard, and stops at `up:` (the
+    release reaches it). Hyprland makes the keyboard with the latest event the active one and the
+    event that switches it is lost to the client (finding 14), so the holder spends a modifiers event
+    before each key and a run spends one again after a `down:`/`up:`. A holder killed outright
+    (SIGKILL) leaves its key down for Hyprland: the next `down:` takes over its stale socket, and its
+    `up:` fired the release bind twice (*assumed*: once for each keyboard's press). Test: `t_keys_down_up` (the
+    issue's press and release binds with `pointer move` between, SUPER+A, capitals, the repeat
+    stopping, a key held at `down` gone with the box). The Hotkey Wheel gesture itself not tried.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

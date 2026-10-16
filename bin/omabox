@@ -109,7 +109,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..."    where you see each mark: 1:1, or the --fit N that maps it
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox tree [-b NAME] [--window SEL] [--find TEXT] [--json] [--all]   a window's accessibility tree as text
-  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS)...  e.g. super+space  -t hi  Return
+  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
                [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
   omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [BTN]
@@ -286,6 +286,13 @@ coordinates and focuses it first when it is off screen or covered there (--no-ra
 \`keys --window\` focuses the window (the active one again), then types; while a layer holds the
 keyboard against any window (Omarchy's launcher, a menu) it refuses, exit 1, before sending or
 focusing anything: close the layer first (Escape; twice in a launcher with text in its field).
+\`keys down:KEY\` presses KEY and leaves it down across later commands (\`pointer move\`, \`click\`,
+\`keys\`) until \`keys up:KEY\`: a bind on a key's release, a gesture made while a key is held. KEY
+is one key (XF86Tools, super, shift, a; down:A holds a). Hyprland joins it with the other keys:
+\`keys down:super\`, then \`keys a\` fires SUPER+A; shift held types capitals. A held letter repeats
+in the focused app, as a real key does, until another key is pressed. A key already held, or an
+up:KEY not held, is exit 1. Anything still held is let go when the box goes down (with your agent,
+for a box named after your session). Not with --pass.
 @ shot click drag pointer pixel
 --fit N scales a shot's image down to N pixels on its longest side (a scaled screen's image is its
 layout times the scale: 2560 px for a 1280 px layout at 2). --zoom N (2-16, with -g) shows each pixel of
@@ -7434,6 +7441,12 @@ cmd_keys() {
   done
   settle_opts_check
   set -- "${toks[@]}"
+  # down:KEY / up:KEY (#230): a key held across later commands, by a holder the keyboard tool forks
+  # off in the box (finding 343). That run goes in the box's pid namespace, so the holder ends with
+  # the box; --pass values stay out of it (finding 307).
+  local held=0 t
+  for t; do case $t in down:*|up:*) held=1 ;; esac; done
+  [ $held = 0 ] || [ ${#pass[@]} = 0 ] || die "keys: down:/up: and --pass in calls of their own"
   select_box "$name"; need_box; shell_note
   [ $# -gt 0 ] || die "keys: nothing to send"
   # --window: that window focused first (finding 81), as a click on it would. A layer that holds the
@@ -7506,6 +7519,7 @@ kb_tool() {
 keys_send() {
   local v
   MARK_T0=${EPOCHREALTIME//[!0-9]/}   # when they began, for a recording (rec_input)
+  if [ "${held:-0}" = 1 ]; then box_sys "${kb[@]}" </dev/null; return; fi
   for v in "${pass[@]}"; do caller_env "$v"; printf '\0'; done | on_box "${kb[@]}"
 }
 

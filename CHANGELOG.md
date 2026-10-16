@@ -7,6 +7,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **`keys down:KEY` and `keys up:KEY` hold a key down across other commands.** `keys` only tapped,
+  so a bind on a key's release, or anything that happens while a key is held, could not be tested:
+  now `omabox keys down:XF86Tools`, then `omabox pointer move …`, then `omabox keys up:XF86Tools`
+  fires the press bind, then the release bind, as a held key does. A held key joins the others as on
+  a real keyboard (`down:super`, then `keys a` is SUPER+A; `down:shift` types capitals), and a held
+  letter repeats in the app until let go. Pressing a held key again, or letting go of one that is not
+  held, is an error; anything still held goes with the box.
+
 - **`omabox-feedback`, an opt-in skill for reporting what omabox got wrong.** Off unless you run
   `omabox setup --feedback-skill` (`--no-feedback-skill` takes it out; a plain `omabox setup` never
   adds it). Then `/omabox-feedback` has your agent look back through the session (in Claude Code,

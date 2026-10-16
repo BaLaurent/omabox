@@ -253,6 +253,14 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - `keys -t TEXT` and `--pass VAR` type a newline as Return and a tab as Tab; any other control
   character (backspace, escape, a carriage return) is refused, exit 2, before anything is typed. A
   `--pass` value's one trailing `\r` (a Windows line ending) is dropped.
+- **A held key** (`keys down:KEY` … `keys up:KEY`): KEY stays down across the commands between
+  (`pointer move`, `click`, other `keys`), for a bind on a key's release (`hl.bind(KEY, fn, {release =
+  true})`) or a gesture made while a key is held. One key each (`down:XF86Tools`, `down:super`,
+  `down:a`). It joins the other keys as on a real keyboard: `down:super` then `keys a` fires SUPER+A,
+  `down:shift` types capitals; a held letter repeats in the focused app until another key is pressed.
+  A second `down:` of the same key, or an `up:` of one not held, is exit 1. A key still held goes with
+  the box (`down`, or your agent exiting, for a box named after your session): a box you keep (`up
+  --new`) keeps it down until `up:KEY`.
 - **Travel** (`--steps N` on `click` and `pointer`; 1-999, 1 is a jump): N moves in a straight line
   from where the pointer is, each seen by Hyprland and drawn before the next (~40 ms apart), so
   focus-follows-mouse and hover happen on the way. Pick N so a step (the distance over N) is narrower

@@ -1,6 +1,6 @@
 // omabox-keyboard: type on the Wayland display in $WAYLAND_DISPLAY through a virtual keyboard.
 //
-//   omabox-keyboard [--layout us] [--variant V] [--model M] [--options O] [--delay MS]  COMBO | -t TEXT | -T | -s MS | -m MODS | -p MS ...
+//   omabox-keyboard [--layout us] [--variant V] [--model M] [--options O] [--delay MS]  COMBO | -t TEXT | -T | -s MS | -m MODS | -p MS | down:KEY | up:KEY ...
 //   omabox-keyboard [--layout ...] --hold
 //
 // COMBO is super+space, ctrl+shift+t, Return, a, F5, ctrl++, super+/ ... (modifiers: super ctrl shift
@@ -13,6 +13,10 @@
 // under whatever comes after; -p MS prints "paused" and waits for a line (or the end) on stdin, MS at
 // most: `omabox click --mod` clicks there with the pointer tool (#25). Held modifiers are released
 // at the end of the run, on a timed-out pause, and on SIGTERM, SIGINT or SIGHUP: never left down.
+// down:KEY presses KEY and leaves it down after the run, up:KEY (in this run or a later one) lets go
+// of it (#230): a holder, forked off by the first down:, keeps a keyboard of its own on the seat while
+// any key is held, answering on $XDG_RUNTIME_DIR/omabox-held-keys, and ends with the last up:. KEY is
+// one key, as in a COMBO without modifiers (a letter is its key: down:A holds a).
 // Tokens run left to right in one connection, all checked before it connects. Exit 1 if the
 // compositor goes away mid-run.
 // --hold keeps an idle keyboard on the seat until the compositor goes away (NOTES finding 41).
@@ -31,6 +35,9 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 #include <wayland-client.h>
@@ -68,7 +75,7 @@ static void sleep_ms(long ms) {
 }
 
 static void usage(void) {
-    fprintf(stderr, "usage: omabox-keyboard [--layout L] [--variant V] [--model M] [--options O] [--delay MS] [--hold | (COMBO | -t TEXT | -T | -s MS | -m MODS | -p MS)...]\n");
+    fprintf(stderr, "usage: omabox-keyboard [--layout L] [--variant V] [--model M] [--options O] [--delay MS] [--hold | (COMBO | -t TEXT | -T | -s MS | -m MODS | -p MS | down:KEY | up:KEY)...]\n");
     exit(2);
 }
 
@@ -148,6 +155,19 @@ static void key(xkb_keycode_t code, int down) {
 }
 static void set_mods(uint32_t depressed) { zwp_virtual_keyboard_v1_modifiers(kbd, depressed, 0, 0, 0); }
 
+// Hyprland makes a keyboard the active one on its first event after another's (a new one's first of
+// all, finding 14), re-sending keymap and enter to the focused client, and the event that caused the
+// switch is lost to it. Spent on a modifiers event that changes nothing before the first key, and again
+// after the holder's keyboard (down:, up:) had a turn.
+static int spent;
+static void spend(uint32_t depressed) {
+    if (spent) return;
+    set_mods(depressed);
+    sync_or_die();
+    sleep_ms(20);
+    spent = 1;
+}
+
 // The modifiers -m holds down (bitmask over mods[]), their keys, and the modifier mask they make.
 static unsigned kept;
 static xkb_keycode_t kept_code[NMODS];
@@ -175,6 +195,7 @@ static int chord(unsigned held, xkb_keycode_t code, int run) {
     held &= ~kept;
     if (!mod_keys(held, mk)) return 0;
     if (!run) return 1;
+    spend(mask);
     for (size_t m = 0; m < NMODS; m++) {
         if (!(held & (1u << m))) continue;
         key(mk[m], 1);
@@ -195,6 +216,7 @@ static int chord(unsigned held, xkb_keycode_t code, int run) {
 
 // -m: press these modifiers and keep them down. release_held lets go of all of them, once.
 static void hold_mods(unsigned held) {
+    spend(kept_mask);
     held &= ~kept;
     for (size_t m = 0; m < NMODS; m++) {
         if (!(held & (1u << m))) continue;
@@ -286,6 +308,21 @@ static unsigned parse_mods(const char *tok) {
     return held;
 }
 
+// A key's name (a keysym name, an alias, a single character) as its keysym, NoSymbol if none; *as is
+// the name it was looked up by (an alias's keysym name).
+static xkb_keysym_t key_sym(const char *name, const char **as) {
+    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++)
+        if (!strcasecmp(name, aliases[i].alias)) name = aliases[i].name;
+    *as = name;
+    xkb_keysym_t sym = xkb_keysym_from_name(name, XKB_KEYSYM_NO_FLAGS);
+    if (sym == XKB_KEY_NoSymbol) sym = xkb_keysym_from_name(name, XKB_KEYSYM_CASE_INSENSITIVE);
+    // A single character is its own keysym: + - / are not keysym names (plus, minus, slash are).
+    const unsigned char *p = (const unsigned char *)name;
+    uint32_t cp;
+    if (sym == XKB_KEY_NoSymbol && decode(&p, &cp) && !*p) sym = xkb_utf32_to_keysym(cp);
+    return sym;
+}
+
 static int do_combo(const char *tok, int run) {
     char buf[256];
     if (snprintf(buf, sizeof(buf), "%s", tok) >= (int)sizeof(buf)) { fprintf(stderr, "omabox-keyboard: token too long\n"); return 0; }
@@ -298,14 +335,10 @@ static int do_combo(const char *tok, int run) {
         held |= 1u << m;
         keyname = plus + 1;
     }
-    for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++)
-        if (!strcasecmp(keyname, aliases[i].alias)) keyname = (char *)aliases[i].name;
-    xkb_keysym_t sym = xkb_keysym_from_name(keyname, XKB_KEYSYM_NO_FLAGS);
-    if (sym == XKB_KEY_NoSymbol) sym = xkb_keysym_from_name(keyname, XKB_KEYSYM_CASE_INSENSITIVE);
-    // A single character is its own keysym: + - / are not keysym names (plus, minus, slash are).
-    const unsigned char *p = (const unsigned char *)keyname;
+    const char *as;
+    xkb_keysym_t sym = key_sym(keyname, &as);
+    keyname = (char *)as;
     uint32_t cp;
-    if (sym == XKB_KEY_NoSymbol && decode(&p, &cp) && !*p) sym = xkb_utf32_to_keysym(cp);
     // With modifiers a letter names the key, as Hyprland's binds do (SUPER+W is not SUPER+SHIFT+W).
     if (held) sym = xkb_keysym_to_lower(sym);
     struct hit h;
@@ -409,6 +442,297 @@ static int do_text(const char *s, int run) {
     return 1;
 }
 
+// Connects to the compositor and puts a keyboard with this keymap on its seat (kbd); 0, said, if not.
+static int kbd_connect(void) {
+    display = wl_display_connect(NULL);
+    if (!display) { fprintf(stderr, "omabox-keyboard: cannot connect to Wayland display\n"); return 0; }
+    struct wl_registry *reg = wl_display_get_registry(display);
+    wl_registry_add_listener(reg, &registry_listener, NULL);
+    sync_or_die();
+    if (!seat || !manager) { fprintf(stderr, "omabox-keyboard: compositor lacks wl_seat or zwp_virtual_keyboard_manager_v1\n"); return 0; }
+
+    kbd = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(manager, seat);
+    char *km = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
+    if (!km) { fprintf(stderr, "omabox-keyboard: cannot serialise the keymap\n"); return 0; }
+    size_t size = strlen(km) + 1;
+    int fd = memfd_create("omabox-keymap", MFD_CLOEXEC);
+    if (fd < 0 || ftruncate(fd, (off_t)size) < 0) { perror("omabox-keyboard: memfd"); return 0; }
+    char *map = mmap(NULL, size, PROT_WRITE, MAP_SHARED, fd, 0);
+    if (map == MAP_FAILED) { perror("omabox-keyboard: mmap"); return 0; }
+    memcpy(map, km, size);
+    munmap(map, size);
+    free(km);
+    zwp_virtual_keyboard_v1_keymap(kbd, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, fd, (uint32_t)size);
+    sync_or_die();
+    close(fd);
+    return 1;
+}
+
+// --- held keys (#230) -------------------------------------------------------------------------------
+// down:KEY and up:KEY go to a holder: this tool forked off by the first down:, in the background (the
+// box's, as `omabox keys` runs a run with them in the box's pid namespace: it ends with the box). It
+// keeps a keyboard of its own on the seat, presses and releases keys on it as asked, one request a
+// connection on a unix socket ("down CODE", "up CODE" -> "ok", "held", "not-held NAMES"), and ends
+// once nothing is held, letting go of everything first (on SIGTERM, SIGINT and SIGHUP too). Hyprland
+// joins the modifiers of every keyboard on the seat, for its binds and for the client: SUPER held
+// there and `keys a` from another keyboard fire SUPER+A, shift held there types an A (NOTES).
+#define HELD_MAX 32
+static int is_held_tok(const char *t) { return !strncmp(t, "down:", 5) || !strncmp(t, "up:", 3); }
+
+static int held_addr(struct sockaddr_un *a) {
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    memset(a, 0, sizeof(*a));
+    a->sun_family = AF_UNIX;
+    if (!rt || *rt != '/' || snprintf(a->sun_path, sizeof(a->sun_path), "%s/omabox-held-keys", rt) >= (int)sizeof(a->sun_path)) {
+        fprintf(stderr, "omabox-keyboard: no XDG_RUNTIME_DIR for the held keys' socket\n");
+        return 0;
+    }
+    return 1;
+}
+
+// down:KEY / up:KEY's key: one key, a letter its key (down:A holds a), no symbol that needs a modifier.
+static int held_code(const char *tok, xkb_keycode_t *code) {
+    const char *name = strchr(tok, ':') + 1, *as;
+    if (!*name) { fprintf(stderr, "omabox-keyboard: %s: which key? (down:XF86Tools, down:super, down:a)\n", tok); return 0; }
+    xkb_keysym_t sym = key_sym(name, &as);
+    struct hit h;
+    if (sym == XKB_KEY_NoSymbol && strchr(name + 1, '+')) {
+        fprintf(stderr, "omabox-keyboard: %s: one key each (down:ctrl down:c), not a combo\n", tok);
+        return 0;
+    }
+    if (sym != XKB_KEY_NoSymbol) sym = xkb_keysym_to_lower(sym);
+    if (sym == XKB_KEY_NoSymbol || !find_keysym(sym, &h)) { fprintf(stderr, "omabox-keyboard: %s: no key for '%s' in this layout\n", tok, as); return 0; }
+    if (h.mask) { fprintf(stderr, "omabox-keyboard: %s: '%s' takes a modifier on this layout: hold the modifier and its key, each with a down:\n", tok, as); return 0; }
+    *code = h.code;
+    return 1;
+}
+
+// The keysym names of the keys in codes, space-separated, in out.
+static void held_names(const xkb_keycode_t *codes, int n, char *out, size_t len) {
+    size_t at = 0;
+    out[0] = 0;
+    for (int k = 0; k < n && at < len; k++) {
+        const xkb_keysym_t *syms;
+        char name[64] = "?";
+        if (xkb_keymap_key_get_syms_by_level(keymap, codes[k], 0, 0, &syms) > 0) xkb_keysym_get_name(syms[0], name, sizeof(name));
+        int w = snprintf(out + at, len - at, "%s%s", k ? " " : "", name);
+        if (w < 0) break;
+        at += (size_t)w;
+    }
+}
+
+// The holder (in the forked child): its socket bound (lfd); it writes a byte to `ready` once it is on
+// the seat, or exits, saying why on the caller's stderr. Never returns.
+static int held_ino_ok;
+static ino_t held_ino;
+static struct sockaddr_un held_sa;
+static void held_unlink(void) {
+    struct stat st;   // only its own socket: a new holder's may be there by now
+    if (held_ino_ok && stat(held_sa.sun_path, &st) == 0 && st.st_ino == held_ino) unlink(held_sa.sun_path);
+    held_ino_ok = 0;
+}
+static void push_state(struct xkb_state *st) {
+    zwp_virtual_keyboard_v1_modifiers(kbd, xkb_state_serialize_mods(st, XKB_STATE_MODS_DEPRESSED),
+        xkb_state_serialize_mods(st, XKB_STATE_MODS_LATCHED), xkb_state_serialize_mods(st, XKB_STATE_MODS_LOCKED),
+        xkb_state_serialize_layout(st, XKB_STATE_LAYOUT_EFFECTIVE));
+}
+static void held_serve(int lfd, int ready) {
+    setsid();
+    struct sigaction sa = {0};
+    sa.sa_handler = on_signal;   // no SA_RESTART: poll ends, everything is let go
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
+    signal(SIGPIPE, SIG_IGN);
+    atexit(held_unlink);
+    // The caller's connection (a run with keys of its own) is not this one's.
+    if (display) close(wl_display_get_fd(display));
+    display = NULL; kbd = NULL; seat = NULL; manager = NULL;
+    if (!kbd_connect()) exit(1);
+    struct xkb_state *st = xkb_state_new(keymap);
+    if (!st) { fprintf(stderr, "omabox-keyboard: no keyboard state\n"); exit(1); }
+    spent = 0;
+    spend(0);
+    // From here nothing of the caller's: its stdout and stderr would hold its pipes.
+    int null = open("/dev/null", O_RDWR | O_CLOEXEC);
+    if (null >= 0) { dup2(null, 0); dup2(null, 1); dup2(null, 2); if (null > 2) close(null); }
+    if (write(ready, "1", 1) != 1) exit(1);
+    close(ready);
+    xkb_keycode_t held[HELD_MAX];
+    int n = 0, wfd = wl_display_get_fd(display);
+    for (;;) {
+        if (stop) break;
+        wl_display_flush(display);
+        struct pollfd p[2] = {{wfd, POLLIN, 0}, {lfd, POLLIN, 0}};
+        if (poll(p, 2, -1) < 0) { if (errno == EINTR) continue; break; }
+        if (p[0].revents && wl_display_dispatch(display) == -1) exit(1);   // the compositor went: nothing to let go
+        if (!(p[1].revents & POLLIN)) continue;
+        int c = accept4(lfd, NULL, NULL, SOCK_CLOEXEC);
+        if (c < 0) continue;
+        struct timeval tv = {2, 0};
+        setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        char req[64], out[HELD_MAX * 64 + 16];
+        size_t len = 0;
+        ssize_t r;
+        while (len < sizeof(req) - 1 && (r = read(c, req + len, sizeof(req) - 1 - len)) > 0) {
+            len += (size_t)r;
+            if (memchr(req, '\n', len)) break;
+        }
+        req[len] = 0;
+        unsigned code = 0;
+        int k = -1, down = sscanf(req, "down %u", &code) == 1, up = !down && sscanf(req, "up %u", &code) == 1;
+        for (int j = 0; j < n; j++) if (held[j] == code) k = j;
+        if ((down || up) && (code < xkb_keymap_min_keycode(keymap) || code > xkb_keymap_max_keycode(keymap))) {
+            snprintf(out, sizeof(out), "bad\n");
+        } else if (down && k >= 0) {
+            snprintf(out, sizeof(out), "held\n");
+        } else if (down && n == HELD_MAX) {
+            snprintf(out, sizeof(out), "full\n");
+        } else if (down || (up && k >= 0)) {
+            push_state(st);   // spent (finding 14): another keyboard may have had a turn since
+            sync_or_die();
+            sleep_ms(20);
+            key(code, down);
+            xkb_state_update_key(st, code, down ? XKB_KEY_DOWN : XKB_KEY_UP);
+            push_state(st);
+            sync_or_die();
+            if (down) held[n++] = code; else held[k] = held[--n];
+            if (!n) held_unlink();   // a down: from now on starts a new holder
+            snprintf(out, sizeof(out), "ok\n");
+        } else {
+            char names[HELD_MAX * 64];
+            held_names(held, n, names, sizeof(names));
+            snprintf(out, sizeof(out), "%s %s\n", up ? "not-held" : "list", names);
+        }
+        send(c, out, strlen(out), MSG_NOSIGNAL);
+        close(c);
+        if (!n) break;
+    }
+    // Let go of whatever is still down (a signal), then of the keyboard.
+    held_unlink();
+    close(lfd);
+    while (n > 0) {
+        key(held[--n], 0);
+        xkb_state_update_key(st, held[n], XKB_KEY_UP);
+        push_state(st);
+    }
+    sync_or_die();
+    sleep_ms(30);   // the compositor handles the last release before the device goes away
+    zwp_virtual_keyboard_v1_destroy(kbd);
+    sync_or_die();
+    exit(0);
+}
+
+// Starts a holder on a socket of its own, or finds one already answering there (a stale socket, a
+// holder killed outright, is taken over). 0, said, if neither.
+static int held_start(void) {
+    if (!held_addr(&held_sa)) return 0;
+    int lfd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (lfd < 0) { perror("omabox-keyboard: socket"); return 0; }
+    if (bind(lfd, (struct sockaddr *)&held_sa, sizeof(held_sa)) < 0) {
+        int c = errno == EADDRINUSE ? socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0) : -1;
+        if (c >= 0 && connect(c, (struct sockaddr *)&held_sa, sizeof(held_sa)) == 0) { close(c); close(lfd); return 1; }
+        if (c >= 0) close(c);
+        if (errno != ECONNREFUSED || unlink(held_sa.sun_path) < 0 || bind(lfd, (struct sockaddr *)&held_sa, sizeof(held_sa)) < 0) {
+            fprintf(stderr, "omabox-keyboard: cannot hold keys: %s: %s\n", held_sa.sun_path, strerror(errno));
+            close(lfd);
+            return 0;
+        }
+    }
+    struct stat st;
+    if (listen(lfd, 8) < 0 || stat(held_sa.sun_path, &st) < 0) { perror("omabox-keyboard: listen"); close(lfd); return 0; }
+    held_ino = st.st_ino;
+    int pfd[2];
+    if (pipe2(pfd, O_CLOEXEC) < 0) { perror("omabox-keyboard: pipe"); close(lfd); return 0; }
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    if (pid == 0) {
+        close(pfd[0]);
+        if (fork() != 0) _exit(0);   // the holder is not this run's child: reaped by the box's init
+        held_ino_ok = 1;
+        held_serve(lfd, pfd[1]);
+    }
+    close(lfd);
+    close(pfd[1]);
+    if (pid < 0) { perror("omabox-keyboard: fork"); close(pfd[0]); unlink(held_sa.sun_path); return 0; }
+    waitpid(pid, NULL, 0);
+    // A byte once it is on the seat; the end of the pipe if it is gone (it said why).
+    struct pollfd p = {pfd[0], POLLIN, 0};
+    char c = 0;
+    if (poll(&p, 1, 15000) <= 0 || read(pfd[0], &c, 1) != 1 || c != '1') {
+        close(pfd[0]);
+        fprintf(stderr, "omabox-keyboard: the key holder did not start\n");
+        return 0;
+    }
+    close(pfd[0]);
+    return 1;
+}
+
+// One request to the holder and its one-line answer: 1 answered, 0 no answer (it was ending), -1 no
+// holder (errno).
+static int held_ask(const char *req, char *reply, size_t len) {
+    if (!held_addr(&held_sa)) exit(1);
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    if (connect(fd, (struct sockaddr *)&held_sa, sizeof(held_sa)) < 0) { int e = errno; close(fd); errno = e; return -1; }
+    struct timeval tv = {15, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    send(fd, req, strlen(req), MSG_NOSIGNAL);
+    size_t at = 0;
+    ssize_t r;
+    while (at < len - 1 && (r = read(fd, reply + at, len - 1 - at)) > 0) at += (size_t)r;
+    close(fd);
+    reply[at] = 0;
+    char *nl = strchr(reply, '\n');
+    if (!nl) return 0;
+    *nl = 0;
+    return 1;
+}
+
+static int do_held(const char *tok, int run) {
+    xkb_keycode_t code;
+    if (!held_code(tok, &code)) return 0;
+    if (!run) return 1;
+    int down = tok[0] == 'd';
+    char req[32], reply[HELD_MAX * 64 + 16];
+    snprintf(req, sizeof(req), "%s %u\n", down ? "down" : "up", code);
+    int r = -1;
+    for (int tries = 0; tries < 3; tries++) {
+        r = held_ask(req, reply, sizeof(reply));
+        if (r > 0) break;
+        if (r < 0 && !down) break;
+        if (r < 0 && (errno == ENOENT || errno == ECONNREFUSED) && !held_start()) return 0;
+    }
+    spent = 0;   // the holder's keyboard had a turn: this run's next key spends one again
+    if (r < 0 && !down) {
+        fprintf(stderr, "omabox-keyboard: %s: no key is held%s\n", tok, errno == ECONNREFUSED
+            ? " (its holder was killed: a key it held may still be down for Hyprland; down: and up: of it again let go)" : "");
+        return 0;
+    }
+    if (r <= 0) { fprintf(stderr, "omabox-keyboard: %s: the key holder did not answer\n", tok); return 0; }
+    if (!strcmp(reply, "ok")) return 1;
+    const char *k = tok + (down ? 5 : 3);
+    if (!strcmp(reply, "held")) fprintf(stderr, "omabox-keyboard: %s: held already (up:%s lets go)\n", tok, k);
+    else if (!strncmp(reply, "not-held ", 9)) fprintf(stderr, "omabox-keyboard: %s: not held (held: %s)\n", tok, reply + 9);
+    else if (!strcmp(reply, "full")) fprintf(stderr, "omabox-keyboard: %s: %d keys held already\n", tok, HELD_MAX);
+    else fprintf(stderr, "omabox-keyboard: %s: the key holder said '%s'\n", tok, reply);
+    return 0;
+}
+
+// Whether a run is down:, up: (one at least) and -s alone: nothing to type on a keyboard of its own.
+// (A run of -s alone still puts one on the seat: its first event clears modifiers left down, finding
+// 112.)
+static int held_only(int argc, char **argv, int i) {
+    int any = 0;
+    for (; i < argc; i++) {
+        if (!strcmp(argv[i], "-s")) i++;
+        else if (is_held_tok(argv[i])) any = 1;
+        else return 0;
+    }
+    return any;
+}
+
 // One pass over the tokens: with run = 0 it only checks them (before connecting, so a bad token never
 // leaves half a sequence typed); with run = 1 it sends them.
 static int tokens(int argc, char **argv, int i, int run) {
@@ -419,7 +743,7 @@ static int tokens(int argc, char **argv, int i, int run) {
         } else if (!strcmp(argv[i], "-s")) {
             if (i + 1 >= argc) usage();
             long ms = num(argv[++i], 0, 600000);
-            if (run) { sync_or_die(); sleep_ms(ms); }
+            if (run) { if (display) sync_or_die(); sleep_ms(ms); }
         } else if (!strcmp(argv[i], "-m")) {
             if (i + 1 >= argc) usage();
             unsigned held = parse_mods(argv[++i]);
@@ -429,6 +753,8 @@ static int tokens(int argc, char **argv, int i, int run) {
             if (i + 1 >= argc) usage();
             long ms = num(argv[++i], 1, 600000);
             if (run) { sync_or_die(); if (!pause_for(ms)) return 0; }
+        } else if (is_held_tok(argv[i])) {
+            if (!do_held(argv[i], run)) return 0;
         } else if (!do_combo(argv[i], run)) return 0;
         if (run && stop) return 0;
     }
@@ -528,38 +854,16 @@ int main(int argc, char **argv) {
     if (spares) { xkb_keymap_unref(keymap); keymap = spares; }
     if (!tokens(argc, argv, i, 0)) return 1;
 
-    display = wl_display_connect(NULL);
-    if (!display) { fprintf(stderr, "omabox-keyboard: cannot connect to Wayland display\n"); return 1; }
-    struct wl_registry *reg = wl_display_get_registry(display);
-    wl_registry_add_listener(reg, &registry_listener, NULL);
-    sync_or_die();
-    if (!seat || !manager) { fprintf(stderr, "omabox-keyboard: compositor lacks wl_seat or zwp_virtual_keyboard_manager_v1\n"); return 1; }
-
-    kbd = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(manager, seat);
-    char *km = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
-    if (!km) { fprintf(stderr, "omabox-keyboard: cannot serialise the keymap\n"); return 1; }
-    size_t size = strlen(km) + 1;
-    int fd = memfd_create("omabox-keymap", MFD_CLOEXEC);
-    if (fd < 0 || ftruncate(fd, (off_t)size) < 0) { perror("omabox-keyboard: memfd"); return 1; }
-    char *map = mmap(NULL, size, PROT_WRITE, MAP_SHARED, fd, 0);
-    if (map == MAP_FAILED) { perror("omabox-keyboard: mmap"); return 1; }
-    memcpy(map, km, size);
-    munmap(map, size);
-    free(km);
-    zwp_virtual_keyboard_v1_keymap(kbd, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, fd, (uint32_t)size);
-    sync_or_die();
-    close(fd);
+    // A run of down:, up: and -s alone types nothing here: no keyboard of its own on the seat.
+    if (!hold && held_only(argc, argv, i)) return tokens(argc, argv, i, 1) ? 0 : 1;
+    if (!kbd_connect()) return 1;
     // A box has no keyboard of its own. With none on the seat, Hyprland drops keyboard focus changes
     // ("setKeyboardFocus without a valid keyboard set"), so a device that comes later finds a shell
     // panel without focus and its keys go nowhere. An idle one held for the box's life prevents it.
     if (hold) { while (wl_display_dispatch(display) != -1) {} return 0; }
-    // Hyprland makes a new keyboard the active one on its first event, re-sending keymap and enter to
-    // the focused client, and the key that caused the switch is lost. Spend that on an empty
-    // modifiers event so the first real key arrives.
-    set_mods(0);
-    sync_or_die();
-    sleep_ms(20);
-
+    // Its first event spent before the first key (finding 14); also what clears modifiers a killed
+    // run left down (finding 112), in a run that types nothing.
+    spend(0);
     int ok = tokens(argc, argv, i, 1);
     release_held();
     if (stop) { fprintf(stderr, "omabox-keyboard: stopped by signal %d; modifiers released\n", (int)stop); ok = 0; }
