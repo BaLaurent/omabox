@@ -11115,10 +11115,20 @@ submap_release() {
   host_hyprctl eval 'if hl.get_current_submap() == "omabox" then hl.dispatch(hl.dsp.submap("reset")) end' >/dev/null
 }
 
-# --json is for the bar widget (plugin/): one array, a single pass, with peek state.
+# --json is for the bar widget (plugin/): one array, a single pass, with peek state. Anything else is
+# refused (#236): a -b or an unknown flag dropped here gave a script the table where it asked for JSON.
 cmd_ls() {
+  local json=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --json) json=1 ;;
+      -b|--box) not_one_box "$MAIN_CMD" ;;
+      *) say "$MAIN_CMD: unknown argument $1 (omabox $MAIN_CMD [--json])"; exit 2 ;;
+    esac
+    shift
+  done
   local n hung; hung=$(hung_boxes)
-  if [ "${1:-}" = --json ]; then
+  if [ $json = 1 ]; then
     for n in $(list_names); do
       select_box "$n"
       box_json "$(grep -qFx -- "hypr $n" <<<"$hung" && echo true || echo false)" \
@@ -12189,13 +12199,15 @@ global_box() {
   esac
   if [[ $BOX_CMDS != *" $1 "* ]]; then
     case $1 in
-      ls|list|which|saves|config|guard|host|broker) say "$1 takes no -b: it is not about one box" ;;
+      ls|list|which|saves|config|guard|host|broker) not_one_box "$1" ;;
       *) say "unknown command: $1 (omabox help lists the commands and their options)" ;;
     esac
     exit 2
   fi
   ARGS=("$1" "$flag" "$name" "${@:2}")
 }
+# A command that is not about one box, given -b before it or (ls, #236) after it: one line, exit 2.
+not_one_box() { say "$1 takes no -b: it is not about one box"; exit 2; }
 
 # Everything runs from main, called on the file's last line: bash reads a script as it runs it, so
 # with ~/.local/bin/omabox linked to a working copy, an edit made while a command ran used to land in

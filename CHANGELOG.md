@@ -16,6 +16,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   content are taken out of every draft first; a safety problem is never filed, only pointed to
   SECURITY.md. It runs only when you ask; `/omabox-feedback auto` files without the question.
 
+### Fixed
+
+- **`omabox ls` refuses arguments it does not take.** `ls -b NAME --json` printed the table and
+  exited 0, as did `ls` with any unknown flag. Now `-b` after `ls` says "ls takes no -b", as before
+  it, and anything else but `--json` is an unknown argument; both exit 2.
+
 ## 0.6.1 — 2026-10-14
 
 Security fixes, and a fix pass over 0.6.0. A process in a box could reach the host files you gave

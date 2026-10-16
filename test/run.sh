@@ -3209,6 +3209,10 @@ t_unit_cli() {
   check_match "...up NAME as well is two names" "up: one box name, got $P-x and $P-y" "$(ob -b "$P-x" up "$P-y" 2>&1)"
   check_eq "...a command that takes no -b: one line" "omabox: ls takes no -b: it is not about one box" "$(ob -b "$P-x" ls 2>&1)"
   check_eq "...exit 2" 2 "$(ob -b "$P-x" ls >/dev/null 2>&1; echo $?)"
+  # After ls (#236): the same line and exit, not the table with -b and --json dropped.
+  check_eq "...after ls too, --json or not" "omabox: ls takes no -b: it is not about one box 2" "$(o=$(ob ls -b "$P-x" --json 2>&1); echo "$o $?")"
+  check_eq "...and list, as list" "omabox: list takes no -b: it is not about one box 2" "$(o=$(ob list --box "$P-x" 2>&1); echo "$o $?")"
+  check_eq "ls: an unknown argument refused, exit 2 (#236)" "omabox: ls: unknown argument --bogus (omabox ls [--json]) 2" "$(o=$(ob ls --json --bogus 2>&1); echo "$o $?")"
   check_eq "...an unknown one: one line" 1 "$(ob -b "$P-x" shoot 2>&1 | wc -l)"
   check_match "...no command: said" "goes with a command" "$(ob -b "$P-x" 2>&1)"
   check_match "...help still helps" "omabox up" "$(ob -b "$P-x" help 2>&1)"

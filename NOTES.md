@@ -6689,3 +6689,12 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   hides a path in, and an `--overlay` of one, are still refused (finding 292): the broker reads them
   on the host, and an overlay's covers cannot be checked. Reading through the jail's own mounts
   (`/proc/PID/root`, no link followed, as jail_verify walks) would allow the first four.
+
+327. **`ls` refuses what it does not take** (2026-10-16, #236). `cmd_ls` read only its first
+    argument, as `--json`, and dropped the rest: `omabox ls -b NAME --json` printed the table and
+    exited 0, so a script piping it into a JSON parser got a table and no error, and `ls --bogus` was
+    `ls`. Now `-b`/`--box` after `ls` (or `list`) is the line `omabox -b NAME ls` already gave, "ls
+    takes no -b: it is not about one box", exit 2, from one helper both use (`not_one_box`); any other
+    argument is "ls: unknown argument X (omabox ls [--json])", exit 2 as well (the issue asked for 2;
+    other commands' unknown options exit 1 through `die`). `--json` anywhere, or twice, is still
+    `--json`. `t_unit_cli`.
