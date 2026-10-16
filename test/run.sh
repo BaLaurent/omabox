@@ -1864,7 +1864,9 @@ t_unit_bar_seed_note() {
   printf '[font]\nbase-size = 14\n\n[bar]\nicon-slot = 33\n[bar]\n' > "$d/desk/shell.toml"
   check_eq "a shell.toml that sets something: its tables named, once each, and --stock-bar" \
     "omabox: up: seeded the bar from $d/desk: its shell.toml [font], [bar] (--stock-bar starts from Omarchy's default)" "$(bsn "$d/desk")"
-  check_fails "...never a value" grep -qE '14|33|base-size' <<<"$(bsn "$d/desk")"
+  # The desk's path left out: the suite's pid in it can hold a 14 or a 33.
+  local said; said=$(bsn "$d/desk"); said=${said//"$d"/}
+  check_fails "...never a value" grep -qE '14|33|base-size' <<<"$said"
   jq '.bar.position = "left"' "$d/desk/shell.json" > "$d/desk/x.json" && mv "$d/desk/x.json" "$d/desk/shell.json"
   check_eq "...and a layout of its own (the bar on the left)" \
     "omabox: up: seeded the bar from $d/desk: its shell.json layout and shell.toml [font], [bar] (--stock-bar starts from Omarchy's default)" "$(bsn "$d/desk")"
