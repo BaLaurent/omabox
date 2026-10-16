@@ -1047,11 +1047,23 @@ run_read() { local f=$D/run/$1; [ ! -L "$f" ] && [ -f "$f" ] && head -c 65536 --
 # input, bindings and looknfeel; Hyprland's require makes an error in one a config error and goes on)
 # or any other, what a desktop's red bar shows (a box draws none, finding 352). Nothing when there are
 # none. Hyprland's answer, from what the box's files say: control characters dropped, 20 lines and 300
-# bytes a line at most.
+# bytes a line at most. A Hyprland that does not answer is said, 1 (finding 353): it printed nothing, so
+# a reload into a Hyprland that hung just after its `ok` (finding 352) read as a clean one.
 hypr_errors_note() {
-  local t l
-  t=$(on_box timeout "$HYPR_LIMIT" hyprctl configerrors 2>/dev/null | LC_ALL=C tr -d '\000-\010\013-\037\177' |
-    grep -v '^[[:space:]]*$' | head -n 20) || t=""
+  local t l rc=0
+  # The first 64 KiB (a longer answer cut there: answered, 141); hyprctl's status, not the pipe's.
+  t=$(on_box timeout "$HYPR_LIMIT" hyprctl configerrors 2>/dev/null | head -c 65536 |
+    LC_ALL=C tr -d '\000-\010\013-\037\177'; exit "${PIPESTATUS[0]}") || rc=$?
+  # Gone or crashed: said as hung_text says it. One that answers a ping: configerrors failed on its
+  # own (a Hyprland build without it), said, not a failure of the command.
+  if [ $rc != 0 ] && [ $rc != 141 ]; then
+    if t=$(hypr_lost); then say "$t"; return 1; fi
+    if hypr_answers; then say "box '$NAME': could not read its config's errors (hyprctl configerrors: exit $rc)"; return 0; fi
+    say "box '$NAME': its Hyprland did not answer hyprctl configerrors, so the config's errors are unknown" \
+      "(hung? its threads: omabox gdb -b $NAME; its log: omabox log -b $NAME; then omabox down $NAME)"
+    return 1
+  fi
+  t=$({ grep -v '^[[:space:]]*$' <<<"$t" || true; } | head -n 20) || true
   [ -n "$t" ] || return 0
   say "box '$NAME': its config has errors (the rest of the config loaded):"
   while IFS= read -r l; do say "  ${l:0:300}"; done <<<"$t"
@@ -3925,7 +3937,8 @@ cmd_up() {
   rm -f "$D/starting"; touch "$D/used"
   local screen live_sc; screen=$(box_screen); live_sc=$(main_scale_live) || live_sc=""
   say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")) in $D"
-  hypr_errors_note
+  # A Hyprland that stops answering here (finding 353): said, the box left up, exit 1 at the end.
+  local unanswered=0; hypr_errors_note || unanswered=1
   # No idle limit and no agent or owner to go with (#220): it outlives its caller, said to the caller
   # that is not a person at a terminal (an agent whose own process `up` could not find, a script).
   if [ $interactive = 0 ] && [ "$idle_s" = 0 ] && [ -z "$owner$agent" ] && [ "$at_term" = false ]; then
@@ -3939,6 +3952,7 @@ cmd_up() {
   if [ $json = 1 ]; then box_json
   elif [ $new = 1 ]; then echo "$NAME"; fi
   [ -z "$crashed" ] || { say "$crashed"; exit 1; }
+  [ $unanswered = 0 ] || exit 1
 }
 
 # What `up --audio` needs (#226): fails printing the programs missing, "pipewire, pactl".
@@ -8674,7 +8688,7 @@ cmd_hyprctl() {
   exec {i}<&-
   # A reload loads the box HOME's ~/.config/hypr modules again (#246): the config's errors are said.
   if [ $rc = 0 ]; then
-    for a; do case $a in -*) ;; reload) hypr_errors_note; break ;; *) break ;; esac; done
+    for a; do case $a in -*) ;; reload) hypr_errors_note || rc=1; break ;; *) break ;; esac; done
   fi
   return $rc
 }
@@ -10761,7 +10775,7 @@ cmd_reload() {
     die "reload: hyprctl reload failed (exit $rc)"
   fi
   say "box '$NAME': config reloaded from $ROOT/share/hyprland.lua (binds, rules and Lua state added since are gone)"
-  hypr_errors_note
+  hypr_errors_note || exit 1
 }
 
 # share/shell.sh keeps the shell's pid in the box's omabox-shell.pid: a pid there once shell.sh wrote

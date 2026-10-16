@@ -12,6 +12,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   Hyprland deadlock in that bar's text). A box now draws no such bar, even when your
   `looknfeel.lua` asks for it; `up`, `reload` and `hyprctl reload` still print the errors, and
   `omabox hyprctl configerrors` lists them.
+- **`reload` and `hyprctl reload` say when the box's Hyprland stopped answering after the reload.**
+  They printed nothing more when Hyprland answered the reload and then hung, which read as a clean
+  reload. Now they say it did not answer (with `omabox gdb` and `omabox down` to go on) and exit 1;
+  so does `up`, which leaves the box up.
 - **`logger` reaches the box's journal by name.** 0.7.0 said `logger --journald` lands in `omabox
   log journal`, but in a box `logger` is omabox's own stand-in, which wrote `~/logger.log`, so the
   journal stayed empty unless you typed `/usr/bin/logger`. Now `logger --journald` and a plain

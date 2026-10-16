@@ -4755,6 +4755,20 @@ t_user_hypr() {
   check_match "...omabox reload says it too" "its config has errors" "$(ob reload -b "$B" 2>&1)"
   sed -i '$d' "$H/.config/hypr/input.lua"
   check_eq "fixed: hyprctl reload says nothing more" "ok" "$(ob hyprctl -b "$B" reload 2>&1)"
+  # Finding 353: a Hyprland that stops answering just after a reload's ok (as finding 352's deadlock
+  # did) is said, exit 1; nothing was said. Stopped by a timer the reload sets when stop-once is there.
+  printf '\nif os.remove("%s/stop-once") then hl.timer(function() os.execute("kill -STOP $PPID") end, { timeout = 1, type = "oneshot" }) end\n' \
+    "$c" >> "$H/.config/hypr/looknfeel.lua"
+  local rc cmd cont='kill -CONT $(pidof Hyprland)'
+  for m in "hyprctl -b $B reload" "reload -b $B"; do
+    touch "$H/.config/hypr/stop-once"
+    read -ra cmd <<<"$m"
+    rc=0; out=$(ob "${cmd[@]}" 2>&1) || rc=$?
+    check_match "Hyprland stopped after the reload: $m says it did not answer, exit 1" \
+      "its Hyprland did not answer hyprctl configerrors.*omabox gdb -b $B.*omabox down $B\) 1$" "${out//$'\n'/ } $rc"
+    ob run -b "$B" -- sh -c "$cont" >/dev/null 2>&1
+  done
+  check "...it answers again once continued" ob hyprctl -b "$B" version
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -10698,6 +10712,32 @@ t_unit_hypr_lost() {
   check_fails "hypr_end: a link is not read" lib eval "D='$d'; hypr_end"
 }
 
+# hypr_errors_note (finding 353), hyprctl stubbed: the errors, control characters dropped; none:
+# nothing; a Hyprland that does not answer: said, 1; gone: said as gone, 1; one that answers a ping
+# but whose configerrors fails: said, 0.
+t_unit_hypr_errors_note() {
+  local out
+  hen() {   # MODE: what the stubbed `hyprctl configerrors` does. Prints the output, then the status.
+    timeout 10 bash -c 'source "$1"; NAME=u M=$2
+      on_box() { case $M in
+        errors) printf "a\033[31mb\n\n  c\n" ;; none) printf "\n" ;;
+        hung|gone) echo "Hyprland IPC didn'"'"'t respond in time"; return 6 ;; fails) return 3 ;; esac; }
+      hypr_lost() { [ "$M" = gone ] && echo "box '"'"'u'"'"' went down: its Hyprland crashed (SIGSEGV)"; }
+      hypr_answers() { [ "$M" = fails ]; }
+      r=0; hypr_errors_note || r=$?; echo "rc=$r"' _ "$TMP/lib/bin/omabox" "$1" 2>&1
+  }
+  check_eq "hypr_errors_note: the errors, control characters dropped, blank lines out" \
+    "omabox: box 'u': its config has errors (the rest of the config loaded):"$'\n'"omabox:   a[31mb"$'\n'"omabox:     c"$'\n'"rc=0" "$(hen errors)"
+  check_eq "...none: nothing" "rc=0" "$(hen none)"
+  out=$(hen hung)
+  check_match "...no answer: said, with what to do, 1" \
+    "^omabox: box 'u': its Hyprland did not answer hyprctl configerrors, so the config's errors are unknown \(hung\? its threads: omabox gdb -b u; .*omabox down u\)"$'\n'"rc=1$" "$out"
+  check_fails "...hyprctl's own words not taken for an error of the config" grep -q "respond in time" <<<"$out"
+  check_eq "...gone: said as gone, 1" "omabox: box 'u' went down: its Hyprland crashed (SIGSEGV)"$'\n'"rc=1" "$(hen gone)"
+  check_eq "...answers a ping, configerrors fails: said, 0" \
+    "omabox: box 'u': could not read its config's errors (hyprctl configerrors: exit 3)"$'\n'"rc=0" "$(hen fails)"
+}
+
 # log gdb --crash (#233) on a gdb log of two watches: one whose process was killed (gdb runs its crash
 # commands anyway: no crash), one that crashed in thread 3. Only that one, without the other threads.
 t_unit_gdb_crashes() {
@@ -11926,7 +11966,7 @@ t_link_out() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)

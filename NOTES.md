@@ -7158,6 +7158,26 @@ from them.
     burners, 12 boxes x 15 or 30 cycles (270) with no hang. Seen in a box: with the error, a shot of the screen's top has no bar (main's
     config draws it there), `configerrors` has the error. Test: t_user_hypr (the option on over
     `looknfeel.lua`'s, `configerrors` still has the error).
+353. **A reload into a Hyprland that then stops answering is said, exit 1** (2026-10-16, #249).
+    `hypr_errors_note` (the config's errors after `up`, `reload` and `hyprctl reload`, finding 339)
+    printed nothing when `hyprctl configerrors` failed: its pipe ended in `grep`, `|| t=""` took any
+    failure for "no errors". So with finding 352's deadlock, whose reload answers `ok` before the bar's
+    text hangs the next frame, `omabox reload` said "config reloaded" and nothing else, exit 0
+    (hang.sh's `[]` column). Now hyprctl's own status is kept (`PIPESTATUS[0]` in the capture; 141, an
+    answer cut at 64 KiB, is an answer): on a failure, a Hyprland gone or crashed is said as
+    `hung_text` says it (`hypr_lost`); one that answers a `version` ping had a configerrors of its own
+    fail (a build without it), said "could not read its config's errors (… exit N)", status 0; else
+    "its Hyprland did not answer hyprctl configerrors, so the config's errors are unknown (hung? its
+    threads: omabox gdb -b B; its log: omabox log -b B; then omabox down B)", 1. Callers: `hyprctl
+    reload` returns 1 after printing Hyprland's `ok`; `reload` exits 1 after its "config reloaded"
+    line; `up` says it after "up", keeps its other notes and output (`--json`, `--new`'s name) and
+    exits 1 at the end, the box left up, as for a shell that crashed (#126). *Decided*: hyprctl's
+    stdout ("Hyprland IPC didn't respond in time", exit 6) is never printed as a config error. About
+    8 s on a stopped Hyprland (hyprctl's own 5 s, the 2 s ping, `hypr_lost`'s looks). Seen in a box:
+    a timer the reload sets SIGSTOPs Hyprland (in the box's pid namespace) just after its `ok`: before,
+    `hyprctl reload` printed `ok`, exit 0; now the line above, exit 1, for both commands; SIGCONT and
+    it answers. Tests: t_user_hypr (that timer, both commands), t_unit_hypr_errors_note (hyprctl
+    stubbed: errors, none, hung, gone, a failing configerrors).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
