@@ -24,8 +24,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   them or at rounded corners; `--approve` says each, and a check fails on any the baseline lacks.
   `check diff A.png B.png` compares two shots of yours the same way (`--report` too).
 - **`up --clean`: a desktop where only what is tested moves.** Omarchy's own bar on tokyo-night, a
-  solid `#ff00ff` wallpaper (any of it inside a window or the bar is a hole), the clock frozen at
-  "Friday 12:00" in its usual place, no pointer, no network and no animations (over reloads too).
+  solid `#ff00ff` wallpaper (any of it inside a window or the bar is a hole), every process's wall
+  clock from "Friday 12:00" as the box starts (the bar's own clock, and the times an app shows or
+  stamps, read 12:00 for the box's first minute, then run on; a library of omabox's own, preloaded
+  into the box's processes; static and Go programs keep the real clock), no pointer, no network and
+  no animations (over reloads too).
   `--keep animations,bar,clock,pointer,wallpaper` takes any of them back, for a test of Hyprland or
   the shell that needs them; `--theme` and `--net connected` choose their own. `run` takes it for a
   throwaway box too.

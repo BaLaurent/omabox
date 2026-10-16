@@ -90,8 +90,8 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    (installed beside the old one, then swapped in). It must provide the soname the installed Hyprland
    links (`ldd $(command -v Hyprland)`), or `up` skips it for the system's; only the nested Hyprland
    loads it. Outside a checkout it goes to `~/.local/share/omabox/aquamarine`.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `burst`, `tree`, `relay`, `events`
-   (need `wayland-scanner`; protocol XML is vendored).
+3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `burst`, `tree`, `relay`, `events`,
+   `clock` (need `wayland-scanner`; protocol XML is vendored).
 4. `omabox setup` (finding 126): links `~/.local/bin/omabox` → `bin/omabox`; `skill/` as
    `skills/omabox` in `~/.agents` and `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when
    those exist; `skill-feedback/` as `skills/omabox-feedback` beside it only with `--feedback-skill`,
@@ -7319,6 +7319,60 @@ from them.
     --json), t_check (a Qt Quick window: approve with an unstable random label, same, a button moved
     6 px: region and `moved +6,+0 button "Save"`, a new checkpoint, a failing scenario: exit 3).
 
+359. **`up --clean`'s clock: every process's wall clock from Friday 12:00** (2026-10-16, #252, built on
+    findings 357-358). The bar's literal format froze only the bar's text: an app's own times followed
+    the real clock (the subject stamped an item "added today 16:37" and showed it, so a check made a
+    minute later read a change). `tools/clock`, a library of omabox's own (no libfaketime here, no
+    sudo to install it): `omabox-clock.so` in a clean box's own `/etc/ld.so.preload` (`$D/etc`, which
+    makes `/etc` the read-only overlay `--omarchy` used; the host's lines first when it has some), so
+    every dynamically linked process of the box has it: the session, the shell, `run`'s commands
+    (which start with a clean environment: LD_PRELOAD would not reach them), D-Bus-activated services
+    (xdg-desktop-portal's maps), a `--systemd` box's units (`systemd-run --user --pipe date`). It reads
+    `/opt/omabox/clock/instant`, which only such a box has: CLEAN_CLOCK_AT (2026-01-02 12:00, a
+    Friday) in the box's timezone (the host's /etc/localtime, or a `--env TZ`) and CLOCK_BOOTTIME at
+    `up`. Outside a box (the system bus there, or no /opt/omabox/share mount), in /opt/omabox/bin's
+    tools (`events` stamps lines the host compares: `--since 30s`) and with `OMABOX_REAL_CLOCK=1`
+    (on_box and box_sys: `record`'s first frame and audio are put in step with the host's marks) it
+    leaves the clock alone. CLOCK_REALTIME and its relatives as clock_gettime, gettimeofday, time,
+    timespec_get and syscall() read them; CLOCK_MONOTONIC stays the kernel's. **Running, not frozen.**
+    Frozen, the shell, a Qt Quick app (qml6), a GTK 4 app and a headless Qt daemon with a web API all
+    idled once the deadlines below were moved (`cpu` 0.0-0.2% each), their timers fired (a 1 s Timer
+    and a GLib timeout counted on; the bar's minute timer fired and kept 12:00), the daemon's API
+    answered and stamped what it made with the instant. But bash's `$SECONDS` stood still (`sleep 2`:
+    0) and python's `time.time()` too: a wait measured on the wall clock never ends, and Omarchy's
+    scripts have them (omarchy-launch-shell's relaunch budget, omarchy-restart-shell's 30 s relock
+    deadline; 20 of its scripts use `$SECONDS` or `date +%s`), as share/shell.sh's 5 s does. So it
+    runs from the instant at the box's start: the bar's own clock (the literal format is gone; its
+    code runs) reads "Friday 12:00" for the box's first minute, then 12:01; a check step about a
+    minute in can see that minute tick in one run of three, approve's "unstable". **Absolute
+    deadlines** on those clocks are moved into the real one (left alone they are months back, and the
+    kernel returns at once): clock_nanosleep, timerfd_settime and timer_settime with ABSTIME,
+    pthread_cond_timedwait on a condition left on CLOCK_REALTIME (glibc's `__wrefs` bit 1), sem_timedwait,
+    the timed and clock locks and joins, mq, futex WAIT_BITSET/WAIT_REQUEUE_PI with CLOCK_REALTIME and
+    LOCK_PI by syscall(). A deadline that means never is left as it is: systemd's TIME_T_MAX timerfd
+    (how it hears of a clock set) overflowed when moved, fired at once, and a `--systemd` box's
+    manager looped ("Looping too fast"; its Hyprland never came up). Found on the way, frozen or
+    running alike: the GTK app's NVIDIA driver threads (`[vkps] Update`, `[vkrt] Analysis`) at 100%
+    each, 400% in all. libnvidia-eglcore dlopens libc and looks up pthread_cond_timedwait with dlvsym
+    at GLIBC_2.2.5 (the compat version), then waits on deadlines made from the box's gettimeofday; the
+    library's dlsym and dlvsym now hand back its own for libc's functions (and a wrapper for that
+    compat one): 0.1%. They find libc's own dlsym and dlvsym in libc's symbol table (dl_iterate_phdr),
+    not with dlopen: jemalloc calls syscall() from its constructor before the library's has run, and
+    dlopen's allocation came back into it (every Quickshell crashed at start). The GTK app's
+    VK_ERROR_UNKNOWN warnings are there on the real clock too. Measured on the subject: approve (3
+    boxes, nothing unstable), then a check 2 minutes later: 4 of 4 same, its item's time 12:00 in
+    both. Limits: static binaries and Go programs read the vDSO themselves, as a raw syscall
+    instruction does; io_uring timeouts; 32-bit programs (the library is 64-bit: their ld.so says it
+    skips it); Flatpak apps (an /etc of their own); what the kernel stamps (file times, so a file
+    written in the box is in its future; socket timestamps; `ps`'s start times); TLS certificates are
+    judged at the box's date (a clean box has no network unless `--net connected`: with it, `--keep
+    clock`); the box's own logs (journal, apps.log) carry its clock. Tests: t_unit_clock
+    (clock_instant_file with and without a TZ; in a bwrap standing in for a box: date, `$SECONDS`
+    running, the real clock without the instant file, with OMABOX_REAL_CLOCK, for a tool in
+    /opt/omabox/bin, with the host's bus, without the share mount; a probe: each CLOCK_REALTIME
+    deadline waits its 0.3 s, the 2.2.5 one by dlvsym too, a never one does not fire), t_clean (the
+    bar's format kept, `run`'s date, `$SECONDS`, the portal's and the shell's maps, `events` on the
+    host's clock; `--keep clock`: the real clock, no ld.so.preload).
 360. **`check run`'s report: every change in one image** (2026-10-16, #252, after finding 358). A
     changed checkpoint's `ID.diff.png` is the whole shot marked, ~1.5k image tokens apiece (finding
     243's count), mostly of what did not change, and an agent read each. Now, when anything changed,
@@ -7418,11 +7472,12 @@ of them, nor wayvnc (finding 34). It needs labwc.
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
-- Visual checks (findings 357-358, 361, #252): a box's clock cannot be pinned (no libfaketime here), so an
-  app's own times differ when a minute ticks between baseline and check; holes (finding 361) show
-  only where the wallpaper is behind (a popup over a window hides them) and not where a gap opens
-  onto the open wallpaper; an exploratory mode
-  (an agent walking the UI, getting only flagged changes) is not built; not inside ai-jail.
+- Visual checks (findings 357-361, #252): a clean box's clock runs from Friday 12:00 at its start, so
+  a step about a minute into a run can see a minute tick, and static and Go programs (and anything
+  else that skips libc's clock calls) keep the real clock; holes (finding 361) show only where the
+  wallpaper is behind (a popup over a window hides them) and not where a gap opens onto the open
+  wallpaper; an exploratory mode (an agent walking the UI, getting only flagged changes) is not
+  built; not inside ai-jail.
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
   aquamarine patched downstream with #415 is recognised by the symbol it adds (finding 246).
 - More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44;
