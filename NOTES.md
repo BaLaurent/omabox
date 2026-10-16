@@ -4220,7 +4220,7 @@ from them.
     (and a throwaway box's run, which said nothing) its own line; on a box that is up it is printed
     as it came. And a PID 1 that has exited but is not yet reaped (a zombie: kill -0 answers, its
     namespaces are gone, nsenter's "cannot open /proc/N/ns/user") is no longer alive for `box_alive`
-    and `ls`. The cost is a temporary file per call through the box (mktemp, unlinked at once). Not
+    and `ls`. The cost is a temporary file per call through the box (mktemp, unlinked at once; a pipe since finding 345). Not
     reproduced: on_box meeting the dying box in a real one (a race of milliseconds); checked with
     stand-ins for nsenter in t_unit_box_gone, and for `run` in t_own_processes (one line, the words).
     Checks: t_hung (the first call after the stop, 7 s), t_unit_guard_exec_host (-np, -dp, -pn,
@@ -6618,6 +6618,25 @@ from them.
     for byte, status and stderr apart, no fd of any box process naming a host file while another
     `run` writes one, a pty of its own under `script`, a shell fed by a pipe. Cost: three `stat`s
     and up to three `cat`s a `box_exec`.
+
+345. **nsenter's own messages are read through a bounded pipe, and printed only when they look like
+    nsenter's** (2026-10-16). `ns_held` (#166, finding 192's part 3) held nsenter's stderr, and that of
+    the box-side `env`/`bash` it starts until the command's bash takes the caller's, in a host
+    temporary file, read back whole and printed as it came. Now it is a pipe, as finding 325 has for a
+    command's stdio, read on the host by `ns_hold_read` (its other fds closed): the first 4 KiB
+    (`NS_HELD_MAX`) come back over a pipe of their own, whose EOF says the reader is done, and the rest
+    is read into nothing, so no writer waits on a full pipe. A reader still running `NS_HELD_WAIT`
+    (1 s) after the command is ended, as the shell's own child: nothing of the command's writes there
+    then. 4 KiB because a pipe holds two pages at the least, so the reader never waits on this side
+    either. `ns_said` prints only whole lines in the shapes it is there for (`ns_own_line`:
+    `nsenter: `, `prlimit: `, `env: `, and bash's `$0: line N: PID SIGNAL CMD` for a command killed by
+    a signal, its words translated or not), at most 3, printable ASCII only; anything else is dropped
+    and counted ("omabox: dropped N bytes of other output on nsenter's stderr"). The cost: two
+    short-lived processes a call (the reader, then its `cat`) instead of `mktemp`'s one; no wait in the
+    usual case (EOF at once). Checked: `t_unit_box_gone` (other lines and escapes dropped and counted,
+    4 KiB read of 3 MB, a pipe kept open elsewhere does not hold the call past about a second, bash's
+    line for a signal passes) and `t_run_stdio` (other output on that stderr during ten `run -- true`:
+    each status 0, nothing else printed, under 8 KB in all, each back in tens of ms).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

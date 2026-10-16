@@ -1040,32 +1040,65 @@ on_box() {
   ns_said $rc "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
   return $rc
 }
-# nsenter's own words kept apart from the command's (#166). Run CMD with its stderr held in a file, and
-# the caller's stderr on another fd, whose number goes in CMD's first word OMABOX_EFD=@EFD (an env
+# nsenter's own words kept apart from the command's (#166). Run CMD with its stderr held, and the
+# caller's stderr on another fd, whose number goes in CMD's first word OMABOX_EFD=@EFD (an env
 # assignment; the first only, so a user's command after it is never changed): the command in the box
 # makes that fd its stderr first thing, so it writes where it always did. What came before (nsenter's
 # "cannot open /proc/N/ns/user" on a box going down, bash's "Killed" line for nsenter itself) is in
-# NS_HELD, for ns_said. ns_held CMD...
+# NS_HELD, for ns_said. Held in a pipe, never a file (finding 325: until the box's bash moves it, it
+# is the stderr of a process in the box's pid namespace), read here by ns_hold_read: its first
+# NS_HELD_MAX bytes come back, the rest is read into nothing, and what came is taken once the reader
+# is done, or after NS_HELD_WAIT s whatever is there (the reader is then ended: the command is over,
+# nothing of its own writes there any more). ns_held CMD...
+NS_HELD_MAX=4096 NS_HELD_WAIT=1
 ns_held() {
-  local f w r e a set=0 args=() rc=0
+  local dw dr w e a set=0 args=() rc=0 rp st pp
   NS_HELD=""
-  f=$(mktemp) || { "$@"; return; }
-  # shellcheck disable=SC2094 # on purpose: written through one fd, read back through the other
-  exec {w}>"$f" {r}<"$f" {e}>&2
-  rm -f -- "$f"
+  # (The reader's way back, a pipe of its own: its EOF says the reader is done. At most 4 KiB on it, so
+  # the reader never waits for this side: a pipe holds two pages at the least.)
+  { exec {dw}<> <(:) && exec {dr}<"/dev/fd/$dw"; } 2>/dev/null || { "$@"; return; }
+  exec {w}> >(exec 1>&"$dw" 2>/dev/null; ns_hold_read)
+  rp=$!
+  exec {dw}>&- {e}>&2
   for a; do
     if [ $set = 0 ] && [ "$a" = OMABOX_EFD=@EFD ]; then args+=("OMABOX_EFD=$e") set=1; else args+=("$a"); fi
   done
   # (A group: bash says a command killed by a signal on the stderr it has then.)
-  { "${args[@]}" {w}>&- {r}<&-; } 2>&"$w" || rc=$?
+  { "${args[@]}" {w}>&- {dr}<&-; } 2>&"$w" || rc=$?
   exec {w}>&- {e}>&-
-  IFS= read -r -d '' NS_HELD <&"$r" || true
-  exec {r}<&-
+  IFS= read -r -d '' -t "$NS_HELD_WAIT" -u "$dr" NS_HELD || true
+  exec {dr}<&-
+  # (Ours still, the shell's own child: not a pid the system gave another process since.)
+  st=""; read -r st 2>/dev/null < "/proc/$rp/stat" || st=""
+  st=${st##*) }; read -r st pp _ <<<"$st"
+  if [ -n "$st" ] && [ "$st" != Z ] && [ "$pp" = "$BASHPID" ]; then kill -KILL "$rp" 2>/dev/null || true; fi
   return $rc
+}
+# What ns_held's pipe is read by, on its stdin to its stdout: the first NS_HELD_MAX bytes, then the
+# rest into nothing (a writer is never left blocked on a full pipe, nor failed), with nothing else of
+# omabox's or the caller's open.
+# shellcheck disable=SC2329 # called through ns_held
+ns_hold_read() {
+  local a
+  for a in /proc/"$BASHPID"/fd/*; do
+    a=${a##*/}
+    [[ $a =~ ^[0-9]+$ ]] && [ "$a" -gt 2 ] || continue
+    eval "exec $a>&-" 2>/dev/null || true
+  done
+  head -c "$NS_HELD_MAX" || true
+  exec cat >/dev/null
+}
+# ns_own_line LINE: LINE is one of the words ns_held is there for: nsenter's own, or prlimit's and env's
+# on the way in (nocore, on_box), or bash's for a command killed by a signal ("$0: line N: PID Killed
+# CMD"; the word "line" and the signal's are translated).
+ns_own_line() {
+  [[ $1 =~ ^(nsenter|prlimit|env):\ . ]] && return 0
+  [[ $1 == "$0: "* ]] && [[ ${1#"$0: "} =~ ^[^\ ]+\ [0-9]+:\ +[0-9]+\ . ]]
 }
 # What ns_held held, after a command that ended RC: on a box that went down meanwhile (its PID 1 can
 # outlive the command by a moment: up to 2 s), WORDS instead, or nothing when the caller says it (run);
-# else as it came. ns_said RC [WORDS]
+# else its own lines (ns_own_line; whole ones, at most 3, printable ASCII only), and how many bytes
+# of anything else were dropped. ns_said RC [WORDS]
 ns_said() {
   [ -n "${NS_HELD:-}" ] || return 0
   if [ "$1" != 0 ]; then
@@ -1075,7 +1108,17 @@ ns_said() {
       sleep 0.2
     done
   fi
-  printf '%s' "$NS_HELD" >&2
+  local LC_ALL=C l lines=() out="" n=0 kept=0 held=$NS_HELD
+  # (A last line without its newline is not a whole one.)
+  [[ $held == *$'\n'* ]] && mapfile -t lines <<<"${held%$'\n'*}"
+  for l in "${lines[@]}"; do
+    l=${l//[^[:print:]]/}
+    if [ $n -lt 3 ] && [ ${#l} -le 400 ] && ns_own_line "$l"; then
+      out+=$l$'\n' n=$((n + 1)) kept=$((kept + ${#l} + 1))
+    fi
+  done
+  printf '%s' "$out" >&2
+  [ $((${#held} - kept)) -le 0 ] || say "dropped $((${#held} - kept)) bytes of other output on nsenter's stderr"
 }
 
 # A box whose PID 1 lives but whose Hyprland does not answer (stopped, or deadlocked by a plugin under

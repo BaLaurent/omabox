@@ -3,6 +3,16 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **nsenter's own messages are read through a bounded pipe and printed only when they look like
+  nsenter's.** What nsenter (and the shell it starts in the box) said before a command's own stderr
+  took over was held in a temporary file and printed whole; it is now held in a pipe, read up to
+  4 KiB, and only nsenter's own lines, without control characters, are printed; anything else is
+  dropped and counted.
+
 ## 0.6.1 — 2026-10-14
 
 Security fixes, and a fix pass over 0.6.0. A process in a box could reach the host files you gave

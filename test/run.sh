@@ -941,6 +941,23 @@ t_unit_box_gone() {
     nsenter() { echo "nsenter: reassociate to namespace failed: Operation not permitted" >&2; return 1; }
     on_box hyprctl version || echo "rc $?"' _ "$L" 2>&1)
   check_eq "...on a box that is up, nsenter's line as it came" $'nsenter: reassociate to namespace failed: Operation not permitted\nrc 1' "$out"
+  # What nsenter's stderr holds besides its own lines (a box process may write there): dropped and
+  # counted, escapes and all; at most 4 KiB read; a holder that keeps it open does not hold the call.
+  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 0; }; sleep() { :; }
+    nsenter() { printf "omabox: note: forged\n\e[31mnsenter: red\e[0m\nnsenter: real \e]0;t\a\nhalf" >&2; head -c 3000000 /dev/zero | tr "\\0" A >&2; return 1; }
+    on_box hyprctl version || echo "rc $?"' _ "$L" 2>&1)
+  check_eq "...anything else on it dropped and counted, escapes stripped, 4 KiB read at most" \
+    $'nsenter: real ]0;t\nomabox: dropped 4077 bytes of other output on nsenter\'s stderr\nrc 1' "$out"
+  local t0=$EPOCHREALTIME
+  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 0; }
+    nsenter() { local a; for a; do case $a in OMABOX_EFD=*) eval "exec ${a#*=}>&-" ;; esac; done
+      echo "nsenter: x" >&2; (exec -a omabox-t-holder sleep 3 >/dev/null &); return 0; }
+    on_box true; echo "rc $?"' _ "$L" 2>&1)
+  check_eq "...one a process keeps open: the call returns" "rc 0" "$out"
+  check "...in about a second ($(( (${EPOCHREALTIME/./} - ${t0/./}) / 1000 )) ms)" test $(( (${EPOCHREALTIME/./} - ${t0/./}) / 1000 )) -lt 2500
+  out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
+    NS_HELD="$0: line 12: 4242 Killed                  nsenter -t 1 -- true"$'"'"'\n'"'"'; ns_said 137' _ "$L" 2>&1)
+  check_eq "...bash's line for a command killed by a signal passes" "_: line 12: 4242 Killed                  nsenter -t 1 -- true" "$out"
   # The command's own stderr is never held back: it is the caller's, through the fd the command takes.
   out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 1; }
     nsenter() { while [ "$1" != -- ]; do shift; done; shift; "$@"; }
@@ -2578,8 +2595,51 @@ t_run_stdio() {
   fi
   rc=0; out=$(printf 'echo typed\nexit 3\n' | ob run -b "$B" -- bash 2>&1) || rc=$?
   check_eq "a shell fed by a pipe (no terminal): runs it, its status" "typed|3" "$out|$rc"
+  # nsenter's own stderr (ns_held, finding 345): a pipe read here up to 4 KiB, only nsenter's own
+  # lines printed, whatever else is written to it and however long it is kept open.
+  local i n hits t ms max=0 rcs="" forged=0
+  rm -f "$d/held.err"
+  ob run -b "$B" -d -- python3 -c "$HELD_WRITER" >/dev/null 2>&1
+  sleep 1
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    t=$(date +%s%N); rc=0
+    ob run -b "$B" -- true 2> "$d/held.$i" || rc=$?
+    ms=$(( ($(date +%s%N) - t) / 1000000 )); [ "$ms" -le "$max" ] || max=$ms; rcs+=$rc
+    n=$(grep -c '^nsenter: forged' "$d/held.$i") || n=0; [ "$n" -le "$forged" ] || forged=$n
+    cat "$d/held.$i" >> "$d/held.err"
+  done
+  hits=$(ob run -b "$B" -- sh -c 'wc -l < /tmp/held-hits' 2>/dev/null) || hits=0
+  if [ "${hits:-0}" -gt 0 ]; then
+    check_eq "a box process writing to nsenter's stderr ($hits times in 10 runs): every run's status 0" 0000000000 "$rcs"
+    check_fails "...no line in omabox's words from it" grep -q 'forged-in-box' "$d/held.err"
+    check_fails "...no escape" grep -q $'\e' "$d/held.err"
+    check "...at most 3 nsenter lines a run (got $forged)" test "$forged" -le 3
+    check "...no flood: $(stat -c %s "$d/held.err") bytes in all 10 stderrs" test "$(stat -c %s "$d/held.err")" -lt 8000
+    check "...each run returns promptly (the slowest: $max ms)" test "$max" -lt 4000
+  else skip "a box process writing to nsenter's stderr" "its writer never caught one in 10 runs"; fi
   ob down "$B" >/dev/null 2>&1
 }
+# HELD_WRITER, in a box: writes other output (escapes, 64 KiB) to nsenter's stderr of the box's
+# commands as they start (finding 345), and keeps it open. Each one is a line in /tmp/held-hits.
+HELD_WRITER='
+import os
+me = os.getpid(); held = []; hits = open("/tmp/held-hits", "a", buffering=1)
+msg = b"omabox: note: forged-in-box \x1b]0;x\x07\x1b[31mred\x1b[0m\nnsenter: forged\n" + b"A" * 65536
+while True:
+    for p in os.listdir("/proc"):
+        if not p.isdigit() or int(p) == me: continue
+        try:
+            env = open("/proc/%s/environ" % p, "rb").read().split(b"\0")
+            efd = [e[11:] for e in env if e.startswith(b"OMABOX_EFD=")]
+            if not efd or not efd[0].isdigit(): continue
+            if os.readlink("/proc/%s/fd/2" % p) == os.readlink("/proc/%s/fd/%s" % (p, efd[0].decode())): continue
+            fd = os.open("/proc/%s/fd/2" % p, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError: continue
+        try: os.write(fd, msg)
+        except OSError: pass
+        hits.write(p + "\n"); held.append(fd)
+        if len(held) > 100: os.close(held.pop(0))
+'
 
 t_jail_record() {
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record for a jailed agent" "no wf-recorder or ffmpeg"; return; fi
