@@ -4874,6 +4874,8 @@ t_tree() {
   H=$(ob path -b "$B")/home
   check_eq "IsEnabled is off at up (Qt apps export nothing yet)" "b false" \
     "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled 2>&1)"
+  check_eq "...ScreenReaderEnabled too" "b false" \
+    "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled 2>&1)"
   # Qt Quick first, started before any tree: `tree` turns IsEnabled on and waits for it to register.
   if ob run -b "$B" -- sh -c 'command -v qml6' >/dev/null 2>&1; then
     cat > "$H/tree-demo.qml" <<'QML'
@@ -4956,6 +4958,10 @@ PY
   rc=0; out=$(ob tree -b "$B" --window omabox.tree 2>&1) || rc=$?
   check_eq "foot: no accessibility tree, said, exit 1" "1 yes" "$rc $(grep -q 'no accessibility tree' <<<"$out" && echo yes)"
   check_match "...and where one is to be had" "force-renderer-accessibility.*terminals" "$out"
+  # #237: AccessKit before 0.22 (egui apps on eframe 0.36 and older) registers only once
+  # ScreenReaderEnabled is on: `tree` sets it with IsEnabled (no egui app here: checked by hand).
+  check_eq "after tree, ScreenReaderEnabled is on (older AccessKit apps watch only it)" "b true" \
+    "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled 2>&1)"
   check_match "a window that is not there: the box's windows listed" "no window matches nosuchwindow" "$(ob tree -b "$B" --window nosuchwindow 2>&1)"
   check "down" ob down "$B"
 }

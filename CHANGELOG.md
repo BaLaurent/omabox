@@ -44,6 +44,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`omabox tree` reads egui and other winit (AccessKit) apps.** An egui app on eframe 0.36 or older
+  never joined the box's accessibility bus: its AccessKit waits for a screen reader
+  (`ScreenReaderEnabled`), and `tree` only turned on what Qt waits for. `tree` now sets both, and
+  libatspi's "Unknown object '/org/a11y/atspi/cache'" warning, printed after every such app's tree,
+  is gone.
 - **Print (Omarchy's screenshot) no longer kills a box on NVIDIA.** The screenshot turns hardware
   cursors on while it runs, and Hyprland then wrote the cursor into a buffer NVIDIA cannot map: the
   box's Hyprland crashed at the next cursor change (the selection going away, a pointer move). A box

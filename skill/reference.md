@@ -38,9 +38,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   coordinates: `click --window SEL` at the middle of those bounds lands on it (a control in a Qt dock
   widget is placed relative to the dock: check with a shot). `tree` alone prints the whole window
   (no SEL: the active one); a dense one (an editor, a long page) costs more than its shot, so ask
-  with `--find`. `--json` for a script; exit 1 when nothing holds TEXT. GTK and Qt apps have a tree
-  (`tree` turns Qt's on); Chromium and Electron only when started with `--force-renderer-accessibility`
-  (start them so when you will ask); terminals (foot), the Omarchy shell, its plugins and bar widgets
+  with `--find`. `--json` for a script; exit 1 when nothing holds TEXT. GTK, Qt and egui/winit
+  (AccessKit) apps have a tree (`tree` turns Qt's and AccessKit's on); Chromium and Electron only
+  when started with `--force-renderer-accessibility` (start them so when you will ask); terminals (foot), the Omarchy shell, its plugins and bar widgets
   have none and say "no accessibility tree": shots for those. An unnamed control (a switch beside its
   label) matches by its role (`--find switch`), or read the whole tree.
 - `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a
@@ -146,7 +146,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   secrets themselves.
 - Accessibility (AT-SPI) tests (dogtail, a toolkit's a11y tests, pyatspi) run in a box against its
   own a11y bus, in its runtime dir: GTK apps register on it; Qt ones once `org.a11y.Status.IsEnabled`
-  is true (`omabox run -- busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true`).
+  is true (`omabox run -- busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true`),
+  AccessKit (egui, winit) before accesskit_unix 0.22 once `ScreenReaderEnabled` is (the same call).
 
 ## The guard, in detail
 

@@ -6940,6 +6940,26 @@ from them.
     check on (the box died). By hand in the investigation: a region saved by Print in a headless
     NVIDIA box, and an interactive NVIDIA box in an NVIDIA stand-in (finding 26) alive under forced
     hardware cursors. Not checked: NVIDIA with VRR (auto's other way to hardware cursors).
+341. **`tree` sets ScreenReaderEnabled too: AccessKit before 0.22 waits for it** (2026-10-16, #237).
+    An egui app on eframe 0.36 (accesskit_winit 0.32, accesskit_unix 0.21.1) never joined the box's
+    a11y bus, so `tree` said "pid N is not on the box's accessibility bus". accesskit_unix before 0.22
+    watches only `org.a11y.Status.ScreenReaderEnabled`, and `tree` set only `IsEnabled` (Qt's,
+    finding 244); 0.22 (AccessKit #715) watches IsEnabled and adds the cache object (#719), and
+    eframe 0.37 (accesskit_unix 0.24) already worked. The window's pid was the AT-SPI app's pid; the
+    bus address comes from the session bus's `org.a11y.Bus.GetAddress`, which the box has. Now
+    `omabox-tree` sets each of the two that is off and waits its 3 s when it turned either on. It also
+    drops libatspi's `dbind` warning "Unknown object '/org/a11y/atspi/cache'", printed on every read
+    of an app without the cache object (0.21) as a stray `omabox: tree:` line after the tree; any
+    other `dbind` message still shows. *Decided*: set SRE for every app rather than detect AccessKit
+    (accesskit_unix has no switch to force it; Orca sets both). Box-wide and sticky like IsEnabled: an
+    app that changes behaviour when "a screen reader runs" sees it after the first `tree`. Verified
+    by hand in the investigation, in a box: the 0.36 app off the bus with IsEnabled on, on the bus
+    within ~14 ms of SRE (label and button with bounds matching a shot, a click at the button's middle
+    counted), and the patched helper printing its tree on the first call with no warning; the 0.37
+    app read before and after. Not in the suite (an egui build is ~800 MB of target dir): t_tree
+    checks SRE is off at `up` and on after a `tree` (fails with the old helper). Assumed: other
+    AccessKit toolkits on old accesskit_unix (Slint, iced, Bevy) behave the same; SRE changes nothing
+    for Qt, GTK or Chromium (finding 244: it does not turn Chromium's tree on).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

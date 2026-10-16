@@ -14,9 +14,10 @@
 // --find TEXT prints only the lines holding TEXT (any case; not in the bounds), each after its
 // printed ancestors: `list "Options" > check box "Dark mode" [checked] @12,40 140x24`.
 //
-// Before reading, it sets org.a11y.Status.IsEnabled (what a screen reader sets): Qt apps export their
-// tree only then, and follow it live; GTK4 exports always. One that just turned it on waits up to 3 s
-// for PID's application to register again.
+// Before reading, it sets org.a11y.Status.IsEnabled and ScreenReaderEnabled (what a screen reader
+// sets): Qt apps export their tree only then, and follow it live; AccessKit apps (egui, winit) before
+// accesskit_unix 0.22 watch only ScreenReaderEnabled (#237); GTK4 exports always. One that just turned
+// either on waits up to 3 s for PID's application to register (again).
 //
 // Exit: 0 printed; 1 --find matched nothing; 3 no tree for that window (said why); 4 the box has no
 // accessibility bus; 2 usage, or outside a box.
@@ -327,7 +328,7 @@ done:
 }
 
 // The box's a11y bus answers (at-spi-bus-launcher on its session bus); and IsEnabled set true.
-// Returns -1 without a bus, else whether IsEnabled was off (and is on now).
+// Returns -1 without a bus, else whether IsEnabled or ScreenReaderEnabled was off (and is on now).
 static int a11y_bus(void) {
     GError *e = NULL;
     GDBusConnection *c = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &e);
@@ -353,26 +354,34 @@ static int a11y_bus(void) {
         g_object_unref(c);
         return -1;
     }
-    int was_off = 1;
-    r = g_dbus_connection_call_sync(c, "org.a11y.Bus", "/org/a11y/bus", "org.freedesktop.DBus.Properties", "Get",
-                                    g_variant_new("(ss)", "org.a11y.Status", "IsEnabled"), G_VARIANT_TYPE("(v)"),
-                                    G_DBUS_CALL_FLAGS_NONE, 5000, NULL, NULL);
-    if (r) {
-        GVariant *v;
-        g_variant_get(r, "(v)", &v);
-        if (g_variant_is_of_type(v, G_VARIANT_TYPE_BOOLEAN) && g_variant_get_boolean(v)) was_off = 0;
-        g_variant_unref(v);
-        g_variant_unref(r);
-    }
-    if (was_off) {
+    // IsEnabled for Qt (and AccessKit from 0.22 on); ScreenReaderEnabled for AccessKit before 0.22
+    // (eframe 0.36 and older egui apps), which watches only that (#237).
+    static const char *const PROPS[] = {"IsEnabled", "ScreenReaderEnabled"};
+    static const char *const WHO[] = {"Qt apps", "older egui/winit (AccessKit) apps"};
+    int was_off = 0;
+    for (size_t k = 0; k < G_N_ELEMENTS(PROPS); k++) {
+        int off = 1;
+        r = g_dbus_connection_call_sync(c, "org.a11y.Bus", "/org/a11y/bus", "org.freedesktop.DBus.Properties", "Get",
+                                        g_variant_new("(ss)", "org.a11y.Status", PROPS[k]), G_VARIANT_TYPE("(v)"),
+                                        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, NULL);
+        if (r) {
+            GVariant *v;
+            g_variant_get(r, "(v)", &v);
+            if (g_variant_is_of_type(v, G_VARIANT_TYPE_BOOLEAN) && g_variant_get_boolean(v)) off = 0;
+            g_variant_unref(v);
+            g_variant_unref(r);
+        }
+        if (!off) continue;
         r = g_dbus_connection_call_sync(c, "org.a11y.Bus", "/org/a11y/bus", "org.freedesktop.DBus.Properties", "Set",
-                                        g_variant_new("(ssv)", "org.a11y.Status", "IsEnabled", g_variant_new_boolean(TRUE)),
+                                        g_variant_new("(ssv)", "org.a11y.Status", PROPS[k], g_variant_new_boolean(TRUE)),
                                         NULL, G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &e);
         if (!r) {
-            fprintf(stderr, "omabox-tree: could not set org.a11y.Status.IsEnabled (%s): Qt apps will have no tree\n", e->message);
+            fprintf(stderr, "omabox-tree: could not set org.a11y.Status.%s (%s): %s will have no tree\n", PROPS[k], e->message, WHO[k]);
             g_clear_error(&e);
-            was_off = 0;
-        } else g_variant_unref(r);
+        } else {
+            g_variant_unref(r);
+            was_off = 1;
+        }
     }
     g_object_unref(c);
     return was_off;
@@ -399,6 +408,14 @@ static GPtrArray *apps_of(guint pid, int *any, char **toolkit) {
     }
     g_object_unref(desk);
     return found;
+}
+
+// libatspi's "AT-SPI: Error in GetItems ... Unknown object '/org/a11y/atspi/cache'" on every read of an
+// app without the cache object (AccessKit before 0.22), whose tree reads fine without it: dropped. Any
+// other dbind message passes on.
+static void dbind_log(const gchar *d, GLogLevelFlags l, const gchar *m, gpointer u) {
+    if (m && strstr(m, "Unknown object '/org/a11y/atspi/cache'")) return;
+    g_log_default_handler(d, l, m, u);
 }
 
 static double now(void) {
@@ -433,6 +450,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (find && !*find) find = NULL;
+    g_log_set_handler("dbind", G_LOG_LEVEL_WARNING, dbind_log, NULL);
 
     int was_off = a11y_bus();
     if (was_off < 0) return 4;
@@ -445,7 +463,8 @@ int main(int argc, char **argv) {
     int any = 0;
     char *toolkit = NULL;
     GPtrArray *apps = apps_of(pid, &any, &toolkit);
-    // Turned on just now: a Qt app registers again (with its tree) a moment later.
+    // Turned on just now: a Qt app registers again (with its tree) a moment later, an AccessKit one for
+    // the first time.
     for (double end = now() + 3; was_off && apps->len == 0 && now() < end;) {
         g_ptr_array_unref(apps);
         for (double t = now() + 0.1; now() < t;) {
