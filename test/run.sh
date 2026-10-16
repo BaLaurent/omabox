@@ -5019,15 +5019,26 @@ logger -t omarchy-shell omabox shell route' >/dev/null 2>&1
     bash -c "'$CLI' log -b '$B' journal -n 5 | grep -c 'omabox-cat\[[0-9]*\]: line \(one\|two\)$' | grep -qx 2"
   # at-spi-bus-launcher as a test harness runs it (#234): from a cleaned environment (no
   # ATSPI_DBUS_IMPLEMENTATION), on a private session bus and runtime dir, so it starts dbus-broker-launch.
+  # Only from a systemd user unit (sd_pid_get_user_unit), whose cgroup the box's processes have from
+  # the suite: run from a login session's scope (root's ssh session through runuser, #249) it starts
+  # dbus-daemon instead.
+  local cg; cg=$(ob run -b "$B" -- cat /proc/self/cgroup 2>&1) || cg="exit $?: $cg"
   if [ ! -x /usr/bin/dbus-broker-launch ] || [ ! -x /usr/lib/at-spi-bus-launcher ]; then
     skip "journal: a dbus-broker started from a cleaned environment" "no dbus-broker or at-spi-bus-launcher"
+  elif ! in_user_unit "$cg"; then
+    skip "journal: a dbus-broker started from a cleaned environment" \
+      "the suite runs in no systemd user unit (cgroup ${cg//$'\n'/ }), where at-spi-bus-launcher starts dbus-daemon; systemd-run --user --scope test/run.sh"
   else
     # shellcheck disable=SC2016 # the box's shells
     out=$(ob run -b "$B" -- env -i PATH=/usr/bin HOME=/home/sbx XDG_RUNTIME_DIR="$(ob run -b "$B" -- mktemp -d)" dbus-run-session -- sh -c '
       /usr/lib/at-spi-bus-launcher 2>&1 & l=$!
       for _ in $(seq 50); do a=$(busctl --user call org.a11y.Bus /org/a11y/bus org.a11y.Bus GetAddress 2>/dev/null) && break; sleep 0.1; done
       a=${a#s \"}; a=${a%%[,\"]*}
-      for _ in $(seq 50); do busctl --address="$a" list >/dev/null 2>&1 && { echo "bus up: $(pgrep -x dbus-broker -P "$(pgrep -x dbus-broker-lau -P $l)" >/dev/null && echo dbus-broker)"; break; }; sleep 0.1; done
+      up=""; for _ in $(seq 50); do busctl --address="$a" list >/dev/null 2>&1 && { up=1; break; }; sleep 0.1; done
+      k=$(pgrep -x dbus-broker-lau -P $l)
+      if [ -z "$up" ]; then echo "no bus at [$a]"
+      elif [ -n "$k" ] && pgrep -x dbus-broker -P "$k" >/dev/null; then echo "bus up: dbus-broker"
+      else echo "bus up, no dbus-broker under the launcher (its children: $(pgrep -l -P $l | paste -sd " "))"; fi
       kill $l' 2>&1 | grep -v '^dbus-daemon\[')
     check_eq "...a dbus-broker an a11y launcher starts from a cleaned environment comes up" "bus up: dbus-broker" "$out"
     check "...and logs to it" until_ok 5 bash -c "'$CLI' log -b '$B' journal --grep 'dbus-broker-launch\[[0-9]+\]: Ready' | grep -q ."
@@ -5045,6 +5056,23 @@ for i in range(400): s.sendto(b\"MESSAGE=entry %d\n\" % i, \"d/socket\")" &&
   else no "...bounded: past --max, journal.1.log and a new journal.log, each within it" "got [$out]"; fi
 }
 
+# in_user_unit CGROUP: /proc/PID/cgroup's CGROUP is in a systemd user unit, as sd_pid_get_user_unit
+# finds one: slices, the user manager (or a session's scope), slices, then a unit that is no slice.
+in_user_unit() {
+  local l
+  while IFS= read -r l; do
+    [[ $l =~ ^(0::|[0-9]+:name=systemd:)/([^/]+\.slice/)*(user@[^/]+\.service|session-[^/]+\.scope)/([^/]+\.slice/)*[^/]+\.(service|scope)(/|$) ]] && return 0
+  done <<<"$1"
+  return 1
+}
+t_unit_user_unit() {
+  check "in a user unit: an app's scope under user@UID.service" in_user_unit "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-graphical.slice/app-Hyprland-x.scope"
+  check "...a service there" in_user_unit "0::/user.slice/user-1000.slice/user@1000.service/app.slice/omabox-x.service"
+  check_fails "not: a login session's scope (an ssh session, runuser in it)" in_user_unit "0::/user.slice/user-0.slice/session-3.scope"
+  check_fails "...the user manager's slice alone" in_user_unit "0::/user.slice/user-1000.slice/user@1000.service/app.slice"
+  check_fails "...a system service" in_user_unit "0::/system.slice/sshd.service"
+  check_fails "...a cgroup namespace's root" in_user_unit "0::/"
+}
 t_dbus_user_app() {
   local B=$P-dbusapp
   check "up" ob up "$B" --no-shell
@@ -11892,7 +11920,7 @@ t_link_out() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)
 
