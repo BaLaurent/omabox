@@ -7256,6 +7256,69 @@ from them.
     t_record_input (a watcher in the box SIGSTOPs the stop's encode once: killed at 3 s, run again,
     a video; twice: both messages, exit 1, raw.mkv kept, no ffmpeg left).
 
+357. **Spike: visual checks, how much changes when nothing does** (2026-10-16, #252; probes and
+    numbers in `spike/visual/`). Before building a `check` with baselines: a clean box made from
+    today's options (stock bar, tokyo-night, a solid `#ff00ff` sentinel wallpaper, the clock frozen
+    by a literal Qt format `'Friday 12:00'` so it keeps its place, `--no-pointer`, `--net isolated`,
+    animations off by `hl.config`), a Qt Quick app with a bar widget of its own against fixed data,
+    four checkpoints shot twice 3 s apart, in seven boxes (on the NVIDIA RTX 5070 Ti: the gpu setting;
+    first written as the AMD iGPU, which was not checked then). **Within a run: pixel-identical** (shots
+    and trees). **Across boxes ~2,000 single pixels differ** on text, and as much between two
+    starts of the app in one box: Qt Quick's distance-field text is not repeatable from one start to
+    the next (the glyph atlas fills in arrival order). It stays with `QSG_RENDER_LOOP=basic` and on
+    llvmpipe, and goes with `QT_QUICK_BACKEND=software` or `QML_DISABLE_DISTANCEFIELD=1` (which
+    renders text natively: 56k px from the default, not visible at 2x). Every noise pixel is below
+    10% of full scale in grey; a synthetic 1 px shift of a text block survives 25%, a painted-over
+    glyph too. At 10% the boxes differ only in content: the server's random port (the test's to
+    pin) and "added … HH:MM" (only a pinned clock fixes that; nothing pins time in a box yet,
+    no libfaketime here). Port pinned: two fresh boxes identical at 10% on all four checkpoints.
+    A spacing changed from 2 to 4 px in a build of the app: caught at 10%, and the tree diff
+    (`treediff.py`) named it ("moved -6,+0 button "add …"", -4, -2 down the row). The sentinel
+    counts 0 in windows and the bar; a Quickshell popup is drawn in a full-screen layer, so its own
+    rectangle comes from pixels, not Hyprland. The widget has no tree (finding 244): pixels only,
+    which held as well. **A threshold misses subtle colour**: a row 3 levels brighter is gone at
+    10% and one 5,000 px blob exactly, while the noise never made a blob over 13 px. So: exact
+    pixels in the users' rendering, isolated blobs under ~32 px dropped (and counted);
+    `QML_DISABLE_DISTANCEFIELD=1` an opt-in strict mode.
+
+358. **`omabox check` and `up --clean`: visual checks against a baseline** (2026-10-16, #252, built on
+    finding 357). `up --clean`: --stock-bar on tokyo-night unless --theme, a 16x16 `#ff00ff` PNG
+    (CLEAN_WALLPAPER_PNG, scaled by the background) that share/session.sh links over the background
+    omarchy-theme-set chose (`OMABOX_CLEAN_WALLPAPER`), the clock's format and verticalFormat Qt
+    literals in the box's shell.json, --no-pointer, --net isolated unless --net, and `animations off`
+    in the run dir's omabox.clean, read by share/hyprland.lua on every load as omabox.pointer is (a
+    reload kept them off). `--keep` takes animations, bar, clock, pointer, wallpaper back; box.json and
+    ls --json have `clean: {keep}`; up_already compares --clean and --keep; `run` forwards both. `check
+    point ID` (in a scenario, `$OMABOX_CHECK_OUT`): `wait still --quiet 500ms` (15 s; not still: taken,
+    noted), a shot (screen, -g or --window, `OMABOX_SHOT_NO_BASELINE`), with --window `tree --json`,
+    and ID.point (what, settled, tree, --ignore regions). `check run`: per run a fresh `up --clean`
+    box (`check-PID-N`; `OMABOX_CHECK_NAME` is the suite's prefix), the scenario with `OMABOX` set,
+    this omabox's bin first on PATH, its output in runN.log; exit 3 when it fails or takes no
+    checkpoint. The comparison (check_regions): both shots with --ignore and unstable regions
+    painted black, `difference`, `-alpha off` again (a -draw brought alpha back, and the parts'
+    colour read `graya(255,...)`, so check.py saw no part at all: every masked comparison read same;
+    found by t_check's moved button, caught before any release), max channel, threshold 0,
+    connected components; share/check.py drops parts under 32 px (specks: the noise never made one
+    over 13 on NVIDIA, 7 on AMD) and merges the rest 12 px apart. The tree diff keys an element by
+    place (role#N under its parent), not by name: keyed by name, a label whose text changes each run
+    (random, a time) read as one vanished and another appeared, never matched by the unstable list;
+    a name change is now a `name` line, an element inserted before others of its role shifts theirs.
+    **--approve runs 3 times, not 2** (--runs N): with 2, the subject's flaky status column (one
+    start in eight 3-4 px left) was run 1 and became the baseline; now each checkpoint's baseline is
+    the run most others match, and the regions and tree elements where any differed are its
+    `ID.unstable`, said ("run 1 of 3 differed": the app or a minute that ticked; "every run
+    differed": data or a time not pinned). A baseline's check.json (omabox, Hyprland, Omarchy, GPU
+    driver, theme, size) is compared on each check: an AMD run against an NVIDIA baseline had 203
+    regions in the app, and the report said "gpu nvidia -> amdgpu". Measured on the subject: approve
+    52 s (3 boxes), a check ~15 s; the same build same but for its "added … HH:MM" when the
+    minute had ticked (no clock pinning: Open); the 2 px spacing change caught (4 regions) and named
+    (6 moved buttons), the ⋯ button's 2 px move only by the tree (its dots' parts are specks). Not
+    inside ai-jail (refused). Tests: t_unit_check (check.py regions and tree, check diff on made
+    images: specks, a block, a 3-level fill, --ignore here and elsewhere, --speck, a size; --keep;
+    refusals), t_clean (sentinel pixel, literal clock, animations off over a reload, --keep, ls
+    --json), t_check (a Qt Quick window: approve with an unstable random label, same, a button moved
+    6 px: region and `moved +6,+0 button "Save"`, a new checkpoint, a failing scenario: exit 3).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -7274,6 +7337,10 @@ of them, nor wayvnc (finding 34). It needs labwc.
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
+- Visual checks (findings 357-358, #252): a box's clock cannot be pinned (no libfaketime here), so an
+  app's own times differ when a minute ticks between baseline and check; Quickshell popups are drawn
+  in a full-screen layer, so the sentinel cannot be counted inside one yet; an exploratory mode
+  (an agent walking the UI, getting only flagged changes) is not built; not inside ai-jail.
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
   aquamarine patched downstream with #415 is recognised by the symbol it adds (finding 246).
 - More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44;

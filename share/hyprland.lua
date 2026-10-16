@@ -319,6 +319,18 @@ do
   end
 end
 
+-- `up --clean` (#252, finding 357): animations off unless --keep animations, from omabox.clean; read on
+-- every load for the same reason as omabox.pointer.
+do
+  local f = io.open((os.getenv("XDG_RUNTIME_DIR") or "") .. "/omabox.clean")
+  if f then
+    for l in f:lines() do
+      if l == "animations off" then hl.config({ animations = { enabled = false } }) end
+    end
+    f:close()
+  end
+end
+
 -- Quickshell's crash reporter (#126, NOTES finding 183): when the shell crashes, Quickshell writes a
 -- report under ~/.cache/quickshell/crashes, then opens a dialog that takes focus. Nobody reads it in a
 -- box, and it took the keys meant for the app under test (Return on it opened a browser). It is

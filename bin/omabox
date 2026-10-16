@@ -87,6 +87,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
             [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
+            [--clean [--keep animations,bar,clock,pointer,wallpaper]]   a desktop where only what is tested moves
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
@@ -109,6 +110,11 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..."    where you see each mark: 1:1, or the --fit N that maps it
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox tree [-b NAME] [--window SEL] [--find TEXT] [--json] [--all]   a window's accessibility tree as text
+  omabox check run [--approve [--runs 3]] [--base DIR] [-o DIR] [--speck 32] [UP OPTIONS] -- SCENARIO [ARG...]
+                                                         a visual check: the scenario's checkpoints against a baseline
+  omabox check point ID [-b NAME] [--window SEL | -g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
+                                                         a checkpoint, in a scenario: once still, a shot (and the tree)
+  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png]   what differs, as a check sees it
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
                [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
@@ -247,6 +253,13 @@ says when that bar is not Omarchy's ("seeded the bar from your desk: its shell.j
 shell.toml [bar]"). Plugins are placed as without it.
 @ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
+@ up run check
+--clean: a desktop where only what is tested moves, for shots compared across runs (\`check\`):
+Omarchy's bar (--stock-bar) on tokyo-night (or --theme), a #ff00ff wallpaper (no theme has it: any of
+it inside a window or the bar is a hole), the clock frozen at "Friday 12:00" (in its place, at its
+width), no pointer, no network (--net connected gives it back), animations off (over reloads too).
+--keep LIST takes any of animations, bar (yours), clock, pointer, wallpaper back, for a test of
+Hyprland or the shell that needs them. A theme set later in the box brings that theme's wallpaper.
 @ up run audio record
 --audio: the box's own PipeWire, WirePlumber and pipewire-pulse (PipeWire and Pulse apps both play),
 its only devices a speaker nobody hears (omabox-speaker, a null sink: the default output) and a
@@ -458,6 +471,26 @@ its ancestors (\`list > list item "Beta" [selected] @12,354 1872x22\`); exit 1 w
 (\`tree\` sets org.a11y.Status.IsEnabled, which Qt waits for, and ScreenReaderEnabled, which older
 AccessKit waits for); Chromium and Electron only when started with --force-renderer-accessibility;
 terminals, the Omarchy shell and its plugins have none: "no accessibility tree", exit 1.
+@ check
+\`check\` compares an app's or a plugin's look with a baseline, so a person need not look. A SCENARIO
+is a command of yours (a script) that sets the box up, drives it with omabox commands and calls
+\`omabox check point ID\` where a shot should match; \`check run\` gives it a fresh \`up --clean\` box
+of its own each run (UP OPTIONS: --plugin, --theme, --size...; OMABOX names the box, the scenario's
+\`omabox\` is this one). --approve runs it 3 times (--runs N) and writes the baseline to --base DIR
+(./omabox-check): for each checkpoint the run most others match; where any run differed is
+"unstable", said and left out from then on (one run of three: the app is not the same from one
+start to the next there, or a time changed; every run: data or a time the scenario does not pin).
+Without --approve it runs once and says for each checkpoint same, changed (each region "at X,Y WxH",
+marked on ID.diff.png; with --window, the tree's moved, resized, text, state, appeared and vanished
+elements), new or missing: exit 0 when all are the same, 1 when not, 3 when the scenario failed.
+Shots are compared exactly, as users see them, leaving out specks: parts of the difference under 32
+px (--speck), what Qt Quick's text varies by from one start of an app to the next; a fill a few
+levels off, a 1 px shift of a text block or a clipped glyph is far more. A change smaller than a
+speck (a 2 px move of a few dots) can only show in the tree. \`check point\` waits until the shot is
+still (15 s, --timeout; then taken anyway, noted), shoots the screen, -g or --window (with its tree,
+when it has one); --ignore leaves a region of that shot out (a clock of the app's own). \`check
+diff A B\` compares two shots of yours the same way (exit 0 same, 1 not). A baseline made on another
+omabox, Hyprland, Omarchy, GPU, theme or size is said. Not inside ai-jail yet.
 @ drag
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
@@ -2512,6 +2545,18 @@ seed_home() {
     place_plugin "$id" "$section" "$kinds" "$ids" < "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new"
     mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
   done
+  # --clean (#252, finding 357): the clock's text frozen with a literal format (it keeps its widget,
+  # place and width, and never ticks), and the sentinel wallpaper's file, which the session links.
+  if [ "${CLEAN:-0}" = 1 ]; then
+    if ! clean_has clock; then
+      jq --arg f "$CLEAN_CLOCK" --arg v "$CLEAN_CLOCK_VERTICAL" \
+        '(.bar.layout[]?[]? | select(.id == "omarchy.clock")) |= (.format = $f | .verticalFormat = $v)' \
+        "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new" ||
+        die "up --clean: could not freeze the clock in the box's shell.json"
+      mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
+    fi
+    clean_has wallpaper || base64 -d <<<"$CLEAN_WALLPAPER_PNG" > "$h/.config/omabox/clean-wallpaper.png"
+  fi
   # The user's current theme, or with `up --theme NAME` none of it (finding 245): the box's session
   # runs omarchy-theme-set NAME before Hyprland starts, which makes all three. A save's go first, so
   # nothing of its look is left if that fails, and the background is the first omarchy-theme-set
@@ -3202,6 +3247,41 @@ box_addr() {
 # does not have are refused (finding 134): an agent asking for a plugin, isolation or a size would
 # otherwise go on without it. Only those given: a bare `up` takes the box as it is. Mounts, --env and
 # --idle are not compared. Reads cmd_up's locals (`given` names the options on the command line).
+# up --clean (#252, finding 357): what it sets, and what --keep can take back. The theme is Omarchy's
+# default; the wallpaper a colour no theme uses, so any of it inside a window or the bar is a hole (a
+# 16x16 PNG of it, scaled); the clock a literal Qt format, which keeps its widget, place and width.
+CLEAN_THEME=tokyo-night
+CLEAN_WALLPAPER='#ff00ff'
+CLEAN_WALLPAPER_PNG=iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVQoz2P8z/CfgRTARJLqUQ2jGoaUBgBKTgIeHXO4xgAAAABJRU5ErkJggg==
+CLEAN_CLOCK="'Friday 12:00'"
+CLEAN_CLOCK_VERTICAL="'12'"$'\n'"'—'"$'\n'"'00'"
+CLEAN_KEEPS="animations bar clock pointer wallpaper"
+CLEAN=0 CLEAN_KEEP=""   # up sets them
+# --keep LIST: comma-separated, each one of CLEAN_KEEPS; printed back comma-separated, once each.
+clean_keep() {
+  local k out=() IFS=,
+  for k in $1; do
+    [[ " $CLEAN_KEEPS " == *" $k "* ]] || { say "up: --keep takes ${CLEAN_KEEPS// /, } (comma-separated), got $k"; return 1; }
+    [[ ",${out[*]}," == *",$k,"* ]] || out+=("$k")
+  done
+  [ ${#out[@]} -gt 0 ] || { say "up: --keep takes ${CLEAN_KEEPS// /, } (comma-separated)"; return 1; }
+  echo "${out[*]}"
+}
+clean_has() { [[ ,$CLEAN_KEEP, == *,$1,* ]]; }
+# What a clean box is, as `up` says it. clean_text THEME NET
+clean_text() {
+  local parts=() s
+  if clean_has bar; then parts+=("your bar"); else parts+=("Omarchy's bar"); fi
+  parts+=("theme $1")
+  clean_has wallpaper || parts+=("wallpaper $CLEAN_WALLPAPER (any of it inside a window or the bar is a hole)")
+  clean_has clock || parts+=("the clock at ${CLEAN_CLOCK//\'/}")
+  clean_has pointer || parts+=("no pointer")
+  [ "$2" != isolated ] || parts+=("no network")
+  clean_has animations || parts+=("animations off")
+  s=$(IFS=,; echo "${parts[*]}")
+  echo "${s//,/, }"
+}
+
 up_already() {
   touch "$D/used" 2>/dev/null || true
   local diff=() p id ids
@@ -3219,6 +3299,11 @@ up_already() {
   case " $given " in *" systemd "*) [ "$(meta systemd)" = true ] || diff+=("--systemd (it has no user manager)") ;; esac
   case " $given " in *" audio "*) [ "$(meta audio)" = true ] || diff+=("--audio (it has no audio)") ;; esac
   case " $given " in *" stock-bar "*) [ "$(meta bar)" = stock ] || diff+=("--stock-bar (it has your bar)") ;; esac
+  case " $given " in *" clean "*)
+    if [ "$(jq -r '.clean != null' "$D/box.json" 2>/dev/null)" != true ]; then diff+=("--clean (it is not clean)")
+    elif [ "$(jq -r '.clean.keep | join(",")' "$D/box.json" 2>/dev/null)" != "$CLEAN_KEEP" ]; then
+      diff+=("--keep ${CLEAN_KEEP:-nothing} (it keeps $(jq -r '.clean.keep | if length == 0 then "nothing" else join(",") end' "$D/box.json" 2>/dev/null))")
+    fi ;; esac
   case " $given " in *" desk-shell "*) [ "$(meta bar)" = desk ] || diff+=("--desk-shell (it has $([ "$(meta bar)" = stock ] && echo "the stock bar" || echo "your bar with only its own plugins"))") ;; esac
   case " $given " in *" xwayland "*) [ "$(meta xwayland)" = true ] || diff+=("--xwayland (it has none)") ;; esac
   case " $given " in *" autoreload "*) [ "$(meta autoreload)" = true ] || diff+=("--autoreload (its autoreload is off)") ;; esac
@@ -3254,7 +3339,7 @@ up_already() {
 }
 
 cmd_up() {
-  STOCK_BAR=0 THEME="" DESK_SHELL=0 DESK="" DESK_SHOWN="" DESK_IDS="" DESK_FILES="" NO_SEED=""
+  STOCK_BAR=0 THEME="" DESK_SHELL=0 DESK="" DESK_SHOWN="" DESK_IDS="" DESK_FILES="" NO_SEED="" CLEAN=0 CLEAN_KEEP=""
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 audio=0 audio_missing="" owner=""
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 nopointer=0 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
@@ -3275,7 +3360,7 @@ cmd_up() {
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--stock-bar|--desk-shell|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--no-seed|--monitor|--theme-dir|--theme)
+      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--stock-bar|--desk-shell|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--no-seed|--monitor|--theme-dir|--theme|--clean)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -3324,6 +3409,8 @@ cmd_up() {
         shift ;;
       --owner) optarg "$@"; [[ $2 =~ ^[1-9][0-9]*$ ]] || die "up: --owner is a pid, got $2"; owner=$2; shift ;;   # internal: `run`'s throwaway box goes when this pid does
       --stock-bar) STOCK_BAR=1 ;;
+      --clean) CLEAN=1 ;;
+      --keep) optarg "$@"; CLEAN_KEEP=$(clean_keep "$2") || exit 1; shift ;;
       # The desk's config is outside any jail, and its files are the user's (#206).
       --desk-shell) ! in_jail || die "up: --desk-shell mirrors your desktop's shell config, not for an agent inside ai-jail"; DESK_SHELL=1 ;;
       --systemd) systemd=1 ;;
@@ -3338,6 +3425,18 @@ cmd_up() {
     esac
     shift
   done
+  # --clean (#252, finding 357): a desktop where only what is tested moves. Omarchy's own bar on
+  # CLEAN_THEME, a sentinel wallpaper, the clock frozen, no pointer, no network, animations off;
+  # --keep takes any of them back, --theme and --net choose their own.
+  if [ "$CLEAN" = 1 ]; then
+    [ "$DESK_SHELL" = 0 ] || die "up: --clean or --desk-shell, not both (--clean starts from Omarchy's bar; --keep bar keeps yours)"
+    clean_has bar || STOCK_BAR=1
+    [ -n "$THEME" ] || THEME=$CLEAN_THEME
+    clean_has pointer || nopointer=1
+    [ $net_set = 1 ] || net=isolated
+  else
+    [ -z "$CLEAN_KEEP" ] || die "up: --keep goes with --clean (what of the clean desktop to keep as it is)"
+  fi
   # A plugin that cannot be mounted (not there, or a manifest id that is not a name: finding 175) is
   # refused before any lock or box dir is made; PLUGINS ("id<TAB>dir" each) is what the box mounts.
   # A jailed caller's (finding 99): a folder of the jail's, whole, or one inside a folder the box has
@@ -3709,6 +3808,7 @@ cmd_up() {
     --arg net "$net" --arg allow "$allow" --argjson net_addrs "$(printf '%s\n' ${net_addrs[@]+"${net_addrs[@]}"} | jq -R 'select(. != "")' | jq -sc .)" --argjson idle "$idle_s" --arg bar "$(if [ "$STOCK_BAR" = 1 ]; then echo stock; elif [ "$DESK_SHELL" = 1 ]; then echo desk; else echo user; fi)" \
     --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --argjson audio "$([ $audio = 1 ] && echo true || echo false)" --arg owner "$owner" --arg owner_start "$owner_start" --arg agent "$agent" \
     --arg starter "$starter" --argjson at_term "$at_term" \
+    --argjson clean "$(if [ "$CLEAN" = 1 ]; then jq -nc --arg k "$CLEAN_KEEP" '{keep: ($k | split(",") | map(select(. != "")))}'; else echo null; fi)" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson plugin_dirs "$(printf '%s\n' "${PLUGINS[@]}" | jq -R 'select(. != "") | split("\t") | {(.[0]): .[1]}' | jq -s 'add // {}')" \
     --argjson linked "$(printf '%s\n' "${LINKED_PLUGINS[@]}" | jq -R 'select(. != "")' | jq -s .)" \
@@ -3741,6 +3841,7 @@ cmd_up() {
       + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
       + (if $omarchy != "" then {omarchy: $omarchy} else {} end)
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
+      + (if $clean != null then {clean: $clean} else {} end)
       + (if $owner_start != "" then {owner_start: $owner_start} else {} end)
       + (if $agent != "" then ($agent | split(" ") | {agent: (.[0] | tonumber), agent_start: .[1]}) else {} end)
       + {starter: (($starter | capture("^(?<pid>[0-9]+) (?<start>[0-9]+) (?<command>.+)$") | .pid |= tonumber) // {}
@@ -3748,6 +3849,10 @@ cmd_up() {
       + (if $mode == "interactive" then {workspace: $ws, confirm_close: ($confirm == "on"), confirm_close_from: $confirm_from,
           drawn_hidden: true} else {} end)' > "$D/box.json"
   [ $interactive = 0 ] || write_confirm_flag "$D/run" "$confirm"
+  # --clean (#252): animations off, read by the box's config on every load, as the pointer's file is.
+  if [ "$CLEAN" = 1 ] && ! clean_has animations; then
+    box_file "$D/run/omabox.clean" "animations off" || die "up: could not write the box's clean settings"
+  fi
   # --no-pointer (#228): as `pointer hide` keeps it, read by the box's config from its first load.
   if [ $nopointer = 1 ]; then
     printf 'hidden\nwas false\n' > "$D/pointer"
@@ -3836,6 +3941,8 @@ cmd_up() {
   [ -z "${OMABOX_AQUAMARINE:-}" ] || hypr_env+=(--setenv OMABOX_AQUAMARINE "$OMABOX_AQUAMARINE")
   # OMABOX_THEME: `up --theme`'s, which share/session.sh sets before Hyprland starts (finding 245).
   [ -z "$THEME" ] || hypr_env+=(--setenv OMABOX_THEME "$THEME")
+  # --clean's wallpaper (#252), which share/session.sh links after omarchy-theme-set has set the theme's.
+  [ "$CLEAN" = 0 ] || clean_has wallpaper || hypr_env+=(--setenv OMABOX_CLEAN_WALLPAPER /home/sbx/.config/omabox/clean-wallpaper.png)
   # OMABOX_BOX (#172): the box's name in every process of its session, so a host process list tells a
   # box's shell from the desktop's (/proc/PID/environ; `omabox which PID`).
   args+=(--setenv PATH /opt/omabox/share/bin:/usr/bin --setenv XDG_RUNTIME_DIR "$run" --setenv HOME /home/sbx
@@ -4025,6 +4132,7 @@ cmd_up() {
   rm -f "$D/starting"; touch "$D/used"
   local screen live_sc; screen=$(box_screen); live_sc=$(main_scale_live) || live_sc=""
   say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")) in $D"
+  [ "$CLEAN" = 0 ] || say "clean: $(clean_text "$THEME" "$net")"
   # A Hyprland that stops answering here (finding 353): said, the box left up, exit 1 at the end.
   local unanswered=0; hypr_errors_note || unanswered=1
   # No idle limit and no agent or owner to go with (#220): it outlives its caller, said to the caller
@@ -5073,8 +5181,8 @@ cmd_run() {
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "run: --env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--seed|--no-seed|--theme-dir|--theme|--monitor|--net|--allow|--addr|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
-      --xwayland|--autoreload|--no-shell|--no-pointer|--stock-bar|--desk-shell|--systemd|--audio) up_args+=("$1") ;;
+      --size|--plugin|--ro-bind|--overlay|--seed|--no-seed|--theme-dir|--theme|--monitor|--net|--allow|--addr|--idle|--from|--hyprland|--omarchy|--keep) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --xwayland|--autoreload|--no-shell|--no-pointer|--stock-bar|--desk-shell|--systemd|--audio|--clean) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
       -*) die "run: unknown option $1 (the command goes after --; --interactive is up's only)" ;;
@@ -7647,6 +7755,378 @@ shot_burst() {
 # Return, a), -t TEXT, -s MS, --pass VAR. The layout is the box's, so keycodes mean what Hyprland
 # thinks they mean. --pass types a variable of the caller's (finding 84): its value goes to the tool's
 # stdin (printf is a builtin: no argv), never on a command line; the tool reads one text per -T.
+# --- visual checks (#252, finding 357) --------------------------------------------------------------
+
+# A check compares shots exactly, in the rendering users see, and leaves out specks: parts of the
+# difference under CHECK_SPECK pixels. Qt Quick's distance-field text varies from one start of an
+# app to the next by single pixels on its glyphs (never a part over 13 px measured, every pixel of
+# it under 10% of full scale), while a 1 px shift of a text block, a clipped glyph or a fill 3
+# levels off makes parts of 100 px and more (a threshold on the values instead lost that fill).
+# Parts CHECK_GAP px apart or less are one region.
+CHECK_SPECK=32
+CHECK_GAP=12
+CHECK_PY=$ROOT/share/check.py
+CHECK_ID_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+
+# Where two shots of one size differ: "X,Y WxH PIXELS" a region, then "specks N PIXELS". Each MASK
+# ("X Y W H", image pixels) is painted black in both first, so it is left out. Fails when magick does
+# (never an empty answer read as "same"). check_regions A B SPECK [MASK]...
+check_regions() {
+  local fa=$1 fb=$2 speck=$3 m x y w h draw=() cc; shift 3
+  for m in "$@"; do
+    read -r x y w h <<<"$m"
+    draw+=(-draw "rectangle $x,$y $((x + w - 1)),$((y + h - 1))")
+  done
+  # (alpha off again after the composite: a -draw brings it back, and the parts' colour with it)
+  cc=$(magick "$fa" "$fb" -alpha off -fill black "${draw[@]}" -compose difference -composite -alpha off -grayscale Brightness \
+    -threshold 0 -define connected-components:verbose=true -connected-components 8 null: 2>/dev/null) || return 1
+  /usr/bin/python3 -I "$CHECK_PY" regions "$speck" "$CHECK_GAP" <<<"$cc"
+}
+
+# The regions drawn on the new shot, for a person or an agent to look at: check_mark NEW OUT REGION...
+check_mark() {
+  local new=$1 out=$2 r x y w h draw=(); shift 2
+  for r in "$@"; do
+    [[ $r =~ ^(-?[0-9]+),(-?[0-9]+)\ ([0-9]+)x([0-9]+) ]] || continue
+    x=${BASH_REMATCH[1]} y=${BASH_REMATCH[2]} w=${BASH_REMATCH[3]} h=${BASH_REMATCH[4]}
+    draw+=(-draw "rectangle $((x - 2)),$((y - 2)) $((x + w + 1)),$((y + h + 1))")
+  done
+  magick "$new" -fill none -stroke '#ff2020' -strokewidth 2 "${draw[@]}" "$out" 2>/dev/null
+}
+
+# A region line's "X Y W H" (for a mask), from "X,Y WxH ...".
+check_mask_of() {
+  [[ $1 =~ ^(-?[0-9]+),(-?[0-9]+)\ ([0-9]+)x([0-9]+) ]] || return 1
+  echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
+}
+
+cmd_check() {
+  # omabox -b NAME check point ...: the box for a checkpoint (run makes its own, diff reads files).
+  local name=""
+  if [ "${1:-}" = -b ] || [ "${1:-}" = --box ]; then optarg "$@"; name=$2; shift 2; fi
+  local sub=${1:-}
+  [ $# = 0 ] || shift
+  [ -z "$name" ] || [ "$sub" = point ] || die "check $sub: -b NAME goes with check point (run starts boxes of its own, diff reads files)"
+  case $sub in
+    run) check_run "$@" ;;
+    point) check_point ${name:+-b "$name"} "$@" ;;
+    diff) check_diff "$@" ;;
+    -h|--help) usage check ;;
+    "") usage check; exit 2 ;;
+    *) die "check: run, point or diff, got $sub (omabox help check)" ;;
+  esac
+}
+
+# check diff A.png B.png: what differs between two shots, as `check run` compares a checkpoint.
+check_diff() {
+  local files=() masks=() speck=$CHECK_SPECK out="" g
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --ignore) optarg "$@"; g=$(geom_parse "$2") || die "check diff: --ignore is \"X,Y WxH\", got $2"; masks+=("$g"); shift ;;
+      --speck) optarg "$@"; [[ $2 =~ ^[0-9]{1,6}$ ]] || die "check diff: --speck is a number of pixels, got $2"; speck=$((10#$2)); shift ;;
+      -o) optarg "$@"; out=$2; shift ;;
+      -h|--help) usage check; return ;;
+      -*) die "check diff: unknown option $1" ;;
+      *) files+=("$1") ;;
+    esac
+    shift
+  done
+  [ ${#files[@]} = 2 ] || die "check diff: two shots, A.png B.png"
+  command -v magick >/dev/null || die "check: needs ImageMagick's magick (package imagemagick, part of Omarchy)"
+  local f sa sb
+  for f in "${files[@]}"; do [ -f "$f" ] || die "check diff: no such file: $f"; done
+  sa=$(magick identify -format '%wx%h' "${files[0]}" 2>/dev/null) || die "check diff: not an image: ${files[0]}"
+  sb=$(magick identify -format '%wx%h' "${files[1]}" 2>/dev/null) || die "check diff: not an image: ${files[1]}"
+  if [ "$sa" != "$sb" ]; then echo "size $sa -> $sb"; return 1; fi
+  local res; res=$(check_regions "${files[0]}" "${files[1]}" "$speck" ${masks[@]+"${masks[@]}"}) || die "check diff: could not compare them (magick)"
+  local regions; regions=$(grep -v '^specks ' <<<"$res" || true)
+  local sp; sp=$(sed -n 's/^specks //p' <<<"$res")
+  if [ -z "$regions" ]; then echo "same (specks: ${sp% *}, ${sp#* } px)"; return 0; fi
+  local r
+  while IFS= read -r r; do echo "${r% *} (${r##* } px)"; done <<<"$regions"
+  echo "specks: ${sp% *}, ${sp#* } px"
+  if [ -n "$out" ]; then
+    local rs=(); mapfile -t rs <<<"$regions"
+    check_mark "${files[1]}" "$out" "${rs[@]}" || die "check diff: could not draw $out (magick)"
+  fi
+  return 1
+}
+
+# check point ID: a checkpoint of a `check run` scenario: once the screen is still, a shot (and the
+# window's tree, with --window) into the run's folder ($OMABOX_CHECK_OUT, or -o DIR).
+check_point() {
+  local name="" id="" sels=() geom="" masks=() out=${OMABOX_CHECK_OUT:-} tmo=15s g
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --active) sels+=(active) ;;
+      -g) optarg "$@"; geom_parse "$2" >/dev/null || die "check point: -g is \"X,Y WxH\", got $2"; geom=$2; shift ;;
+      --ignore) optarg "$@"; g=$(geom_parse "$2") || die "check point: --ignore is \"X,Y WxH\" (in the shot's pixels), got $2"; masks+=("$g"); shift ;;
+      --timeout) optarg "$@"; tmo=$2; shift ;;
+      -o) optarg "$@"; out=$2; shift ;;
+      -h|--help) usage check; return ;;
+      -*) die "check point: unknown option $1" ;;
+      *) [ -z "$id" ] || die "check point: one ID, got $id and $1"; id=$1 ;;
+    esac
+    shift
+  done
+  [ -n "$id" ] || die "check point: which checkpoint? (an ID: letters, digits, . _ -)"
+  [[ $id =~ $CHECK_ID_RE ]] || die "check point: an ID is letters, digits, . _ - (64 at most, not starting with . _ -), got $id"
+  [ -n "$out" ] || die "check point: outside a check run (omabox check run -- SCENARIO calls it), give -o DIR"
+  [ -z "$geom" ] || [ ${#sels[@]} = 0 ] || die "check point: -g or --window, not both"
+  mkdir -p "$out"
+  [ ! -e "$out/$id.png" ] || die "check point: $id was taken already in this run (each ID once)"
+  select_box "$name"; need_box
+  local self=$ROOT/bin/omabox wargs=() sargs=() settled=yes rc=0 w
+  for w in ${sels[@]+"${sels[@]}"}; do wargs+=(--window "$w"); done
+  [ -z "$geom" ] || wargs=(-g "$geom")
+  sargs=("${wargs[@]}")
+  "$self" -b "$NAME" wait --timeout "$tmo" still --quiet 500ms ${wargs[@]+"${wargs[@]}"} >/dev/null 2>"$out/$id.wait" || rc=$?
+  case $rc in
+    0) ;;
+    124) settled=no; say "check point $id: not still after $tmo: taken anyway, marked unsettled ($(tail -n 1 "$out/$id.wait"))" ;;
+    *) die "check point $id: $(tail -n 1 "$out/$id.wait")" ;;
+  esac
+  rm -f -- "${out:?}/${id:?}.wait"
+  OMABOX_SHOT_NO_BASELINE=1 "$self" -b "$NAME" shot ${sargs[@]+"${sargs[@]}"} -o "$out/$id.png" >/dev/null 2>"$out/$id.shot" ||
+    die "check point $id: the shot failed: $(tail -n 1 "$out/$id.shot")"
+  rm -f -- "${out:?}/${id:?}.shot"
+  local tree=none
+  if [ ${#sels[@]} -gt 0 ]; then
+    rc=0; "$self" -b "$NAME" tree "${sargs[@]}" --json > "$out/$id.tree.json" 2>/dev/null || rc=$?
+    if [ $rc = 0 ]; then tree=yes; else rm -f -- "${out:?}/${id:?}.tree.json"; fi
+  fi
+  {
+    if [ ${#sels[@]} -gt 0 ]; then echo "of window ${sels[*]}"; elif [ -n "$geom" ]; then echo "of region $geom"; else echo "of screen"; fi
+    echo "settled $settled"
+    echo "tree $tree"
+    for g in ${masks[@]+"${masks[@]}"}; do echo "ignore $g"; done
+  } > "$out/$id.point"
+  echo "$out/$id.png"
+}
+
+# The IDs a run took, in the order taken (the .point files' times).
+check_ids() {
+  [ -d "$1" ] || return 0
+  command find "$1" -maxdepth 1 -name '*.point' -printf '%T@ %f\n' 2>/dev/null | sort -n | sed 's/^[^ ]* //; s/\.point$//'
+}
+
+# One checkpoint of NEW against BASE (two folders), leaving out the point's --ignore regions and what
+# UNSTABLE lists (regions, and "tree KEY" lines). Sets CHK_REGIONS (lines), CHK_SPECKS ("N PX"),
+# CHK_SIZE ("" or "WxH -> WxH") and CHK_TREE (lines). check_one BASE NEW ID SPECK [UNSTABLE]
+check_one() {
+  local base=$1 new=$2 id=$3 speck=$4 unstable=${5:-} masks=() m l sa sb res
+  CHK_REGIONS="" CHK_SPECKS="0 0" CHK_SIZE="" CHK_TREE=""
+  while read -r l m; do [ "$l" != ignore ] || masks+=("$m"); done < "$new/$id.point"
+  if [ -n "$unstable" ] && [ -f "$unstable" ]; then
+    while IFS= read -r l; do
+      [[ $l == tree\ * ]] && continue
+      m=$(check_mask_of "$l") && masks+=("$m")
+    done < "$unstable"
+  fi
+  sa=$(magick identify -format '%wx%h' "$base/$id.png" 2>/dev/null) || return 1
+  sb=$(magick identify -format '%wx%h' "$new/$id.png" 2>/dev/null) || return 1
+  if [ "$sa" != "$sb" ]; then
+    CHK_SIZE="$sa -> $sb"
+  else
+    res=$(check_regions "$base/$id.png" "$new/$id.png" "$speck" ${masks[@]+"${masks[@]}"}) || return 1
+    CHK_REGIONS=$(grep -v '^specks ' <<<"$res" || true)
+    CHK_SPECKS=$(sed -n 's/^specks //p' <<<"$res")
+  fi
+  if [ -f "$base/$id.tree.json" ] && [ -f "$new/$id.tree.json" ]; then
+    local ign=""
+    if [ -n "$unstable" ] && [ -f "$unstable" ]; then ign=$new/$id.tree-ignore; sed -n 's/^tree //p' "$unstable" > "$ign"; fi
+    CHK_TREE=$(/usr/bin/python3 -I "$CHECK_PY" tree "$base/$id.tree.json" "$new/$id.tree.json" ${ign:+"$ign"}) || true
+    [ -z "$ign" ] || rm -f -- "${ign:?}"
+  fi
+  return 0
+}
+
+# What the box of a run was (for the baseline's check.json, and to say when a comparison is across
+# versions or GPUs): check_env BOX
+check_env() {
+  "$ROOT/bin/omabox" ls --json 2>/dev/null | jq -c --arg n "$1" --arg v "$(cat "$ROOT/VERSION" 2>/dev/null)" \
+    'first(.[] | select(.name == $n)) | {omabox: $v, hyprland: .hyprland_version, omarchy: .omarchy_version, theme,
+      size, gpu: (.render.driver // null), clean}' 2>/dev/null || echo '{}'
+}
+
+# check run [--approve] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO...: the scenario
+# (a command of yours that drives a box and calls `omabox check point ID` at each checkpoint) in a
+# fresh `up --clean` box of its own; its checkpoints against the baseline in DIR. --approve runs it
+# 3 times (--runs N) and makes the baseline, check_approve's way.
+check_run() {
+  local approve=0 runs="" base=omabox-check out="" speck=$CHECK_SPECK upopts=() scen=()
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --approve) approve=1 ;;
+      --runs) optarg "$@"; [[ $2 =~ ^[2-9]$ ]] || die "check run: --runs is 2 to 9 (for --approve), got $2"; runs=$2; shift ;;
+      --base) optarg "$@"; base=$2; shift ;;
+      -o) optarg "$@"; out=$2; shift ;;
+      --speck) optarg "$@"; [[ $2 =~ ^[0-9]{1,6}$ ]] || die "check run: --speck is a number of pixels, got $2"; speck=$((10#$2)); shift ;;
+      -h|--help) usage check; return ;;
+      --) shift; scen=("$@"); break ;;
+      -b|--box|--new|--interactive|-i|--json) die "check run: the scenario gets a box of its own (no $1)" ;;
+      --clean) ;;   # every check box is
+      --size|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--seed|--no-seed|--monitor|--theme-dir|--theme|--keep|--env|--overlay|--ro-bind|--idle)
+        optarg "$@"; upopts+=("$1" "$2"); shift ;;
+      --xwayland|--autoreload|--no-shell|--systemd|--audio|--stock-bar|--no-pointer) upopts+=("$1") ;;
+      --desk-shell) die "check run: a check's box is clean (--keep bar keeps your bar), not your desk's shell" ;;
+      -*) die "check run: unknown option $1 (omabox help check)" ;;
+      *) die "check run: the scenario goes after -- (omabox check run [OPTIONS] -- SCENARIO...), got $1" ;;
+    esac
+    shift
+  done
+  [ ${#scen[@]} -gt 0 ] || die "check run: which scenario? omabox check run [OPTIONS] -- SCENARIO [ARG...]"
+  [ -z "$runs" ] || [ $approve = 1 ] || die "check run: --runs goes with --approve (a check is one run)"
+  ! in_jail || die "check run: not inside ai-jail yet (it starts boxes of its own and reads their shots on the host)"
+  command -v magick >/dev/null || die "check: needs ImageMagick's magick (package imagemagick, part of Omarchy)"
+  [ -x /usr/bin/python3 ] || die "check: needs /usr/bin/python3 (package python)"
+  if [ $approve = 0 ] && ! compgen -G "$base/*.png" >/dev/null; then
+    die "check run: no baseline in $base: omabox check run --approve [--base DIR] -- ${scen[*]} makes one"
+  fi
+  [ -n "$out" ] || out=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/check/$(date +%Y%m%d-%H%M%S)-$$
+  mkdir -p "$out"
+  out=$(cd "$out" && pwd)
+  local k box rc self=$ROOT/bin/omabox
+  if [ $approve = 0 ]; then runs=1; else runs=${runs:-3}; fi
+  CHECK_BOXES=()
+  trap 'for b in ${CHECK_BOXES[@]+"${CHECK_BOXES[@]}"}; do "$ROOT/bin/omabox" down "$b" >/dev/null 2>&1 || true; done' EXIT
+  for ((k = 1; k <= runs; k++)); do
+    box=${OMABOX_CHECK_NAME:-check-$$}-$k   # (OMABOX_CHECK_NAME: internal, the suite's t<pid>-* names)
+    say "check: run $k of $runs: a clean box ($box), then: ${scen[*]}"
+    CHECK_BOXES+=("$box")
+    OMABOX_SESSION="" "$self" up "$box" --clean --idle 30m ${upopts[@]+"${upopts[@]}"} >/dev/null 2>"$out/run$k.up.log" ||
+      die "check: the box for run $k did not start: $(grep . "$out/run$k.up.log" | tail -n 1) ($out/run$k.up.log)"
+    [ $k != 1 ] || check_env "$box" > "$out/env.json"
+    mkdir -p "$out/run$k"
+    rc=0
+    # The scenario's `omabox` is this one (its bin first), driving this run's box ($OMABOX).
+    PATH=$ROOT/bin:$PATH OMABOX=$box OMABOX_SESSION="" OMABOX_CHECK_OUT=$out/run$k "${scen[@]}" > "$out/run$k.log" 2>&1 || rc=$?
+    "$self" down "$box" >/dev/null 2>&1 || true
+    if [ $rc != 0 ]; then
+      say "check: the scenario failed in run $k (exit $rc): $(grep . "$out/run$k.log" | tail -n 1) ($out/run$k.log)"
+      exit 3
+    fi
+    [ -n "$(check_ids "$out/run$k")" ] || { say "check: the scenario took no checkpoint (omabox check point ID in it)"; exit 3; }
+  done
+  trap - EXIT
+  if [ $approve = 1 ]; then check_approve "$out" "$base" "$speck" "$runs"; else check_compare "$out" "$base" "$speck"; fi
+}
+
+# --approve: the scenario ran RUNS times. For each checkpoint the baseline is the run most others
+# match (the first of those that tie), and the regions (and tree elements) where any run differed from
+# it are unstable, left out from then on. One run of three differing is the app (a layout that is
+# not the same from one start to the next); every run differing is data or a time the scenario does
+# not pin. check_approve OUT BASE SPECK RUNS
+check_approve() {
+  local out=$1 base=$2 speck=$3 runs=$4 id r k j n=0 unst=0 best agree most odd
+  mkdir -p "$base"
+  for ((k = 2; k <= runs; k++)); do
+    for id in $(check_ids "$out/run1"); do
+      [ -f "$out/run$k/$id.point" ] || die "check: run $k took no $id: the scenario must take the same checkpoints each time"
+    done
+    for id in $(check_ids "$out/run$k"); do
+      [ -f "$out/run1/$id.point" ] || die "check: run 1 took no $id: the scenario must take the same checkpoints each time"
+    done
+  done
+  # A checkpoint the scenario no longer takes leaves the baseline (only the files a check writes).
+  for r in "$base"/*.point; do
+    [ -f "$r" ] || continue
+    id=$(basename "$r" .point)
+    [ -f "$out/run1/$id.point" ] && continue
+    rm -f -- "${base:?}/${id:?}.png" "${base:?}/${id:?}.tree.json" "${base:?}/${id:?}.point" "${base:?}/${id:?}.unstable"
+    echo "dropped  $id (the scenario no longer takes it)"
+  done
+  for id in $(check_ids "$out/run1"); do
+    n=$((n + 1))
+    # Which runs match which: the baseline is the run with the most matches.
+    best=1 most=-1
+    for ((k = 1; k <= runs; k++)); do
+      agree=0
+      for ((j = 1; j <= runs; j++)); do
+        [ $j != "$k" ] || continue
+        check_one "$out/run$k" "$out/run$j" "$id" "$speck" || die "check: could not compare $id's runs (magick)"
+        [ -n "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ] || agree=$((agree + 1))
+      done
+      if [ $agree -gt $most ]; then best=$k most=$agree; fi
+    done
+    : > "$out/$id.unstable"
+    odd=()
+    for ((j = 1; j <= runs; j++)); do
+      [ $j != "$best" ] || continue
+      check_one "$out/run$best" "$out/run$j" "$id" "$speck" || die "check: could not compare $id's runs (magick)"
+      [ -z "$CHK_SIZE" ] || die "check: $id is $CHK_SIZE between runs $best and $j: a window that is not the same size each time cannot have a baseline"
+      [ -n "$CHK_REGIONS$CHK_TREE" ] || continue
+      odd+=("$j")
+      {
+        [ -z "$CHK_REGIONS" ] || cut -d' ' -f1,2 <<<"$CHK_REGIONS"
+        [ -z "$CHK_TREE" ] || /usr/bin/python3 -I "$CHECK_PY" tree-keys "$out/run$best/$id.tree.json" "$out/run$j/$id.tree.json" | sed 's/^/tree /'
+      } >> "$out/$id.unstable"
+    done
+    sort -u -o "$out/$id.unstable" "$out/$id.unstable"
+    cp -- "$out/run$best/$id.png" "$out/run$best/$id.point" "$base/"
+    if [ -f "$out/run$best/$id.tree.json" ]; then cp -- "$out/run$best/$id.tree.json" "$base/"; else rm -f -- "${base:?}/${id:?}.tree.json"; fi
+    if [ -s "$out/$id.unstable" ]; then
+      unst=$((unst + 1))
+      cp -- "$out/$id.unstable" "$base/"
+      if [ $((${#odd[@]} + 1)) -lt "$runs" ]; then
+        echo "unstable $id: run ${odd[*]} of $runs differed from the others: an app that is not the same from one start to the next, or a time that changed between runs (left out from now on; that run: $out/run${odd[0]}/$id.png):"
+      else
+        echo "unstable $id: every run differed: data or a time the scenario does not pin (left out from now on):"
+      fi
+      sed 's/^/  /' "$out/$id.unstable"
+    else
+      rm -f -- "${base:?}/${id:?}.unstable"
+      echo "baseline $id"
+    fi
+    if grep -qx 'settled no' "$out/run$best/$id.point"; then echo "  note: $id was not still when taken"; fi
+  done
+  cp -- "$out/env.json" "$base/check.json"
+  echo "check: baseline of $n checkpoints in $base ($unst with regions left out); runs in $out"
+}
+
+# A run against the baseline: same, changed (regions, tree), new, missing. Exit 1 unless all same.
+check_compare() {
+  local out=$1 base=$2 speck=$3 id fail=0 same=0 n=0 r regs=() e
+  for id in $(check_ids "$out/run1"); do
+    n=$((n + 1))
+    if [ ! -f "$base/$id.png" ]; then
+      echo "new      $id: no baseline (omabox check run --approve adds it)"; fail=1; continue
+    fi
+    check_one "$base" "$out/run1" "$id" "$speck" "$base/$id.unstable" || die "check: could not compare $id (magick)"
+    if [ -z "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ]; then
+      same=$((same + 1)); echo "same     $id"; continue
+    fi
+    fail=1
+    if [ -n "$CHK_SIZE" ]; then echo "changed  $id: size $CHK_SIZE"
+    else
+      regs=()
+      [ -z "$CHK_REGIONS" ] || mapfile -t regs <<<"$CHK_REGIONS"
+      echo "changed  $id: ${#regs[@]} region$([ ${#regs[@]} = 1 ] || echo s)$([ ${#regs[@]} = 0 ] || echo " (marked: $out/$id.diff.png)")"
+      for r in ${regs[@]+"${regs[@]}"}; do echo "  at ${r% *} (${r##* } px)"; done
+      [ ${#regs[@]} = 0 ] || check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || true
+    fi
+    if [ -n "$CHK_TREE" ]; then while IFS= read -r r; do echo "  tree: $r"; done <<<"$CHK_TREE"; fi
+    [ "${CHK_SPECKS%% *}" = 0 ] || echo "  specks left out: ${CHK_SPECKS%% *} (${CHK_SPECKS#* } px; parts under $speck px)"
+    if grep -qx 'settled no' "$out/run1/$id.point"; then echo "  note: $id was not still when taken"; fi
+  done
+  for r in "$base"/*.point; do
+    [ -f "$r" ] || continue
+    id=$(basename "$r" .point)
+    [ -f "$out/run1/$id.point" ] || { echo "missing  $id: in the baseline, not taken this run"; fail=1; }
+  done
+  # A baseline from another omabox, Hyprland, Omarchy or GPU: differences may be that.
+  if [ -f "$base/check.json" ]; then
+    e=$(jq -rn --slurpfile a "$base/check.json" --slurpfile b "$out/env.json" \
+      '($a[0] // {}) as $x | ($b[0] // {}) as $y | [("omabox", "hyprland", "omarchy", "gpu", "theme", "size")
+        | select($x[.] != $y[.]) | "\(.) \($x[.] // "?") -> \($y[.] // "?")"] | join(", ")' 2>/dev/null) || e=""
+    [ -z "$e" ] || echo "note: the baseline was made with another setup ($e): a difference may be that"
+  fi
+  echo "check: $same of $n same; shots in $out/run1"
+  return $fail
+}
+
 cmd_keys() {
   local name="" toks=() sels=() pass=()
   while [ $# -gt 0 ]; do
@@ -11809,7 +12289,7 @@ box_json() {
       client_render: (.client_render // null),
       monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end),
-      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + (if .no_seed then {no_seed} else {} end) + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}' "$D/box.json" 2>/dev/null ||
+      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + (if .no_seed then {no_seed} else {} end) + {clean: (.clean // null)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false, orphan: false}'
 }
 
@@ -12909,7 +13389,7 @@ cmd_saves() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot record pixel calibrate windows tree keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip "
+BOX_CMDS=" up run shot screenshot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box) ;; *) return 0 ;; esac
@@ -12964,6 +13444,7 @@ main() {
     calibrate) cmd_calibrate "$@" ;;
     windows) cmd_windows "$@" ;;
     tree) cmd_tree "$@" ;;
+    check) cmd_check "$@" ;;
     keys) cmd_keys "$@" ;;
     keys-to-box) cmd_keys_to_box "$@" ;;
     click) cmd_click "$@" ;;

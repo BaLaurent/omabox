@@ -94,10 +94,10 @@ stops: the 124 names it, `--ignore "X,Y WxH"`. ref: Waiting, in detail.
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
 discard it) click with `--in THAT.png X Y`, never your own arithmetic. A shot bigger than the model
 sees is scaled down for it, and some models read points in that smaller image (Haiku 4.5: 0.76x):
-to click off a whole screen or a big window, `shot --fit 1456` and `click --in` it,
-any model; still missing: `omabox calibrate`. **Shots are most of a session's context**:
+off a whole screen or big window, `shot --fit 1456` and `click --in` it,
+any model; still missing: `calibrate`. **Shots are most of a session's context**:
 the smallest that shows it (`--window`, `-g`, `--fit 1280`); what an action changed
-`shot --changed`; a colour `omabox pixel`, a transition `shot --burst N --sheet`.
+`shot --changed`; a colour `pixel`, a transition `shot --burst N --sheet`; against a baseline `check`.
 ref: Shots. **The pointer is test state**
 (focus follows it; it stays where the last command left it): ref: Pointer, in detail.
 

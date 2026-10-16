@@ -128,6 +128,10 @@ if [ -n "${OMABOX_THEME:-}" ]; then
   fi
 fi
 
+# `up --clean`'s wallpaper (#252, finding 357): over the background omarchy-theme-set just chose. Only
+# this start: a theme set later in the box takes that theme's, as on a desk.
+[ -z "${OMABOX_CLEAN_WALLPAPER:-}" ] || ln -sfn -- "$OMABOX_CLEAN_WALLPAPER" "$HOME/.local/state/omarchy/current/background"
+
 # The theme's light or dark mode in the box's dconf, as `omarchy-theme-set` leaves it on the host
 # (finding 148): a fresh dconf says "no preference", so portal dialogs, GTK, libadwaita and Qt apps
 # came out light under a dark theme. In the background: the session does not wait for dconf.

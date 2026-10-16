@@ -5207,6 +5207,169 @@ t_dbus_user_app() {
   check "down" ob down "$B"
 }
 
+# Visual checks (#252, finding 357), what needs no box: the diff's specks and regions, the tree diff,
+# --keep's list, and what check and up --clean refuse before a box is made.
+t_unit_check() {
+  local d=$TMP/uchk out rc
+  mkdir -p "$d"
+  # check.py regions: parts under SPECK are specks; parts GAP px apart or less are one region.
+  out=$(printf '%s\n' 'Objects (id: bounding-box centroid area mean-color):' \
+    '  0: 400x300+0+0 200,150 119000 gray(0)' '  1: 3x3+10+10 11,11 9 gray(255)' \
+    '  2: 20x10+100+100 110,105 200 gray(255)' '  3: 10x10+125+100 130,105 100 gray(255)' \
+    '  4: 30x10+300+200 315,205 300 gray(255)' | python3 -I "$ROOT/share/check.py" regions 32 12)
+  check_eq "regions: a speck left out, two parts 5 px apart one region, a far one apart" \
+    $'100,100 35x10 300\n300,200 30x10 300\nspecks 1 9' "$out"
+  # check.py tree: element by element.
+  printf '%s' '[{"depth":0,"role":"frame","name":"W","states":[],"x":0,"y":0,"w":400,"h":300},
+    {"depth":1,"role":"button","name":"Save","states":[],"x":20,"y":20,"w":80,"h":30},
+    {"depth":1,"role":"label","name":"","text":"hi","states":[],"x":20,"y":60,"w":80,"h":20},
+    {"depth":1,"role":"check box","name":"Dark","states":["unchecked"],"x":20,"y":90,"w":80,"h":20},
+    {"depth":1,"role":"button","name":"Gone","states":[]},
+    {"depth":1,"role":"image","name":"Logo","states":[],"x":300,"y":10,"w":40,"h":40}]' > "$d/a.json"
+  printf '%s' '[{"depth":0,"role":"frame","name":"W","states":[],"x":0,"y":0,"w":400,"h":300},
+    {"depth":1,"role":"button","name":"Save","states":[],"x":24,"y":20,"w":90,"h":30},
+    {"depth":1,"role":"label","name":"","text":"ho","states":[],"x":20,"y":60,"w":80,"h":20},
+    {"depth":1,"role":"check box","name":"Dark","states":["checked"],"x":20,"y":90,"w":80,"h":20},
+    {"depth":1,"role":"button","name":"New","states":[],"x":5,"y":5,"w":10,"h":10},
+    {"depth":1,"role":"link","name":"Help","states":[],"x":5,"y":200,"w":30,"h":10}]' > "$d/b.json"
+  rc=0; out=$(python3 -I "$ROOT/share/check.py" tree "$d/a.json" "$d/b.json") || rc=$?
+  check_eq "tree: moved and resized, text, state, a name (by place), vanished, appeared; exit 1" \
+    $'moved +4,+0 resized +10x+0  button "Save"  @24,20 90x30\ntext  label  "hi" -> "ho"\nstate  check box "Dark"  [unchecked] -> [checked]\nname  button  "Gone" -> "New"\nvanished  image "Logo"  (was @300,10 40x40)\nappeared  link "Help"  @5,200 30x10|1' "$out|$rc"
+  rc=0; out=$(python3 -I "$ROOT/share/check.py" tree "$d/a.json" "$d/a.json") || rc=$?
+  check_eq "...the same tree: nothing, exit 0" "|0" "$out|$rc"
+  rc=0; python3 -I "$ROOT/share/check.py" tree-keys "$d/a.json" "$d/b.json" > "$d/keys" || rc=$?
+  check_eq "tree-keys: one key a changed element, exit 0 (the keys are the answer)" "6|0" "$(wc -l < "$d/keys")|$rc"
+  check_eq "...a key is its place, what it is beside it" 'frame#1/button#1  (button "Save")' "$(head -n 1 "$d/keys")"
+  rc=0; out=$(python3 -I "$ROOT/share/check.py" tree "$d/a.json" "$d/b.json" "$d/keys") || rc=$?
+  check_eq "...with them ignored: nothing, exit 0" "|0" "$out|$rc"
+  # check diff on made images: exact, specks left out, a region named, --ignore, a size change.
+  if command -v magick >/dev/null; then
+    magick -size 200x100 xc:'#202030' -fill '#c0c0d0' -draw 'rectangle 20,20 80,40' "$d/a.png"
+    magick "$d/a.png" -fill '#c1c0d0' -draw 'point 150,80' -draw 'point 10,90' "$d/specks.png"
+    magick "$d/a.png" -fill '#c0c0d0' -draw 'rectangle 120,20 160,40' "$d/new.png"
+    magick "$d/a.png" -fill '#232333' -draw 'rectangle 0,60 199,99' "$d/shade.png"
+    magick -size 201x100 xc:'#202030' "$d/wide.png"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/a.png") || rc=$?
+    check_eq "check diff: the same image" "same (specks: 0, 0 px)|0" "$out|$rc"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/specks.png") || rc=$?
+    check_eq "...two stray pixels: specks, the same" "same (specks: 2, 2 px)|0" "$out|$rc"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/new.png" -o "$d/marked.png") || rc=$?
+    check_eq "...a new block: its region, exit 1" $'120,20 41x21 (861 px)\nspecks: 0, 0 px|1' "$out|$rc"
+    check "...-o draws it" test -s "$d/marked.png"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/shade.png") || rc=$?
+    check_match "...a fill 3 levels off (what a threshold loses) is a region" '^0,60 200x40 \(8000 px\)' "$out"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/new.png" --ignore "0,60 10x10") || rc=$?
+    check_eq "...an --ignore elsewhere leaves it found (a mask's alpha once hid every part)" $'120,20 41x21 (861 px)\nspecks: 0, 0 px|1' "$out|$rc"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/new.png" --ignore "115,15 50x30") || rc=$?
+    check_eq "...--ignore leaves it out" "same (specks: 0, 0 px)|0" "$out|$rc"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/new.png" --speck 1000) || rc=$?
+    check_eq "...--speck 1000: that block a speck too" "same (specks: 1, 861 px)|0" "$out|$rc"
+    rc=0; out=$(ob check diff "$d/a.png" "$d/wide.png") || rc=$?
+    check_eq "...another size: said, exit 1" "size 200x100 -> 201x100|1" "$out|$rc"
+    check_fails "...one file only refused" ob check diff "$d/a.png"
+  else
+    skip "check diff on made images" "no magick (imagemagick)"
+  fi
+  # --keep: a list of what the clean desktop keeps, once each.
+  check_eq "--keep: comma-separated, once each" "clock,animations" "$(lib clean_keep clock,animations,clock 2>&1)"
+  check_match "--keep: anything else refused, naming what it takes" "takes animations, bar, clock, pointer, wallpaper.*got blur" \
+    "$(lib clean_keep clock,blur 2>&1)"
+  check_eq "clean_text: all of it" "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, no pointer, no network, animations off" \
+    "$(lib clean_text tokyo-night isolated)"
+  check_eq "...what --keep takes back, and a network" "your bar, theme nord, no pointer" \
+    "$(lib eval 'CLEAN_KEEP=bar,wallpaper,clock,animations; clean_text nord connected')"
+  # Refused before any box is made.
+  check_match "up --keep without --clean refused" "--keep goes with --clean" "$(ob up "$P-uck" --keep clock 2>&1)"
+  check_match "up --clean --desk-shell refused" "--clean or --desk-shell, not both" "$(ob up "$P-uck" --clean --desk-shell 2>&1)"
+  check_match "check point outside a run refused" "outside a check run" "$(env -u OMABOX_CHECK_OUT "$CLI" check point a 2>&1)"
+  check_match "check point: a bad ID refused" "an ID is letters" "$(OMABOX_CHECK_OUT=$d/o ob check point ../x 2>&1)"
+  check_match "check run without a baseline refused, saying how to make one" "no baseline in $d/none: omabox check run --approve" \
+    "$(ob check run --base "$d/none" -- true 2>&1)"
+  check_match "check run: no scenario refused" "which scenario" "$(ob check run --approve 2>&1)"
+  check_match "check run: --runs without --approve refused" "--runs goes with --approve" "$(ob check run --runs 3 --base "$d" -- true 2>&1)"
+  check_match "check run: -b refused (a box of its own)" "a box of its own" "$(ob check run -b x -- true 2>&1)"
+  check_match "omabox -b NAME check run: refused too, -b is check point's" "-b NAME goes with check point" "$(ob -b x check run -- true 2>&1)"
+  check_match "omabox -b NAME check point: the box is asked for" "no box '$P-uckb' is up" "$(OMABOX_CHECK_OUT=$d/o ob -b "$P-uckb" check point a 2>&1)"
+  check_match "check: help names its commands" "omabox check run" "$(ob help check 2>&1)"
+  check_eq "check: no box was made" "" "$(ob ls 2>/dev/null | grep -F "$P-uck" || true)"
+}
+
+# up --clean (#252, finding 357): a desktop where only what is tested moves, and --keep's way back.
+t_clean() {
+  local B=$P-cln K=$P-clk H out
+  check "up --clean" ob up "$B" --clean
+  H=$(ob path -b "$B")/home
+  out=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | [.clean, .bar, .net, .theme]')
+  check_eq "...ls --json: clean, the stock bar, no network, tokyo-night" '[{"keep":[]},"stock","isolated","tokyo-night"]' "$out"
+  check_eq "...the wallpaper is the sentinel" "#ff00ff" "$(ob pixel -b "$B" 960 700 2>&1)"
+  check_eq "...the clock's format is a literal" "'Friday 12:00'" \
+    "$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' "$H/.config/omarchy/shell.json")"
+  check_eq "...animations off" false "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"
+  ob reload -b "$B" >/dev/null 2>&1
+  check_eq "...still off after a reload" false "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"
+  check_match "...no pointer" '^hidden' "$(cat "$(ob path -b "$B")/pointer" 2>&1)"
+  check_match "up again with another --keep: refused, saying what it keeps" "--keep clock \\(it keeps nothing\\)" \
+    "$(ob up "$B" --clean --keep clock 2>&1)"
+  check "down" ob down "$B"
+  check "up --clean --keep animations,wallpaper,pointer --net connected" ob up "$K" --clean --keep animations,wallpaper,pointer --net connected
+  check_eq "...animations on" true "$(ob lua -b "$K" 'hl.get_config("animations:enabled")' 2>&1)"
+  check_match "...the theme's wallpaper, not the sentinel" '^#' "$(ob pixel -b "$K" 960 700 2>&1)"
+  if [ "$(ob pixel -b "$K" 960 700 2>&1)" = "#ff00ff" ]; then no "...not the sentinel" "#ff00ff"; else ok "...not the sentinel"; fi
+  check_eq "...its network and keep list" '["connected",["animations","wallpaper","pointer"]]' \
+    "$(ob ls --json | jq -c --arg n "$K" '.[] | select(.name == $n) | [.net, .clean.keep]')"
+  check "down" ob down "$K"
+}
+
+# check run (#252): a scenario's checkpoints against a baseline, end to end, with a Qt Quick window
+# whose button a variable moves, a label that differs every run (unstable), and an extra checkpoint.
+t_check() {
+  local d=$TMP/chk out rc
+  if ! command -v qml6 >/dev/null 2>&1 || ! command -v magick >/dev/null; then
+    skip "check run end to end" "no qml6 (qt6-declarative) or magick"; return
+  fi
+  mkdir -p "$d"
+  cat > "$d/scenario.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+H=$(omabox path)/home
+cat > "$H/c.qml" <<QML
+import QtQuick
+import QtQuick.Controls
+ApplicationWindow {
+    width: 400; height: 240; visible: true; title: "Check demo"
+    color: "#202030"
+    Button { x: $((20 + ${MOVE:-0})); y: 20; width: 120; height: 40; text: "Save" }
+    Label { x: 20; y: 120; color: "white"; text: "run " + Math.floor(Math.random() * 1000000) }
+}
+QML
+omabox check point desk -g "0,0 1920x26"
+omabox run -d -- qml6 /home/sbx/c.qml
+omabox wait --timeout 20s window 'title:^Check demo$'
+omabox check point demo --window 'title:^Check demo$'
+[ -z "${EXTRA:-}" ] || omabox check point extra -g "0,0 200x26"
+SH
+  chmod +x "$d/scenario.sh"
+  export OMABOX_CHECK_NAME=$P-chk
+  rc=0; out=$(ob check run --approve --runs 2 --base "$d/base" -o "$d/a" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_eq "approve: exit 0" 0 "$rc"
+  check_match "...the bar's checkpoint is a plain baseline" $'(^|\n)baseline desk' "$out"
+  check_match "...the random label: unstable, every run differing" $'unstable demo: every run differed[^\n]*\n  [0-9]+,[0-9]+ [0-9]+x[0-9]+' "$out"
+  check "...the baseline's files" test -s "$d/base/demo.png" -a -s "$d/base/demo.tree.json" -a -s "$d/base/demo.unstable" -a -s "$d/base/check.json"
+  rc=0; out=$(ob check run --base "$d/base" -o "$d/b" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_eq "check, nothing changed: same, the label left out, exit 0" $'same     desk\nsame     demo|0' "$(grep -E '^(same|changed|new|missing) ' <<<"$out")|$rc"
+  rc=0; out=$(MOVE=6 ob check run --base "$d/base" -o "$d/c" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_eq "the button 6 px to the right: exit 1" 1 "$rc"
+  check_match "...changed, a region at the button" $'changed  demo: [0-9]+ regions? \\(marked: [^\n]*demo.diff.png\\)\n  at [0-9]+,[0-9]+ ' "$out"
+  check_match "...the tree names it" 'tree: moved \+6,\+0  button "Save"' "$out"
+  check "...marked" test -s "$d/c/demo.diff.png"
+  rc=0; out=$(EXTRA=1 ob check run --base "$d/base" -o "$d/e" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_match "a checkpoint the baseline lacks: new, exit 1" "new      extra: no baseline.*\|1$" "$out|$rc"
+  rc=0; out=$(ob check run --base "$d/base" -o "$d/f" -- false 2>&1) || rc=$?
+  check_eq "a scenario that fails: exit 3" 3 "$rc"
+  check_eq "no check box left" "" "$(ob ls 2>/dev/null | grep -F "$P-chk" || true)"
+  unset OMABOX_CHECK_NAME
+}
+
 # omabox tree (#178, finding 317): a window's accessibility tree as text, query-first. A Qt Quick and a
 # GTK4 window answer a state question with --find, and the bounds the line gives, handed to `click
 # --window`, land on that control (the tree then says it changed); foot has no tree, and says so.
@@ -12156,9 +12319,9 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
@@ -12169,7 +12332,7 @@ default_jobs() {
   local n m; n=$(($(nproc) / 2)) m=$(awk '/^MemAvailable:/ {print int($2 / 2097152)}' /proc/meminfo)
   [ "$m" -ge "$n" ] || n=$m; [ "$n" -le 8 ] || n=8; [ "$n" -ge 1 ] || n=1; echo "$n"
 }
-SLOW=(t_agent_session t_widget t_widget_list t_run_idle t_guard t_peek t_peek_monitors t_reap_race t_wait t_pointer t_clip t_replace t_idle)
+SLOW=(t_check t_agent_session t_widget t_widget_list t_run_idle t_guard t_peek t_peek_monitors t_reap_race t_wait t_pointer t_clip t_replace t_idle)
 
 # The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
 hostctl() { lib host_hyprctl "$@"; }

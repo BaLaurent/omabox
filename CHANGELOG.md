@@ -5,6 +5,26 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **Visual checks: `omabox check`.** An app's or a plugin's look compared with a baseline, so
+  nobody has to look at every screen. A scenario (a script of yours that drives the box and calls
+  `omabox check point ID` where a shot should match) runs in a fresh clean box; `check run
+  --approve -- SCENARIO` runs it three times and keeps what most runs agree on as the baseline,
+  saying what was not the same from one run to the next (and leaving that out from then on); `check
+  run -- SCENARIO` then says, for each checkpoint, same or changed: each region that changed, marked
+  on a copy of the shot, and, for an app with an accessibility tree, which element moved, resized,
+  changed its text or state, appeared or vanished (`moved -6,+0 button "Save"`). Shots are
+  compared exactly, as users see them, leaving out only specks a few pixels big (what Qt Quick's
+  text varies by from one start of an app to the next), so a colour a few levels off is still
+  caught. `check diff A.png B.png` compares two shots of yours the same way.
+- **`up --clean`: a desktop where only what is tested moves.** Omarchy's own bar on tokyo-night, a
+  solid `#ff00ff` wallpaper (any of it inside a window or the bar is a hole), the clock frozen at
+  "Friday 12:00" in its usual place, no pointer, no network and no animations (over reloads too).
+  `--keep animations,bar,clock,pointer,wallpaper` takes any of them back, for a test of Hyprland or
+  the shell that needs them; `--theme` and `--net connected` choose their own. `run` takes it for a
+  throwaway box too.
+
 ### Fixed
 
 - **A config error no longer hangs a box.** Under load, `hyprctl reload` in a box whose config had
