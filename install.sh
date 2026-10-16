@@ -46,7 +46,7 @@ step "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"
 
 step "Tools"
 # (Not `make && echo`: set -e ignores a failure on the left of &&, and install.sh would carry on.)
-for t in pointer keyboard wlfd peek still burst tree relay events clock; do
+for t in pointer keyboard wlfd peek still burst tree relay events; do
   make -s -C "$ROOT/tools/$t" || die "building tools/$t failed"
   echo "tools/$t"
 done

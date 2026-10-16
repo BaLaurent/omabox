@@ -56,7 +56,7 @@ tools_ready() {
   for m in "$ROOT"/tools/*/Makefile; do
     t=${m%/Makefile}; t=${t##*/}
     if [ "${1:-}" = installed ]; then
-      [ -x "$ROOT/tools/$t/omabox-$t" ] || [ -f "$ROOT/tools/$t/omabox-$t.so" ] || { echo "tools/$t/omabox-$t is missing from this install"; return 1; }
+      [ -x "$ROOT/tools/$t/omabox-$t" ] || { echo "tools/$t/omabox-$t is missing from this install"; return 1; }
       continue
     fi
     make -q -C "$ROOT/tools/$t" >/dev/null 2>&1 && continue
@@ -5428,7 +5428,7 @@ t_unit_check() {
   check_eq "--keep: comma-separated, once each" "clock,animations" "$(lib clean_keep clock,animations,clock 2>&1)"
   check_match "--keep: anything else refused, naming what it takes" "takes animations, bar, clock, locale, pointer, wallpaper.*got blur" \
     "$(lib clean_keep clock,blur 2>&1)"
-  check_eq "clean_text: all of it" "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock from Friday 12:00, locale en_US.UTF-8 in UTC, no pointer, no network, animations off" \
+  check_eq "clean_text: all of it" "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, no pointer, no network, animations off" \
     "$(lib eval 'CLEAN_LANG=en_US.UTF-8 CLEAN_ZONE=UTC; clean_text tokyo-night isolated')"
   check_eq "...what --keep takes back, and a network" "your bar, theme nord, no pointer" \
     "$(lib eval 'CLEAN_KEEP=bar,wallpaper,clock,animations,locale; clean_text nord connected')"
@@ -5438,9 +5438,6 @@ t_unit_check() {
   else
     check_eq "clean_locale: C.UTF-8 (this system has no en_US)" C.UTF-8 "$(lib clean_locale)"
   fi
-  check_eq "clock_instant_file: a clean box's zone (CLEAN_ZONE) when no TZ is given" "1767355200" \
-    "$(lib eval 'CLEAN_ZONE=UTC; clock_instant_file' | cut -d' ' -f1)"
-  check_eq "...a TZ given wins" "1767322800" "$(lib eval 'CLEAN_ZONE=UTC; clock_instant_file --setenv TZ Asia/Tokyo' | cut -d' ' -f1)"
   # Refused before any box is made.
   check_match "up --keep without --clean refused" "--keep goes with --clean" "$(ob up "$P-uck" --keep clock 2>&1)"
   check_match "up --clean --desk-shell refused" "--clean or --desk-shell, not both" "$(ob up "$P-uck" --clean --desk-shell 2>&1)"
@@ -5458,108 +5455,7 @@ t_unit_check() {
   check_eq "check: no box was made" "" "$(ob ls 2>/dev/null | grep -F "$P-uck" || true)"
 }
 
-# up --clean's clock (#252, finding 360): tools/clock's library in throwaway sandboxes, one standing
-# in for a clean box (/opt/omabox/share a mount of its own, no system bus, the instant file) and others
-# for where it must leave the clock alone. A probe of the calls that hand the kernel a CLOCK_REALTIME
-# deadline: each must wait its 0.3 s, neither return at once (the deadline months back: a busy loop)
-# nor wait for ever, and a deadline that means never must not fire (systemd's: its manager looped).
-t_unit_clock() {
-  local d=$TMP/uclock so=$ROOT/tools/clock/omabox-clock.so at now out
-  mkdir -p "$d"
-  check_eq "clock_instant_file: Friday 12:00 in a TZ the box is given, then CLOCK_BOOTTIME in ns" "1767355200" \
-    "$(lib clock_instant_file --setenv FOO bar --setenv TZ UTC | cut -d' ' -f1)"
-  check_eq "...in another" "1767322800" "$(lib clock_instant_file --setenv TZ Asia/Tokyo | cut -d' ' -f1)"
-  check_match "...the box's start, in ns" "^[0-9]+ [0-9]+0000000$" "$(lib clock_instant_file)"
-  lib clock_instant_file --setenv TZ UTC > "$d/instant"
-  # clock_box [BWRAP OPTION]... -- CMD...: a sandbox standing in for a clean box, the library preloaded.
-  clock_box() {
-    local o=(); while [ "$1" != -- ]; do o+=("$1"); shift; done; shift
-    bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --die-with-parent --tmpfs /run --tmpfs /opt \
-      --ro-bind "$ROOT/share" /opt/omabox/share --ro-bind "$so" /opt/omabox/clock/omabox-clock.so \
-      "${o[@]}" env TZ=UTC LC_ALL=C LD_PRELOAD=/opt/omabox/clock/omabox-clock.so "$@"
-  }
-  check_eq "in a box: date reads Friday 12:00" "Friday 12:00" \
-    "$(clock_box --ro-bind "$d/instant" /opt/omabox/clock/instant -- date '+%A %H:%M' 2>&1)"
-  check_match "...and runs from there (bash's \$SECONDS too: frozen, a wait on it never ended)" "^[12] 12:0[0-9]:[0-9]{2}$" \
-    "$(clock_box --ro-bind "$d/instant" /opt/omabox/clock/instant -- bash -c 'sleep 1.1; echo "$SECONDS $(date +%T)"' 2>&1)"
-  now=$(date +%s)
-  at=$(clock_box -- date +%s 2>&1)
-  check "...no instant file: the real clock" test "$((at - now))" -ge 0 -a "$((at - now))" -le 5
-  at=$(clock_box --ro-bind "$d/instant" /opt/omabox/clock/instant -- env OMABOX_REAL_CLOCK=1 date +%s 2>&1)
-  check "...OMABOX_REAL_CLOCK=1 (omabox's helpers): the real clock" test "$((at - now))" -ge 0 -a "$((at - now))" -le 5
-  at=$(clock_box --ro-bind "$d/instant" /opt/omabox/clock/instant --ro-bind /usr/bin/date /opt/omabox/bin/date -- /opt/omabox/bin/date +%s 2>&1)
-  check "...a tool in /opt/omabox/bin (events' stamps, which the host compares): the real clock" \
-    test "$((at - now))" -ge 0 -a "$((at - now))" -le 5
-  # Not a box: the host's system bus there (the run dir not hidden), or no /opt/omabox/share mount.
-  at=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --die-with-parent --tmpfs /opt \
-    --ro-bind "$ROOT/share" /opt/omabox/share --ro-bind "$d/instant" /opt/omabox/clock/instant \
-    env LD_PRELOAD="$so" date +%s 2>&1)
-  if [ -e /run/dbus/system_bus_socket ]; then
-    check "...with the host's system bus (not a box): the real clock" test "$((at - now))" -ge 0 -a "$((at - now))" -le 5
-  else skip "...with the host's system bus" "no system bus here"; fi
-  at=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --die-with-parent --tmpfs /run --tmpfs /opt \
-    --ro-bind "$d/instant" /opt/omabox/clock/instant env LD_PRELOAD="$so" date +%s 2>&1)
-  check "...without /opt/omabox/share a mount (not a box): the real clock" test "$((at - now))" -ge 0 -a "$((at - now))" -le 5
-  if ! command -v cc >/dev/null; then skip "the clock's deadlines" "no cc"; return; fi
-  cat > "$d/probe.c" <<'EOF'
-#define _GNU_SOURCE
-#include <dlfcn.h>
-#include <errno.h>
-#include <linux/futex.h>
-#include <poll.h>
-#include <pthread.h>
-#include <semaphore.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <sys/syscall.h>
-#include <sys/time.h>
-#include <sys/timerfd.h>
-#include <time.h>
-#include <unistd.h>
-static double mono(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
-static struct timespec in(double s) {   // now on the box's CLOCK_REALTIME, plus S
-    struct timespec t; clock_gettime(CLOCK_REALTIME, &t);
-    long long n = t.tv_nsec + (long long)(s * 1e9); t.tv_sec += n / 1000000000; t.tv_nsec = n % 1000000000; return t;
-}
-static double t0;
-static void took(const char *what) { printf("%s %d\n", what, (int)((mono() - t0) * 10 + 0.5)); }
-int main(void) {
-    struct timespec t; struct timeval tv; clock_gettime(CLOCK_REALTIME, &t); gettimeofday(&tv, NULL);
-    struct timespec s; syscall(SYS_clock_gettime, CLOCK_REALTIME, &s);
-    printf("now %lld %lld %lld %lld\n", (long long)t.tv_sec, (long long)tv.tv_sec, (long long)time(NULL), (long long)s.tv_sec);
-    pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER; pthread_cond_t c = PTHREAD_COND_INITIALIZER; struct timespec d;
-    pthread_mutex_lock(&m);
-    t0 = mono(); d = in(0.3); pthread_cond_timedwait(&c, &m, &d); took("cond");
-    // glibc 2.2.5's, by dlvsym: how NVIDIA's driver looks it up (its threads spun at 100% each).
-    int (*old)(void *, pthread_mutex_t *, const struct timespec *) = dlvsym(dlopen("libc.so.6", RTLD_LAZY), "pthread_cond_timedwait", "GLIBC_2.2.5");
-    struct { void *cond; } oc = { 0 };
-    t0 = mono(); d = in(0.3); if (old) old(&oc, &m, &d); took("cond-2.2.5");
-    pthread_mutex_unlock(&m);
-    sem_t sem; sem_init(&sem, 0, 0);
-    t0 = mono(); d = in(0.3); sem_timedwait(&sem, &d); took("sem");
-    t0 = mono(); d = in(0.3); clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &d, NULL); took("nanosleep");
-    uint32_t word = 0;
-    t0 = mono(); d = in(0.3); syscall(SYS_futex, &word, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME, 0, &d, NULL, FUTEX_BITSET_MATCH_ANY); took("futex");
-    int fd = timerfd_create(CLOCK_REALTIME, 0); uint64_t x;
-    struct itimerspec it = { { 0, 0 }, in(0.3) };
-    t0 = mono(); timerfd_settime(fd, TFD_TIMER_ABSTIME, &it, NULL); if (read(fd, &x, sizeof x) < 0) return 1; took("timerfd");
-    struct itimerspec never = { { 0, 0 }, { INT64_MAX, 0 } };
-    timerfd_settime(fd, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET, &never, NULL);
-    struct pollfd p = { fd, POLLIN, 0 };
-    printf("never %d\n", poll(&p, 1, 300));
-    return 0;
-}
-EOF
-  if ! cc -O2 -pthread -o "$d/probe" "$d/probe.c" 2> "$d/cc.log"; then no "the clock's probe builds" "$(head -c 300 "$d/cc.log")"; return; fi
-  out=$(clock_box --ro-bind "$d/instant" /opt/omabox/clock/instant -- "$d/probe" 2>&1)
-  check_match "in a box: clock_gettime, gettimeofday, time and syscall() read it" "^now 176735520[0-9] 176735520[0-9] 176735520[0-9] 176735520[0-9]"$'\n' "$out"
-  check_eq "...each CLOCK_REALTIME deadline waits its 0.3 s; one that means never does not fire" \
-    $'cond 3\ncond-2.2.5 3\nsem 3\nnanosleep 3\nfutex 3\ntimerfd 3\nnever 0' "$(sed 1d <<<"$out")"
-  out=$(clock_box -- "$d/probe" 2>&1)
-  check_eq "...and without the instant, the same" $'cond 3\ncond-2.2.5 3\nsem 3\nnanosleep 3\nfutex 3\ntimerfd 3\nnever 0' "$(sed 1d <<<"$out")"
-}
-
-# up --clean (#252, findings 357, 360): a desktop where only what is tested moves, and --keep's way
+# up --clean (#252, findings 357, 363): a desktop where only what is tested moves, and --keep's way
 # back.
 t_clean() {
   local B=$P-cln K=$P-clk H out lang
@@ -5577,15 +5473,10 @@ t_clean() {
   ob check point -b "$B" -o "$TMP/clnp" desk >/dev/null 2>&1
   check_eq "...check point looks for holes there (finding 362), and the stock bar has none" "holes checked|" \
     "$(grep '^holes' "$TMP/clnp/desk.point" 2>&1)|$(grep '^hole ' "$TMP/clnp/desk.point" || true)"
-  # The clock (finding 360): every process's from Friday 12:00 at the box's start, the bar's own code.
-  check_eq "...the bar's clock keeps Omarchy's format (the real clock code runs)" "dddd HH:mm" \
+  check_eq "...the clock's format is a literal" "'Friday 12:00'" \
     "$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' "$H/.config/omarchy/shell.json")"
-  check_match "...run's command reads Friday 12:00 (its first minute)" "^Friday 12:0[0-9]$" "$(ob run -b "$B" -- env LC_ALL=C date '+%A %H:%M' 2>&1)"
-  check_match "...and it runs (bash's \$SECONDS: frozen, a wait on it never ended)" "^[12]$" "$(ob run -b "$B" -- bash -c 'sleep 1.1; echo $SECONDS' 2>&1)"
-  check "...a D-Bus-activated service has the library" ob run -b "$B" -- sh -c 'p=$(pgrep -x xdg-desktop-por | head -n 1) && grep -q omabox-clock "/proc/$p/maps"'
-  check "...the shell too" ob run -b "$B" -- sh -c 'grep -q omabox-clock "/proc/$(pgrep -x quickshell | head -n 1)/maps"'
-  out=$(ob events -b "$B" --json 2>&1 | head -n 1 | jq -r '.time | floor' 2>&1)
-  check "...events keep the host's clock (their stamps are compared with it)" test "$(( $(date +%s) - ${out:-0} ))" -lt 300
+  out=$(ob run -b "$B" -- date +%s 2>&1)
+  check "...and the box's processes on the real clock (the bar's text alone is frozen)" test "$(( $(date +%s) - ${out:-0} ))" -lt 30
   check_eq "...animations off" false "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"
   ob reload -b "$B" >/dev/null 2>&1
   check_eq "...still off after a reload" false "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"
@@ -5600,9 +5491,8 @@ t_clean() {
   if [ "$(ob pixel -b "$K" 960 700 2>&1)" = "#ff00ff" ]; then no "...not the sentinel" "#ff00ff"; else ok "...not the sentinel"; fi
   ob check point -b "$K" -o "$TMP/clnp" kept >/dev/null 2>&1
   check_eq "...so check point looks for no holes on its screen" "holes off: --keep wallpaper" "$(grep '^holes' "$TMP/clnp/kept.point" 2>&1)"
-  out=$(ob run -b "$K" -- date +%s 2>&1)
-  check "...the real clock" test "$(( $(date +%s) - ${out:-0} ))" -lt 30
-  check_fails "...no /etc/ld.so.preload of the box's" ob run -b "$K" -- test -e /etc/ld.so.preload
+  check_eq "...--keep clock: the bar's clock keeps Omarchy's format" "dddd HH:mm" \
+    "$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' "$(ob path -b "$K")/home/.config/omarchy/shell.json")"
   check_eq "...its network and keep list" '["connected",["animations","wallpaper","pointer","clock","locale"]]' \
     "$(ob ls --json | jq -c --arg n "$K" '.[] | select(.name == $n) | [.net, .clean.keep]')"
   out=$(readlink -f /etc/localtime 2>/dev/null) || out=""
@@ -7707,7 +7597,7 @@ t_unit_install() {
   rmdir "$h/.claude/skills/omabox"
   check "install.sh in a clean HOME" env HOME="$h" PATH="$stub:$PATH" "$c/install.sh"
   check_eq "...built every tool in its own ROOT" "$(cd "$c/tools" && printf '%s\n' */Makefile | sed 's|\(.*\)/Makefile|\1/omabox-\1|')" \
-    "$(cd "$c/tools" && for f in */omabox-*; do [ -x "$f" ] && echo "${f%.so}"; done)"   # (tools/clock's is a library)
+    "$(cd "$c/tools" && for f in */omabox-*; do [ -x "$f" ] && echo "$f"; done)"
   check_eq "...and nothing in the checkout under test (#187)" "$tools0" "$(stat -c '%n %.9Y' "$ROOT"/tools/*/omabox-* 2>&1)"
   check_eq "the skill is a link" "$c/skill" "$(readlink "$h/.claude/skills/omabox")"
   check_fails "...not the feedback skill: opt-in (finding 326)" test -L "$h/.claude/skills/omabox-feedback"
@@ -12766,7 +12656,7 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check t_unit_clock)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)
 

@@ -24,7 +24,6 @@ TREE=$ROOT/tools/tree/omabox-tree
 EVENTS=$ROOT/tools/events/omabox-events
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
 RELAY=$ROOT/tools/relay/omabox-relay
-CLOCK=$ROOT/tools/clock/omabox-clock.so
 # aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
 # the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
 # and where: a checkout's build/prefix, else the user's data dir (aq_resolve). With omabox's own patches
@@ -258,13 +257,11 @@ shell.toml [bar]"). Plugins are placed as without it.
 @ up run check
 --clean: a desktop where only what is tested moves, for shots compared across runs (\`check\`):
 Omarchy's bar (--stock-bar) on tokyo-night (or --theme), a #ff00ff wallpaper (no theme has it: any of
-it inside a window or the bar is a hole), every process's wall clock from Friday 12:00 as the box
-starts (the bar's, and the times an app shows or stamps; it runs, so "12:00" holds for the box's
-first minute; static and Go programs keep the real one), English (en_US.UTF-8, else C.UTF-8) and UTC
-for the whole session, not your LC_TIME or zone, no pointer, no network (--net connected gives it
-back), animations off (over reloads too). --keep LIST takes any of animations, bar (yours), clock,
-locale (yours and your timezone), pointer, wallpaper back, for a test of Hyprland or the shell that
-needs them. A theme set later in the box brings that theme's wallpaper.
+it inside a window or the bar is a hole), the bar's clock frozen at "Friday 12:00" (in its place, at
+its width), English (en_US.UTF-8, else C.UTF-8) in UTC for the whole session, no pointer, no network
+(--net connected gives it back), animations off (over reloads too). --keep LIST takes any of
+animations, bar (yours), clock, locale (yours and your timezone), pointer, wallpaper back. A theme
+set later in the box brings that theme's wallpaper.
 @ up run audio record
 --audio: the box's own PipeWire, WirePlumber and pipewire-pulse (PipeWire and Pulse apps both play),
 its only devices a speaker nobody hears (omabox-speaker, a null sink: the default output) and a
@@ -503,7 +500,7 @@ differed by (Qt Quick's text varies from one start of an app to the next; 16 to 
 largest for each checkpoint of it; 8 when the runs agreed to the pixel; --speck N for all);
 "same" says what it left out. A change smaller than that can only show in the tree. A scenario puts
 files in the box under \$(omabox path)/home (/home/sbx in it); a date shown relative ("9 months
-ago") needs its file's mtime fixed (\`omabox run -- touch -d ...\`, on the box's clock).
+ago") needs its file's mtime set relative to now (\`omabox run -- touch -d "9 months ago" FILE\`).
 \`check point\` waits until the shot is still (15 s, --timeout; then taken anyway, noted), shoots the
 screen, -g, --window (with its tree, when it has one) or a crop of the window (--window SEL -g, in
 its coordinates; the tree's elements touching it); --ignore leaves a region of that shot out (a
@@ -1144,10 +1141,6 @@ BOX_STILL=/opt/omabox/bin/omabox-still
 BOX_BURST=/opt/omabox/bin/omabox-burst
 BOX_TREE=/opt/omabox/bin/omabox-tree
 BOX_EVENTS=/opt/omabox/bin/omabox-events
-# --clean's clock library and its instant (tools/clock: not in /opt/omabox/bin, whose tools it leaves
-# on the real clock).
-BOX_CLOCK=/opt/omabox/clock/omabox-clock.so
-BOX_CLOCK_INSTANT=/opt/omabox/clock/instant
 
 # Run a tool against the box's compositor (grim, hyprctl, the keyboard and pointer), inside the box's
 # mount namespace with a clean environment (finding 63). Its sockets live in the box's runtime dir,
@@ -1170,7 +1163,7 @@ on_box() {
   sig=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || die "box '$NAME': no HYPRLAND_INSTANCE_SIGNATURE in its omabox.env"
   # shellcheck disable=SC2016 # the inner sh's
   ns_held nsenter -t "$pid" -U -m --preserve-credentials -- env -i PATH=/usr/bin XDG_RUNTIME_DIR="/run/user/$UID" \
-    WAYLAND_DISPLAY="$wd" HYPRLAND_INSTANCE_SIGNATURE="$sig" LANG="${LANG:-C.UTF-8}" OMABOX_REAL_CLOCK=1 OMABOX_EFD=@EFD \
+    WAYLAND_DISPLAY="$wd" HYPRLAND_INSTANCE_SIGNATURE="$sig" LANG="${LANG:-C.UTF-8}" OMABOX_EFD=@EFD \
     /usr/bin/sh -c 'case $OMABOX_EFD in *[!0-9]*) ;; *) eval "exec 2>&$OMABOX_EFD $OMABOX_EFD>&-" ;; esac
       unset OMABOX_EFD; exec "$@"' sh "$@" || rc=$?
   ns_said $rc "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
@@ -1468,9 +1461,7 @@ box_exec() {
   local wd=$PWD
   if [ -n "$sys" ]; then
     [[ ${1:-} == /* ]] || die "box_exec: omabox's own helper goes by its full path, got ${1:-nothing}"
-    # (OMABOX_REAL_CLOCK: on the host's clock in a clean box too, tools/clock: what they stamp, the
-    # host reads.)
-    env=(HOME=/home/sbx LANG="${LANG:-C.UTF-8}" XDG_RUNTIME_DIR="/run/user/$UID" OMABOX_SYS=1 OMABOX_REAL_CLOCK=1)
+    env=(HOME=/home/sbx LANG="${LANG:-C.UTF-8}" XDG_RUNTIME_DIR="/run/user/$UID" OMABOX_SYS=1)
     # The box's display, Hyprland and session bus from its omabox.env, read once (the first of each,
     # as box_env takes them): record_stop asks every 100 ms while wf-recorder finishes.
     local seen=" "
@@ -2579,8 +2570,16 @@ seed_home() {
     place_plugin "$id" "$section" "$kinds" "$ids" < "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new"
     mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
   done
-  # --clean (#252, finding 357): the sentinel wallpaper's file, which the session links.
+  # --clean (#252, finding 357): the clock's text frozen with a literal format (it keeps its widget,
+  # place and width, and never ticks), and the sentinel wallpaper's file, which the session links.
   if [ "${CLEAN:-0}" = 1 ]; then
+    if ! clean_has clock; then
+      jq --arg f "$CLEAN_CLOCK" --arg v "$CLEAN_CLOCK_VERTICAL" \
+        '(.bar.layout[]?[]? | select(.id == "omarchy.clock")) |= (.format = $f | .verticalFormat = $v)' \
+        "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new" ||
+        die "up --clean: could not freeze the clock in the box's shell.json"
+      mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
+    fi
     clean_has wallpaper || base64 -d <<<"$CLEAN_WALLPAPER_PNG" > "$h/.config/omabox/clean-wallpaper.png"
   fi
   # The user's current theme, or with `up --theme NAME` none of it (finding 245): the box's session
@@ -3275,13 +3274,12 @@ box_addr() {
 # --idle are not compared. Reads cmd_up's locals (`given` names the options on the command line).
 # up --clean (#252, finding 357): what it sets, and what --keep can take back. The theme is Omarchy's
 # default; the wallpaper a colour no theme uses, so any of it inside a window or the bar is a hole (a
-# 16x16 PNG of it, scaled); the clock, every process's, from CLEAN_CLOCK_AT (tools/clock, finding 360).
+# 16x16 PNG of it, scaled); the clock a literal Qt format, which keeps its widget, place and width.
 CLEAN_THEME=tokyo-night
 CLEAN_WALLPAPER='#ff00ff'
 CLEAN_WALLPAPER_PNG=iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVQoz2P8z/CfgRTARJLqUQ2jGoaUBgBKTgIeHXO4xgAAAABJRU5ErkJggg==
-# The clock (finding 360): this instant in the box's timezone when the box starts, a Friday, which the
-# bar's own clock shows as "Friday 12:00" for its first minute; it runs from there.
-CLEAN_CLOCK_AT="2026-01-02 12:00"
+CLEAN_CLOCK="'Friday 12:00'"
+CLEAN_CLOCK_VERTICAL="'12'"$'\n'"'—'"$'\n'"'00'"
 # The locale and timezone (finding 363): English in UTF-8 and UTC for the whole session, not the host's
 # (its LC_TIME made an app's dates Portuguese, "Há 9 meses"); --keep locale gives both back.
 CLEAN_TZ=UTC
@@ -3302,20 +3300,6 @@ clean_keep() {
   echo "${out[*]}"
 }
 clean_has() { [[ ,$CLEAN_KEEP, == *,$1,* ]]; }
-# The instant file tools/clock reads (BOX_CLOCK_INSTANT): CLEAN_CLOCK_AT in the box's timezone (a TZ
-# the box's --setenv triples, cmd_up's envs, give it; else CLEAN_ZONE, a clean box's, whose bar then
-# reads Friday 12:00 in it; else the host's /etc/localtime), and CLOCK_BOOTTIME now in ns
-# (/proc/uptime's), from which the box's clock runs.
-# clock_instant_file [--setenv NAME VALUE]...
-clock_instant_file() {
-  local tz="" at up
-  while [ $# -ge 3 ]; do [ "$2" != TZ ] || tz=$3; shift 3; done
-  [ -n "$tz" ] || tz=$CLEAN_ZONE
-  if [ -n "$tz" ]; then at=$(TZ=$tz date -d "$CLEAN_CLOCK_AT" +%s) || return 1
-  else at=$(env -u TZ date -d "$CLEAN_CLOCK_AT" +%s) || return 1; fi
-  up=$(cut -d' ' -f1 /proc/uptime) && [[ $up =~ ^[0-9]+\.[0-9]{2}$ ]] || return 1
-  echo "$at $((10#${up/./}))0000000"
-}
 # A clean box's locale and timezone as its box.json records them (check.json's, a check compares
 # them): its own, or with --keep locale the host's (LANG and any LC_* the box is given) and a TZ
 # --env gives (the --setenv triples, cmd_up's envs), else the host's /etc/localtime's zone.
@@ -3340,7 +3324,7 @@ clean_text() {
   if clean_has bar; then parts+=("your bar"); else parts+=("Omarchy's bar"); fi
   parts+=("theme $1")
   clean_has wallpaper || parts+=("wallpaper $CLEAN_WALLPAPER (any of it inside a window or the bar is a hole)")
-  clean_has clock || parts+=("the clock from Friday 12:00")
+  clean_has clock || parts+=("the clock at ${CLEAN_CLOCK//\'/}")
   clean_has locale || parts+=("locale ${CLEAN_LANG:-$(clean_locale)} in ${CLEAN_ZONE:-$CLEAN_TZ}")
   clean_has pointer || parts+=("no pointer")
   [ "$2" != isolated ] || parts+=("no network")
@@ -3501,12 +3485,10 @@ cmd_up() {
     shift
   done
   # --clean (#252, finding 357): a desktop where only what is tested moves. Omarchy's own bar on
-  # CLEAN_THEME, a sentinel wallpaper, the clock pinned (finding 360), no pointer, no network,
-  # animations off; --keep takes any of them back, --theme and --net choose their own.
+  # CLEAN_THEME, a sentinel wallpaper, the clock frozen, English in UTC (finding 363), no pointer, no
+  # network, animations off; --keep takes any of them back, --theme and --net choose their own.
   if [ "$CLEAN" = 1 ]; then
     [ "$DESK_SHELL" = 0 ] || die "up: --clean or --desk-shell, not both (--clean starts from Omarchy's bar; --keep bar keeps yours)"
-    clean_has clock || [ -f "$CLOCK" ] ||
-      die "up --clean: missing $CLOCK, which pins the box's clock: run install.sh$([ ! -f "$ROOT/.git" ] || echo " (in a git worktree: make -C $ROOT/tools/clock)"), or --keep clock"
     clean_has bar || STOCK_BAR=1
     [ -n "$THEME" ] || THEME=$CLEAN_THEME
     clean_has pointer || nopointer=1
@@ -3962,21 +3944,12 @@ cmd_up() {
   # wrote it, and box terminals followed it to the host's checkout. A box's own instead: the packaged
   # Omarchy, or --omarchy's tree. Over the host's file when there is one; else, only for --omarchy, in
   # a read-only overlay of /etc with the file on top (bwrap cannot add a file to a read-only bind).
-  # --clean's clock (#252, finding 360): tools/clock's library in every dynamically linked process of
-  # the box, through the box's own /etc/ld.so.preload (the host's lines first, when it has one). Not
-  # LD_PRELOAD: `run`'s commands and omabox's tools start with a clean environment, and a user
-  # manager's units with its own. The library reads the instant from BOX_CLOCK_INSTANT, which only
-  # such a box has.
-  # Each of the box's own files in $D/etc goes over the host's; one the host lacks makes /etc a
-  # read-only overlay with $D/etc on top.
+  # Each of the box's own files in $D/etc (this one, --clean's locale and timezone below) goes over the
+  # host's; one the host lacks, or a link, makes /etc a read-only overlay with $D/etc on top.
   local etc_args=(--ro-bind /etc /etc) etc_new=0 f
   mkdir -p "$D/etc"
   if [ -e /etc/omarchy.conf ] || [ -n "$omarchy" ]; then
     { printf 'export OMARCHY_PATH='; printf '%q\n' "${omarchy:-/usr/share/omarchy}"; } > "$D/etc/omarchy.conf"
-  fi
-  if [ "$CLEAN" = 1 ] && ! clean_has clock; then
-    { cat /etc/ld.so.preload 2>/dev/null || true; echo "$BOX_CLOCK"; } > "$D/etc/ld.so.preload"
-    clock_instant_file "${envs[@]}" > "$D/clock" || die "up --clean: could not work out the box's clock ($CLEAN_CLOCK_AT)"
   fi
   # --clean's locale and timezone (finding 363): the session's LANG (launch.sh below) and, for what
   # reads the files instead (a --systemd box's user manager reads locale.conf; glibc, Qt and ICU
@@ -4009,8 +3982,6 @@ cmd_up() {
   [ ! -x "$BURST" ] || args+=(--ro-bind "$BURST" "$BOX_BURST")
   # `tree`'s reader of the box's accessibility bus (#178); without it, `tree` says to start the box again.
   [ ! -x "$TREE" ] || args+=(--ro-bind "$TREE" "$BOX_TREE")
-  # --clean's clock: the library and the instant it reads (above).
-  [ ! -s "$D/clock" ] || args+=(--ro-bind "$CLOCK" "$BOX_CLOCK" --ro-bind "$D/clock" "$BOX_CLOCK_INSTANT")
   # A private aquamarine (finding 125), which share/start-hyprland.sh puts first; none: the system's.
   [ -z "$AQ_LIB" ] || args+=(--ro-bind "$AQ_LIB" /opt/omabox/lib)
   for n in "${renders[@]}"; do args+=(--dev-bind "$n" "$n"); done
