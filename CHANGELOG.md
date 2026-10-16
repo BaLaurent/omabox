@@ -119,6 +119,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   it, and anything else but `--json` is an unknown argument; both exit 2. `omabox saves` too:
   `saves --json --bogus` printed the JSON and exited 0. And `omabox --version` (`version`, `-V`):
   `version foo` printed the version and exited 0.
+- **`omabox tree` no longer prints libatspi's warnings after a tree it read.** A warning about
+  another app on the box's accessibility bus came out as a stray `omabox: tree:` line; now they show
+  only when `tree` fails.
 - **The skill shows `wait change` again**, for an app that redraws later by itself (a sync, a
   timer): `omabox wait change --window APP`, then `wait still`. Without it agents slept with
   `wait cmd -- false`. `omabox help wait` says what `change` waits for.

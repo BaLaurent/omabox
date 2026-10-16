@@ -7066,6 +7066,16 @@ from them.
     foo`, `--version foo` and `-V --json` printed the version and exited 0, the hole `ls` and `saves`
     had: any argument after it is now "--version: unknown argument X (omabox --version)", exit 2,
     nothing printed (`-h` is still its help; a `-b NAME` before it is still ignored). `t_unit_version`.
+349. **`tree` keeps libatspi's warnings out of a tree it read** (2026-10-16, finding 341's loose end).
+    libatspi warns through GLib about any app on the box's a11y bus that answers badly (`dbind-WARNING
+    **: AT-SPI: Error in GetItems, sender=:1.19, …` for an app with no cache object), on a read that
+    went fine: `omabox tree` printed it as a stray `omabox: tree:` line after the tree. `omabox-tree`
+    now holds every GLib message (its log writer) and prints them only when it fails (any exit but 0),
+    as GLib would have (a debug one only with `G_MESSAGES_DEBUG`); an error, which aborts, goes out at
+    once. Its own notes (stopped at N nodes, Chromium's flag) still show. Seen in a box: a Python app
+    that embeds itself in the registry and has no objects made the old helper print the warning on
+    every read of a zenity window, the new one only on a failed read (pid 1). Test: t_tree (that app;
+    a failed `--find` shows the warning, a read tree has none).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

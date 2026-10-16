@@ -4996,6 +4996,23 @@ PY
     else no "...a click at its bounds' middle checks it" "no bounds in [$out]"; fi
     rc=0; out=$(ob tree -b "$B" --window 'Tree demo GTK4' --find 'no such words' 2>&1) || rc=$?
     check_eq "...--find with nothing matching: 1, and says so" "1 yes" "$rc $(grep -q 'nothing in the window holds "no such words"' <<<"$out" && echo yes)"
+    # An app on the bus that answers nothing: libatspi warns about it on every read (finding 349).
+    cat > "$H/mute-a11y.py" <<'PY'
+from gi.repository import Gio, GLib
+s = Gio.bus_get_sync(Gio.BusType.SESSION)
+addr = s.call_sync('org.a11y.Bus', '/org/a11y/bus', 'org.a11y.Bus', 'GetAddress', None, GLib.VariantType('(s)'), 0, -1, None).unpack()[0]
+c = Gio.DBusConnection.new_for_address_sync(addr, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+c.call_sync('org.a11y.atspi.Registry', '/org/a11y/atspi/accessible/root', 'org.a11y.atspi.Socket', 'Embed',
+            GLib.Variant('((so))', ((c.get_unique_name(), '/org/a11y/atspi/accessible/root'),)), None, 0, -1, None)
+GLib.MainLoop().run()
+PY
+    ob run -b "$B" -d -- python3 -I /home/sbx/mute-a11y.py >/dev/null 2>&1
+    # shellcheck disable=SC2329 # called through until_ok
+    warned() { local o; o=$("$CLI" tree -b "$B" --window 'Tree demo GTK4' --find 'no such words' 2>&1); grep -q 'dbind-WARNING.*Error in GetItems' <<<"$o"; }
+    check "a failed tree keeps libatspi's warnings (an app on the bus that answers nothing)" until_ok 10 warned
+    out=$(ob tree -b "$B" --window 'Tree demo GTK4' 2>&1)
+    check_match "...a tree that was read leaves them out" '^frame "Tree demo GTK4" ' "$out"
+    check_fails "...no warning line in it" grep -q 'WARNING\|omabox: tree:' <<<"$out"
   else
     skip "tree of a GTK4 window" "no GTK4 or python-gobject"
   fi

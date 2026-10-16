@@ -418,13 +418,49 @@ static void dbind_log(const gchar *d, GLogLevelFlags l, const gchar *m, gpointer
     g_log_default_handler(d, l, m, u);
 }
 
+// What libatspi, GLib and GDBus log (warnings about one app's objects, while the window read fine)
+// is held here and printed only when the run fails: on a tree that was read it was a stray line in
+// omabox tree's output (finding 349). An error (it aborts) goes out at once.
+struct held_log { GLogLevelFlags level; gchar *domain, *message; };
+static GArray *glog;
+static GLogWriterOutput glog_writer(GLogLevelFlags l, const GLogField *f, gsize n, gpointer u) {
+    (void)u;
+    if (l & G_LOG_LEVEL_ERROR) return g_log_writer_standard_streams(l, f, n, NULL);
+    const char *domain = NULL, *message = NULL;
+    for (gsize i = 0; i < n; i++) {
+        if (!strcmp(f[i].key, "GLIB_DOMAIN")) domain = f[i].value;
+        else if (!strcmp(f[i].key, "MESSAGE")) message = f[i].value;
+    }
+    if (g_log_writer_default_would_drop(l, domain)) return G_LOG_WRITER_HANDLED;   // debug, unless G_MESSAGES_DEBUG
+    if (!glog) glog = g_array_new(FALSE, FALSE, sizeof(struct held_log));
+    struct held_log h = {l, g_strdup(domain), g_strdup(message)};
+    g_array_append_val(glog, h);
+    return G_LOG_WRITER_HANDLED;
+}
+// The held messages, as GLib would have printed them.
+static void glog_flush(void) {
+    for (guint i = 0; glog && i < glog->len; i++) {
+        struct held_log *h = &g_array_index(glog, struct held_log, i);
+        GLogField f[2] = {{"MESSAGE", h->message ? h->message : "", -1}, {"GLIB_DOMAIN", h->domain, -1}};
+        g_log_writer_standard_streams(h->level, f, h->domain ? 2 : 1, NULL);
+    }
+}
+
 static double now(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+static int tree_main(int argc, char **argv);
 int main(int argc, char **argv) {
+    g_log_set_writer_func(glog_writer, NULL, NULL);
+    int rc = tree_main(argc, argv);
+    if (rc) glog_flush();
+    return rc;
+}
+
+static int tree_main(int argc, char **argv) {
     if (!omabox_inside_box()) {
         fprintf(stderr, "omabox-tree: only runs inside an omabox box\n");
         return 2;
