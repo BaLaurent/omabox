@@ -99,7 +99,7 @@ loop, across boxes, all four checkpoints).
 - Name changes from the tree where there is one; pixels and regions where there is not.
 - Clean profile as above; a pinned clock is the gap left.
 
-**Afterwards, with `check` built (finding 358):** the AMD iGPU (`OMABOX_RENDER_NODE=renderD128`):
+**Afterwards, with `check` built (finding 359):** the AMD iGPU (`OMABOX_RENDER_NODE=renderD128`):
 three runs identical, the largest noise blob 7 px (NVIDIA: 13). The same scenario on AMD against an
 NVIDIA baseline: 203 regions in the app: baselines are per GPU. And a flaky layout in the subject: in
 one start of eight its status column (square and word) sat 3-4 px left of where the other seven had

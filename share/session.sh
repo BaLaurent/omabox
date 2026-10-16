@@ -98,6 +98,31 @@ fi
 # hyprctl) are called by absolute path, so no stub or project build on this PATH replaces them.
 mkdir -p "$HOME/.local/bin"
 p=/opt/omabox/share/bin:$HOME/.local/bin
+# `up --quickshell PATH` (finding 358): the build is the box's quickshell and qs, by a link in the box's
+# runtime dir, which share/shell.sh and the systemd-cat stand-in exec for the shell, and which comes
+# next on PATH for what calls it by name (Omarchy's omarchy-shell and restart: `qs ipc`, `quickshell
+# kill`; `omabox run -- qs ...`). A link at a fixed path, not the variable: the shell is started again
+# by whatever runs `omarchy restart shell` (a bar menu, a project's script) with its own environment,
+# so OMABOX_QUICKSHELL is taken out of the session's like OMABOX_HYPRLAND. First the build is asked
+# whether the box's Qt is the one it was built against (its patch release too, which `up` cannot
+# read from the binary): one that is not would die as the shell starts, so the box ends here, saying so.
+if [ -n "${OMABOX_QUICKSHELL:-}" ]; then
+  rc=0; out=$(without_host_fd timeout 10 "$OMABOX_QUICKSHELL" --private-check-compat < /dev/null 2>&1) || rc=$?
+  # 1: the warning (another Qt); 0: the same; anything else (109: a build without the flag) cannot tell.
+  if [ "$rc" = 1 ]; then
+    out=$(printf '%s' "$out" | sed 's/\x1b\[[0-9;]*m//g' | tr -s '\n' ' ')
+    if [[ $out =~ built\ against\ Qt\ ([^ ]+)\ but\ the\ system\ has\ updated\ to\ Qt\ ([^ ]+) ]]; then
+      out="built against Qt ${BASH_REMATCH[1]}, the box has Qt ${BASH_REMATCH[2]} (Qt's private API: build it again against the installed Qt)"
+    fi
+    echo "session.sh: --quickshell: $(printf '%s' "$out" | cut -c 1-300)" >&2
+    kill -KILL -1; exit 1
+  fi
+  mkdir -p "$XDG_RUNTIME_DIR/omabox-quickshell"
+  ln -sfn "$OMABOX_QUICKSHELL" "$XDG_RUNTIME_DIR/omabox-quickshell/quickshell"
+  ln -sfn "$OMABOX_QUICKSHELL" "$XDG_RUNTIME_DIR/omabox-quickshell/qs"
+  p=$p:$XDG_RUNTIME_DIR/omabox-quickshell
+  unset OMABOX_QUICKSHELL
+fi
 # `up --omarchy DIR` (finding 135): its bin next, as Omarchy's env-bootstrap puts a dev link's first.
 [ -z "${OMABOX_OMARCHY:-}" ] || p=$p:$OMABOX_OMARCHY/bin
 IFS=: read -ra dirs <<< "${OMABOX_CALLER_PATH:-}:$PATH"

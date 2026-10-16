@@ -22,7 +22,7 @@
   check.py tree-keys BASE.json NEW.json
       The keys of the elements that differ, "KEY  (role "name")" a line (for IGNORE); exit 0.
   check.py sheet PLAN OUT.png [FONT]
-      The report of a check (finding 360): one image of every change, each region cropped with some
+      The report of a check (finding 361): one image of every change, each region cropped with some
       context from the baseline and the new shot side by side, inside what a model sees in one look.
       PLAN: tab-separated lines, "title TEXT", then per changed checkpoint "point ID BASE.png NEW.png
       BASE.tree.json NEW.tree.json UNSTABLE" (empty fields: none) and its "region X Y W H" or "size
@@ -235,7 +235,7 @@ def crop_tree(path, x, y, w, h):
     sys.stdout.write("\n")
 
 
-# The report (finding 360): what a model sees in one look is 1568 px a side and ~1.15 MP (finding
+# The report (finding 361): what a model sees in one look is 1568 px a side and ~1.15 MP (finding
 # 243), so the sheet is 1456 px wide at most and its area under that; each side of a pair 706 px wide
 # and 360 high at most, a region cropped with CTX px around it, crops of one checkpoint merged while
 # they are near, a small crop shown 2x (a 2 px move is 4 there). More than CROPS_MAX crops in one

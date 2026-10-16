@@ -90,6 +90,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
             [--clean [--keep animations,bar,clock,locale,pointer,wallpaper]]   a desktop where only what is tested moves
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
+            [--quickshell PATH]                          a Quickshell build of yours for the box's shell
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      start it under a free name, box-1, box-2, ... (printed)
@@ -297,6 +298,12 @@ starts); hyprctl and hyprpm stay the installed ones (a warning when the versions
 \`windows\` name it. Compositor logic runs for real (layouts, focus, input routing, the Lua config,
 IPC, protocols); DRM/KMS, real monitors, HDR/VRR, multi-GPU, libinput with real devices and the
 session and suspend paths never run in a box (the lock screen does, without a real password).
+--quickshell PATH: the box's shell (and \`quickshell\`/\`qs\` on its PATH, and omabox's own calls to
+its shell) runs that binary, its folder mounted read-only at its own path. Quickshell uses Qt's
+private API, so the build must be one against the installed Qt: \`up\` refuses a build against
+another Qt, or one needing a library the box lacks, naming both. \`ls\` and \`windows\` name it;
+\`ls --json\` has quickshell_version (\`quickshell --version\` in the box, every box's), which is the
+last release's number, never proof that a fix is in: a build of an unreleased commit says it too.
 @ shot windows keys click drag pointer wait pixel
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
@@ -1509,6 +1516,8 @@ box_exec() {
       cd "$1" && shift
       if [ -n "${OMABOX_SYS:-}" ]; then unset OMABOX_SYS OMABOX_CALLER_PATH; PATH=/usr/bin exec -- "$@"; fi
       p=/opt/omabox/share/bin:/home/sbx/.local/bin
+      # `up --quickshell`: the build as quickshell and qs, before the caller'"'"'s /usr/bin (finding 358).
+      [ ! -x "${XDG_RUNTIME_DIR:-/nonexistent}/omabox-quickshell/quickshell" ] || p=$p:$XDG_RUNTIME_DIR/omabox-quickshell
       # `up --omarchy`: its bin before the caller'"'"'s dirs, as in the session (finding 135).
       [ "${OMARCHY_PATH:-/usr/share/omarchy}" = /usr/share/omarchy ] || p=$p:${OMARCHY_PATH%/}/bin
       set -f; IFS=:
@@ -1854,7 +1863,7 @@ shell_running() { local st; st=$(on_box cat "/proc/$1/stat" 2>/dev/null) && [[ $
 # beside 2 busy loops a core). shell_hung PID
 shell_hung() {
   local rc=0 age
-  on_box timeout 2 /usr/bin/quickshell ipc --pid "$1" show >/dev/null 2>&1 || rc=$?
+  on_box timeout 2 "$(box_qs)" ipc --pid "$1" show >/dev/null 2>&1 || rc=$?
   [ $rc = 124 ] || return 1
   # Its age in s: /proc/uptime less its start (stat's field 22, in clock ticks).
   # shellcheck disable=SC2016 # the inner sh's
@@ -1906,7 +1915,7 @@ shell_adopt() {
   local f cfg p
   f=$(box_home_file shell.log) && grep -aq 'An instance of this configuration is already running' "$f" 2>/dev/null || return 1
   cfg=$(meta omarchy); cfg=${cfg:-/usr/share/omarchy}/shell
-  p=$(on_box /usr/bin/quickshell list -j -p "$cfg" --any-display 2>/dev/null | jq -r 'first(.[].pid) // empty' 2>/dev/null) || p=""
+  p=$(on_box "$(box_qs)" list -j -p "$cfg" --any-display 2>/dev/null | jq -r 'first(.[].pid) // empty' 2>/dev/null) || p=""
   [[ $p =~ ^[0-9]+$ ]] && shell_running "$p" || return 1
   # shellcheck disable=SC2016 # the box's XDG_RUNTIME_DIR
   on_box sh -c 'f=$XDG_RUNTIME_DIR/omabox-shell.pid; echo "$1" > "$f.new" && mv -f "$f.new" "$f"' sh "$p" || return 1
@@ -1945,10 +1954,12 @@ shell_note() {
 }
 # shell_crash's answer in words. shell_crash_text WHEN HOW
 shell_crash_text() {
+  # A box on a Quickshell build (finding 358) says which: a build that dies is the first suspect.
+  local qs=""; [ -z "$(meta quickshell)" ] || qs=" on the Quickshell build $(meta quickshell)"
   case $2 in
-    "crashed -") echo "warning: the shell crashed $1 starting (omabox log -b $NAME shell)" ;;
-    crashed\ *) echo "warning: the shell crashed $1 starting (report: ${2#crashed }; omabox log -b $NAME shell)" ;;
-    *) echo "warning: the shell exited $1 starting (omabox log -b $NAME shell)" ;;
+    "crashed -") echo "warning: the shell crashed$qs $1 starting (omabox log -b $NAME shell)" ;;
+    crashed\ *) echo "warning: the shell crashed$qs $1 starting (report: ${2#crashed }; omabox log -b $NAME shell)" ;;
+    *) echo "warning: the shell exited$qs $1 starting (omabox log -b $NAME shell)" ;;
   esac
 }
 # Once its bar is on screen: the shell watched until 2 s after the bar came (BAR_AT, ms), as a crash
@@ -3264,14 +3275,14 @@ box_addr() {
 # --idle are not compared. Reads cmd_up's locals (`given` names the options on the command line).
 # up --clean (#252, finding 357): what it sets, and what --keep can take back. The theme is Omarchy's
 # default; the wallpaper a colour no theme uses, so any of it inside a window or the bar is a hole (a
-# 16x16 PNG of it, scaled); the clock, every process's, from CLEAN_CLOCK_AT (tools/clock, finding 359).
+# 16x16 PNG of it, scaled); the clock, every process's, from CLEAN_CLOCK_AT (tools/clock, finding 360).
 CLEAN_THEME=tokyo-night
 CLEAN_WALLPAPER='#ff00ff'
 CLEAN_WALLPAPER_PNG=iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVQoz2P8z/CfgRTARJLqUQ2jGoaUBgBKTgIeHXO4xgAAAABJRU5ErkJggg==
-# The clock (finding 359): this instant in the box's timezone when the box starts, a Friday, which the
+# The clock (finding 360): this instant in the box's timezone when the box starts, a Friday, which the
 # bar's own clock shows as "Friday 12:00" for its first minute; it runs from there.
 CLEAN_CLOCK_AT="2026-01-02 12:00"
-# The locale and timezone (finding 362): English in UTF-8 and UTC for the whole session, not the host's
+# The locale and timezone (finding 363): English in UTF-8 and UTC for the whole session, not the host's
 # (its LC_TIME made an app's dates Portuguese, "Há 9 meses"); --keep locale gives both back.
 CLEAN_TZ=UTC
 CLEAN_KEEPS="animations bar clock locale pointer wallpaper"
@@ -3367,6 +3378,7 @@ up_already() {
   case " $given " in *" no-shell "*) [ "$(jq -r '.shell | tostring' "$D/box.json" 2>/dev/null)" = false ] || diff+=("--no-shell (it has the shell)") ;; esac
   case " $given " in *" omarchy "*) [ "$(meta omarchy)" = "$omarchy" ] || diff+=("--omarchy ${omarchy:-/usr/share/omarchy} (it runs $(meta omarchy | grep . || echo /usr/share/omarchy))") ;; esac
   case " $given " in *" hyprland "*) [ "$(meta hyprland)" = "$hyprland" ] || diff+=("--hyprland $hyprland (it runs $(meta hyprland | grep . || echo "the installed one"))") ;; esac
+  case " $given " in *" quickshell "*) [ "$(meta quickshell)" = "$quickshell" ] || diff+=("--quickshell $quickshell (its shell runs $(meta quickshell | grep . || echo "the installed one"))") ;; esac
   case " $given " in *" from "*) [ "$(meta from)" = "$FROM" ] || diff+=("--from $FROM (it started from $(meta from | grep . || echo "no save"))") ;; esac
   case " $given " in *" monitor "*)
     [ "$(printf '%s\n' "${monitors[@]}" | jq -R . | jq -sc .)" = "$(jq -c '.monitor_specs // []' "$D/box.json" 2>/dev/null)" ] ||
@@ -3402,22 +3414,24 @@ cmd_up() {
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 nopointer=0 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
   local net_addrs=()      # --addr (#229): addresses on an isolated box's loopback, as box_addr has them
   local overlays=() robinds=() plugin_args=() envs=() seeds=() monitors=() theme_dirs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
+  local quickshell="" qs_bind=1   # --quickshell: a Quickshell build for the box's shell (finding 358)
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local named=() g        # the host paths --ro-bind, --seed and --overlay name, as named (refuse_src)
   # A jailed caller's host paths (#198): each followed only inside the jail's folders (jail_path) before
   # anything looks at it, and refused as written (jail_refuse), one way whatever the host has there;
   # the paths as given, for the refusals checked after the options are read.
-  local plugin_given=() theme_given=() hypr_given="" omarchy_given=""
+  local plugin_given=() theme_given=() hypr_given="" omarchy_given="" qs_given=""
   local W_WHOLE="a folder this jail was given whole (its project, or one of its maps)"
   local W_PLUGIN="a plugin's folder (with a manifest.json) this jail was given whole (its project, or one of its maps), nor inside one the box has"
   local W_THEME="a folder in this jail's project nor one it was given whole"
   local W_HYPR="in this jail's project nor in a folder it was given whole (or is not a Hyprland build's binary there)"
+  local W_QS="in this jail's project nor in a folder it was given whole (or is not a Quickshell build's binary there)"
   local W_OMARCHY="in this jail's project nor a folder it was given whole (or is not an Omarchy tree there)"
   local omarchy="" omarchy_bind=1   # --omarchy: an Omarchy tree instead of /usr/share/omarchy (finding 135)
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--stock-bar|--desk-shell|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--no-seed|--monitor|--theme-dir|--theme|--clean)
+      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--quickshell|--omarchy|--stock-bar|--desk-shell|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--no-seed|--monitor|--theme-dir|--theme|--clean)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -3460,6 +3474,10 @@ cmd_up() {
         if in_jail; then { g=$(jail_path "$2") && hyprland=$(hypr_bin "$g" 2>/dev/null); } || jail_refuse --hyprland "$2" "$W_HYPR"
         else hyprland=$(hypr_bin "$2") || exit 1; fi
         shift ;;
+      --quickshell) optarg "$@"; qs_given=$2
+        if in_jail; then { g=$(jail_path "$2") && quickshell=$(qs_bin "$g" 2>/dev/null); } || jail_refuse --quickshell "$2" "$W_QS"
+        else quickshell=$(qs_bin "$2") || exit 1; fi
+        shift ;;
       --omarchy) optarg "$@"; omarchy_given=$2
         if in_jail; then { g=$(jail_path "$2") && omarchy=$(omarchy_tree "$g" 2>/dev/null); } || jail_refuse --omarchy "$2" "$W_OMARCHY"
         else omarchy=$(omarchy_tree "$2") || exit 1; fi
@@ -3483,7 +3501,7 @@ cmd_up() {
     shift
   done
   # --clean (#252, finding 357): a desktop where only what is tested moves. Omarchy's own bar on
-  # CLEAN_THEME, a sentinel wallpaper, the clock pinned (finding 359), no pointer, no network,
+  # CLEAN_THEME, a sentinel wallpaper, the clock pinned (finding 360), no pointer, no network,
   # animations off; --keep takes any of them back, --theme and --net choose their own.
   if [ "$CLEAN" = 1 ]; then
     [ "$DESK_SHELL" = 0 ] || die "up: --clean or --desk-shell, not both (--clean starts from Omarchy's bar; --keep bar keeps yours)"
@@ -3535,6 +3553,13 @@ cmd_up() {
         jail_refuse --hyprland "$hypr_given" "$W_HYPR"
       hypr_bind=0
     fi
+    # --quickshell's likewise.
+    if [ -n "$quickshell" ] && ! jail_root "${quickshell%/*}" >/dev/null; then
+      local top
+      top=$(repo_top) && jail_root "$top" >/dev/null && jail_sees "$quickshell" >/dev/null && [[ $quickshell == "$top"/* ]] ||
+        jail_refuse --quickshell "$qs_given" "$W_QS"
+      qs_bind=0
+    fi
     # --omarchy's tree likewise.
     if [ -n "$omarchy" ] && ! jail_root "$omarchy" >/dev/null; then
       local top
@@ -3581,7 +3606,7 @@ cmd_up() {
     # --overlay, --ro-bind and --seed were checked as they were read (#198): one of the jail's folders,
     # whole, for a mount (none below one, which could be swapped for a link before the mount), a path
     # it sees for a seed (seed_copy_in checks it again as it copies); --plugin before resolve_plugin;
-    # --hyprland and --omarchy before --theme.
+    # --hyprland, --quickshell and --omarchy before --theme.
   fi
   # A --seed onto a --plugin's or --theme-dir's folder in the box HOME (#199): refused before anything
   # is made, naming the plugin or theme and DEST as the box HOME has it, never where SRC leads.
@@ -3605,6 +3630,13 @@ cmd_up() {
     why=$(refuse_src "${hyprland%/*}") && die "--hyprland: refusing to mount ${hyprland%/*} (the binary's folder) into a box: $why; put the build in a folder of its own"
     why=$(refuse_dest "${hyprland%/*}") && die "--hyprland: refusing to mount ${hyprland%/*} (the binary's folder) at its own path in a box: $why"
     robinds+=("${hyprland%/*}"$'\t'"${hyprland%/*}")
+  fi
+  # --quickshell (finding 358) likewise: the box's shell runs it, so a box without one has no use for it.
+  [ -z "$quickshell" ] || [ "$shell" = 1 ] || die "up: --quickshell runs the box's shell, and --no-shell starts none"
+  if [ -n "$quickshell" ] && [ "$qs_bind" = 1 ] && [[ $quickshell != /usr/* ]]; then
+    why=$(refuse_src "${quickshell%/*}") && die "--quickshell: refusing to mount ${quickshell%/*} (the binary's folder) into a box: $why; put the build in a folder of its own"
+    why=$(refuse_dest "${quickshell%/*}") && die "--quickshell: refusing to mount ${quickshell%/*} (the binary's folder) at its own path in a box: $why"
+    robinds+=("${quickshell%/*}"$'\t'"${quickshell%/*}")
   fi
   # --omarchy (finding 135): the tree, read-only at its own path, refused as --ro-bind's are.
   [ -z "$omarchy" ] || [ "$omarchy_bind" = 0 ] || robinds+=("$omarchy"$'\t'"$omarchy")
@@ -3641,6 +3673,9 @@ cmd_up() {
     local saved_on; saved_on=$(jq -r '.hyprland // empty' "$from_dir/save.json" 2>/dev/null) || saved_on=""
     [ "$saved_on" = "$hyprland" ] ||
       say "note: save '$FROM' was made in a box on ${saved_on:-the installed Hyprland}, this one runs ${hyprland:-the installed Hyprland}"
+    saved_on=$(jq -r '.quickshell // empty' "$from_dir/save.json" 2>/dev/null) || saved_on=""
+    [ "$saved_on" = "$quickshell" ] ||
+      say "note: save '$FROM' was made in a box whose shell ran ${saved_on:-the installed Quickshell}, this one's runs ${quickshell:-the installed Quickshell}"
   fi
   # Nor does a box behind pasta start from a process with no_new_privs: bwrap cannot write its uid
   # map there (finding 89). A connected box falls back to none, as a nested one does: an agent's
@@ -3671,6 +3706,7 @@ cmd_up() {
   # Inside a [ ] test its die was swallowed; the first real call came after the box dir was made.
   local render; render=$(render_node)
   check_install "$render" "$hyprland"
+  [ -z "$quickshell" ] || qs_check "$quickshell"
   # A box starts from the user's Omarchy look (seed_home), which Omarchy makes at their first login:
   # an account that never logged in has no theme yet (finding 130). Said before anything is made.
   # With --theme the box starts on that one instead (checked above).
@@ -3875,7 +3911,7 @@ cmd_up() {
     --argjson linked "$(printf '%s\n' "${LINKED_PLUGINS[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
-    --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" --arg omarchy "$omarchy" \
+    --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" --arg quickshell "$quickshell" --arg omarchy "$omarchy" \
     --argjson xwayland "$xwayland" --argjson autoreload "$autoreload" --argjson shell "$shell" \
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --arg aq_main "${AQ_MAIN:-}" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
@@ -3900,6 +3936,7 @@ cmd_up() {
       + (if $jail != "" then {jail: $jail} else {} end)
       + (if $from != "" then {from: $from} else {} end)
       + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
+      + (if $quickshell != "" then {quickshell: $quickshell} else {} end)
       + (if $omarchy != "" then {omarchy: $omarchy} else {} end)
       + (if $owner != "" then {owner: ($owner | tonumber)} else {} end)
       + (if $clean != null then {clean: $clean} else {} end)
@@ -3925,7 +3962,7 @@ cmd_up() {
   # wrote it, and box terminals followed it to the host's checkout. A box's own instead: the packaged
   # Omarchy, or --omarchy's tree. Over the host's file when there is one; else, only for --omarchy, in
   # a read-only overlay of /etc with the file on top (bwrap cannot add a file to a read-only bind).
-  # --clean's clock (#252, finding 359): tools/clock's library in every dynamically linked process of
+  # --clean's clock (#252, finding 360): tools/clock's library in every dynamically linked process of
   # the box, through the box's own /etc/ld.so.preload (the host's lines first, when it has one). Not
   # LD_PRELOAD: `run`'s commands and omabox's tools start with a clean environment, and a user
   # manager's units with its own. The library reads the instant from BOX_CLOCK_INSTANT, which only
@@ -3941,7 +3978,7 @@ cmd_up() {
     { cat /etc/ld.so.preload 2>/dev/null || true; echo "$BOX_CLOCK"; } > "$D/etc/ld.so.preload"
     clock_instant_file "${envs[@]}" > "$D/clock" || die "up --clean: could not work out the box's clock ($CLEAN_CLOCK_AT)"
   fi
-  # --clean's locale and timezone (finding 362): the session's LANG (launch.sh below) and, for what
+  # --clean's locale and timezone (finding 363): the session's LANG (launch.sh below) and, for what
   # reads the files instead (a --systemd box's user manager reads locale.conf; glibc, Qt and ICU
   # localtime), /etc/locale.conf and /etc/localtime. localtime is a link, as the host's, which Qt
   # reads the zone's name from: a link goes in through the overlay (a bind would follow it).
@@ -4020,6 +4057,9 @@ cmd_up() {
   # no a11y bus. With dbus-daemon it lives in the box's runtime dir. From the start: an app asks for it once.
   # OMABOX_HYPRLAND: the build share/start-hyprland.sh starts instead of /usr/bin/Hyprland (finding 116).
   local hypr_env=(); [ -z "$hyprland" ] || hypr_env=(--setenv OMABOX_HYPRLAND "$hyprland")
+  # OMABOX_QUICKSHELL: the build the box's shell runs instead of /usr/bin/quickshell (finding 358);
+  # share/session.sh turns it into a link in the box's runtime dir and takes it out of the environment.
+  [ -z "$quickshell" ] || hypr_env+=(--setenv OMABOX_QUICKSHELL "$quickshell")
   # OMABOX_OMARCHY: the tree share/start-hyprland.sh and session.sh run instead of /usr/share/omarchy.
   [ -z "$omarchy" ] || hypr_env+=(--setenv OMABOX_OMARCHY "$omarchy")
   # OMABOX_AQUAMARINE=system (finding 125) holds for the boxes a box starts too (the suite's stand-in hosts).
@@ -4130,7 +4170,7 @@ cmd_up() {
     # (finding 58: LC_TIME and the rest are the user's formats).
     # (login_shell, not shell: that is cmd_up's "wait for the Omarchy shell" flag, finding 62.)
     local login_shell; login_shell=$(getent passwd "$(id -un)" | cut -d: -f7); [ -x "$login_shell" ] || login_shell=/bin/bash
-    # --clean: its own LANG and none of the host's LC_* (finding 362).
+    # --clean: its own LANG and none of the host's LC_* (finding 363).
     printf ' %q' env -i PATH=/usr/bin TERM=dumb LANG="${CLEAN_LANG:-${LANG:-C.UTF-8}}" USER="$(id -un)" LOGNAME="$(id -un)" SHELL="$login_shell" "${sdenv[@]}"
     local v; [ -n "$CLEAN_LANG" ] || for v in LANGUAGE ${!LC_*}; do [ -z "${!v:-}" ] || printf ' %q' "$v=${!v}"; done
     # shellcheck disable=SC2016 # expanded when launch.sh runs, under the host's exec rule
@@ -4194,7 +4234,7 @@ cmd_up() {
     rm -f "$D/covers-pending"
     exec {go}<>"$D/go"; printf go >&"$go"; exec {go}>&-
   fi
-  wait_hyprland; hypr_version
+  wait_hyprland; hypr_version; qs_version
   wait_ready "$shell"
   # More monitors (#122), as `monitor add` makes them: one at a time, each placed by what the last one
   # really became (Hyprland may round a scale), the shell giving each its bar as it comes.
@@ -4753,6 +4793,58 @@ hypr_version() {
     say "warning: box '$NAME' runs Hyprland $ver, but hyprctl and hyprpm are the installed $host's: their IPC may not match (omabox hyprctl, the shell's calls)"
 }
 
+# `up --quickshell PATH` (finding 358): PATH resolved, when it is an executable ELF file, as hypr_bin.
+qs_bin() {
+  local p; p=$(readlink -f -- "$1" 2>/dev/null) && [ -f "$p" ] || die "--quickshell: no such file: $1"
+  [ -x "$p" ] || die "--quickshell: $p is not executable"
+  [ "$(head -c 4 -- "$p" | od -An -tx1 | tr -d ' \n')" = 7f454c46 ] ||
+    die "--quickshell: $p is not an ELF binary (a Quickshell build's own binary, e.g. build/src/quickshell; not a wrapper script)"
+  printf '%s\n' "$p"
+}
+# The box's Qt (the system's: a box has /usr) and its version, from the library's name (6.11.2), else
+# the Qt minor its qt_version_tag stands for (6.11).
+QT_CORE=/usr/lib/libQt6Core.so.6
+# The Qt minor a program was built against (the version of the qt_version_tag it refers to), and the
+# one the box's Qt stands for (its default version of it).
+qt_built() { readelf -W --dyn-syms -- "$1" 2>/dev/null | sed -n 's/.* UND qt_version_tag@Qt_\(6\.[0-9]*\)\( .*\)\{0,1\}$/\1/p' | head -n 1; }
+qt_box() { readelf -W --dyn-syms -- "$QT_CORE" 2>/dev/null | sed -n 's/.* qt_version_tag@@Qt_\(6\.[0-9]*\)$/\1/p' | head -n 1; }
+qt_version() {
+  local f; f=$(readlink -f -- "$QT_CORE" 2>/dev/null) && [[ $f =~ \.so\.(6\.[0-9]+\.[0-9]+)$ ]] && { echo "${BASH_REMATCH[1]}"; return; }
+  qt_box
+}
+# A Quickshell build is checked before the box dir is made, never run here: its ELF read (readelf),
+# and `ldd` as the box's loader sees it. Quickshell uses Qt's private API, whose ABI changes between Qt
+# versions, so a build against another Qt dies as the shell starts, where only shell.log says why.
+# Every Qt program refers to qt_version_tag at the Qt minor it was built against (Qt_6.11): another
+# minor than the box's is refused here, naming both. A build against another patch release of the
+# same minor (the binary does not say which) is caught in the box: share/session.sh asks the build
+# itself (--private-check-compat) before the session starts. qs_check PATH
+qs_check() {
+  local want have
+  elf_needed "$1" | grep -qx 'libQt6Core\.so\.6' || die "--quickshell $1 links no libQt6Core.so.6 (readelf -d): not a Quickshell build?"
+  want=$(qt_built "$1") have=$(qt_box)
+  [ -z "$want" ] || [ -z "$have" ] || [ "$want" = "$have" ] ||
+    die "--quickshell $1 was built against Qt $want, but the box has Qt $(qt_version): Quickshell uses Qt's private API," \
+      "so it would die as the shell starts. Build it again against the installed Qt"
+  # Not for a jailed agent's file: the broker does not load what the jail hands it.
+  in_jail && return 0
+  local missing; missing=$(ldd -- "$1" 2>/dev/null | awk '/=> not found/ {print $1}' | paste -sd ' ') || true
+  [ -z "$missing" ] || die "--quickshell $1 needs $missing, which the box lacks (it has the system's libraries)"
+}
+# The box's Quickshell: `up --quickshell`'s build, else the installed one. What omabox runs in the box
+# for its shell (ipc, list, kill) is the one the shell runs: a build talking to another version's IPC
+# is not assumed to work.
+box_qs() { local q; q=$(meta quickshell) || q=""; echo "${q:-/usr/bin/quickshell}"; }
+# The box's Quickshell version, as it says it (`quickshell --version`, its first line), into box.json
+# for `ls --json`: every box's. Its number is the last release's, never proof that a fix is in: a build
+# of an unreleased commit says it too (its revision, when it was built from git, is in the line).
+qs_version() {
+  local line
+  line=$(on_box timeout 6 "$(box_qs)" --version 2>/dev/null | head -c 4096 | head -n 1) || line=""
+  [ -n "$line" ] || { [ -z "$(meta quickshell)" ] || say "box '$NAME': its Quickshell ($(meta quickshell)) did not say its version (quickshell --version)"; return 0; }
+  jq --arg v "$line" '.quickshell_version = $v' "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"
+}
+
 # A value inside a single-quoted Lua string sent to the host Hyprland. Our own paths only; anything
 # that could end the string is refused rather than escaped.
 lua_str() {
@@ -5267,7 +5359,7 @@ cmd_run() {
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "run: --env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--seed|--no-seed|--theme-dir|--theme|--monitor|--net|--allow|--addr|--idle|--from|--hyprland|--omarchy|--keep) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--seed|--no-seed|--theme-dir|--theme|--monitor|--net|--allow|--addr|--idle|--from|--hyprland|--quickshell|--omarchy|--keep) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--no-pointer|--stock-bar|--desk-shell|--systemd|--audio|--clean) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
@@ -5565,6 +5657,8 @@ cmd_windows() {
   if [ $json = 1 ]; then jq . <<<"$wins"; return; fi
   # A box on a Hyprland build of its own (finding 116) says so first.
   [ -z "$(meta hyprland)" ] || printf 'box %s runs Hyprland %s%s\n' "$NAME" "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
+  # And one whose shell runs a Quickshell build (finding 358): its layer surfaces are not listed here.
+  [ -z "$(meta quickshell)" ] || printf 'box %s runs its shell on Quickshell %s%s\n' "$NAME" "$(meta quickshell)" "$(v=$(meta quickshell_version); [ -z "$v" ] || echo " ($v)")"
   # Bottom to top, as they stack.
   printf '%-16s %-8s %-10s %-20s %-22s %-16s %s\n' ADDRESS PID WORKSPACE STATE GEOMETRY CLASS TITLE
   windows_table <<<"$wins"
@@ -7851,7 +7945,7 @@ shot_burst() {
 # Parts CHECK_GAP px apart or less are one region.
 CHECK_SPECK=32
 CHECK_GAP=12
-# A checkpoint's own speck (finding 362), measured at --approve, is at least CHECK_SPECK_MIN when its
+# A checkpoint's own speck (finding 363), measured at --approve, is at least CHECK_SPECK_MIN when its
 # runs differed at all: three runs see the text noise but not its tail (5 px in them, 10 in the next
 # check on AMD; 13 the most seen on NVIDIA). When they agreed to the pixel, CHECK_SPECK_AGREED: a
 # window with little text can agree in its runs and show a 1-2 px part of its glyphs in the next one
@@ -7888,7 +7982,7 @@ check_mark() {
   magick "$new" -fill none -stroke '#ff2020' -strokewidth 2 "${draw[@]}" "$out" 2>/dev/null
 }
 
-# The report (finding 360): every change of a check in one image, each region cropped with some
+# The report (finding 361): every change of a check in one image, each region cropped with some
 # context from the baseline beside the new shot (share/check.py sheet lays it out inside what a model
 # sees in one look); one look where the ID.diff.png of each changed checkpoint was ~1.5k image tokens
 # apiece, mostly of what did not change. PLAN: check.py's (a "title" line, then per checkpoint a
@@ -7913,7 +8007,7 @@ check_mask_of() {
   echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
 }
 
-# Holes (finding 361): where a shot is see-through inside a surface. A clean box's wallpaper is the
+# Holes (finding 362): where a shot is see-through inside a surface. A clean box's wallpaper is the
 # sentinel colour, so any of it in a window, the bar or a popup is a transparent part, a gap or a
 # surface that did not draw. What Hyprland knows does not say where: a Quickshell popup is drawn in a
 # full-screen layer. So pixels: the parts of exactly the sentinel (antialiased edges blend it away)
@@ -8222,7 +8316,7 @@ check_run() {
       --) shift; scen=("$@"); break ;;
       -b|--box|--new|--interactive|-i|--json) die "check run: the scenario gets a box of its own (no $1)" ;;
       --clean) ;;   # every check box is
-      --size|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--seed|--no-seed|--monitor|--theme-dir|--theme|--keep|--env|--overlay|--ro-bind|--idle)
+      --size|--plugin|--net|--allow|--addr|--from|--hyprland|--quickshell|--omarchy|--seed|--no-seed|--monitor|--theme-dir|--theme|--keep|--env|--overlay|--ro-bind|--idle)
         optarg "$@"; upopts+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--systemd|--audio|--stock-bar|--no-pointer) upopts+=("$1") ;;
       --desk-shell) die "check run: a check's box is clean (--keep bar keeps your bar), not your desk's shell" ;;
@@ -8412,7 +8506,7 @@ check_approve() {
   done
   cp -- "$out/env.json" "$base/check.json"
   echo "check: baseline of $n checkpoints in $base ($unst with regions left out); runs in $out"
-  # The baseline in one image (finding 362): a person or an agent looks before keeping it, since what
+  # The baseline in one image (finding 363): a person or an agent looks before keeping it, since what
   # most runs agree on is kept, a wrong screen (an error, a page not loaded yet) as well.
   { printf 'title\tthe baseline in %s, each checkpoint as a check will compare it; amber: unstable, left out; red: holes\n' "$base"
     cat -- "$plan.body"; } > "$plan"
@@ -12683,7 +12777,7 @@ box_json() {
     '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), addrs: (.addrs // []), idle: (.idle // 0),
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
         | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), audio: (.audio // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
-      hyprland_version: (.hyprland_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
+      hyprland_version: (.hyprland_version // null), quickshell: (.quickshell // null), quickshell_version: (.quickshell_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
       client_render: (.client_render // null),
       monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end),
@@ -12751,6 +12845,8 @@ cmd_ls() {
     [ -z "$al" ] || printf '  addresses: %s (on its loopback)\n' "$al"
     # A box on a Hyprland build of its own (finding 116), under its line: never taken for a stock one.
     [ -z "$(meta hyprland)" ] || printf '  Hyprland: %s%s\n' "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
+    # And one whose shell runs a Quickshell build (finding 358).
+    [ -z "$(meta quickshell)" ] || printf '  Quickshell: %s%s\n' "$(meta quickshell)" "$(v=$(meta quickshell_version); [ -z "$v" ] || echo " ($v)")"
     # keys-to-box (finding 117), when on: SUPER keys follow focus into it.
     [ ! -f "$D/keys-to-box" ] || echo "  keys-to-box: on (SUPER keys go to it while its window has focus and the pointer)"
     # Its GPU (#118), on a machine with more than one, or when it is a fallback (finding 237: the box
@@ -13437,7 +13533,7 @@ relay_call() {
     if [ "$prev" = --pass ] && [[ $a =~ ^[A-Za-z_][A-Za-z0-9_]{0,58}$ ]] && v=$(caller_env "$a"); then env+=(--env "PASS_$a=$v"); fi
     case $prev in
       --plugin|--overlay|--theme-dir|--omarchy) [[ $a != /* && -d $a ]] && a=$(readlink -f -- "$a") ;;
-      --hyprland) [[ $a != /* && -e $a ]] && a=$(readlink -f -- "$a") ;;
+      --hyprland|--quickshell) [[ $a != /* && -e $a ]] && a=$(readlink -f -- "$a") ;;
       --ro-bind) [[ $a != /* ]] && a=$(readlink -f -- "${a%%:/*}")${a#"${a%%:/*}"} ;;
       # SRC:DEST: only SRC is the caller's path (DEST is in the box HOME). One that is not there is
       # sent as given, for the broker to say so.
@@ -13728,9 +13824,10 @@ cmd_save() {
   # shellcheck disable=SC2086
   kill -CONT $SAVE_PIDS 2>/dev/null || true
   SAVE_PIDS=""
-  # The Hyprland build it ran (finding 116), so an `up --from` on another one can say so.
-  jq -n --arg box "$NAME" --arg saved "$(date -Is)" --arg version "$(cat "$ROOT/VERSION")" --arg hyprland "$(meta hyprland)" \
-    '{box: $box, saved: $saved, version: $version} + (if $hyprland != "" then {hyprland: $hyprland} else {} end)' > "$SAVE_TMP/save.json"
+  # The Hyprland and Quickshell builds it ran (findings 116, 358), so an `up --from` on another one can say so.
+  jq -n --arg box "$NAME" --arg saved "$(date -Is)" --arg version "$(cat "$ROOT/VERSION")" --arg hyprland "$(meta hyprland)" --arg quickshell "$(meta quickshell)" \
+    '{box: $box, saved: $saved, version: $version} + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
+      + (if $quickshell != "" then {quickshell: $quickshell} else {} end)' > "$SAVE_TMP/save.json"
   local old=$SAVES/.old-$save-$$
   [ ! -e "$dest" ] || mv -T "$dest" "$old"
   mv -T "$SAVE_TMP" "$dest"

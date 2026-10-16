@@ -30,7 +30,7 @@ $XDG_RUNTIME_DIR/omabox/<name>/   box dir: run/ (the box's /run/user/$UID), home
                                   a nested connected box gets bwrap's --unshare-net instead (net: none)
 bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, pid/ipc/uts namespaces
 │                        binds: /usr /etc /sys ro, the repo + ro-bind file + --ro-bind ro, mise installs ro,
-│                        --hyprland's folder ro (116),
+│                        --hyprland's and --quickshell's folders ro (116, 358),
 │                        one render node (plus its NVIDIA render-side nodes on NVIDIA);
 │                        an interactive box every render node (95),
 │                        share/ → /opt/omabox/share, a private aquamarine (125) →
@@ -47,7 +47,7 @@ bwrap sandbox            fake HOME=/home/sbx, private /run/user/$UID and /tmp, p
       ├ HEADLESS-2       screen on AMD/Intel; WAYLAND-1 bootstrap disabled
       │ WAYLAND-1        screen on NVIDIA; labwc's private headless output is resized to --size
       ├ quickshell       the Omarchy shell (bar, menu, tray host, notifications): share/shell.sh;
-      │                  not with --no-shell
+      │                  not with --no-shell; /usr/bin/quickshell, or --quickshell's build (358)
       ├ keyboard, pointer --hold: idle devices so focus changes work (41)
       └ apps             `omabox run [-d]` (nsenter into the namespaces, Hyprland's env)
 interactive: no labwc; Hyprland nests in the host Hyprland through one fd (tools/wlfd, WAYLAND_SOCKET),
@@ -7255,7 +7255,6 @@ from them.
     sleeps: stuck twice, stuck once, a plain failure, the bound), record_stuck_on in
     t_record_input (a watcher in the box SIGSTOPs the stop's encode once: killed at 3 s, run again,
     a video; twice: both messages, exit 1, raw.mkv kept, no ffmpeg left).
-
 357. **Spike: visual checks, how much changes when nothing does** (2026-10-16, #252; probes and
     numbers in `spike/visual/`). Before building a `check` with baselines: a clean box made from
     today's options (stock bar, tokyo-night, a solid `#ff00ff` sentinel wallpaper, the clock frozen
@@ -7281,7 +7280,85 @@ from them.
     pixels in the users' rendering, isolated blobs under ~32 px dropped (and counted);
     `QML_DISABLE_DISTANCEFIELD=1` an opt-in strict mode.
 
-358. **`omabox check` and `up --clean`: visual checks against a baseline** (2026-10-16, #252, built on
+358. **`up --quickshell PATH`: the box's shell on a Quickshell build** (2026-10-16, #253: testing a
+    shell plugin's accessibility tree needs Quickshell's 916a0dd, released in 0.3.2; up to 0.3.1,
+    what Arch ships, no Quickshell window publishes an AT-SPI tree). Built as `--hyprland` is (finding
+    116), on `up` and a throwaway `run`. `qs_bin` resolves PATH and refuses a missing, non-executable
+    or non-ELF file; its folder is mounted read-only at its own path, checked by `refuse_src`/
+    `refuse_dest` (none under `/usr`); ai-jail: the same rules as `--hyprland`'s (`W_QS`), and
+    `relay_call` sends the path absolute. With `--no-shell` it is refused (nothing would run it).
+    **Which Qt.** Quickshell uses Qt's private API, whose ABI may change with any Qt release, so a build
+    against another Qt loads fine and dies as the shell starts. Two checks, both naming the versions:
+    `qs_check` before the box dir is made reads the ELF (never runs it): it must need
+    `libQt6Core.so.6`, and the `qt_version_tag@Qt_6.N` it refers to (every Qt program does: the Qt
+    minor it was built against) must be the default version of the box's libQt6Core's
+    (`qt_version_tag@@Qt_6.11`), else "was built against Qt 6.10, but the box has Qt 6.11.2"; then
+    `ldd` (not for a jailed caller's file) for a library the box lacks. The patch release is not in
+    the binary (its private symbols are all `Qt_6_PRIVATE_API`, no minor), but Quickshell has a
+    hidden flag for it, `--private-check-compat` (exit 1 and a "built against Qt X but the system
+    has updated to Qt Y" line when its build-time `QT_VERSION_STR` is not the running `qVersion()`;
+    since 2024-11): `share/session.sh` runs it in the box before anything starts, and on a 1 ends the
+    box with a `session.sh: --quickshell: built against Qt X, the box has Qt Y` line, which `up`'s
+    "died while starting (...)" prints; another exit (109: a build without the flag) cannot tell and
+    goes on. In the box, not on the host: it runs the build. A shell that dies anyway is said with
+    the build named ("the shell crashed on the Quickshell build PATH while starting").
+    **Which binary runs.** `OMABOX_QUICKSHELL` reaches `session.sh` by bwrap's `--setenv`; it links
+    the build as `$XDG_RUNTIME_DIR/omabox-quickshell/{quickshell,qs}`, puts that dir on the session's
+    PATH after the box HOME's `~/.local/bin`, and unsets the variable, as `OMABOX_HYPRLAND` is unset
+    for Hyprland's children, but for another reason: the shell is not only started by `shell.sh` at
+    `up`, but again by whatever runs `omarchy restart shell` (a bar menu, a project's script, `omabox
+    run`), with an environment of its own; a link at a fixed path reaches every one of them, and the
+    apps the shell launches inherit no variable naming it. `shell.sh` (start, `list`, `kill`) and the
+    `systemd-cat` stand-in (Omarchy's launcher runs `systemd-cat -t omarchy-shell -- quickshell`) exec
+    the link when it is there, else `/usr/bin/quickshell`; by name, Omarchy's `omarchy-shell` (`qs
+    ipc`) and restart (`quickshell kill`) find it on PATH, and `omabox run`'s PATH puts it before the
+    caller's `/usr/bin` too. The host side's calls into the box's shell (`shell_hung`'s `ipc show`,
+    `shell_adopt`'s `list`) run `box_qs`: box.json's `quickshell`, else `/usr/bin/quickshell` (a
+    build talking to another version's IPC is not assumed to work). Through a link the process is
+    still named `quickshell` (`/proc/PID/stat`, which `shell.sh` matches); `/proc/PID/exe` is the
+    build.
+    **What is recorded.** `box.json` has `quickshell` (the resolved path) and every box's
+    `quickshell_version` (`qs_version`: `quickshell --version`'s first line, run in the box right
+    after `hypr_version`). Not proof of a fix: a build of an unreleased commit says the last release
+    ("Quickshell 0.3.1 (revision fae96f1..., distributed by Unset)" for a build with the 0.3.2 fix);
+    its revision, when built from git, is the thing to read. `ls` prints `Quickshell: PATH (version)`
+    under the box's line, `ls --json` has `quickshell` (null for the installed one) and
+    `quickshell_version`, `windows` starts with `box NAME runs its shell on Quickshell PATH (...)`,
+    `save` records it in `save.json` and `up --from` notes another one, and "already up, without what
+    you asked for" names a different `--quickshell`.
+    **Verified in a box** with a Debug build of fae96f1 (2026-09-23, with 916a0dd) against the
+    installed Qt 6.11.2: the build's `qt_version_tag@Qt_6.11` matches and its `--private-check-compat`
+    says 0, so it runs: the shell's `/proc/PID/exe` is the build, bar drawn (shot), `qs`/`quickshell`
+    on the box's PATH are the link, `ls`/`ls --json`/`windows` name it with its version line;
+    `restart-shell` and `omabox run -- omarchy restart shell` keep it; a throwaway `run --quickshell`
+    too. **`tree` on it**: `omabox tree` (no selector: "no window matches active; the box's
+    windows: (none)", exit 2; `--window class:quickshell` and `--window pid:PID` the same): the shell
+    has no window, only layer surfaces (`omarchy-bar` 42x1080, `omarchy-background` 1920x1080), and
+    `tree` selects a window from `hyprctl clients`. What AT-SPI has, read with a python3
+    `gi.repository.Atspi` script run by `omabox run` (IsEnabled and ScreenReaderEnabled set first):
+    two applications with the shell's pid, both named `quickshell` (`QT_QPA_PLATFORMTHEME=gtk3`): an
+    empty `gtk` one and the `Qt` one, which has two `frame`s, nameless, at 0,0 with the layer
+    surfaces' sizes (42x1080, 1920x1080), both empty: Omarchy's QML sets no `Accessible.*`, and a
+    Qt Quick item without a role is not published. A test config on the same build (a `PanelWindow`
+    with a `Text` and a `Rectangle` with `Accessible.role: Accessible.Button` and a name) publishes
+    `frame "" @0,0 1878x40 > button "a named button" [focusable] @65,0 80x30`, started before
+    IsEnabled was set or after (no restart needed); on the installed
+    0.3.1 the same config's Qt application has no children. So for `tree` to read the shell: select
+    a layer (`hyprctl -j layers`: namespace, pid, x, y, w, h) instead of a window, take the AT-SPI
+    application with that pid whose ToolkitName is `Qt` (not the `gtk` one listed first), the frame
+    by size (they have no names), and add the layer's position to the bounds, which Qt gives in the
+    surface's own coordinates (a Wayland client does not know where it is). Not done here.
+    Checked: the refusals (a missing, non-executable or script file, an ELF without Qt, a folder
+    refused as `--ro-bind`'s, `--no-shell`; a stub built against `qt_version_tag@Qt_6.10`; a stub
+    whose `--private-check-compat` says 6.11.0: the box died with "--quickshell: built against Qt
+    6.11.0, the box has Qt 6.11.2 ..."). Not checked: a real build against another Qt (none here),
+    a jailed agent's real box. `t_unit_quickshell` (the refusals before a box, jail, relay,
+    `qs_version`/`box_qs` with `on_box` stubbed), `t_quickshell` (a copy of the installed quickshell:
+    exe, PATH, environment, ls/ls --json/windows, restart-shell and Omarchy's restart, already-up,
+    save and `up --from`'s note, the in-box Qt check with a stub), `t_hyprland` (a box without it:
+    the installed one, its version line).
+
+359. **`omabox check` and `up --clean`: visual checks against a baseline** (2026-10-16, #252, built on
     finding 357). `up --clean`: --stock-bar on tokyo-night unless --theme, a 16x16 `#ff00ff` PNG
     (CLEAN_WALLPAPER_PNG, scaled by the background) that share/session.sh links over the background
     omarchy-theme-set chose (`OMABOX_CLEAN_WALLPAPER`), the clock's format and verticalFormat Qt
@@ -7319,8 +7396,8 @@ from them.
     --json), t_check (a Qt Quick window: approve with an unstable random label, same, a button moved
     6 px: region and `moved +6,+0 button "Save"`, a new checkpoint, a failing scenario: exit 3).
 
-359. **`up --clean`'s clock: every process's wall clock from Friday 12:00** (2026-10-16, #252, built on
-    findings 357-358). The bar's literal format froze only the bar's text: an app's own times followed
+360. **`up --clean`'s clock: every process's wall clock from Friday 12:00** (2026-10-16, #252, built on
+    findings 357-359). The bar's literal format froze only the bar's text: an app's own times followed
     the real clock (the subject stamped an item "added today 16:37" and showed it, so a check made a
     minute later read a change). `tools/clock`, a library of omabox's own (no libfaketime here, no
     sudo to install it): `omabox-clock.so` in a clean box's own `/etc/ld.so.preload` (`$D/etc`, which
@@ -7373,7 +7450,7 @@ from them.
     deadline waits its 0.3 s, the 2.2.5 one by dlvsym too, a never one does not fire), t_clean (the
     bar's format kept, `run`'s date, `$SECONDS`, the portal's and the shell's maps, `events` on the
     host's clock; `--keep clock`: the real clock, no ld.so.preload).
-360. **`check run`'s report: every change in one image** (2026-10-16, #252, after finding 358). A
+361. **`check run`'s report: every change in one image** (2026-10-16, #252, after finding 359). A
     changed checkpoint's `ID.diff.png` is the whole shot marked, ~1.5k image tokens apiece (finding
     243's count), mostly of what did not change, and an agent read each. Now, when anything changed,
     `check run` also writes `report.png` and prints `report:  PATH` before its last line
@@ -7412,8 +7489,8 @@ from them.
     check.py sheet: a region's tree line with a % doubled, a blue move under a speck, 7 crops as the
     whole shots, 12 big crops at half size and the 6 left named in the image), t_check (the report's
     path, inside one look, none and no plan left when same).
-361. **`check point` finds holes: the sentinel wallpaper inside a surface** (2026-10-16, #252, built
-    on finding 358). `up --clean`'s `#ff00ff` is no theme's colour, so any of it inside a window, the
+362. **`check point` finds holes: the sentinel wallpaper inside a surface** (2026-10-16, #252, built
+    on finding 359). `up --clean`'s `#ff00ff` is no theme's colour, so any of it inside a window, the
     bar or a popup is a defect, and nothing looked for it. Hyprland's rectangles cannot say where: a
     Quickshell popup is drawn in a full-screen layer (`omarchy-keyboard-panel` is 1920x1080, its card
     ~400x790 at the top right). So pixels: the 8-connected parts of exactly the sentinel (antialiased
@@ -7454,8 +7531,8 @@ from them.
     a check whose shots match; 40 px said at --approve), t_clean (the stock bar none, --keep
     wallpaper off).
 
-362. **What a first visual check missed: specks per checkpoint, the baseline seen, a pinned locale**
-    (2026-10-16, #252, after findings 357-361; a first-time user's report). **Real changes read
+363. **What a first visual check missed: specks per checkpoint, the baseline seen, a pinned locale**
+    (2026-10-16, #252, after findings 357-362; a first-time user's report). **Real changes read
     "same".** A bar widget's spacing changed by 2 px made a 16 px part of the difference, and the fixed
     32 px speck dropped it; a bar widget has no tree to catch it otherwise. Nautilus's sort arrow
     vanished: a 26 px part, dropped too. 32 was what Qt Quick's distance-field text needed (finding 357:
@@ -7485,7 +7562,7 @@ from them.
     screen in most of them (an error, a page not loaded yet) becomes it, unseen. Now --approve writes
     `baseline.png` in the runs' folder (check.py `overview`, through check_report): every checkpoint as
     kept, each scaled to the sheet's width and all of them down together until they fit one look
-    (finding 360's 1456 px, 1.15 MP, 1568 high), unstable regions amber (a see-through fill, so what is
+    (finding 361's 1456 px, 1.15 MP, 1568 high), unstable regions amber (a see-through fill, so what is
     under them reads), holes red; prints `overview: PATH` and `check: look at it before you keep this
     baseline`. Five checkpoints (the bar, its clock, a window, a crop of it, the screen): 1100x1015,
     each legible. **The clean desktop did not pin the locale**: the box took the host's LC_TIME=pt_BR
@@ -7495,7 +7572,7 @@ from them.
     with that LANG for what reads the file (a `--systemd` box's user manager), and `/etc/localtime` a
     link to UTC. Both in the box's /etc (`$D/etc`); the link goes in through the overlay, never a bind:
     a bind follows the link at its destination, and would have mounted UTC's data over the host's zone
-    file under its name, which Qt reads the zone's id from. The clock (finding 359): clock_instant_file
+    file under its name, which Qt reads the zone's id from. The clock (finding 360): clock_instant_file
     takes CLEAN_ZONE when no `--env TZ` is given, so the instant is Friday 12:00 UTC and the bar reads
     "Friday 12:00" (a shot); `--env TZ` still wins, for both. `--keep locale` gives the host's LANG,
     LC_* and /etc/localtime back. box.json's `clean` and the baseline's check.json have `locale` and
@@ -7549,20 +7626,23 @@ of them, nor wayvnc (finding 34). It needs labwc.
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
-- Visual checks (findings 357-362, #252): a checkpoint's speck comes from its --approve runs (3):
+- Visual checks (findings 357-363, #252): a checkpoint's speck comes from its --approve runs (3):
   noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; a clean box's clock runs from Friday 12:00 at its
   start, so a step about a minute into a run can see a minute tick, and static and Go programs (and anything
-  else that skips libc's clock calls) keep the real clock; holes (finding 361) show only where the
+  else that skips libc's clock calls) keep the real clock; holes (finding 362) show only where the
   wallpaper is behind (a popup over a window hides them) and not where a gap opens onto the open
   wallpaper; an exploratory mode (an agent walking the UI, getting only flagged changes) is not
   built; not inside ai-jail.
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
   aquamarine patched downstream with #415 is recognised by the symbol it adds (finding 246).
 - More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44;
-  `--omarchy DIR` is done, finding 135): `--quickshell PATH` and `--lib DIR` (library dirs ahead of
-  the system's; `/opt/omabox/lib` comes first now) are parked until a project needs them (→ #81). A
-  `--hyprland` build whose RUNPATH points outside its own folder finds those libraries on the host
-  (`ldd` passes) but not in the box.
+  `--omarchy DIR` is done, finding 135; `--quickshell PATH` is done, finding 358): `--lib DIR`
+  (library dirs ahead of the system's; `/opt/omabox/lib` comes first now) is parked until a project
+  needs it (→ #81). A `--hyprland` or `--quickshell` build whose RUNPATH points outside its own
+  folder finds those libraries on the host (`ldd` passes) but not in the box.
+- `tree` reads windows only (finding 358): the shell's layer surfaces, which a Quickshell with
+  AT-SPI (0.3.2, or a build with 916a0dd) publishes as frames, are out of its reach. What it would
+  take is in finding 358; → #254.
 - Portals (findings 12, 148): ScreenCast needs PipeWire in the box (started by hand it worked; an
   `up --audio` box has it now, finding 313, ScreenCast there not rechecked); portal
   errors are not logged (dbus-daemon drops an activated service's stderr).

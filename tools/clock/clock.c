@@ -1,4 +1,4 @@
-// omabox-clock.so: a clean box's wall clock pinned (`up --clean`, #252, NOTES finding 359).
+// omabox-clock.so: a clean box's wall clock pinned (`up --clean`, #252, NOTES finding 360).
 //
 // Preloaded into every dynamically linked process of a clean box by the box's own /etc/ld.so.preload
 // (bin/omabox puts it in the box's /etc overlay; the host's /etc is never changed): the session, the
@@ -504,7 +504,7 @@ long syscall(long n, ...) {
 // place, as one that links them does. NVIDIA's driver libraries dlopen libc and look up
 // pthread_cond_timedwait (glibc 2.2.5's, with dlvsym), and waited with libc's own on deadlines made
 // from the box's gettimeofday: each returned at once, four threads of a GTK 4 app at 100% (finding
-// 359). Only a lookup that found libc's function (the one RTLD_NEXT found here) is swapped. RTLD_NEXT
+// 360). Only a lookup that found libc's function (the one RTLD_NEXT found here) is swapped. RTLD_NEXT
 // is passed on as a tail call, so libc sees the caller's own place, not this library's.
 static const struct { const char *name; void **real; void *own; } swaps[] = {
 #define SWAP(n, r) { #n, (void **)&r, (void *)n }

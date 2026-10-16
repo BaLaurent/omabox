@@ -17,9 +17,12 @@ fi
 # a project runs in the box on a config of its own is not ours to kill.
 pidfile=$XDG_RUNTIME_DIR/omabox-shell.pid
 config=$OMARCHY_PATH/shell
+# The box's quickshell: `up --quickshell`'s build when share/session.sh linked one (finding 358).
+qs=$XDG_RUNTIME_DIR/omabox-quickshell/quickshell
+[ -x "$qs" ] || qs=/usr/bin/quickshell
 shells() {
   { cat "$pidfile" 2>/dev/null; echo
-    /usr/bin/quickshell list -j -p "$config" --any-display 2>/dev/null | jq -r '.[].pid' 2>/dev/null
+    "$qs" list -j -p "$config" --any-display 2>/dev/null | jq -r '.[].pid' 2>/dev/null
   } | sort -un | while read -r p; do
     st=$(cat "/proc/$p/stat" 2>/dev/null) || continue
     case $st in "$p (quickshell) "[!Z]*) echo "$p" ;; esac   # (not one exited and not reaped yet)
@@ -30,7 +33,7 @@ launchers() { pgrep -f '^[^ ]*bash [^ ]*/omarchy-launch-shell$'; }
 # it dies of a signal, not when it quits (finding 131). One that will not quit: its launcher is stopped
 # first (it then stops the shell), or it would start another next to the new one.
 for old in $(shells); do
-  timeout 5 /usr/bin/quickshell kill --pid "$old" >/dev/null 2>&1 && continue
+  timeout 5 "$qs" kill --pid "$old" >/dev/null 2>&1 && continue
   parent=$(sed 's/.*) . \([0-9]*\).*/\1/' "/proc/$old/stat" 2>/dev/null) || parent=""
   if [ -n "$parent" ] && grep -qa omarchy-launch-shell "/proc/$parent/cmdline" 2>/dev/null; then kill "$parent"
   else kill "$old"; fi
@@ -69,4 +72,4 @@ launcher=$OMARCHY_PATH/bin/omarchy-launch-shell
 [ ! -x "$launcher" ] || exec "$launcher" >> "$HOME/shell.log" 2>&1
 # An Omarchy tree without it (`up --omarchy` of an older one): the shell itself, as before.
 echo $$ > "$pidfile"
-QS_DISABLE_FILE_WATCHER=1 QS_NO_RELOAD_POPUP=1 exec /usr/bin/quickshell -n -p "$OMARCHY_PATH/shell" >> "$HOME/shell.log" 2>&1
+QS_DISABLE_FILE_WATCHER=1 QS_NO_RELOAD_POPUP=1 exec "$qs" -n -p "$OMARCHY_PATH/shell" >> "$HOME/shell.log" 2>&1
