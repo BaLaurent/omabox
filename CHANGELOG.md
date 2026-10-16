@@ -16,10 +16,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   on a copy of the shot, and, for an app with an accessibility tree, which element moved, resized,
   changed its text or state, appeared or vanished (`moved -6,+0 button "Save"`), and one report
   image of every change, each cropped from the baseline beside the new shot and labelled, a fifth
-  of the image tokens of looking at each changed shot or less. Shots are
-  compared exactly, as users see them, leaving out only specks a few pixels big (what Qt Quick's
-  text varies by from one start of an app to the next), so a colour a few levels off is still
-  caught. Each checkpoint is searched for holes too: the clean wallpaper showing through inside a
+  of the image tokens of looking at each changed shot or less. Shots are compared exactly, as users
+  see them, leaving out only specks: stray parts smaller than what that checkpoint's approve runs
+  differed by (twice their largest, 16 px at least; Qt Quick's text varies by a few pixels a glyph
+  from one start of an app to the next), and nothing where the runs agreed to the pixel (the bar,
+  most apps), so a 2 px spacing change in a bar widget or a vanished sort arrow is caught, and a
+  colour a few levels off too; `same` says what it left out. `--approve` also writes one image of
+  the whole baseline, what is left out marked, to look at before keeping it (what most runs showed
+  is kept, a wrong screen too). `check point --window SEL -g "X,Y WxH"` checks a part of a window,
+  in its coordinates, with the tree of that part. The last line counts same, changed, new and
+  missing checkpoints, each run says how long its box took to start, and a check with no baseline
+  exits 4. Each checkpoint is searched for holes too: the clean wallpaper showing through inside a
   window, the bar or a popup (a transparent part, a gap, a surface that did not draw), not around
   them or at rounded corners; `--approve` says each, and a check fails on any the baseline lacks.
   `check diff A.png B.png` compares two shots of yours the same way (`--report` too).
@@ -27,10 +34,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   solid `#ff00ff` wallpaper (any of it inside a window or the bar is a hole), every process's wall
   clock from "Friday 12:00" as the box starts (the bar's own clock, and the times an app shows or
   stamps, read 12:00 for the box's first minute, then run on; a library of omabox's own, preloaded
-  into the box's processes; static and Go programs keep the real clock), no pointer, no network and
-  no animations (over reloads too).
-  `--keep animations,bar,clock,pointer,wallpaper` takes any of them back, for a test of Hyprland or
-  the shell that needs them; `--theme` and `--net connected` choose their own. `run` takes it for a
+  into the box's processes; static and Go programs keep the real clock), English (en_US.UTF-8, or
+  C.UTF-8) in UTC for the whole session whatever your locale and timezone (a Portuguese LC_TIME made
+  an app's dates "Há 9 meses"), no pointer, no network and no animations (over reloads too).
+  `--keep animations,bar,clock,locale,pointer,wallpaper` takes any of them back, for a test of
+  Hyprland or the shell that needs them; `--theme` and `--net connected` choose their own. `run` takes it for a
   throwaway box too.
 
 ### Fixed
