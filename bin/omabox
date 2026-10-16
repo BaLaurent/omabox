@@ -12704,8 +12704,10 @@ not_one_box() { say "$1 takes no -b: it is not about one box"; exit 2; }
 # with ~/.local/bin/omabox linked to a working copy, an edit made while a command ran used to land in
 # the middle of what it was still reading ("line 1207: q: command not found"). By the time that line
 # is read, bash has the whole file (finding 66).
-# The version, then what a new box would run on: the aquamarine (finding 125).
+# The version, then what a new box would run on: the aquamarine (finding 125). Nothing else is taken
+# (finding 348): `version foo` printed it and exited 0, as ls and saves did with theirs (finding 327).
 cmd_version() {
+  [ $# = 0 ] || { say "--version: unknown argument $1 (omabox --version)"; exit 2; }
   echo "omabox $(cat "$ROOT/VERSION")"
   local want
   if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null; then echo "aquamarine: $(aq_desc)"; fi
@@ -12769,7 +12771,7 @@ main() {
     setup) cmd_setup "$@" ;;
     _reap) cmd__reap "$@" ;;
     help|-h|--help) usage "$@" ;;
-    version|-V|--version) cmd_version ;;
+    version|-V|--version) cmd_version "$@" ;;
     *) say "unknown command: $cmd (omabox help lists the commands and their options)"; exit 2 ;;
   esac
 }

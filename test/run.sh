@@ -1838,6 +1838,9 @@ t_unit_version() {
   local v; v=$(cat "$ROOT/VERSION")
   check_eq "omabox --version" "omabox $v" "$("$CLI" --version | head -1)"
   check_match "...then the aquamarine boxes use (finding 125)" "^aquamarine: (a private build, |the system's, )" "$("$CLI" --version | sed -n 2p)"
+  check_eq "...an argument it does not take refused, exit 2, nothing printed" "omabox: --version: unknown argument foo (omabox --version) 2" \
+    "$(o=$("$CLI" version foo 2>&1); echo "$o $?")"
+  check_eq "...--version too" "omabox: --version: unknown argument --json (omabox --version) 2" "$(o=$("$CLI" --version --json 2>&1); echo "$o $?")"
   check_eq "the widget's manifest has it" "$v" "$(jq -r .version "$ROOT/plugin/manifest.json")"
   check_match "...and its Settings face" "pluginVersion: \"$v\"" "$(grep pluginVersion "$ROOT/plugin/Panel.qml")"
   # The widget shows box names and errors agents wrote, in the user's real bar: never as rich text.

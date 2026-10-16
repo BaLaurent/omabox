@@ -7062,6 +7062,10 @@ from them.
     holder's file) and against its own earlier ones before it sends anything: `keys a up:super` with
     nothing held typed `a`, then failed; now exit 1 with nothing sent (a holder's own answer still
     decides when a key is sent, for a race). Test: `t_keys_down_up` (both cases).
+348. **`--version` refuses arguments too** (2026-10-16, finding 327's loose end). `omabox version
+    foo`, `--version foo` and `-V --json` printed the version and exited 0, the hole `ls` and `saves`
+    had: any argument after it is now "--version: unknown argument X (omabox --version)", exit 2,
+    nothing printed (`-h` is still its help; a `-b NAME` before it is still ignored). `t_unit_version`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

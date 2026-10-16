@@ -117,7 +117,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox ls` refuses arguments it does not take.** `ls -b NAME --json` printed the table and
   exited 0, as did `ls` with any unknown flag. Now `-b` after `ls` says "ls takes no -b", as before
   it, and anything else but `--json` is an unknown argument; both exit 2. `omabox saves` too:
-  `saves --json --bogus` printed the JSON and exited 0.
+  `saves --json --bogus` printed the JSON and exited 0. And `omabox --version` (`version`, `-V`):
+  `version foo` printed the version and exited 0.
 - **The skill shows `wait change` again**, for an app that redraws later by itself (a sync, a
   timer): `omabox wait change --window APP`, then `wait still`. Without it agents slept with
   `wait cmd -- false`. `omabox help wait` says what `change` waits for.
