@@ -481,37 +481,19 @@ AccessKit waits for); Chromium and Electron only when started with --force-rende
 terminals, the Omarchy shell and its plugins have none: "no accessibility tree", exit 1.
 @ check
 \`check\` compares an app's or a plugin's look with a baseline, so a person need not look. A SCENARIO
-is a command of yours (a script) that sets the box up, drives it with omabox commands and calls
-\`omabox check point ID\` where a shot should match; \`check run\` gives it a fresh \`up --clean\` box
-of its own each run (UP OPTIONS: --plugin, --theme, --size...; OMABOX names the box, the scenario's
-\`omabox\` is this one). --approve runs it 3 times (--runs N) and writes the baseline to --base DIR
-(./omabox-check): for each checkpoint the run most others match; where any run differed is
-"unstable", said and left out from then on (one run of three: the app is not the same from one
-start to the next there, or a time changed; every run: data or a time the scenario does not pin).
-It also writes baseline.png, every checkpoint kept in one image, unstable regions amber: look at it
-before you keep the baseline (what most runs showed is kept, a wrong screen too).
-Without --approve it runs once and says for each checkpoint same, changed (each region "at X,Y WxH",
-marked on ID.diff.png; with --window, the tree's moved, resized, text, state, appeared and vanished
-elements), holes, new or missing: exit 0 when all are the same, 1 when not, 3 when the scenario
-failed, 4 when there is no baseline. When any changed, report.png: each change cropped beside its
-baseline, in one image (look first). Shots are compared exactly, as users see them, leaving out
-specks: parts of the difference smaller than twice the largest stray part the --approve runs
-differed by (Qt Quick's text varies from one start of an app to the next; 16 to 32 px, a window's
-largest for each checkpoint of it; 8 when the runs agreed to the pixel; --speck N for all);
-"same" says what it left out. A change smaller than that can only show in the tree. A scenario puts
-files in the box under \$(omabox path)/home (/home/sbx in it); a date shown relative ("9 months
-ago") needs its file's mtime set relative to now (\`omabox run -- touch -d "9 months ago" FILE\`).
-\`check point\` waits until the shot is still (15 s, --timeout; then taken anyway, noted), shoots the
-screen, -g, --window (with its tree, when it has one) or a crop of the window (--window SEL -g, in
-its coordinates; the tree's elements touching it); --ignore leaves a region of that shot out (a
-clock of the app's own). It also finds holes: the #ff00ff wallpaper enclosed by a window, the bar
-or a popup (in a window's own pixels, fully transparent ones), not the wallpaper around and between
-them, nor rounded corners; only where the wallpaper is behind (a popup over a window hides them:
-take its checkpoint over an empty workspace). --approve says each ("holes ID: ... at X,Y WxH") and
-keeps them; a check fails on holes the baseline lacks. \`check diff A B\`
-compares two shots of yours the same way (exit 0 same, 1 not; --speck 32, --report too). A baseline
-made on another omabox, Hyprland, Omarchy, GPU, theme, size, locale or timezone is said. Not inside
-ai-jail yet.
+is a script of yours that sets the box up, drives it with omabox commands and calls \`omabox check
+point ID\` where a shot should match (once still: the screen, -g, --window SEL with its tree; --ignore
+leaves a region out); \`check run\` gives it a fresh \`up --clean\` box each run (UP OPTIONS; OMABOX
+names the box). --approve runs it 3 times and writes the baseline to --base DIR (./omabox-check):
+what most runs showed, where they differed "unstable" and left out from then on, and baseline.png,
+every checkpoint kept in one image: look at it before you keep the baseline (a wrong screen most
+runs showed is kept too). Without --approve it runs once and says for each checkpoint same, changed
+(each region "at X,Y WxH", the tree's changes), holes, new or missing; when any changed, look at
+report.png first (each change cropped beside its baseline). Exit 0 all same, 1 not, 3 the scenario
+failed, 4 no baseline. Shots are compared exactly but for specks (stray parts smaller than the
+approve runs differed by, said under "same"), and searched for holes (the #ff00ff wallpaper inside a
+window, the bar or a popup). \`check diff A B\` compares two shots of yours the same way. More (times
+and dates, specks, holes): the omabox skill's reference.md, "Visual checks". Not inside ai-jail yet.
 @ drag
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
