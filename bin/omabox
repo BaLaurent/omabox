@@ -88,7 +88,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
             [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
-            [--clean [--keep animations,bar,clock,pointer,wallpaper]]   a desktop where only what is tested moves
+            [--clean [--keep animations,bar,clock,locale,pointer,wallpaper]]   a desktop where only what is tested moves
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
@@ -259,10 +259,11 @@ shell.toml [bar]"). Plugins are placed as without it.
 Omarchy's bar (--stock-bar) on tokyo-night (or --theme), a #ff00ff wallpaper (no theme has it: any of
 it inside a window or the bar is a hole), every process's wall clock from Friday 12:00 as the box
 starts (the bar's, and the times an app shows or stamps; it runs, so "12:00" holds for the box's
-first minute; static and Go programs keep the real one), no pointer, no network (--net connected
-gives it back), animations off (over reloads too). --keep LIST takes any of animations, bar (yours),
-clock, pointer, wallpaper back, for a test of Hyprland or the shell that needs them. A theme set
-later in the box brings that theme's wallpaper.
+first minute; static and Go programs keep the real one), English (en_US.UTF-8, else C.UTF-8) and UTC
+for the whole session, not your LC_TIME or zone, no pointer, no network (--net connected gives it
+back), animations off (over reloads too). --keep LIST takes any of animations, bar (yours), clock,
+locale (yours and your timezone), pointer, wallpaper back, for a test of Hyprland or the shell that
+needs them. A theme set later in the box brings that theme's wallpaper.
 @ up run audio record
 --audio: the box's own PipeWire, WirePlumber and pipewire-pulse (PipeWire and Pulse apps both play),
 its only devices a speaker nobody hears (omabox-speaker, a null sink: the default output) and a
@@ -3262,8 +3263,15 @@ CLEAN_WALLPAPER_PNG=iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAGUlEQVQoz2P8
 # The clock (finding 359): this instant in the box's timezone when the box starts, a Friday, which the
 # bar's own clock shows as "Friday 12:00" for its first minute; it runs from there.
 CLEAN_CLOCK_AT="2026-01-02 12:00"
-CLEAN_KEEPS="animations bar clock pointer wallpaper"
-CLEAN=0 CLEAN_KEEP=""   # up sets them
+# The locale and timezone (finding 362): English in UTF-8 and UTC for the whole session, not the host's
+# (its LC_TIME made an app's dates Portuguese, "Há 9 meses"); --keep locale gives both back.
+CLEAN_TZ=UTC
+CLEAN_KEEPS="animations bar clock locale pointer wallpaper"
+CLEAN=0 CLEAN_KEEP="" CLEAN_LANG="" CLEAN_ZONE=""   # up sets them
+# en_US.UTF-8 when the system has it (locale -a), else C.UTF-8 (glibc's own, always there).
+clean_locale() {
+  if locale -a 2>/dev/null | grep -qix 'en_US\.utf-\{0,1\}8'; then echo en_US.UTF-8; else echo C.UTF-8; fi
+}
 # --keep LIST: comma-separated, each one of CLEAN_KEEPS; printed back comma-separated, once each.
 clean_keep() {
   local k out=() IFS=,
@@ -3275,9 +3283,10 @@ clean_keep() {
   echo "${out[*]}"
 }
 clean_has() { [[ ,$CLEAN_KEEP, == *,$1,* ]]; }
-# The instant file tools/clock reads (BOX_CLOCK_INSTANT): CLEAN_CLOCK_AT in the box's timezone (the
-# host's /etc/localtime, unless the box's --setenv triples, cmd_up's envs, give it a TZ), and
-# CLOCK_BOOTTIME now in ns (/proc/uptime's), from which the box's clock runs.
+# The instant file tools/clock reads (BOX_CLOCK_INSTANT): CLEAN_CLOCK_AT in the box's timezone (a TZ
+# the box's --setenv triples, cmd_up's envs, give it; else CLEAN_ZONE, a clean box's, whose bar then
+# reads Friday 12:00 in it; else the host's /etc/localtime), and CLOCK_BOOTTIME now in ns
+# (/proc/uptime's), from which the box's clock runs.
 # clock_instant_file [--setenv NAME VALUE]...
 clock_instant_file() {
   local tz="" at up
@@ -3290,11 +3299,30 @@ clock_instant_file() {
 # What a clean box is, as `up` says it. clean_text THEME NET
 clean_text() {
   local parts=() s
+  [ -n "$tz" ] || tz=$CLEAN_ZONE
   if clean_has bar; then parts+=("your bar"); else parts+=("Omarchy's bar"); fi
   parts+=("theme $1")
   clean_has wallpaper || parts+=("wallpaper $CLEAN_WALLPAPER (any of it inside a window or the bar is a hole)")
   clean_has clock || parts+=("the clock from Friday 12:00")
   clean_has pointer || parts+=("no pointer")
+# A clean box's locale and timezone as its box.json records them (check.json's, a check compares
+# them): its own, or with --keep locale the host's (LANG and any LC_* the box is given) and a TZ
+# --env gives (the --setenv triples, cmd_up's envs), else the host's /etc/localtime's zone.
+clean_locale_rec() {
+  local s v
+  if [ -n "$CLEAN_LANG" ]; then echo "$CLEAN_LANG"; return; fi
+  s=${LANG:-C.UTF-8}
+  for v in LANGUAGE ${!LC_*}; do [ -z "${!v:-}" ] || s+=" $v=${!v}"; done
+  echo "$s"
+}
+clean_zone_rec() {
+  local tz="" z
+  while [ $# -ge 3 ]; do [ "$2" != TZ ] || tz=$3; shift 3; done
+  if [ -n "$tz" ]; then echo "$tz"; return; fi
+  if [ -n "$CLEAN_ZONE" ]; then echo "$CLEAN_ZONE"; return; fi
+  z=$(readlink -f /etc/localtime 2>/dev/null) || z=""
+  echo "${z#/usr/share/zoneinfo/}"
+}
   [ "$2" != isolated ] || parts+=("no network")
   clean_has animations || parts+=("animations off")
   s=$(IFS=,; echo "${parts[*]}")
@@ -3302,6 +3330,7 @@ clean_text() {
 }
 
 up_already() {
+  clean_has locale || parts+=("locale ${CLEAN_LANG:-$(clean_locale)} in ${CLEAN_ZONE:-$CLEAN_TZ}")
   touch "$D/used" 2>/dev/null || true
   local diff=() p id ids
   case " $given " in *" interactive "*) [ "$(meta mode)" = interactive ] || diff+=("--interactive (it is $(meta mode))") ;; esac
@@ -3367,6 +3396,7 @@ cmd_up() {
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local named=() g        # the host paths --ro-bind, --seed and --overlay name, as named (refuse_src)
   # A jailed caller's host paths (#198): each followed only inside the jail's folders (jail_path) before
+  CLEAN_LANG="" CLEAN_ZONE=""
   # anything looks at it, and refused as written (jail_refuse), one way whatever the host has there;
   # the paths as given, for the refusals checked after the options are read.
   local plugin_given=() theme_given=() hypr_given="" omarchy_given=""
@@ -3463,6 +3493,7 @@ cmd_up() {
   # A jailed caller's (finding 99): a folder of the jail's, whole, or one inside a folder the box has
   # (linked to at its own path: finding 241), its manifest.json followed only inside the jail's folders
   # (#198); checked before resolve_plugin reads it, and refused as written, however it fails.
+    clean_has locale || CLEAN_LANG=$(clean_locale) CLEAN_ZONE=$CLEAN_TZ
   PLUGINS=()
   local p i m
   for i in "${!plugin_args[@]}"; do
@@ -3829,7 +3860,8 @@ cmd_up() {
     --arg net "$net" --arg allow "$allow" --argjson net_addrs "$(printf '%s\n' ${net_addrs[@]+"${net_addrs[@]}"} | jq -R 'select(. != "")' | jq -sc .)" --argjson idle "$idle_s" --arg bar "$(if [ "$STOCK_BAR" = 1 ]; then echo stock; elif [ "$DESK_SHELL" = 1 ]; then echo desk; else echo user; fi)" \
     --argjson systemd "$([ $systemd = 1 ] && echo true || echo false)" --argjson audio "$([ $audio = 1 ] && echo true || echo false)" --arg owner "$owner" --arg owner_start "$owner_start" --arg agent "$agent" \
     --arg starter "$starter" --argjson at_term "$at_term" \
-    --argjson clean "$(if [ "$CLEAN" = 1 ]; then jq -nc --arg k "$CLEAN_KEEP" '{keep: ($k | split(",") | map(select(. != "")))}'; else echo null; fi)" \
+    --argjson clean "$(if [ "$CLEAN" = 1 ]; then jq -nc --arg k "$CLEAN_KEEP" --arg l "$(clean_locale_rec)" --arg z "$(clean_zone_rec "${envs[@]}")" \
+      '{keep: ($k | split(",") | map(select(. != ""))), locale: $l, timezone: $z}'; else echo null; fi)" \
     --argjson plugins "$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R 'select(. != "")' | jq -s .)" \
     --argjson plugin_dirs "$(printf '%s\n' "${PLUGINS[@]}" | jq -R 'select(. != "") | split("\t") | {(.[0]): .[1]}' | jq -s 'add // {}')" \
     --argjson linked "$(printf '%s\n' "${LINKED_PLUGINS[@]}" | jq -R 'select(. != "")' | jq -s .)" \
@@ -3903,12 +3935,21 @@ cmd_up() {
   fi
   for f in "$D"/etc/*; do
     [ -e "$f" ] || continue
-    if [ -e "/etc/${f##*/}" ]; then etc_args+=(--ro-bind "$f" "/etc/${f##*/}"); else etc_new=1; fi
+    if [ -e "/etc/${f##*/}" ] && [ ! -L "$f" ]; then etc_args+=(--ro-bind "$f" "/etc/${f##*/}"); else etc_new=1; fi
   done
   [ $etc_new = 0 ] || etc_args=(--overlay-src /etc --overlay-src "$D/etc" --ro-overlay /etc)
   # Safety invariant (finding 5): Hyprland tries DRM first. Never bind /dev/dri/card*, /dev/input,
   # /run/seatd.sock, the system bus or the real XDG_RUNTIME_DIR: only a render node goes in (on NVIDIA,
   # an empty file at the card's path, never the device: finding 294).
+  # --clean's locale and timezone (finding 362): the session's LANG (launch.sh below) and, for what
+  # reads the files instead (a --systemd box's user manager reads locale.conf; glibc, Qt and ICU
+  # localtime), /etc/locale.conf and /etc/localtime. localtime is a link, as the host's, which Qt
+  # reads the zone's name from: a link goes in through the overlay (a bind would follow it).
+  rm -f -- "${D:?}/etc/locale.conf" "${D:?}/etc/localtime"
+  if [ -n "$CLEAN_LANG" ]; then
+    echo "LANG=$CLEAN_LANG" > "$D/etc/locale.conf"
+    ln -s "/usr/share/zoneinfo/$CLEAN_ZONE" "$D/etc/localtime"
+  fi
   # The host's name in both network modes (finding 54): pasta's own UTS namespace would otherwise
   # name an isolated box pasta-HOST.
   local args=(--info-fd 3 --unshare-pid --unshare-ipc --unshare-uts --hostname "$(uname -n)"
@@ -4081,8 +4122,9 @@ cmd_up() {
     # (finding 58: LC_TIME and the rest are the user's formats).
     # (login_shell, not shell: that is cmd_up's "wait for the Omarchy shell" flag, finding 62.)
     local login_shell; login_shell=$(getent passwd "$(id -un)" | cut -d: -f7); [ -x "$login_shell" ] || login_shell=/bin/bash
-    printf ' %q' env -i PATH=/usr/bin TERM=dumb LANG="${LANG:-C.UTF-8}" USER="$(id -un)" LOGNAME="$(id -un)" SHELL="$login_shell" "${sdenv[@]}"
-    local v; for v in LANGUAGE ${!LC_*}; do [ -z "${!v:-}" ] || printf ' %q' "$v=${!v}"; done
+    # --clean: its own LANG and none of the host's LC_* (finding 362).
+    printf ' %q' env -i PATH=/usr/bin TERM=dumb LANG="${CLEAN_LANG:-${LANG:-C.UTF-8}}" USER="$(id -un)" LOGNAME="$(id -un)" SHELL="$login_shell" "${sdenv[@]}"
+    local v; [ -n "$CLEAN_LANG" ] || for v in LANGUAGE ${!LC_*}; do [ -z "${!v:-}" ] || printf ' %q' "$v=${!v}"; done
     # shellcheck disable=SC2016 # expanded when launch.sh runs, under the host's exec rule
     printf ' %s' '${HL_EXEC_RULE_TOKEN:+HL_EXEC_RULE_TOKEN=$HL_EXEC_RULE_TOKEN}'
     [ "$(ulimit -Hc)" = 0 ] || printf ' %q' prlimit --core=1:   # nocore, for the whole box

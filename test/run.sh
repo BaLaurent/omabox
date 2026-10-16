@@ -5344,12 +5344,21 @@ t_unit_check() {
   check_match "...a theme's wallpaper since" "not the sentinel" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
   # --keep: a list of what the clean desktop keeps, once each.
   check_eq "--keep: comma-separated, once each" "clock,animations" "$(lib clean_keep clock,animations,clock 2>&1)"
-  check_match "--keep: anything else refused, naming what it takes" "takes animations, bar, clock, pointer, wallpaper.*got blur" \
+  check_match "--keep: anything else refused, naming what it takes" "takes animations, bar, clock, locale, pointer, wallpaper.*got blur" \
     "$(lib clean_keep clock,blur 2>&1)"
-  check_eq "clean_text: all of it" "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock from Friday 12:00, no pointer, no network, animations off" \
-    "$(lib clean_text tokyo-night isolated)"
+  check_eq "clean_text: all of it" "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock from Friday 12:00, locale en_US.UTF-8 in UTC, no pointer, no network, animations off" \
+    "$(lib eval 'CLEAN_LANG=en_US.UTF-8 CLEAN_ZONE=UTC; clean_text tokyo-night isolated')"
   check_eq "...what --keep takes back, and a network" "your bar, theme nord, no pointer" \
-    "$(lib eval 'CLEAN_KEEP=bar,wallpaper,clock,animations; clean_text nord connected')"
+    "$(lib eval 'CLEAN_KEEP=bar,wallpaper,clock,animations,locale; clean_text nord connected')"
+  # The clean locale (finding 362): en_US.UTF-8 when the system has it, else C.UTF-8.
+  if locale -a 2>/dev/null | grep -qix 'en_US.utf-\{0,1\}8'; then
+    check_eq "clean_locale: en_US.UTF-8 (this system has it)" en_US.UTF-8 "$(lib clean_locale)"
+  else
+    check_eq "clean_locale: C.UTF-8 (this system has no en_US)" C.UTF-8 "$(lib clean_locale)"
+  fi
+  check_eq "clock_instant_file: a clean box's zone (CLEAN_ZONE) when no TZ is given" "1767355200" \
+    "$(lib eval 'CLEAN_ZONE=UTC; clock_instant_file' | cut -d' ' -f1)"
+  check_eq "...a TZ given wins" "1767322800" "$(lib eval 'CLEAN_ZONE=UTC; clock_instant_file --setenv TZ Asia/Tokyo' | cut -d' ' -f1)"
   # Refused before any box is made.
   check_match "up --keep without --clean refused" "--keep goes with --clean" "$(ob up "$P-uck" --keep clock 2>&1)"
   check_match "up --clean --desk-shell refused" "--clean or --desk-shell, not both" "$(ob up "$P-uck" --clean --desk-shell 2>&1)"
@@ -5470,11 +5479,17 @@ EOF
 # up --clean (#252, findings 357, 359): a desktop where only what is tested moves, and --keep's way
 # back.
 t_clean() {
-  local B=$P-cln K=$P-clk H out
-  check "up --clean" ob up "$B" --clean
+  local B=$P-cln K=$P-clk H out lang
+  lang=$(lib clean_locale)
+  # (a host LC_TIME of another language: the clean box must not take it, finding 362)
+  check "up --clean" env LC_TIME=pt_BR.UTF-8 "$CLI" up "$B" --clean
   H=$(ob path -b "$B")/home
   out=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | [.clean, .bar, .net, .theme]')
-  check_eq "...ls --json: clean, the stock bar, no network, tokyo-night" '[{"keep":[]},"stock","isolated","tokyo-night"]' "$out"
+  check_eq "...ls --json: clean, the stock bar, no network, tokyo-night" '[{"keep":[],"locale":"'"$lang"'","timezone":"UTC"},"stock","isolated","tokyo-night"]' "$out"
+  check_eq "...its locale for the whole session, none of the host's LC_*; UTC" "$lang||UTC|/usr/share/zoneinfo/UTC|LANG=$lang" \
+    "$(ob run -b "$B" -- sh -c 'echo "$LANG|$(env | grep "^LC_" || true)|$(date +%Z)|$(readlink /etc/localtime)|$(cat /etc/locale.conf)"' 2>&1)"
+  check_eq "...the shell's too" "$lang|" \
+    "$(ob run -b "$B" -- sh -c 'tr "\0" "\n" < "/proc/$(pgrep -x quickshell | head -n 1)/environ" | grep "^LANG=\|^LC_" | sed "s/^LANG=//" | tr "\n" "|"' 2>&1)"
   check_eq "...the wallpaper is the sentinel" "#ff00ff" "$(ob pixel -b "$B" 960 700 2>&1)"
   ob check point -b "$B" -o "$TMP/clnp" desk >/dev/null 2>&1
   check_eq "...check point looks for holes there (finding 361), and the stock bar has none" "holes checked|" \
@@ -5495,7 +5510,8 @@ t_clean() {
   check_match "up again with another --keep: refused, saying what it keeps" "--keep clock \\(it keeps nothing\\)" \
     "$(ob up "$B" --clean --keep clock 2>&1)"
   check "down" ob down "$B"
-  check "up --clean --keep animations,wallpaper,pointer,clock --net connected" ob up "$K" --clean --keep animations,wallpaper,pointer,clock --net connected
+  check "up --clean --keep animations,wallpaper,pointer,clock,locale --net connected" \
+    env LC_TIME=pt_BR.UTF-8 "$CLI" up "$K" --clean --keep animations,wallpaper,pointer,clock,locale --net connected
   check_eq "...animations on" true "$(ob lua -b "$K" 'hl.get_config("animations:enabled")' 2>&1)"
   check_match "...the theme's wallpaper, not the sentinel" '^#' "$(ob pixel -b "$K" 960 700 2>&1)"
   if [ "$(ob pixel -b "$K" 960 700 2>&1)" = "#ff00ff" ]; then no "...not the sentinel" "#ff00ff"; else ok "...not the sentinel"; fi
@@ -5504,7 +5520,7 @@ t_clean() {
   out=$(ob run -b "$K" -- date +%s 2>&1)
   check "...the real clock" test "$(( $(date +%s) - ${out:-0} ))" -lt 30
   check_fails "...no /etc/ld.so.preload of the box's" ob run -b "$K" -- test -e /etc/ld.so.preload
-  check_eq "...its network and keep list" '["connected",["animations","wallpaper","pointer","clock"]]' \
+  check_eq "...its network and keep list" '["connected",["animations","wallpaper","pointer","clock","locale"]]' \
     "$(ob ls --json | jq -c --arg n "$K" '.[] | select(.name == $n) | [.net, .clean.keep]')"
   check "down" ob down "$K"
 }
@@ -5585,6 +5601,10 @@ SH
 # omabox tree (#178, finding 317): a window's accessibility tree as text, query-first. A Qt Quick and a
 # GTK4 window answer a state question with --find, and the bounds the line gives, handed to `click
 # --window`, land on that control (the tree then says it changed); foot has no tree, and says so.
+  out=$(readlink -f /etc/localtime 2>/dev/null) || out=""
+  check_eq "...--keep locale: the host's LC_TIME and timezone" "pt_BR.UTF-8|$out" \
+    "$(ob run -b "$K" -- sh -c 'echo "${LC_TIME:-}|$(readlink -f /etc/localtime)"' 2>&1)"
+  check_match "...recorded" '"timezone":"'"${out#/usr/share/zoneinfo/}"'"' "$(ob ls --json | jq -c --arg n "$K" '.[] | select(.name == $n) | .clean')"
 # The middle of a tree line's bounds (`@X,Y WxH`), as "X Y".
 tree_mid() {
   [[ $1 =~ @(-?[0-9]+),(-?[0-9]+)\ ([0-9]+)x([0-9]+)$ ]] || return 1
