@@ -4756,17 +4756,27 @@ t_user_hypr() {
   sed -i '$d' "$H/.config/hypr/input.lua"
   check_eq "fixed: hyprctl reload says nothing more" "ok" "$(ob hyprctl -b "$B" reload 2>&1)"
   # Finding 353: a Hyprland that stops answering just after a reload's ok (as finding 352's deadlock
-  # did) is said, exit 1; nothing was said. Stopped by a timer the reload sets when stop-once is there.
-  printf '\nif os.remove("%s/stop-once") then hl.timer(function() os.execute("kill -STOP $PPID") end, { timeout = 1, type = "oneshot" }) end\n' \
+  # did) is said, exit 1; nothing was said. Stopped by a timer the reload sets when stop-once is there
+  # (kept in a global: an unreferenced timer can be collected before it fires). A 1 ms timer still
+  # races the CLI's configerrors under load (Hyprland may answer it first and stop after), so a try
+  # whose stop came too late is taken again; t_unit_hypr_errors_note has the logic without the race.
+  printf '\nif os.remove("%s/stop-once") then omabox_test_stop = hl.timer(function() os.execute("kill -STOP $PPID") end, { timeout = 1, type = "oneshot" }) end\n' \
     "$c" >> "$H/.config/hypr/looknfeel.lua"
-  local rc cmd cont='kill -CONT $(pidof Hyprland)'
+  local rc cmd k cont='kill -CONT $(pidof Hyprland)'
   for m in "hyprctl -b $B reload" "reload -b $B"; do
-    touch "$H/.config/hypr/stop-once"
     read -ra cmd <<<"$m"
-    rc=0; out=$(ob "${cmd[@]}" 2>&1) || rc=$?
+    for _ in 1 2 3 4 5 6; do
+      touch "$H/.config/hypr/stop-once"
+      rc=0; out=$(ob "${cmd[@]}" 2>&1) || rc=$?
+      # Continued until it answers: a stop that lands after one CONT is caught by the next.
+      for k in 1 2 3 4 5 6 7 8 9 10; do
+        ob run -b "$B" -- sh -c "$cont" >/dev/null 2>&1
+        ob hyprctl -b "$B" version >/dev/null 2>&1 && break
+      done
+      [[ $out != *"did not answer hyprctl configerrors"* ]] || break
+    done
     check_match "Hyprland stopped after the reload: $m says it did not answer, exit 1" \
       "its Hyprland did not answer hyprctl configerrors.*omabox gdb -b $B.*omabox down $B\) 1$" "${out//$'\n'/ } $rc"
-    ob run -b "$B" -- sh -c "$cont" >/dev/null 2>&1
   done
   check "...it answers again once continued" ob hyprctl -b "$B" version
   ob down "$B" >/dev/null 2>&1
