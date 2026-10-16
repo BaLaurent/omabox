@@ -6918,6 +6918,28 @@ from them.
     probe bind after `hyprctl reload`; monitors.lua and autostart.lua not run, the screen 1920x1080
     at 1; a syntax error in input.lua said by `hyprctl reload` and `reload`, the box alive, the bind
     of bindings.lua (loaded after it) still there; fixed, nothing said.
+340. **On NVIDIA, Print (Omarchy's screenshot) killed the box: hardware cursors through a CPU
+    buffer** (2026-10-16, #245). Hyprland segfaulted in `renderHWCursorBuffer` at the next cursor
+    update after Print (a layer unmapping, the screencast's end). Cause: `omarchy-capture-screenshot`
+    sets `cursor:no_hardware_cursors = 0` while it runs (so grim captures no software cursor) and puts
+    the old value back after; that is also why setting `no_hardware_cursors = 1` at runtime seemed not
+    to help. With hardware cursors forced, Hyprland's `use_cpu_buffer` auto (2) takes the CPU path on
+    NVIDIA: with no `DRM_DUMB` allocator on the Wayland backend it takes the GBM one, `gbm_bo_map`s the
+    cursor buffer and memcpy's into it without checking the map. NVIDIA's GBM cannot CPU-map a bo at
+    all (a host probe on the render node: NULL for every layout and flag; Mesa maps them all), and gdb
+    at the crash showed the memcpy writing to 0x40. AMD survives (a headless output has no hardware
+    cursor; interactive, auto takes the GL path off NVIDIA); a default NVIDIA box rejects hardware
+    cursors and draws the cursor in software. omabox's aquamarine patches are not involved (the same
+    crash on plain 7bb8bdf4). Fix: `cursor = { use_cpu_buffer = 0 }` in omabox's own `hl.config`
+    (after the user modules, finding 339, so it wins; every load sets it): hardware cursors drawn on
+    the GPU. The same as auto on other GPUs; on NVIDIA the default cursor stays software and in shots.
+    The Hyprland bug (the unchecked map) and Omarchy's forced setting are recorded for upstream
+    (diogochaves/upstream#98, #99). Verified in a box (t_cursor_hw_nvidia, renderD129): the option 0;
+    `no_hardware_cursors = 0` and two pointer moves, then Print, the selection layer, Escape, it gone
+    and a move after: the box alive; with `use_cpu_buffer = 2` the same test fails from the first
+    check on (the box died). By hand in the investigation: a region saved by Print in a headless
+    NVIDIA box, and an interactive NVIDIA box in an NVIDIA stand-in (finding 26) alive under forced
+    hardware cursors. Not checked: NVIDIA with VRR (auto's other way to hardware cursors).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

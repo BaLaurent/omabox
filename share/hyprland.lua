@@ -291,6 +291,12 @@ hl.config({
   -- No reload because a file changed (#140): a box changes when the agent asks (`hyprctl reload`,
   -- `omabox reload`), not when omabox or Omarchy is updated under it. `up --autoreload` keeps it on,
   -- as on a desktop, for a project that has to see what a file change does (a reload loop).
+  -- Hardware cursors drawn on the GPU, never into a CPU-mapped buffer (#245): Hyprland's default on
+  -- NVIDIA (use_cpu_buffer auto) maps the Wayland output's GBM cursor buffer, which NVIDIA's GBM cannot
+  -- map, and writes through the NULL. Omarchy's screenshot forces hardware cursors on while it runs,
+  -- so Print killed every NVIDIA box. The same as auto on any other GPU. Here, after the user
+  -- modules, so a looknfeel.lua cursor block does not undo it.
+  cursor = { use_cpu_buffer = 0 },
   misc = { disable_watchdog_warning = true, disable_autoreload = os.getenv("OMABOX_AUTORELOAD") ~= "1" },
   xwayland = { enabled = os.getenv("OMABOX_XWAYLAND") == "1" },
 })

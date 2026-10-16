@@ -44,6 +44,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **Print (Omarchy's screenshot) no longer kills a box on NVIDIA.** The screenshot turns hardware
+  cursors on while it runs, and Hyprland then wrote the cursor into a buffer NVIDIA cannot map: the
+  box's Hyprland crashed at the next cursor change (the selection going away, a pointer move). A box
+  now draws hardware cursors on the GPU; nothing changes on other GPUs.
 - **A box loads `~/.config/hypr/bindings.lua`, `input.lua` and `looknfeel.lua` from its HOME**, as
   Omarchy does. An edit there, then `omabox hyprctl reload`, did nothing: a box never loaded them, so
   a plugin's "add this line to `bindings.lua`" (or its own Set up button) bound nothing, and the
