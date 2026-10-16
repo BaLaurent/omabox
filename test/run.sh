@@ -6069,9 +6069,120 @@ t_hyprland() {
   check_eq "ls --json has the binary" "$h" "$(ob ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .hyprland')"
   check_match "windows says so first" "^box $B runs Hyprland $h \(Hyprland " "$(ob windows -b "$B" | head -n 1)"
   check "box.log has hyprctl version's first line, from inside" until_ok 10 grep -qF "session.sh: Hyprland $h: Hyprland " "$D/box.log"
+  # finding 358: a box without --quickshell is unchanged: its shell is the installed Quickshell.
+  check_eq "its shell runs the installed Quickshell" /usr/bin/quickshell "$(ob run -b "$B" -- sh -c 'p=$(cat "$XDG_RUNTIME_DIR/omabox-shell.pid") && readlink "/proc/$p/exe"')"
+  check_eq "...ls --json has no build and the installed one's version line" "null true" \
+    "$(ob ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | "\(.quickshell) \(.quickshell_version | test("^Quickshell [0-9]"))"')"
   check "its folder is read-only in the box" bash -c "! '$CLI' run -b '$B' -- touch '${h%/*}/x' 2>/dev/null"
   check "restart-shell" ob restart-shell -b "$B"
   check "down" ob down "$B"
+}
+
+# finding 358: `up --quickshell PATH`'s refusals, before any box starts, and what it records.
+t_unit_quickshell() {
+  local d=$TMP/$P-qs out
+  mkdir -p "$d/fh" "$d/proj/build" "$d/other"
+  printf '#!/bin/sh\nexec /usr/bin/quickshell "$@"\n' > "$d/wrapper"; chmod +x "$d/wrapper"
+  cp /usr/bin/true "$d/noqt"; cp /usr/bin/true "$d/fh/quickshell"; : > "$d/plain"
+  check_match "a missing file" "--quickshell: no such file" "$(ob up "$P-q1" --quickshell "$d/nosuch" 2>&1)"
+  check_match "a file that is not executable" "--quickshell: .* is not executable" "$(ob up "$P-q1" --quickshell "$d/plain" 2>&1)"
+  check_match "a script is not an ELF binary" "--quickshell: .* is not an ELF binary" "$(ob up "$P-q1" --quickshell "$d/wrapper" 2>&1)"
+  check_match "an ELF with no Qt" "links no libQt6Core.so.6 \(readelf -d\): not a Quickshell build" "$(ob up "$P-q1" --quickshell "$d/noqt" 2>&1)"
+  check_match "its folder is refused as --ro-bind's are (here: all of HOME)" "refusing to mount $d/fh \(the binary's folder\).*it contains" \
+    "$(HOME=$d/fh "$CLI" up "$P-q1" --quickshell "$d/fh/quickshell" 2>&1)"
+  check_match "...and with --no-shell, which starts no shell" "--quickshell runs the box's shell, and --no-shell starts none" \
+    "$(ob up "$P-q1" --quickshell /usr/bin/quickshell --no-shell 2>&1)"
+  check_match "run takes it for a throwaway (and refuses the same)" "is not an ELF binary" "$(ob run --quickshell "$d/wrapper" -- true 2>&1)"
+  if command -v cc >/dev/null && [ -n "$(lib qt_box)" ]; then
+    # A build against another Qt minor: what qt_version_tag it refers to (every Qt program does).
+    local qt; qt=$(lib qt_box)
+    mkdir -p "$d/b0" "$d/b1" "$d/lib"
+    printf 'extern const char qt_version_tag;\n__asm__(".symver qt_version_tag, qt_version_tag@Qt_%s");\nconst char *const tag = &qt_version_tag;\nint main(void) { return tag == 0; }\n' "6.0" > "$d/old.c"
+    cc -fPIC -pie -o "$d/b0/quickshell" "$d/old.c" -l:libQt6Core.so.6 2>/dev/null
+    check_match "a build against another Qt is refused, naming both" \
+      "was built against Qt 6.0, but the box has Qt $(lib qt_version).*Qt's private API" "$(ob up "$P-q1" --quickshell "$d/b0/quickshell" 2>&1)"
+    # The box's Qt, but a library the box lacks.
+    sed "s/Qt_6\.0/Qt_$qt/" "$d/old.c" > "$d/same.c"; echo 'int aq(void) { return 0; }' > "$d/miss.c"
+    cc -shared -fPIC -Wl,-soname,libomaboxmissing.so.1 -o "$d/lib/libomaboxmissing.so" "$d/miss.c" &&
+      cc -fPIC -pie -o "$d/b1/quickshell" "$d/same.c" -l:libQt6Core.so.6 -L"$d/lib" -Wl,--no-as-needed -lomaboxmissing 2>/dev/null
+    check_match "...and one needing a library the box lacks" "needs libomaboxmissing.so.1, which the box lacks" \
+      "$(ob up "$P-q1" --quickshell "$d/b1/quickshell" 2>&1)"
+  else
+    skip "builds against another Qt are refused" "no C compiler, or no Qt 6 (libQt6Core)"
+  fi
+  # A jailed agent (finding 99): as --hyprland's, the folder one of the jail's, whole, or the binary in
+  # its project. Past that, --size junk stops `up` before anything starts.
+  git -C "$d/proj" init -q
+  cp /usr/bin/true "$d/proj/build/quickshell"; cp /usr/bin/true "$d/other/quickshell"
+  local J; J=$(jq -nc --arg p "$d/proj" --arg c "$d/proj" '{id: "1 2", net: false, cwd: $c, roots: [{path: $p, masked: false}]}')
+  check_match "jail: a build outside the jail's folders is refused" "not in this jail's project nor in a folder it was given whole \(or is not a Quickshell" \
+    "$(OMABOX_JAIL=$J "$CLI" up "$P-q2" --quickshell "$d/other/quickshell" --size huge 2>&1)"
+  check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-q2" --quickshell "$d/proj/build/quickshell" --size huge 2>&1)"
+  printf '#!/bin/sh\nprintf "%%s|" "$@"\n' > "$d/relay"; chmod +x "$d/relay"
+  out=$(cd "$d/proj" && bash -c 'source "$1"; RELAY=$2; relay_call up --quickshell build/quickshell' _ "$TMP/lib/bin/omabox" "$d/relay")
+  check_match "relay: --quickshell goes absolute" "\|up\|--quickshell\|$d/proj/build/quickshell\|" "$out"
+  # The version line, from inside the box (on_box stubbed): every box's, the build's run by its path.
+  mkdir -p "$d/box"; echo '{"quickshell": "/b/quickshell"}' > "$d/box/box.json"
+  qv() { bash -c 'source "$1"; D=$2 NAME=x
+    on_box() { [ "$3" = /b/quickshell ] || [ "$3" = /usr/bin/quickshell ] || return 1; echo "Quickshell 0.0.1 (revision abc, by $3)"; }
+    qs_version; box_qs' _ "$TMP/lib/bin/omabox" "$d/box" 2>&1; }
+  check_eq "a build: the box's quickshell is it" /b/quickshell "$(qv)"
+  check_eq "...and box.json has its version line, from it" "Quickshell 0.0.1 (revision abc, by /b/quickshell)" "$(jq -r .quickshell_version "$d/box/box.json")"
+  echo '{}' > "$d/box/box.json"
+  check_eq "the installed one otherwise" /usr/bin/quickshell "$(qv)"
+  check_eq "...and its version line too" "Quickshell 0.0.1 (revision abc, by /usr/bin/quickshell)" "$(jq -r .quickshell_version "$d/box/box.json")"
+  local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-q[12]$" || true)
+  check_eq "refusals left no box behind" 0 "$left"
+}
+
+# finding 358: a box whose shell runs a Quickshell build of its own (a copy of the installed one stands
+# in for it): the shell, restarted either way, what calls it by name, the records; a build that is not
+# the box's Qt's ends the box as it starts, saying both versions.
+t_quickshell() {
+  local B=$P-qsb q=$TMP/$P-qsbuild/quickshell S=$P-qss exe
+  mkdir -p "${q%/*}"; cp /usr/bin/quickshell "$q"
+  exe='p=$(cat "$XDG_RUNTIME_DIR/omabox-shell.pid") && readlink "/proc/$p/exe"'
+  check "up --quickshell (a copy of the installed one), shell and bar up" ob up "$B" --quickshell "$q"
+  check_box_safety "$B"
+  check_eq "the box's shell runs it" "$q" "$(ob run -b "$B" -- sh -c "$exe")"
+  check_eq "...and is the box's quickshell and qs by name" "$q $q" "$(ob run -b "$B" -- sh -c 'echo "$(readlink -f "$(command -v quickshell)") $(readlink -f "$(command -v qs)")"')"
+  check_fails "...without OMABOX_QUICKSHELL in the session's environment" ob run -b "$B" -- sh -c 'env | grep -q ^OMABOX_QUICKSHELL='
+  check_match "ls says so, under its line" "^  Quickshell: $q \(Quickshell [0-9.]+" "$(ob ls | grep -A3 "^$B " | grep '^  Quickshell')"
+  check_eq "ls --json has the binary and its version line" "$q true" \
+    "$(ob ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | "\(.quickshell) \(.quickshell_version | test("^Quickshell [0-9]"))"')"
+  check_match "windows says so first" "^box $B runs its shell on Quickshell $q \(Quickshell " "$(ob windows -b "$B" | head -n 1)"
+  check "restart-shell" ob restart-shell -b "$B"
+  check_eq "...keeps it" "$q" "$(ob run -b "$B" -- sh -c "$exe")"
+  # Omarchy's own restart (its launcher, through the systemd-cat stand-in), from the box's session.
+  ob run -b "$B" -- omarchy-restart-shell >/dev/null 2>&1
+  check "...and so does omarchy's restart" until_ok 15 sh -c "[ \"\$('$CLI' run -b '$B' -- sh -c '$exe' 2>/dev/null)\" = '$q' ] && '$CLI' run -b '$B' -- sh -c 'kill -0 \$(cat \$XDG_RUNTIME_DIR/omabox-shell.pid)'"
+  check_match "up again with it: the box as it is" "is already up" "$(ob up "$B" --quickshell "$q" 2>&1)"
+  check_match "...with another: refused, naming both" "already up, without what you asked for: --quickshell /usr/bin/quickshell \(its shell runs $q\)" \
+    "$(ob up "$B" --quickshell /usr/bin/quickshell 2>&1)"
+  check "save" sv save "$S" -b "$B"
+  check_eq "...records it" "$q" "$(jq -r .quickshell "$TMP/data/omabox/saves/$S/save.json")"
+  # (Stopped right after the note by a binary that is no Quickshell build: no box starts.)
+  cp /usr/bin/true "${q%/*}/true"
+  check_match "...and up --from it on another one notes so" "note: save '$S' was made in a box whose shell ran $q, this one's runs ${q%/*}/true" \
+    "$(sv up "$P-qsn" --from "$S" --quickshell "${q%/*}/true" 2>&1)"
+  check "down" ob down "$B"
+  sv saves rm "$S" >/dev/null 2>&1
+  # A build against another patch release of the box's Qt (the binary does not say which): its own
+  # --private-check-compat, asked in the box before the session starts, ends the box (a stub of it).
+  if command -v cc >/dev/null && [ -n "$(lib qt_box)" ]; then
+    local d=$TMP/$P-qscompat; mkdir -p "$d/b"
+    printf '%s\n' '#include <stdio.h>' '#include <string.h>' 'extern const char qt_version_tag;' \
+      "__asm__(\".symver qt_version_tag, qt_version_tag@Qt_$(lib qt_box)\");" 'const char *const tag = &qt_version_tag;' \
+      'int main(int c, char **v) { if (c > 1 && !strcmp(v[1], "--private-check-compat")) {' \
+      '  printf("\033[31mCOMPATIBILITY WARNING: Quickshell was built against Qt 6.0.1 but the system has updated to Qt 6.0.2 without rebuilding the package.\n\033[0m"); return 1; }' \
+      '  return tag == 0; }' > "$d/c.c"
+    cc -fPIC -pie -o "$d/b/quickshell" "$d/c.c" -l:libQt6Core.so.6
+    check_match "a build against another Qt patch release: the box ends as it starts, naming both" \
+      "died while starting \(--quickshell: built against Qt 6.0.1, the box has Qt 6.0.2" "$(ob up "$P-qsc" --quickshell "$d/b/quickshell" 2>&1)"
+    ob down "$P-qsc" >/dev/null 2>&1
+  else
+    skip "a build against another Qt patch release ends the box" "no C compiler, or no Qt 6 (libQt6Core)"
+  fi
 }
 
 # finding 91: no global git identity (a fresh machine) is no reason for `up` to fail.
@@ -12156,9 +12267,9 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
