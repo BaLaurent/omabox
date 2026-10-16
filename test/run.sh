@@ -4847,6 +4847,48 @@ for a in (d.get_child_at_index(i) for i in range(d.get_child_count())):
     for j in range(a.get_child_count()): print(a.get_child_at_index(j).get_name())' | grep -qx 'omabox a11y'"
 }
 
+# The box's journal (#234): share/journal.py on the box's own tmpfs at /run/systemd/journal, never the
+# host's; native entries and the stdout stream in ~/journal.log (`omabox log journal`); a dbus-broker a
+# program starts with a cleaned environment comes up (it exited 1 without the socket); the log bounded.
+journal_sink() {
+  local B=$1 out
+  check_eq "journal: the box's own tmpfs at /run/systemd/journal, its sockets in it (#234)" "tmpfs socket socket" \
+    "$(ob run -b "$B" -- sh -c 'echo $(awk '\''$5 == "/run/systemd/journal" { print $9 }'\'' /proc/self/mountinfo) $(stat -c %F /run/systemd/journal/socket /run/systemd/journal/stdout | sed "s/.* //")')"
+  check_eq "...the sink, by its own name" omabox-journal "$(ob run -b "$B" -- pgrep -x omabox-journal >/dev/null && echo omabox-journal)"
+  ob run -b "$B" -- /usr/bin/logger --journald <<<$'MESSAGE=omabox native entry\nSYSLOG_IDENTIFIER=omabox-t' >/dev/null 2>&1
+  check "...a native entry (logger --journald) in omabox log journal" until_ok 5 \
+    bash -c "'$CLI' log -b '$B' journal --grep 'omabox-t\[[0-9]+\]: omabox native entry$' | grep -q ."
+  ob run -b "$B" -- /usr/bin/systemd-cat -t omabox-cat printf 'line one\nline two\n' >/dev/null 2>&1
+  check "...the stdout stream (systemd-cat), line by line" until_ok 5 \
+    bash -c "'$CLI' log -b '$B' journal -n 5 | grep -c 'omabox-cat\[[0-9]*\]: line \(one\|two\)$' | grep -qx 2"
+  # at-spi-bus-launcher as a test harness runs it (#234): from a cleaned environment (no
+  # ATSPI_DBUS_IMPLEMENTATION), on a private session bus and runtime dir, so it starts dbus-broker-launch.
+  if [ ! -x /usr/bin/dbus-broker-launch ] || [ ! -x /usr/lib/at-spi-bus-launcher ]; then
+    skip "journal: a dbus-broker started from a cleaned environment" "no dbus-broker or at-spi-bus-launcher"
+  else
+    # shellcheck disable=SC2016 # the box's shells
+    out=$(ob run -b "$B" -- env -i PATH=/usr/bin HOME=/home/sbx XDG_RUNTIME_DIR="$(ob run -b "$B" -- mktemp -d)" dbus-run-session -- sh -c '
+      /usr/lib/at-spi-bus-launcher 2>&1 & l=$!
+      for _ in $(seq 50); do a=$(busctl --user call org.a11y.Bus /org/a11y/bus org.a11y.Bus GetAddress 2>/dev/null) && break; sleep 0.1; done
+      a=${a#s \"}; a=${a%%[,\"]*}
+      for _ in $(seq 50); do busctl --address="$a" list >/dev/null 2>&1 && { echo "bus up: $(pgrep -x dbus-broker -P "$(pgrep -x dbus-broker-lau -P $l)" >/dev/null && echo dbus-broker)"; break; }; sleep 0.1; done
+      kill $l' 2>&1 | grep -v '^dbus-daemon\[')
+    check_eq "...a dbus-broker an a11y launcher starts from a cleaned environment comes up" "bus up: dbus-broker" "$out"
+    check "...and logs to it" until_ok 5 bash -c "'$CLI' log -b '$B' journal --grep 'dbus-broker-launch\[[0-9]+\]: Ready' | grep -q ."
+  fi
+  # The bound: a second sink with a 4 KB cap, 400 entries sent: two files, each at most the cap.
+  # shellcheck disable=SC2016 # the box's shell
+  out=$(ob run -b "$B" -- sh -c 'cd "$(mktemp -d)" && { python3 -I /opt/omabox/share/journal.py --dir d --log j.log --max 4096 & p=$!; } &&
+    for _ in $(seq 50); do [ -S d/socket ] && break; sleep 0.05; done &&
+    python3 -c "import socket; s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+for i in range(400): s.sendto(b\"MESSAGE=entry %d\n\" % i, \"d/socket\")" &&
+    for _ in $(seq 50); do grep -q "entry 399$" j.log 2>/dev/null && break; sleep 0.05; done; kill $p
+    echo "$(wc -c < j.log) $(wc -c < j.1.log) $(tail -n 1 j.log | sed "s/.*: //")"')
+  if [[ $out =~ ^([0-9]+)\ ([0-9]+)\ (.*)$ ]] && [ "${BASH_REMATCH[1]}" -le 4096 ] && [ "${BASH_REMATCH[2]}" -le 4096 ] &&
+    [ "${BASH_REMATCH[2]}" -gt 3000 ] && [ "${BASH_REMATCH[3]}" = "entry 399" ]; then ok "...bounded: past --max, journal.1.log and a new journal.log, each within it"
+  else no "...bounded: past --max, journal.1.log and a new journal.log, each within it" "got [$out]"; fi
+}
+
 t_dbus_user_app() {
   local B=$P-dbusapp
   check "up" ob up "$B" --no-shell
@@ -4857,6 +4899,7 @@ t_dbus_user_app() {
     "$(ob run -b "$B" -- sh -c 'echo "${DBUS_SESSION_BUS_ADDRESS%%,*} $(stat -c %F "$XDG_RUNTIME_DIR/bus")"')"
   dbus_user_app "$B"
   a11y_bus "$B"
+  journal_sink "$B"
   check "down" ob down "$B"
 }
 
@@ -4984,6 +5027,10 @@ t_systemd() {
   check "systemd-run --user uwsm-app -- APP: the app stays" until_ok 10 \
     bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox.sdrun\")'"
   dbus_user_app "$B"
+  # #234: a unit's output (StandardOutput=journal, the stream socket) in the box's journal log.
+  ob run -b "$B" -- systemd-run --user --quiet --unit omabox-say echo omabox unit output >/dev/null 2>&1
+  check "a unit's output in omabox log journal (#234)" until_ok 10 \
+    bash -c "'$CLI' log -b '$B' journal --grep 'omabox unit output$' | grep -q ."
   local scope; scope=$(systemctl --user list-units --no-legend "omabox-$B-*" | awk '{print $1}')
   check_match "host scope exists" "^omabox-$B-" "$scope"
   check "down" ob down "$B"

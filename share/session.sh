@@ -15,6 +15,17 @@ host_fd=${WAYLAND_SOCKET:-}
 unset WAYLAND_SOCKET
 without_host_fd() { if [ -n "$host_fd" ]; then "$@" {host_fd}>&-; else "$@"; fi; }
 
+# A journal (#234): a box has no journald, and a program that logs only to the journal failed there
+# (dbus-broker-launch exits 1 without /run/systemd/journal/socket, so a bus a program starts with a
+# cleaned environment never came up). share/journal.py takes the native and stdout sockets in the
+# box's own tmpfs at /run/systemd/journal (bin/omabox) and writes what comes to ~/journal.log
+# (`omabox log journal`), bounded. Dies with the box, as everything here does.
+if command -v python3 >/dev/null; then
+  without_host_fd python3 -I /opt/omabox/share/journal.py &
+else
+  echo "session.sh: no python3: the box has no journal socket" >&2
+fi
+
 # A real systemd user manager with `omabox up --systemd` (finding 61): units, timers, `systemd-run
 # --user` work as on the host. It gets the box HOME, and it runs the session bus itself: a manager only
 # joins the bus when its own dbus.service is up, so that unit is dbus-daemon (as in every box; the

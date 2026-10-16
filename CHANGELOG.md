@@ -15,6 +15,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   letter repeats in the app until let go. Pressing a held key again, or letting go of one that is not
   held, is an error; anything still held goes with the box.
 
+- **A box has a journal: `omabox log journal`.** A program that logs only to the journal failed in a
+  box: a test harness that starts its own accessibility bus from a cleaned environment got
+  "at-spi-bus-launcher exited with 1", because the dbus-broker it launches exits when it cannot
+  reach `/run/systemd/journal/socket`. Every box now has its own journal sockets there (the native
+  one and the stdout stream; never your host's), and what comes in goes to `omabox log journal`, one
+  line per message with the sender's name and pid: dbus-broker, `logger --journald`, a `--systemd`
+  box's units' output. The log keeps at most 4 MB, then starts again (the one before as
+  `journal.1.log`). Still no journald: `journalctl` reads nothing in a box.
+
 - **`omabox-feedback`, an opt-in skill for reporting what omabox got wrong.** Off unless you run
   `omabox setup --feedback-skill` (`--no-feedback-skill` takes it out; a plain `omabox setup` never
   adds it). Then `/omabox-feedback` has your agent look back through the session (in Claude Code,

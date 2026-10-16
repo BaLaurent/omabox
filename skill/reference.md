@@ -336,7 +336,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - `omabox log [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]`: the box's logs, the last 100 lines
   of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors), `apps` (what the
   launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
-  `--systemd`), `audio` (PipeWire's, with `--audio`), `events` (Hyprland's events, which `omabox events` reads), `box` (bwrap), `reap` (the
+  `--systemd`), `audio` (PipeWire's, with `--audio`), `events` (Hyprland's events, which `omabox events` reads), `journal` (what programs
+  sent the box's journal sockets: dbus-broker, `logger --journald`, Qt with `QT_FORCE_STDERR_LOGGING=0`, units' output; at most 4 MB, then
+  `journal.1.log`), `box` (bwrap), `reap` (the
   reaper's: idle and agent checks, the down it did). A box that died keeps its logs until `down`: read them to see why.
   `-f` follows until the box goes down (exit 0). `-i` (ignore case) goes anywhere, `--grep -i RE`
   too. Hyprland writes its log in pieces: a line about what just happened can come a moment (or
@@ -419,7 +421,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   session sets itself (PATH, HOME, XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, LD_PRELOAD...): refused.
 - `omabox up --systemd` gives the box a real systemd user manager: `systemctl --user`, units in the box
   HOME's `~/.config/systemd/user`, `systemd-run --user` timers (for plugins that manage their own
-  service or schedule alarms). No journald (`journalctl --user` is empty) and no logind either way.
+  service or schedule alarms). No journald (`journalctl --user` is empty: what units print is in
+  `omabox log journal`) and no logind either way.
 - Saves: `omabox save NAME [-b BOX]` keeps the box HOME (app data, keyring; not `.cache` or logs);
   `omabox up --from NAME` / `run --from NAME -- CMD` start with it, the user's theme and bar seeded on
   top. Quit the app first for a clean save (the box is paused for the copy, so it is at least what a
@@ -430,7 +433,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   stand-in, `--systemd` or not: apps start as plain processes, not units (output in
   `<box dir>/home/apps.log`). Without `--systemd`, `systemd-run --user CMD` runs CMD the same way
   (`--wait`/`--pipe`/`--scope` in the foreground), but timers (`--on-active=...`) need `--systemd`;
-  `systemd-cat -t ID` writes to `~/ID.log` (no journald in any box).
+  `systemd-cat -t ID` writes to `~/ID.log` (no journald in any box; `/usr/bin/systemd-cat` and other
+  journal clients reach the box's own sockets at `/run/systemd/journal`: `omabox log journal`).
 - The XDG base dirs are set as in a session (`XDG_DATA_HOME=/home/sbx/.local/share`, ...). An app
   installed into the box HOME the per-user way (`~/.local/share/applications`, a D-Bus service in
   `~/.local/share/dbus-1/services`) starts from the launcher and by D-Bus activation, as on the host.

@@ -145,7 +145,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
                                                          a box's logs: hyprland (the default), shell, apps, run,
                                                          events, keyring, labwc, systemd, audio, gdb,
-                                                         box, reap
+                                                         journal, box, reap
   omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit
   omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
@@ -483,7 +483,9 @@ strings quoted too). A Lua error is exit 1 with its message. An error inside a c
 hl.timer) that runs later is logged nowhere: catch it with pcall.
 @ log
 \`log\` prints the last -n lines (100) of each log named, of a box that died too; run is the latest
-\`run -d\`'s, apps what Omarchy's launcher started, box bwrap's. -f follows them until the box goes
+\`run -d\`'s, apps what Omarchy's launcher started, journal what programs sent the box's journal
+sockets (/run/systemd/journal: dbus-broker, \`logger --journald\`, units' output; at most 4 MB, then
+journal.1.log), box bwrap's. -f follows them until the box goes
 down (-n then counts lines before --grep). Hyprland writes its log in pieces: its newest lines can
 come late. \`log gdb --crash\`: only each crash's signal and the backtrace of the thread it hit
 (-n and --grep then apply to those).
@@ -3635,6 +3637,9 @@ cmd_up() {
   # below) writable as its whole /sys/fs/cgroup under a cgroup namespace, and the marker systemd
   # checks for a systemd-booted system. @CGROUP@ is filled in inside the scope.
   [ $systemd = 0 ] || args+=(--unshare-cgroup --bind @CGROUP@ /sys/fs/cgroup --dir /run/systemd/system)
+  # The box's journal (#234): a tmpfs of its own, where share/journal.py makes the sockets. Never the
+  # host's /run/systemd/journal: what the box logs stays in the box (~/journal.log).
+  args+=(--tmpfs /run/systemd/journal)
   # DNS (finding 52): /etc is the host's but /run is the box's, so a resolv.conf linking into /run
   # (systemd-resolved's stub, NetworkManager's) points at nothing. A connected box gets that one
   # file (pasta forwards the stub's port); an isolated box has no network to resolve names for.
@@ -3651,11 +3656,11 @@ cmd_up() {
   # share/bin first: stand-ins for tools that need a systemd user manager (uwsm-app).
   # The XDG base dirs, as an Omarchy session has them: dbus-daemon reads the box HOME's D-Bus services
   # only from $XDG_DATA_HOME; without it, it looks in the passwd entry's home, not $HOME (finding 87).
-  # QT_FORCE_STDERR_LOGGING (finding 98): a Qt app without a terminal logs to the journal, which a box
-  # has none of, so a `run -d` log stayed empty; --env QT_FORCE_STDERR_LOGGING=0 turns it off.
+  # QT_FORCE_STDERR_LOGGING (finding 98): a Qt app without a terminal logs to the journal (a box's is
+  # ~/journal.log since #234), so a `run -d` log stayed empty; --env QT_FORCE_STDERR_LOGGING=0 turns it off.
   # ATSPI_DBUS_IMPLEMENTATION (#177, finding 264): at-spi-bus-launcher starts the a11y bus with
-  # dbus-broker-launch by default, which exits at once without a journal socket, so a box had no a11y
-  # bus. With dbus-daemon it lives in the box's runtime dir. From the start: an app asks for it once.
+  # dbus-broker-launch by default, which exited at once when a box had no journal socket, so a box had
+  # no a11y bus. With dbus-daemon it lives in the box's runtime dir. From the start: an app asks for it once.
   # OMABOX_HYPRLAND: the build share/start-hyprland.sh starts instead of /usr/bin/Hyprland (finding 116).
   local hypr_env=(); [ -z "$hyprland" ] || hypr_env=(--setenv OMABOX_HYPRLAND "$hyprland")
   # OMABOX_OMARCHY: the tree share/start-hyprland.sh and session.sh run instead of /usr/share/omarchy.
@@ -8669,14 +8674,14 @@ $code
 # read inside its mount namespace (on_box), where a path resolves as the box sees it and only the
 # box's own files are; a dead box's from the host, only as regular files inside its own dirs. box.log
 # and reap.log are the box dir's, which the box never sees.
-LOG_NAMES=(hyprland shell apps run events keyring labwc systemd audio gdb box reap)
+LOG_NAMES=(hyprland shell apps run events keyring labwc systemd audio gdb journal box reap)
 # Where log NAME of the selected box is: "box PATH" (as the box sees it) or "host PATH"; 1 when the
 # box has none, 2 for a name that is no log.
 log_where() {
   local sig r
   case $1 in
     hyprland) sig=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || return 1; echo "box /run/user/$UID/hypr/$sig/hyprland.log" ;;
-    shell|keyring|apps|labwc|systemd|audio|events|gdb) echo "box /home/sbx/$1.log" ;;
+    shell|keyring|apps|labwc|systemd|audio|events|gdb|journal) echo "box /home/sbx/$1.log" ;;
     # The latest `run -d` (their names are run-<ns since 1970>.log: in order as text).
     run) r=$(cd "$D/home" 2>/dev/null && printf '%s\n' run-*.log | grep -E '^run-[0-9]+\.log$' | sort | tail -n 1) &&
       [ -n "$r" ] || return 1; echo "box /home/sbx/$r" ;;

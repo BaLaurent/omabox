@@ -6998,6 +6998,33 @@ from them.
     `up:` fired the release bind twice (*assumed*: once for each keyboard's press). Test: `t_keys_down_up` (the
     issue's press and release binds with `pointer move` between, SUPER+A, capitals, the repeat
     stopping, a key held at `down` gone with the box). The Hotkey Wheel gesture itself not tried.
+344. **A box's own journal sockets: `omabox log journal`** (2026-10-16, #234). `dbus-broker-launch`
+    connects to `/run/systemd/journal/socket` before anything else (`launcher_open_journal`) and exits
+    1 without it, so a program that starts its own bus from a cleaned environment (a test harness's
+    `at-spi-bus-launcher` without the `ATSPI_DBUS_IMPLEMENTATION` of finding 264) got no bus. A box's
+    `/run` is bwrap's root tmpfs, with only `/run/systemd/resolve` (the resolv.conf bind of finding
+    52) under `/run/systemd`. Now every box gets `--tmpfs /run/systemd/journal` (its own, never the
+    host's) and `share/session.sh` starts `share/journal.py` (python3 -I, as `omabox-journal` by
+    `/proc/self/comm`, so `pkill python3` in a box leaves it; a child of PID 1, gone with the box) on
+    it before the session bus: the native datagram socket (`KEY=value` fields, the length-prefixed
+    binary form, a big entry's memfd over SCM_RIGHTS read up to 64 KB; every passed fd closed) and the
+    `stdout` stream socket (seven header lines, then text; a `<N>` level prefix dropped). Each
+    MESSAGE becomes `DATE TIME IDENTIFIER[PID]: LINE` lines in `~/journal.log` (identifier from
+    SYSLOG_IDENTIFIER or the sender's comm, pid from SCM_CREDENTIALS / SO_PEERCRED, in the box's pid
+    namespace); other fields are dropped. Past 4 MB it is renamed `journal.1.log` (a `.log` name, so
+    `save` leaves it out like the others) and started again. 12 MB RSS. *Decided*: python (in
+    install.sh's packages, so in every box's /usr) over socat (not a dependency) or a mode of
+    omabox-relay (a host tool, not in a box); the stdout socket too (25 lines: a `--systemd` box's
+    unit output, `StandardOutput=journal`, went nowhere without it);
+    no `/dev/log` (syslog: not asked; the `logger` stand-in of #151 covers Omarchy's callers); the
+    `logger`/`systemd-cat` stand-ins and `QT_FORCE_STDERR_LOGGING=1` stay (they write where agents
+    already look). `ATSPI_DBUS_IMPLEMENTATION=dbus-daemon` stays too: the a11y bus under dbus-broker
+    also asks for `org.freedesktop.systemd1` on the session bus (a failed activation, harmless, seen
+    in a box). Seen in a box: the issue's failure reproduced with the socket renamed away (the same
+    `launcher_open_journal` trace), and with it the launcher's dbus-broker answers `busctl list` and
+    logs `dbus-broker-launch[PID]: Ready`. Test: `journal_sink` in t_dbus_user_app (the tmpfs mount,
+    the sink's name, `logger --journald`, `/usr/bin/systemd-cat`, at-spi-bus-launcher from `env -i` on
+    a private bus and runtime dir, the 4 KB bound of a second sink), and t_systemd (a unit's output).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
