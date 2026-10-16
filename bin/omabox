@@ -1452,10 +1452,12 @@ stdio_relay() {
 # leftover; what that writes later is read into nothing. One still copying to a slow reader after the
 # second, or a `cat`, is left running (it ends with its writer; bash does not wait for it at exit).
 relay_drain() {
-  local p st pp _ i
+  local p st pp l i
   for p; do
     for i in $(seq 100); do
-      st=""; read -r _ _ st pp _ 2>/dev/null < "/proc/$p/stat" || st=Z
+      # (State and ppid after the comm's last ")": a comm may hold spaces and parentheses.)
+      st=Z pp=""
+      if read -r l 2>/dev/null < "/proc/$p/stat"; then l=${l##*) }; st=${l%% *}; l=${l#* }; pp=${l%% *}; fi
       [ "$st" != Z ] || break
       # (Ours, the shell's own child: not a pid the system gave another process since.)
       if [ "$i" -ge 10 ] && [ $((i % 5)) = 0 ] && [ "$pp" = "$BASHPID" ]; then kill -URG "$p" 2>/dev/null || true; fi

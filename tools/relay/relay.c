@@ -29,6 +29,7 @@
 // itself. Only callers with its own uid are served.
 #define _GNU_SOURCE
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
@@ -378,13 +379,39 @@ static int cmd_listen(int argc, char **argv) {
 static volatile sig_atomic_t ended;
 static void on_urg(int sig) { (void)sig; ended = 1; }
 
+// Every fd from 3 up closed, however high (a caller's soft RLIMIT_NOFILE may be far above 1024):
+// close_range, or where the kernel has none, each fd /proc/self/fd lists.
+static void close_from_3(void) {
+#ifdef SYS_close_range
+    if (syscall(SYS_close_range, 3U, ~0U, 0U) == 0) return;
+#endif
+    DIR *d = opendir("/proc/self/fd");
+    if (!d) { for (int fd = 3; fd < 65536; fd++) close(fd); return; }
+    int fds[256], n, dfd = dirfd(d);
+    do {  // (closing while reading the dir: collect a batch, close it, read again from the start)
+        n = 0;
+        rewinddir(d);
+        for (struct dirent *e; n < 256 && (e = readdir(d));) {
+            int fd = atoi(e->d_name);
+            if (fd >= 3 && fd != dfd) fds[n++] = fd;
+        }
+        for (int i = 0; i < n; i++) close(fds[i]);
+    } while (n == 256);
+    closedir(d);
+}
+
 static int cmd_copy(void) {
     // Only the pipe and the output: nothing else of omabox's (or the caller's) is held while it runs.
-    for (int fd = 3; fd < 1024; fd++) close(fd);
+    close_from_3();
     struct sigaction sa = {0};
     sa.sa_handler = on_urg;  // no SA_RESTART: a read blocked on an empty pipe returns to see the flag
     sigemptyset(&sa.sa_mask);
     sigaction(SIGURG, &sa, NULL);
+    // A caller that blocks SIGURG passes that mask on through exec: the signal must still get here.
+    sigset_t urg;
+    sigemptyset(&urg);
+    sigaddset(&urg, SIGURG);
+    sigprocmask(SIG_UNBLOCK, &urg, NULL);
     static char buf[1 << 17];
     while (!ended) {
         ssize_t r = read(0, buf, sizeof buf);
@@ -392,20 +419,27 @@ static int cmd_copy(void) {
         if (r <= 0) return r < 0;
         if (write_all(1, buf, (size_t)r) < 0) return 1;
     }
-    // The command is over: what it wrote is in the pipe now; anything later is a leftover's.
+    // The command is over: what it wrote is in the pipe now; anything later is a leftover's. Read
+    // without blocking from here: another reader of the pipe (a process that opened it again) may take
+    // bytes FIONREAD counted, and an empty pipe then ends the copy instead of holding it.
+    int fl = fcntl(0, F_GETFL);
+    if (fl >= 0) fcntl(0, F_SETFL, fl | O_NONBLOCK);
     int left = 0;
     if (ioctl(0, FIONREAD, &left) < 0) left = 0;
     while (left > 0) {
         ssize_t r = read(0, buf, (size_t)left < sizeof buf ? (size_t)left : sizeof buf);
         if (r < 0 && errno == EINTR) continue;
+        if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
         if (r <= 0) return r < 0;
         if (write_all(1, buf, (size_t)r) < 0) return 1;
         left -= (int)r;
     }
     pid_t pid = fork();
     if (pid != 0) return 0;  // (a failed fork: the copy ends all the same, and a later write fails)
+    if (fl >= 0) fcntl(0, F_SETFL, fl);  // (the same open pipe: the drain below blocks again)
     int null = open("/dev/null", O_RDWR | O_CLOEXEC);
     if (null < 0 || dup2(null, 1) < 0 || dup2(null, 2) < 0) _exit(1);
+    if (null > 2) close(null);
     signal(SIGURG, SIG_IGN);
     for (;;) {
         ssize_t r = read(0, buf, sizeof buf);

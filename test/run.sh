@@ -734,6 +734,30 @@ t_unit_fd_exposed() {
   check "...and it lives on, its writes not failing" until_ok 5 test -f "$f.alive"
   lib eval "$rl stdio_relay sh -c 'sleep 10 & cat'" < "$f.rnd" | cat > "$f.rnd.held"
   check "...200 kB through a held pipe, byte for byte" cmp -s "$f.rnd" "$f.rnd.held"
+  # omabox-relay copy itself, on a fifo whose writer (W) lives on: a caller's fd however high (1500,
+  # above the 1024 a loop once stopped at) is not held by the copy nor by its draining child, which keeps
+  # 0, 1 and 2 only; a caller that blocks SIGURG (a mask exec passes on) still ends the copy.
+  local R=$ROOT/tools/relay/omabox-relay w p c i
+  if [ -x "$R" ] && [ "$(ulimit -n)" -gt 1600 ] && command -v python3 >/dev/null; then
+    rm -f -- "$f.fifo"; mkfifo "$f.fifo"; : > "$f.mark"
+    { echo hi; exec sleep 30; } > "$f.fifo" & w=$!
+    # shellcheck disable=SC2016 # python's own
+    (exec 1500>"$f.mark"; exec python3 -c 'import os, signal, sys
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGURG}); os.execv(sys.argv[1], sys.argv[1:])' "$R" copy) < "$f.fifo" > "$f.copied" & p=$!
+    until_ok 5 test -s "$f.copied" >/dev/null
+    # (Ended: a zombie, ours to reap; kill -0 still finds one.)
+    for i in $(seq 40); do ! grep -q '^[^)]*) [^Z]' "/proc/$p/stat" 2>/dev/null && break; kill -URG "$p" 2>/dev/null || true; sleep 0.05; done
+    check_fails "omabox-relay copy: SIGURG ends it though its caller blocked the signal" grep -q '^[^)]*) [^Z]' "/proc/$p/stat"
+    kill "$p" 2>/dev/null || true; wait "$p" 2>/dev/null || true
+    check_eq "...what the pipe held, copied" hi "$(cat "$f.copied")"
+    c=""; for i in $(pgrep -x omabox-relay); do [ /proc/"$i"/fd/0 -ef "$f.fifo" ] && c=$i; done
+    check "...its draining child reads the fifo" test -n "$c"
+    local fds=(/proc/"$c"/fd/*)
+    check_eq "...holding fds 0, 1 and 2 only (not the caller's 1500, nor its /dev/null twice)" "0 1 2" \
+      "$(printf '%s\n' "${fds[@]##*/}" | sort -n | paste -sd ' ')"
+    kill "$w" 2>/dev/null || true; wait "$w" 2>/dev/null || true
+    check "...and it ends with the fifo's writer" until_ok 5 bash -c "! kill -0 $c 2>/dev/null"
+  else skip "omabox-relay copy's fds and mask" "no relay built, python3, or an fd limit under 1600"; fi
 }
 
 # finding 63: what may go into a box, and where.
@@ -2687,6 +2711,21 @@ t_run_stdio() {
     check_match "...on a terminal of its own too" '^hi rc=0 ms=[0-9]+$' "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
     check "...at once (${out##*ms=} ms)" test "${out##*ms=}" -lt 5000
   fi
+  # The relays left draining hold none of the caller's fds, however high (1500: above 1024), and a
+  # caller that blocks SIGURG (a mask exec passes on) is not held for the leftover either.
+  if [ "$(ulimit -n)" -gt 1600 ] && command -v python3 >/dev/null; then
+    : > "$d/mark"
+    (exec 1500>"$d/mark"; ob run -b "$B" -- sh -c 'sleep 30 & echo hi' >/dev/null 2>&1)
+    local held="" p
+    for p in $(pgrep -x omabox-relay); do [ "$(readlink "/proc/$p/fd/1500" 2>/dev/null)" != "$d/mark" ] || held+=" $p"; done
+    check_eq "...a caller's fd 1500: held by no relay left draining" "" "$held"
+    t1=$(date +%s%N); rc=0
+    # shellcheck disable=SC2016 # python's own
+    out=$(python3 -c 'import os, signal, sys
+signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGURG}); os.execv(sys.argv[1], sys.argv[1:])' "$CLI" run -b "$B" -- sh -c 'sleep 30 & echo hi' 2>&1) || rc=$?
+    check_eq "...a caller with SIGURG blocked: \$(run ...) gets it, status 0" "hi|0" "$out|$rc"
+    check "...at once ($(( ($(date +%s%N) - t1) / 1000000 )) ms)" test $(( ($(date +%s%N) - t1) / 1000000 )) -lt 5000
+  else skip "run's relays: a high fd, a blocked SIGURG" "no python3, or an fd limit under 1600"; fi
   ob down "$B" >/dev/null 2>&1
 }
 

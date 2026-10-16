@@ -6844,13 +6844,26 @@ from them.
     `daemon &` keeps the terminal and its later lines show there, but a `$(...)` there waits for it
     too; `run`'s answer is the command's, and a process meant to outlive it belongs in `run -d`, whose
     log keeps everything. The command's own output is never cut: one still being copied to a slow
-    reader after the 1 s bound is left running, as before, and ends once copied. Without its tools
-    built (another omabox's checkout), `cat` and the old behaviour. Checked: t_unit_fd_exposed
-    (stdio_relay with a `sleep &` holding a pipe: output and status 3 in ~120 ms, a leftover's later
-    lines dropped and it alive after, 200 kB byte for byte; with `cat` the same call took the
-    leftover's 4 s), t_run_stdio (`$(run -- sh -c 'sleep 30 & echo hi')` in ~140 ms with 0, then 3;
-    3 MB through a held pipe byte for byte; `run -- wl-copy TEXT` in ~140 ms and `wl-paste -n` gives
-    TEXT back; the same on a terminal of its own, stderr to a file, in ~50 ms).
+    reader after the 1 s bound is left running, as before, and ends once copied. The copy closes every
+    fd from 3 up (`close_range`, else what /proc/self/fd lists: a caller's fd may be far above 1024,
+    and one it waits on must not stay held), and its child keeps 0, 1 and 2 only; it unblocks SIGURG
+    (a caller's blocked mask passes through exec); once the command has ended it reads without
+    blocking (O_NONBLOCK on its own pipe end, cleared again in the child), so another reader of the
+    pipe taking bytes FIONREAD counted cannot hold it. The children left draining are host processes,
+    at most one per held output per `run` (two when stdout and stderr are separate pipes), each with
+    only its pipe and /dev/null, outside a `--systemd` box's scope; they end when the last writer in
+    the box goes, at `down` at the latest. relay_drain reads the state and ppid after the comm's last
+    `)`. Without its tools built (another omabox's checkout), `cat` and the old behaviour. Checked:
+    t_unit_fd_exposed (omabox-relay copy on a fifo under a caller with fd 1500 open and SIGURG
+    blocked: it ends at SIGURG, its child holds fds 0-2 only and ends with the writer, both of which
+    the first version of the copy failed; stdio_relay with a `sleep &` holding a pipe: output and
+    status 3 in ~120 ms, a leftover's later lines dropped and it alive after, 200 kB byte for byte;
+    with `cat` the same call took the leftover's 4 s), t_run_stdio (`$(run -- sh -c 'sleep 30 & echo
+    hi')` in ~140 ms with 0, then 3; 3 MB through a held pipe byte for byte; `run -- wl-copy TEXT` in
+    ~140 ms and `wl-paste -n` gives TEXT back; the same on a terminal of its own, stderr to a file, in
+    ~50 ms; a caller's fd 1500 held by no relay left draining; a caller with SIGURG blocked gets
+    `hi` and 0 in ~180 ms). Not checked by a test: the O_NONBLOCK read, whose race (another reader
+    between FIONREAD and the read) a test cannot win on purpose.
 338. **`omabox cpu --threads`: CPU per thread, an app's main thread apart from its render thread**
     (2026-10-16, #242). Measuring what an animation costs needs a Qt Quick app's GUI thread apart from
     its `QSGRenderThread`; `cpu` gave per-process figures only, so an agent wrote its own sampler (a
