@@ -145,6 +145,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                                                          a box's logs: hyprland (the default), shell, apps, run,
                                                          events, keyring, labwc, systemd, audio, gdb,
                                                          box, reap
+  omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit
   omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
   omabox events [-b NAME] --mark [MARK]                  from here: prints the offset, keeps MARK for --since
@@ -470,12 +471,14 @@ hl.timer) that runs later is logged nowhere: catch it with pcall.
 \`log\` prints the last -n lines (100) of each log named, of a box that died too; run is the latest
 \`run -d\`'s, apps what Omarchy's launcher started, box bwrap's. -f follows them until the box goes
 down (-n then counts lines before --grep). Hyprland writes its log in pieces: its newest lines can
-come late.
+come late. \`log gdb --crash\`: only each crash's signal and the backtrace of the thread it hit
+(-n and --grep then apply to those).
 @ gdb
 \`gdb\` prints every thread's backtrace of the box's Hyprland (--shell: the shell; --pid PID: a
 process of the box), stopped or deadlocked too, and leaves it as it was; -- ARGS replace the backtrace
 with gdb's own (-ex 'info threads'). --watch attaches until a crash: the backtrace of the fatal
-signal goes to \`omabox log gdb\`, then the crash goes on. gdb gets CAP_SYS_PTRACE in the box's user
+signal goes to \`omabox log gdb\` (the thread it hit first, then every thread; \`log gdb --crash\` for
+that one alone), then the crash goes on. gdb gets CAP_SYS_PTRACE in the box's user
 namespace only: it traces the box's processes, never the host's. No symbols beyond the binaries'
 own (debuginfod off).
 @ events
@@ -8383,14 +8386,25 @@ log_cat() {
 log_grep() {
   if [ -z "$LOG_RE" ]; then awk '{ print; fflush() }'; else grep --line-buffered -E "${LOG_I[@]}" -- "$LOG_RE" || true; fi
 }
+# The gdb log's crashes (#233): for each, the --watch header, gdb's signal line and the backtrace of the
+# thread it hit, which `gdb --watch` writes between its two markers ("the thread it hit", "every thread").
+# Markers with no signal line before them (the process exited, or was killed: gdb runs them anyway) are no crash.
+gdb_crashes() {
+  awk '/^== omabox gdb --watch / { hdr = $0; sig = ""; on = 0; next }
+    /^(Thread [0-9]+ .*|Program) received signal / { sig = $0; next }
+    /^== omabox: a fatal signal; the thread it hit:$/ { if (sig == "") next; if (k++) print ""; if (hdr != "") print hdr; print sig; sig = ""; on = 1; next }
+    /^== omabox: (every thread|end)/ { on = 0; next }
+    on && NF { print }'
+}
 
 cmd_log() {
-  local name="" follow=0 n=100 srcs=() s
+  local name="" follow=0 n=100 srcs=() s crash=0
   LOG_RE="" LOG_I=()
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -f|--follow) follow=1 ;;
+      --crash) crash=1 ;;
       # `--grep -i RE` as grep users type it (#130); any other value starting with - is an option
       # taken for the expression.
       --grep) optarg "$@"; if [ "$2" = -i ]; then LOG_I=(-i); shift; optarg "$@"; fi
@@ -8410,6 +8424,10 @@ cmd_log() {
   done
   [ ${#srcs[@]} -gt 0 ] || srcs=(hyprland)
   [[ " ${srcs[*]} " != *" all "* ]] || srcs=("${LOG_NAMES[@]}")
+  if [ $crash = 1 ]; then
+    [ "${srcs[*]}" = gdb ] || die "log: --crash is the gdb log's alone (omabox log gdb --crash)"
+    [ $follow = 0 ] || die "log: --crash prints a crash written already, not -f"
+  fi
   select_box "$name"
   # A dead box's logs are what tells why: read them too (need_box says why there are none).
   [ -f "$D/box.json" ] || need_box
@@ -8432,7 +8450,12 @@ cmd_log() {
   if [ $follow = 0 ]; then
     local out sep=""
     for i in "${!names[@]}"; do
-      if [ "$n" = all ]; then out=$(log_cat "${kinds[i]}" "${paths[i]}" | log_grep)
+      if [ $crash = 1 ]; then
+        out=$(log_cat "${kinds[i]}" "${paths[i]}" | gdb_crashes)
+        [ -n "$out" ] || die "box '$NAME' has no crash in its gdb log (omabox gdb --watch before the step that crashes it)"
+        out=$(printf '%s\n' "$out" | log_grep)
+        [ "$n" = all ] || out=$(printf '%s\n' "$out" | tail -n "$n")
+      elif [ "$n" = all ]; then out=$(log_cat "${kinds[i]}" "${paths[i]}" | log_grep)
       else out=$(log_cat "${kinds[i]}" "${paths[i]}" | log_grep | tail -n "$n"); fi
       # Several: each under its name, as tail does; an empty one (or none matching) not at all.
       if [ ${#names[@]} -gt 1 ]; then [ -n "$out" ] || continue; printf '%s==> %s <==\n' "$sep" "${names[i]}"; sep=$'\n'; fi
@@ -9526,13 +9549,14 @@ cmd_gdb() {
   stdio_relay fds_only "" "${caps[@]}" setsid -f sh -c 'log=$1; shift; exec "$@" >> "$log" 2>&1 </dev/null' sh "$log" \
     "${gdb[@]}" -p "$pid" -ex 'handle all nostop noprint pass' \
     -ex 'handle SIGSEGV SIGABRT SIGBUS SIGFPE SIGILL stop print pass' -ex continue \
-    -ex 'echo \n== omabox: a fatal signal; every thread:\n' -ex 'thread apply all bt' -ex 'echo == omabox: end\n'
+    -ex 'echo \n== omabox: a fatal signal; the thread it hit:\n' -ex thread -ex bt \
+    -ex 'echo \n== omabox: every thread:\n' -ex 'thread apply all bt' -ex 'echo == omabox: end\n'
   local end=$((SECONDS + 10))
   until tracer=$(tracer_of "$pid") && [ "${tracer:-0}" != 0 ]; do
     [ $SECONDS -lt $end ] || die "gdb: did not attach to $what in 10 s (omabox log -b $NAME gdb)"
     sleep 0.1
   done
-  say "gdb watches $what (pid $pid in box '$NAME'): on a crash, every thread's backtrace goes to omabox log -b $NAME gdb"
+  say "gdb watches $what (pid $pid in box '$NAME'): on a crash, every thread's backtrace goes to omabox log -b $NAME gdb (--crash: the thread it hit)"
 }
 
 # gpu release GPU (#118): take down the headless boxes rendering on that GPU (a slot, or nvidia, amd,

@@ -22,6 +22,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`omabox log gdb` puts the thread a crash hit first.** After `gdb --watch` caught a fatal
+  signal, every thread's backtrace followed it with Hyprland's main thread last, after its worker
+  threads. The thread the signal hit now comes right under the signal line, then every thread; `omabox
+  log gdb --crash` prints only that thread's backtrace for each crash.
 - **`shot -g` past the window or the screen is cut to it.** `shot --window SEL -g` a few pixels past
   the window was refused ("not inside window"), and `-g` past the screen gave an image padded with
   transparent pixels. Both now take the part inside and say so on stderr, by edge (`-g clipped to

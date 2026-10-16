@@ -9988,12 +9988,43 @@ os.write(os.open("/proc/self/comm", os.O_WRONLY), b"x\x1b[1my\nz"); open("/tmp/t
   done
   check_eq "...gdb in the box's network namespace" "$(readlink "/proc/$bp/ns/net") $(readlink "/proc/$bp/ns/net") " "$gn"
   check_match "...a second gdb: refused, naming the watch" "traced already, by pid [0-9]+" "$(ob gdb -b "$B" 2>&1)"
+  # #233: the first watch's process killed, not crashed: gdb runs its crash commands all the same, and --crash finds none.
+  ob run -b "$B" -- kill -KILL "$wp"
+  check "the first watch's process killed: its gdb done" until_ok 10 bash -c "'$CLI' log -b '$B' gdb -n all | grep -q '^== omabox: end'"
+  check_match "...log gdb --crash: no crash" "has no crash in its gdb log" "$(ob log -b "$B" gdb --crash 2>&1)"
+  check_match "log --crash: the gdb log's alone" "the gdb log's alone" "$(ob log -b "$B" shell --crash 2>&1)"
   ob run -b "$B" -- pkill -SEGV -xo Hyprland
   check "...a crash: the box goes down as it would have" until_ok 15 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\") | .state == \"dead\"'"
   out=$(ob log -b "$B" gdb -n all 2>&1)
   check_match "...the gdb log has the signal" "received signal SIGSEGV" "$out"
   check_match "...and every thread's backtrace, down to main" $'\n#[0-9]+ +0x[0-9a-f]+ in main \\(\\)' "$out"
+  # #233: the thread the signal hit first, right under the signal, then every thread.
+  check_match "...the thread it hit first, under the signal" \
+    $'received signal SIGSEGV[^=]*\n== omabox: a fatal signal; the thread it hit:\n\\[Current thread is [0-9]+ [^\n]*\n#0 [^=]* in main \\(\\)\n\n== omabox: every thread:\n' "$out"
+  out=$(ob log -b "$B" gdb --crash 2>&1)
+  local th; th=$(sed -n 's/^Thread \([0-9]*\) .* received signal SIGSEGV.*/\1/p' <<<"$out")
+  check_match "...log gdb --crash: the signal and that thread, down to main" \
+    $'^== omabox gdb --watch Hyprland [^\n]*\nThread '"$th"$' [^\n]* received signal SIGSEGV[^\n]*\n\\[Current thread is '"$th"$' [^\n]*\n(#[0-9]+ [^\n]*\n)*#[0-9]+ +0x[0-9a-f]+ in main \\(\\)$' "$out"
   ob down "$B" >/dev/null 2>&1
+}
+
+# log gdb --crash (#233) on a gdb log of two watches: one whose process was killed (gdb runs its crash
+# commands anyway: no crash), one that crashed in thread 3. Only that one, without the other threads.
+t_unit_gdb_crashes() {
+  local log=$'\n== omabox gdb --watch sleep (pid 9 in the box), T1\n\nProgram terminated with signal SIGKILL, Killed.\n'
+  log+=$'\n== omabox: a fatal signal; the thread it hit:\nNo thread selected\nNo stack.\n\n== omabox: every thread:\n== omabox: end\n'
+  log+=$'\n== omabox gdb --watch Hyprland (pid 55 in the box), T2\n[New LWP 60]\n0x1 in ?? () from libc\n\n'
+  log+=$'Thread 3 "worker" received signal SIGSEGV, Segmentation fault.\n0x2 in crash ()\n'
+  log+=$'\n== omabox: a fatal signal; the thread it hit:\n[Current thread is 3 (LWP 60)]\n#0  0x2 in crash ()\n#1  0x3 in start ()\n'
+  log+=$'\n== omabox: every thread:\n\nThread 3 (LWP 60):\n#0  0x2 in crash ()\n\nThread 1 (LWP 55):\n#0  0x4 in main ()\n== omabox: end\n'
+  check_eq "gdb_crashes: the crash's header, signal and thread, nothing else" \
+    $'== omabox gdb --watch Hyprland (pid 55 in the box), T2\nThread 3 "worker" received signal SIGSEGV, Segmentation fault.\n[Current thread is 3 (LWP 60)]\n#0  0x2 in crash ()\n#1  0x3 in start ()' \
+    "$(lib gdb_crashes <<<"$log")"
+  local one=$'== omabox gdb --watch a (pid 2 in the box), T3\nProgram received signal SIGABRT, Aborted.\n'
+  one+=$'== omabox: a fatal signal; the thread it hit:\n#0  0x5 in abort ()\n== omabox: every thread:\n#0  0x5 in abort ()\n== omabox: end\n'
+  check_eq "...a single-threaded one's (Program received signal), two crashes apart" \
+    $'== omabox gdb --watch a (pid 2 in the box), T3\nProgram received signal SIGABRT, Aborted.\n#0  0x5 in abort ()\n\n== omabox gdb --watch a (pid 2 in the box), T3\nProgram received signal SIGABRT, Aborted.\n#0  0x5 in abort ()' \
+    "$(lib gdb_crashes <<<"$one$one")"
 }
 
 # The gpu setting (#156, finding 214) on a fake /dev/dri and /sys/class/drm: an AMD and an NVIDIA GPU.
@@ -11067,7 +11098,7 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_gdb_crashes t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)

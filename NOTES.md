@@ -6762,3 +6762,20 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     `t_unit_wait` (geom_clip), `t_window` (window and screen, `click --in` the clipped crop,
     `--zoom` on it),
     `t_scale`/`t_scale_nvidia` (past a window's corner at scale 2, against its whole shot).
+333. **`gdb --watch`: the thread a crash hit first; `log gdb --crash` for it alone** (2026-10-16,
+    #233). The watch ran `thread apply all bt` at the fatal signal, which lists threads from the
+    highest number down: Hyprland's main thread (1, where most crashes are) came last, after the
+    hyprgraphics, glib, dconf and pango workers, so the first `#0` under the signal line was another
+    thread's, and the default `log` (the last 100 lines) could cut the signal line itself. gdb selects
+    the thread the signal hit when it stops, so the watch now writes `thread` and `bt` under "== omabox:
+    a fatal signal; the thread it hit:", then "== omabox: every thread:" (that one again among them),
+    in gdb's own commands, not by rearranging its text. `omabox log gdb --crash` prints, for each crash,
+    the watch's header, gdb's signal line and that section (-n and --grep after); none: exit 1, "no
+    crash in its gdb log". gdb runs those commands after any end of `continue` (a process killed or
+    exited: "Program terminated with signal SIGKILL", then "No thread selected"): a section with no
+    "received signal" line before it is no crash. A log written by an older omabox (one "every
+    thread" section) has no crash for --crash. Checked on a real fault, the box's Hyprland segfaulting
+    in a Lua `unbind` (#232): the main thread's 24 frames right under the signal, the log 123 lines.
+    `t_unit_gdb_crashes` (killed, a worker thread's crash, two single-threaded ones), `t_gdb` (the
+    killed watch: no crash; the SIGSEGV: the thread it hit between the signal and "every thread", and
+    --crash down to main with the signal's thread number).

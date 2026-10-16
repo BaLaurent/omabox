@@ -117,7 +117,7 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 | "went down while this command ran", or "box is dead" after `omabox run -- pkill -x Hyprland` (or quickshell, omabox-labwc) | Those are the box itself (`pkill -x labwc` no longer matches its own): kill your own process by PID; `omabox down` then `up` to recover. |
 | "box … has no shell", or `ls` says `gone` under SHELL (bar gone mid-test) | It crashed past what Omarchy's launcher restarts: `omabox log shell`, then `restart-shell`. "the shell crashed since the last command": it came back, but what you see changed (a shot may show it starting). |
 | "the shell of box … does not answer (hung …)", or `ls` says `hung` under SHELL | Its pid lives but it answers nothing over its IPC: a frozen bar (a crash whose handler hung, or a stopped shell). `omabox restart-shell` kills it and starts a new one; `omabox gdb --shell` first for its stack. |
-| "the shell crashed … (report: PATH)" from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`. From `up` before the bar came, the box is gone: `up` again once fixed; after it (the box up), `restart-shell` once fixed. For its stack: `omabox gdb --shell --watch`, the crash again, `omabox log gdb`. As on a desktop, Omarchy's launcher starts it again (up to 5 times a minute), so the bar may be back: the crash still happened. |
+| "the shell crashed … (report: PATH)" from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`. From `up` before the bar came, the box is gone: `up` again once fixed; after it (the box up), `restart-shell` once fixed. For its stack: `omabox gdb --shell --watch`, the crash again, `omabox log gdb --crash`. As on a desktop, Omarchy's launcher starts it again (up to 5 times a minute), so the bar may be back: the crash still happened. |
 | `omabox lua 'hl.dsp…'` printed `HL.Dispatcher` or `function: 0x…` | A dispatcher, returned and not run: `omabox lua 'hl.dispatch(EXPR)'` or `omabox hyprctl dispatch 'EXPR'`. |
 | "its Hyprland did not answer (hung? …)", `ls` says `hung` | The box's Hyprland is stuck (a plugin under test?): `omabox gdb` for where, `omabox log`, then `omabox down`. |
 | "no box 'default-…' is up" | Run from outside any repo, where your session's box is used only when it has exactly one up: run it from the repo, or pass `-b NAME` (`omabox ls`). |
@@ -476,8 +476,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - **A hang or a crash**: `omabox gdb` prints every thread's backtrace of the box's Hyprland, stopped
   or deadlocked too, and leaves it as it was (`-- -ex 'info threads'`: gdb's own commands). A crash:
   `omabox gdb --watch` before the step that crashes it; the box then goes down as it would have, and
-  `omabox log gdb` has the fatal signal and every thread's backtrace (the box writes no core and no
-  Hyprland crash report). `--shell` for the shell, `--pid PID` for any process of the box. A gdb run
+  `omabox log gdb` has the fatal signal, the backtrace of the thread it hit, then every thread's
+  (`log gdb --crash`: that thread alone; the box writes no core and no Hyprland crash report). `--shell` for the shell, `--pid PID` for any process of the box. A gdb run
   with `omabox run` is refused (`ptrace: Operation not permitted`). Symbols: what the binaries carry
   (a debug build has them); Arch's are on debuginfod, offline from the addresses.
 
