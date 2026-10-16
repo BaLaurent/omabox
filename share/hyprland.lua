@@ -11,10 +11,11 @@ require("default.hypr.omarchy")
 -- itself (this file stands in for it). Skipped: autostart (as default.hypr.autostart), and monitors:
 -- a new user's is not comments only (GDK_SCALE=2 and a catch-all rule at scale auto), and its rules
 -- are for real screens; the box's are omabox's (`--size`, `--monitor`, `mode`). Hyprland's require
--- keeps a module's error from ending the load: it is a config error (`hyprctl configerrors`, the red
--- bar), which `up`, `reload` and `hyprctl reload` say. The pcall is for a require that raises instead
--- (another build): the rest of the config still loads, and the error goes to Hyprland's log. A module
--- with no file is skipped (a HOME without them, from an Omarchy with no /etc/skel: not an error).
+-- keeps a module's error from ending the load: it is a config error (`hyprctl configerrors`; no red
+-- bar in a box, below), which `up`, `reload` and `hyprctl reload` say. The pcall is for a require
+-- that raises instead (another build): the rest of the config still loads, and the error goes to
+-- Hyprland's log. A module with no file is skipped (a HOME without them, from an Omarchy with no
+-- /etc/skel: not an error).
 for _, m in ipairs({ "hypr.input", "hypr.bindings", "hypr.looknfeel" }) do
   local ok, err = true, nil
   if package.searchpath(m, package.path) then ok, err = pcall(require, m) end
@@ -287,7 +288,11 @@ hl.config({
   -- An interactive box's views (#174) are at any scale, a window's pixels over the size asked for,
   -- which Hyprland would otherwise round to one that divides the window into whole pixels (a 1000x562
   -- window at 0.5208 became 0.5: a 2000x1124 monitor). Its size in the layout is rounded instead.
-  debug = { vfr = true, disable_logs = false, disable_scale_checks = interactive },
+  -- No red "Your config has errors" bar (finding 352): drawing its text can deadlock Hyprland 0.56
+  -- for good under load (the main thread waits on hyprgraphics' async gatherer, which waits on it).
+  -- The errors stay in `hyprctl configerrors`, which `up`, `reload` and `hyprctl reload` print. Here,
+  -- after the user modules, so a looknfeel.lua debug block does not bring the bar back.
+  debug = { vfr = true, disable_logs = false, disable_scale_checks = interactive, suppress_errors = true },
   -- No reload because a file changed (#140): a box changes when the agent asks (`hyprctl reload`,
   -- `omabox reload`), not when omabox or Omarchy is updated under it. `up --autoreload` keeps it on,
   -- as on a desktop, for a project that has to see what a file change does (a reload loop).

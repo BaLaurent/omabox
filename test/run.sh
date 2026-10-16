@@ -1393,7 +1393,7 @@ t_unit_calibrate() {
   check_eq "...the size asked" 1456x819 "$(cal --size 1456x819 -o "$d/c2.png" >/dev/null 2>&1; magick identify -format '%wx%h' "$d/c2.png" 2>&1)"
   for bad in 1920 1920x 10x10 99999x1080 axb; do check_fails "...--size $bad refused" cal --size "$bad" -o "$d/c3.png"; done
   m=$(lib calib_read "$d/card.png" | tail -n +2)
-  local out rc
+  local out
   out=$(cal "$d/card.png" --answer "$(tr '\n' ' ' <<<"$m")" 2>&1); rc=$?
   check_match "--answer 1:1: says so, exit 0" "^read 1:1: .*no --fit needed" "$out $rc"
   out=$(cal "$d/card.png" --answer "$(cal_reads "$m" 0.7583 | tr '\n' ' ')" 2>&1); rc=$?
@@ -3543,7 +3543,7 @@ t_unit_cli() {
 # (t_clip runs the rest in a box standing in for the host, where no agent is).
 # omabox which PID (#172), with no box: what is not in one, and what cannot be told.
 t_unit_which() {
-  local out rc
+  local out
   out=$(ob which $$ 2>&1); rc=$?
   check_eq "which: a host shell is not in a box, exit 1" "not in a box 1" "$out $rc"
   out=$(ob which 1 2>/dev/null); rc=$?
@@ -4724,6 +4724,7 @@ t_user_hypr() {
   check_eq "...none in Hyprland (the skel's modules load cleanly)" "" "$(ob hyprctl -b "$B" configerrors | tr -d '[:space:]')"
   H=$(ob path "$B")/home
   printf '\nhl.config({ general = { gaps_out = 33 } })\n' >> "$H/.config/hypr/looknfeel.lua"
+  printf 'hl.config({ debug = { suppress_errors = false } })\n' >> "$H/.config/hypr/looknfeel.lua"
   printf '\nhl.bind("SUPER + F12", function() end, { description = "%s-probe" })\n' "$P" >> "$H/.config/hypr/bindings.lua"
   printf '\nio.open("%s/ran-monitors", "w"):close()\n' "$c" >> "$H/.config/hypr/monitors.lua"
   for m in HEADLESS-2 WAYLAND-1; do
@@ -4742,6 +4743,12 @@ t_user_hypr() {
   printf '\nhl.config({ input = { kb_layout = "us" }\n' >> "$H/.config/hypr/input.lua"
   out=$(ob hyprctl -b "$B" reload 2>&1)
   check_match "a module with a syntax error: hyprctl reload says it" "its config has errors.*hypr\.input.*input\.lua:[0-9]+: '\}' expected" "${out//$'\n'/ }"
+  # Finding 352: no red bar in a box (drawing it can deadlock Hyprland), looknfeel.lua's
+  # suppress_errors = false notwithstanding; the errors are still Hyprland's to tell.
+  check_eq "...no red bar: debug:suppress_errors stays on over looknfeel.lua's" "true" \
+    "$(ob hyprctl -b "$B" -j getoption debug:suppress_errors | jq -r .bool)"
+  check_match "...hyprctl configerrors still has the error" "input\.lua:[0-9]+: '\}' expected" \
+    "$(ob hyprctl -b "$B" configerrors)"
   check "...the box goes on" ob lua -b "$B" 'return 1'
   check_eq "...and the rest of the config loads (bindings.lua, after it)" "1" \
     "$(ob hyprctl -b "$B" -j binds | jq --arg d "$P-probe" '[.[] | select(.description == $d)] | length')"

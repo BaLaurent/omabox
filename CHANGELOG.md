@@ -7,6 +7,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A config error no longer hangs a box.** Under load, `hyprctl reload` in a box whose config had
+  an error could freeze its Hyprland for good while it drew the red "Your config has errors" bar (a
+  Hyprland deadlock in that bar's text). A box now draws no such bar, even when your
+  `looknfeel.lua` asks for it; `up`, `reload` and `hyprctl reload` still print the errors, and
+  `omabox hyprctl configerrors` lists them.
 - **`logger` reaches the box's journal by name.** 0.7.0 said `logger --journald` lands in `omabox
   log journal`, but in a box `logger` is omabox's own stand-in, which wrote `~/logger.log`, so the
   journal stayed empty unless you typed `/usr/bin/logger`. Now `logger --journald` and a plain

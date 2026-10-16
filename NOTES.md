@@ -6902,7 +6902,7 @@ from them.
     box's own rules (a later specific rule wins for its output, but the catch-all and the env would
     not be overridden). Hyprland 0.56's `require` is its own (a C function): a module that fails to
     parse or raises is caught, becomes a config error (`hyprctl configerrors`, the red "Your config
-    has errors" bar on the box's screen, as on a desktop) and returns `{}`; what the module did
+    has errors" bar on the box's screen, as on a desktop; no bar since finding 352) and returns `{}`; what the module did
     before a runtime error stays, and the load goes on. It never reaches Hyprland's log. The pcall
     around each require is for a build whose `require` raises; it logs to Hyprland's log. *Decided*
     for the warning: `up`, `reload` and `hyprctl reload` print `hyprctl configerrors` when it is not
@@ -7137,6 +7137,27 @@ from them.
     each route, and with the sockets renamed away the `~/TAG.log` fallback. Test: `journal_sink` in
     t_dbus_user_app (bare `logger --journald`, plain `logger` by tag, stdin and untagged,
     `-t omarchy-shell` in shell.log and not in the journal).
+352. **A box draws no config-error bar: drawing it deadlocked Hyprland** (2026-10-16, #249). Under
+    CPU load, `hyprctl reload` in a box whose config has an error (t_user_hypr's syntax error in
+    `input.lua`) could stop the box's Hyprland 0.56.2 answering for good: a Hyprland deadlock in the
+    error bar's text render (hyprgraphics' async gatherer). gdb showed the main thread in
+    `ErrorOverlay::COverlay::createQueued` → `renderText` → `CAsyncResourceGatherer::await`, the
+    gatherer's thread waiting in `asyncAssetSpinLock`, still so 20 s later. Finding 339 had chosen to
+    show the bar, as on a desktop. Now `share/hyprland.lua` sets `debug = { ..., suppress_errors =
+    true }` in its `hl.config` (getoption `debug:suppress_errors` `true`, `set` true): Hyprland never
+    queues the bar (a reload that turns it on takes a bar already shown away), so the text is never
+    drawn. `hyprctl configerrors` is IPC, read from the config manager, not the bar: it still lists
+    the errors, and `up`, `reload` and `hyprctl reload` still print them (their note no longer says
+    "the red bar at the top of its screen"). *Decided*: the user modules cannot bring the bar back:
+    the setting is in the `hl.config` after them (as the cursor's, finding 340), so a `looknfeel.lua`
+    `debug = { suppress_errors = false }` loses; a runtime `omabox lua` that sets it false is the
+    agent's own call and lasts until the next reload (seen). Repro (t_user_hypr's reload
+    sequence: error in, `hyprctl reload`, `omabox reload`, error out, `hyprctl reload`, in a loop,
+    boxes at once): before, 1 box of 4 hung (10 cycles each), 5 of 6 beside 8 nice'd CPU burners
+    (15 each), within 2-10 cycles, each backtrace in the gatherer's `await`; after, beside the
+    burners, 12 boxes x 15 or 30 cycles (270) with no hang. Seen in a box: with the error, a shot of the screen's top has no bar (main's
+    config draws it there), `configerrors` has the error. Test: t_user_hypr (the option on over
+    `looknfeel.lua`'s, `configerrors` still has the error).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -1045,14 +1045,15 @@ run_read() { local f=$D/run/$1; [ ! -L "$f" ] && [ -f "$f" ] && head -c 65536 --
 # The config's errors at its last load (#246), said after `up`, `reload` and `hyprctl reload`, which
 # answer ok whatever they are: a box HOME's ~/.config/hypr module that failed (share/hyprland.lua loads
 # input, bindings and looknfeel; Hyprland's require makes an error in one a config error and goes on)
-# or any other, what a desktop's red bar shows. Nothing when there are none. Hyprland's answer, from
-# what the box's files say: control characters dropped, 20 lines and 300 bytes a line at most.
+# or any other, what a desktop's red bar shows (a box draws none, finding 352). Nothing when there are
+# none. Hyprland's answer, from what the box's files say: control characters dropped, 20 lines and 300
+# bytes a line at most.
 hypr_errors_note() {
   local t l
   t=$(on_box timeout "$HYPR_LIMIT" hyprctl configerrors 2>/dev/null | LC_ALL=C tr -d '\000-\010\013-\037\177' |
     grep -v '^[[:space:]]*$' | head -n 20) || t=""
   [ -n "$t" ] || return 0
-  say "box '$NAME': its config has errors (the red bar at the top of its screen; the rest of the config loaded):"
+  say "box '$NAME': its config has errors (the rest of the config loaded):"
   while IFS= read -r l; do say "  ${l:0:300}"; done <<<"$t"
 }
 

@@ -330,8 +330,10 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   reload`, and it applies (a plugin's "add this to bindings.lua", its Set up button). A new box's are
   Omarchy's comment-only files, not your desktop's. Never loaded: `monitors.lua` (the screen is
   `--size`/`--monitor`/`mode`'s), `autostart.lua`, and `hyprland.lua` itself. A file with an error
-  does not stop the rest loading; `up`, `reload` and `hyprctl reload` print the config's errors (the
-  red bar on the box's screen; `omabox hyprctl configerrors`).
+  does not stop the rest loading; `up`, `reload` and `hyprctl reload` print the config's errors
+  (`omabox hyprctl configerrors`). A box draws no red "Your config has errors" bar
+  (`debug:suppress_errors` is on, whatever `looknfeel.lua` says: drawing it can hang Hyprland 0.56):
+  a shot never shows the errors, those commands do.
 - An error inside a callback (`hl.on`, `hl.timer`) is not in `lua`'s answer, and when the callback
   runs later (a timer, an app's event) it is logged nowhere, not even in the Hyprland log: seen
   nothing, check with `pcall` inside the callback and keep the error in a global to read with
