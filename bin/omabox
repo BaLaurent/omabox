@@ -238,6 +238,11 @@ before anything is made), not your desktop's current one: omarchy-theme-set NAME
 before its Hyprland and bar start, so a test gets the same look whatever your desktop is on (its
 background: your own first for NAME, else the theme's). Over a --from save's look too. \`up\` again with another is refused.
 @ up run
+--stock-bar: Omarchy's default bar (its shell.json, no shell.toml), not a copy of yours: for shots,
+sizes and colours as most people see them. --theme leaves your bar as it is; without this \`up\`
+says when that bar is not Omarchy's ("seeded the bar from your desk: its shell.json layout and
+shell.toml [bar]"). Plugins are placed as without it.
+@ up run
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 @ up run audio record
 --audio: the box's own PipeWire, WirePlumber and pipewire-pulse (PipeWire and Pulse apps both play),
@@ -2459,12 +2464,16 @@ seed_home() {
   # The bus watches only the service dirs that exist when it starts: one made later lists its services
   # after their first activation (finding 87).
   mkdir -p "$h/.local/share/dbus-1/services"
-  local shell_json=$HOME/.config/omarchy/shell.json
+  # The desk's bar: desk_dir's shell.json and shell.toml (the suite's fake desk, as extensions/'s).
+  # --stock-bar: Omarchy's shell.json and no shell.toml at all, not even a --from save's.
+  local desk; desk=$(desk_dir)
+  local shell_json=$desk/shell.json
   if [ "$STOCK_BAR" = 1 ]; then
     shell_json=${omarchy:-/usr/share/omarchy}/config/omarchy/shell.json
     [ -f "$shell_json" ] || die "--stock-bar: no $shell_json in this Omarchy"
+    rm -f -- "$h/.config/omarchy/shell.toml"
   else
-    cp "$HOME/.config/omarchy/shell.toml" "$h/.config/omarchy/" 2>/dev/null || true
+    cp "$desk/shell.toml" "$h/.config/omarchy/" 2>/dev/null || true
   fi
   local ids; ids=$(printf '%s\n' "${PLUGINS[@]}" | cut -f1 | jq -R . | jq -s .)
   # A user who swapped the built-in notifications for a plugin (e.g. njpatel.omapager) has it disabled, and that
@@ -2482,6 +2491,7 @@ seed_home() {
   else
     shell_json_filter "$ids" $notify "$pagers" < "$shell_json" > "$h/.config/omarchy/shell.json" 2>/dev/null ||
       echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"
+    [ "$STOCK_BAR" = 1 ] || bar_seed_note "$desk" "$ids" $notify "$pagers"
   fi
   for p in "${PLUGINS[@]}"; do
     id=${p%%$'\t'*}; dir=${p#*$'\t'}
@@ -2622,6 +2632,28 @@ seed_extensions() {
     line="plugin ${ids[0]} reads it"; [ ${#ids[@]} = 1 ] || line="plugins ${ids[*]} read it"
     say "up: seeded extensions/$n from $shown: $line (--no-seed extensions starts without it)"
   done
+}
+
+# What `up` says when the box's bar is the desk's and not what --stock-bar gives (#250): its layout,
+# when the desk's shell.json made fit for the box (shell_json_filter) has another `bar` than Omarchy's
+# made fit the same way (position, sections, widgets, their formats); and its shell.toml, when that
+# sets anything (sizes, fonts), named by its tables. Names only, never a value. Nothing when the desk's
+# bar is Omarchy's own: the box looks as --stock-bar's would. bar_seed_note DESK KEEP NOTIFY PAGERS
+bar_seed_note() {
+  local desk=$1 stock=${omarchy:-/usr/share/omarchy}/config/omarchy/shell.json mine theirs tables what=() shown
+  if [ -f "$desk/shell.json" ] && [ -f "$stock" ]; then
+    mine=$(shell_json_filter "$2" "$3" "$4" < "$desk/shell.json" 2>/dev/null | jq -cS '.bar // null' 2>/dev/null) || mine=""
+    theirs=$(shell_json_filter "$2" "$3" "$4" < "$stock" 2>/dev/null | jq -cS '.bar // null' 2>/dev/null) || theirs=""
+    [ -z "$mine" ] || [ "$mine" = null ] || [ "$mine" = "$theirs" ] || what+=("shell.json layout")
+  fi
+  if [ -f "$desk/shell.toml" ] && grep -qvE '^[[:space:]]*(#.*)?$' "$desk/shell.toml" 2>/dev/null; then
+    tables=$(sed -nE 's/^[[:space:]]*\[+[[:space:]]*([A-Za-z0-9_.-]+)[[:space:]]*\]+.*/[\1]/p' "$desk/shell.toml" 2>/dev/null |
+      awk '!seen[$0]++' | paste -sd, - | sed 's/,/, /g') || tables=""
+    what+=("shell.toml${tables:+ $tables}")
+  fi
+  [ ${#what[@]} -gt 0 ] || return 0
+  shown="your desk"; [ "$desk" = "$HOME/.config/omarchy" ] || shown=$desk
+  say "up: seeded the bar from $shown: its ${what[0]}${what[1]:+ and ${what[1]}} (--stock-bar starts from Omarchy's default)"
 }
 
 # The user's own wallpapers for THEME, ~/.config/omarchy/backgrounds/THEME (where

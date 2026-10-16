@@ -1804,6 +1804,33 @@ t_unit_no_seed() {
   check_match "...from run too (a throwaway box's option)" "--no-seed: .*got 'x'" "$(ob run --no-seed x -- true 2>&1)"
 }
 
+# #250: what `up` says when the box's bar is the desk's and not Omarchy's (bar_seed_note): its layout
+# when it differs once made fit for the box, its shell.toml's tables when that sets anything; names only.
+t_unit_bar_seed_note() {
+  local d=$TMP/$P-bsn
+  mkdir -p "$d/om/config/omarchy" "$d/desk" "$d/bare"
+  printf '{"version":1,"idle":{"lock":300},"bar":{"position":"top","layout":{"left":[{"id":"omarchy.menu"},{"id":"omarchy.workspaces"}],"right":[{"id":"omarchy.tray"}]}}}\n' \
+    > "$d/om/config/omarchy/shell.json"
+  # bsn DESK: the line for that desk, against the fixture's Omarchy, nothing mounted
+  bsn() { omarchy=$d/om lib bar_seed_note "$1" '[]' true '[]' 2>&1; }
+  # The desk's: Omarchy's in another key order, other idle times, a left-out plugin's widget.
+  jq -S '.idle.lock = 9 | .bar.layout.right += [{id: "x.gone"}]' "$d/om/config/omarchy/shell.json" > "$d/desk/shell.json"
+  check_eq "a desk with Omarchy's bar (as the box has it): nothing said" "" "$(bsn "$d/desk")"
+  printf '# a comment\n\n' > "$d/desk/shell.toml"
+  check_eq "...a shell.toml of comments only: nothing" "" "$(bsn "$d/desk")"
+  printf '[font]\nbase-size = 14\n\n[bar]\nicon-slot = 33\n[bar]\n' > "$d/desk/shell.toml"
+  check_eq "a shell.toml that sets something: its tables named, once each, and --stock-bar" \
+    "omabox: up: seeded the bar from $d/desk: its shell.toml [font], [bar] (--stock-bar starts from Omarchy's default)" "$(bsn "$d/desk")"
+  check_fails "...never a value" grep -qE '14|33|base-size' <<<"$(bsn "$d/desk")"
+  jq '.bar.position = "left"' "$d/desk/shell.json" > "$d/desk/x.json" && mv "$d/desk/x.json" "$d/desk/shell.json"
+  check_eq "...and a layout of its own (the bar on the left)" \
+    "omabox: up: seeded the bar from $d/desk: its shell.json layout and shell.toml [font], [bar] (--stock-bar starts from Omarchy's default)" "$(bsn "$d/desk")"
+  printf 'top = 1\n' > "$d/desk/shell.toml"
+  check_match "...a shell.toml without tables: named alone" "its shell.json layout and shell.toml \(--stock-bar" "$(bsn "$d/desk")"
+  check_eq "no shell.json nor shell.toml on the desk: nothing (the shell's own default)" "" "$(bsn "$d/bare")"
+  check_match "the real desk is \"your desk\"" "seeded the bar from your desk:" \
+    "$(HOME=$d/h omarchy=$d/om bash -c 'source "$1"; mkdir -p "$HOME/.config/omarchy"; echo "[bar]" > "$HOME/.config/omarchy/shell.toml"; echo "a = 1" >> "$HOME/.config/omarchy/shell.toml"; bar_seed_note "$HOME/.config/omarchy" "[]" true "[]"' _ "$TMP/lib/bin/omabox" 2>&1)"
+}
 t_unit_bar_filter() {
   # shellcheck disable=SC2329 # called below
   bar() { lib shell_json_filter "$1" true "$2" <<<"$3" | jq -c "${4:-.bar.layout}"; }
@@ -4620,12 +4647,29 @@ t_reap_race() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# #250: on a fake desk (OMABOX_DESK_CONFIG; never the user's) whose bar is on the left with a
+# shell.toml, `up` says the bar is the desk's and names --stock-bar; --stock-bar gives Omarchy's, with
+# no shell.toml, not even a --from save's, and says nothing.
 t_stock_bar() {
-  local B=$P-stock
-  check "up --stock-bar" ob up "$B" --stock-bar --no-shell
-  check_eq "default layout seeded" "omarchy.workspaces" \
-    "$(jq -r '.bar.layout.left[1].id' "$(ob path -b "$B")/home/.config/omarchy/shell.json")"
+  local B=$P-stock S=$P-stock-s d=$TMP/$P-stock out H c=/home/sbx/.config/omarchy
+  mkdir -p "$d/desk"
+  jq '.bar.position = "left"' /usr/share/omarchy/config/omarchy/shell.json > "$d/desk/shell.json"
+  printf '[font]\nbase-size = 14\n\n[bar]\nicon-canvas = 20\n' > "$d/desk/shell.toml"
+  out=$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --no-shell 2>&1) || { no "up on a fake desk" "$out"; return; }
+  check_match "up says the bar is the desk's, by name, and how to get Omarchy's" \
+    "up: seeded the bar from $d/desk: its shell.json layout and shell.toml \\[font\\], \\[bar\\] \\(--stock-bar starts from Omarchy's default\\)" "$out"
+  check_eq "...the box has the desk's bar and shell.toml" "left 20" \
+    "$(ob run -b "$B" -- sh -c "jq -r .bar.position $c/shell.json; sed -n 's/^icon-canvas = //p' $c/shell.toml" | paste -sd ' ')"
+  check "a save of it" sv save "$S" -b "$B"
+  ob down "$B" >/dev/null 2>&1
+  out=$(OMABOX_DESK_CONFIG=$d/desk sv up "$B" --from "$S" --stock-bar --no-shell 2>&1) || { no "up --from --stock-bar" "$out"; sv saves rm "$S" >/dev/null 2>&1; return; }
+  check_fails "up --stock-bar: nothing said of the bar" grep -q "seeded the bar" <<<"$out"
+  H=$(ob path -b "$B")/home
+  check_eq "...Omarchy's default layout seeded" "top omarchy.workspaces" \
+    "$(jq -r '"\(.bar.position) \(.bar.layout.left[1].id)"' "$H/.config/omarchy/shell.json")"
+  check_fails "...no shell.toml, not even the save's" test -e "$H/.config/omarchy/shell.toml"
   check "down" ob down "$B"
+  sv saves rm "$S" >/dev/null 2>&1
 }
 
 # finding 138: why a mounted plugin is not in the box's bar, said at up and restart-shell (Omarchy's
@@ -11976,7 +12020,7 @@ t_link_out() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)

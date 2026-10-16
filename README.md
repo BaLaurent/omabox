@@ -145,8 +145,9 @@ omabox which 12345                     # the box a host pid is in, a bar like yo
   script, an agent whose process omabox could not find) is gone, `omabox ls` says `orphan` under IDLE,
   and `omabox down --orphans` takes those down. Nothing does by itself, and a box you start at a
   terminal is never one.
-- **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours), `--systemd` (a real
-  systemd user manager, for plugins that manage a service or schedule alarms), `--audio` (the box's
+- **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours, which `up` names when it
+  is not Omarchy's; `--theme` does not reset it), `--systemd` (a real systemd user manager, for
+  plugins that manage a service or schedule alarms), `--audio` (the box's
   own PipeWire with a speaker nobody hears and a silent mic: `omabox audio` and `record --audio` read
   what played; never your speakers), `--from SAVE` (start
   with a HOME kept by `omabox save SAVE`: an app already signed in or set up), `--env KEY=VAL` (for

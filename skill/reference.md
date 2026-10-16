@@ -375,7 +375,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - **Copied from the desk into the box HOME at `up`** (copies: edits after `up` do not reach the box;
   hidden files and `node_modules` left out, links inside stay links), on top of a new Omarchy user's
   HOME (`/etc/skel`): `shell.json` (the bar's settings, with only built-in widgets and the mounted
-  plugins; `--stock-bar`: Omarchy's default instead) and `shell.toml` (not with `--stock-bar`); the
+  plugins; `--stock-bar`: Omarchy's default instead) and `shell.toml` (not with `--stock-bar`; `up`
+  says when this bar is not Omarchy's: "seeded the bar from your desk: its shell.json layout and
+  shell.toml [font], [bar] (--stock-bar …)", names only); the
   current theme, its name and background, and your wallpapers for it (`backgrounds/THEME/`; none of
   it with `--theme NAME`); your custom themes (`themes/*`); `branding/`; **`extensions/`**, where
   plugins keep their settings; the terminal configs (`~/.config/{foot,alacritty,ghostty,kitty}`, the
@@ -400,7 +402,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   it, from `~/.config/omarchy/backgrounds/THEME/`). `omabox up --theme NAME` starts it on NAME instead
   (Omarchy's, one of yours or a `--theme-dir` one; named as `omarchy-theme-set` takes it, `"Tokyo
   Night"` too): the session runs `omarchy-theme-set NAME` before Hyprland and the bar start, with the
-  first background it finds (your own first for NAME, else the theme's). For tests whose result depends on the theme. An unknown NAME is refused
+  first background it finds (your own first for NAME, else the theme's). For tests whose result depends on the theme. It
+  leaves your bar as it is (layout, `shell.toml`'s sizes and fonts): add `--stock-bar` for Omarchy's. An unknown NAME is refused
   before anything is made; with `--from SAVE` it wins over the save's look; `up` again with another
   is refused (box.json and `ls --json` have `theme`).
 - The box HOME is `omabox path` → `<dir>/home`, readable and writable from the host: put outputs there

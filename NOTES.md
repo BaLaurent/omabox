@@ -7178,6 +7178,27 @@ from them.
     `hyprctl reload` printed `ok`, exit 0; now the line above, exit 1, for both commands; SIGCONT and
     it answers. Tests: t_user_hypr (that timer, both commands), t_unit_hypr_errors_note (hyprctl
     stubbed: errors, none, hung, gone, a failing configerrors).
+354. **A box's bar was the desk's unsaid, and `--theme` left it so; `up` names it** (2026-10-16,
+    #250). An agent after stock shots of a widget followed the skill's "depends on the theme → `up
+    --theme NAME`" row and measured icon sizes on the desk's bar: on the left, and a `shell.toml`
+    with bigger `[font]`/`[bar]` sizes (44x51 for stock 35x42 at scale 4). `--stock-bar` (finding 60)
+    was the answer, but nothing led there. `bar_seed_note` (seed_home, without `--stock-bar` or
+    `--desk-shell`) now says "up: seeded the bar from your desk: its shell.json layout and shell.toml
+    [font], [bar] (--stock-bar starts from Omarchy's default)": the layout part when the desk's
+    shell.json, made fit for the box (`shell_json_filter`, same plugins), has another `.bar` than
+    Omarchy's made fit the same way (`jq -S`: key order, idle times, left-out plugins' widgets do not
+    count); the shell.toml part when it has a line other than a comment, with its tables' names,
+    never a value. *Decided*: said only when the box's bar is not what `--stock-bar` gives (a desk
+    on Omarchy's bar hears nothing, as finding 335 says only what a plugin reads); the default stays
+    the desk's bar; no new flag (`--stock-bar` is the stock path). The skill's row is now "the theme
+    or bar … → `up --theme NAME --stock-bar`" (SKILL.md 13994 B). The bar's files now come from
+    `desk_dir` (the suite's fake desk, as extensions/'s, finding 335), and `--stock-bar` removes a
+    `--from` save's `shell.toml` (it kept one: a stock bar with the save's sizes). Not said: the
+    terminal configs, branding and Hyprland toggles `--theme` also leaves (no case yet, and no stock
+    path for them). Tests: t_unit_bar_seed_note (Omarchy's bar in another order, a comments-only
+    toml, tables once each, no values, layout, no files), t_stock_bar (a fake desk: the line and the
+    desk's bar and toml in the box; then `--from` its save with `--stock-bar`: no line, Omarchy's
+    layout, no toml). On the real desk: the line names its shell.json layout and `[font], [bar]`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

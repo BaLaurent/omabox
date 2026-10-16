@@ -23,6 +23,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   omarchy-shell`, the shell launcher's, still goes to `omabox log shell`. `systemd-cat` by its bare
   name still writes `~/IDENTIFIER.log` (the box's shell relies on it): use `/usr/bin/systemd-cat`
   for the journal, as the help now says.
+- **`up` says when the box's bar is your desk's, not Omarchy's.** A box copies your bar's layout
+  and `shell.toml` (its sizes and fonts), and `--theme` leaves both as they are, so a shot or a
+  measured icon size taken "on a stock theme" came out of your bar without a word. Now `up` says
+  "seeded the bar from your desk: its shell.json layout and shell.toml [font], [bar] (--stock-bar
+  starts from Omarchy's default)" when they differ from Omarchy's (names only), and the skill's row
+  for theme-dependent results says `--theme NAME --stock-bar`. `--stock-bar` from a save now drops
+  the save's `shell.toml` too.
 
 ## 0.7.0 — 2026-10-16
 
