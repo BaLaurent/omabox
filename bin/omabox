@@ -10319,10 +10319,14 @@ this task, run that command with: omabox host -- CMD"
 # say so once omabox is gone (issue #51: deleted without `guard off`, nothing is left to undo it).
 # Gone means no omabox on PATH either: ai-jail sees ours at ~/.local/bin/omabox (the broker's maps),
 # never at this path, and a jailed agent told the hook could go offered to remove it (#203).
+# SessionStart fires again on resume and compact: the line goes in once, an older omabox's in its place
+# (any line naming WAYLAND_DISPLAY=$GUARD), rewritten in the file Claude Code gave (#243).
 GUARD_HERE="{ [ -x '$ROOT/bin/omabox' ] || command -v omabox >/dev/null 2>&1; }"
 GUARD_GONE="omabox guard: omabox is gone ($ROOT/bin/omabox)"
 GUARD_HOOK="if ! $GUARD_HERE; then echo '$GUARD_GONE, so the guard is not applied: shell commands here reach the real desktop. Its SessionStart hook (the one naming $GUARD) can go from settings.json'; \
-elif [ -n \"\$CLAUDE_ENV_FILE\" ] && echo 'case :\$PATH: in *:$GUARD_PATH:*) ;; *) PATH=\"$GUARD_PATH:\$PATH\" ;; esac; export ${GUARD_ENV[*]} PATH; prlimit --pid \$\$ --core=1: 2>/dev/null || true' >> \"\$CLAUDE_ENV_FILE\"; then echo '$GUARD_NOTE'; \
+elif [ -n \"\$CLAUDE_ENV_FILE\" ] && l='case :\$PATH: in *:$GUARD_PATH:*) ;; *) PATH=\"$GUARD_PATH:\$PATH\" ;; esac; export ${GUARD_ENV[*]} PATH; prlimit --pid \$\$ --core=1: 2>/dev/null || true' && \
+{ grep -qxF \"\$l\" \"\$CLAUDE_ENV_FILE\" 2>/dev/null || { o=\$(grep -vF 'WAYLAND_DISPLAY=$GUARD ' \"\$CLAUDE_ENV_FILE\" 2>/dev/null); \
+{ [ -z \"\$o\" ] || printf '%s\n' \"\$o\"; printf '%s\n' \"\$l\"; } > \"\$CLAUDE_ENV_FILE\"; }; }; then echo '$GUARD_NOTE'; \
 else echo 'omabox guard: NOT applied (no CLAUDE_ENV_FILE): shell commands here reach the real desktop; do GUI work in omabox anyway'; fi"
 # shellcheck disable=SC2016 # jq, not shell
 GUARD_JQ='def ours: (.command? // "") | contains($g);

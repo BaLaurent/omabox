@@ -6698,3 +6698,14 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     argument is "ls: unknown argument X (omabox ls [--json])", exit 2 as well (the issue asked for 2;
     other commands' unknown options exit 1 through `die`). `--json` anywhere, or twice, is still
     `--json`. `t_unit_cli`.
+
+328. **The guard's line goes into `$CLAUDE_ENV_FILE` once** (2026-10-16, #243). The Claude Code
+    hook appended it with `>>` every time SessionStart fired, and that is on resume and compact too:
+    a long session's env file had it once per compaction, every shell command sourced all of them
+    (harmless, the `case` skips a PATH already guarded, but one 1437-char command line showed it
+    twice). Now the hook writes nothing when the file already has its exact line, and otherwise
+    rewrites the file with every line that names `WAYLAND_DISPLAY=omabox-guard` (an older omabox's
+    line: its text changes with the guard) taken out and its own at the end, the file's other lines
+    kept, in the file Claude Code gave (no rename). The hook's text changed, so an installed one reads
+    `outdated` until `omabox guard on claude` (or setup's "Update it?") renews it; until then it keeps
+    appending as before. `t_unit_guard_settings`.

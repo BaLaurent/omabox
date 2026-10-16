@@ -21,6 +21,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox ls` refuses arguments it does not take.** `ls -b NAME --json` printed the table and
   exited 0, as did `ls` with any unknown flag. Now `-b` after `ls` says "ls takes no -b", as before
   it, and anything else but `--json` is an unknown argument; both exit 2.
+- **The guard no longer piles its line into Claude Code's session environment.** Its hook added the
+  line again on every resume and compaction, so a long session sourced it many times before each
+  command. It is written once now, an older omabox's replaced. `omabox guard` reads the hook as
+  outdated: `omabox guard on claude` renews it.
 
 ## 0.6.1 — 2026-10-14
 

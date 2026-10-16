@@ -8091,6 +8091,13 @@ t_unit_guard_settings() {
   CLAUDE_ENV_FILE=$f sh -c "$hook" >/dev/null
   check_eq "...a second session start: the guard's dir once on PATH (#113)" 1 \
     "$(bash -c '. "$1"; tr : "\n" <<<"$PATH" | grep -cxF "$2"' _ "$f" "$co/share/guard")"
+  # #243: SessionStart fires on resume and compact too; the line went in once per start.
+  check_eq "...and its line once in the env file (#243)" 1 "$(grep -c 'WAYLAND_DISPLAY=omabox-guard' "$f")"
+  local hline; hline=$(grep -F 'WAYLAND_DISPLAY=omabox-guard' "$f")
+  printf 'export OTHER=1\nexport WAYLAND_DISPLAY=omabox-guard DISPLAY=; prlimit --pid $$ --core=1: 2>/dev/null || true\nexport MORE=2\n' > "$f"
+  CLAUDE_ENV_FILE=$f sh -c "$hook" >/dev/null
+  check_eq "...an older omabox's line replaced by this one, the file's other lines kept" "export OTHER=1|export MORE=2|$hline" \
+    "$(paste -sd'|' "$f")"
   # #142: the note says `!` commands are guarded, and gets through whole (it sits in the hooks'
   # single-quoted echo, so a ' in it would cut it short or break the hook).
   check_match "...whole, saying the user's ! commands are guarded (#142)" \
