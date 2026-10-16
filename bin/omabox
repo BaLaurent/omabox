@@ -9455,16 +9455,16 @@ cmd_gdb() {
   [ "$net" = "$(readlink /proc/self/ns/net)" ] || ns+=(-n)
   ns+=(--preserve-credentials)
   case $target in
-    hyprland) pid=$(stdio_relay "${ns[@]}" pgrep -xo Hyprland) || die "gdb: box '$NAME' has no Hyprland running" ;;
+    hyprland) pid=$(stdio_relay fds_only "" "${ns[@]}" pgrep -xo Hyprland) || die "gdb: box '$NAME' has no Hyprland running" ;;
     shell) { pid=$(shell_pid) && shell_running "$pid"; } || die "gdb: box '$NAME' has no shell running ($(shell_state))" ;;
-    pid) stdio_relay "${ns[@]}" test -d "/proc/$pid" || die "gdb: box '$NAME' has no process $pid (omabox run -b $NAME -- ps -e)" ;;
+    pid) stdio_relay fds_only "" "${ns[@]}" test -d "/proc/$pid" || die "gdb: box '$NAME' has no process $pid (omabox run -b $NAME -- ps -e)" ;;
   esac
   local what tracer
-  what=$(stdio_relay "${ns[@]}" cat "/proc/$pid/comm" 2>/dev/null) || what=$target
+  what=$(stdio_relay fds_only "" "${ns[@]}" cat "/proc/$pid/comm" 2>/dev/null) || what=$target
   # The box names its processes (prctl, /proc/PID/comm: newlines and escapes allowed): printed tamed.
   what=${what//[^A-Za-z0-9 ._:+@-]/?}; [ -n "$what" ] || what=$target
   # A traced process's tracer, 0 for none.
-  tracer_of() { stdio_relay "${ns[@]}" sed -n 's/^TracerPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null; }
+  tracer_of() { stdio_relay fds_only "" "${ns[@]}" sed -n 's/^TracerPid:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null; }
   tracer=$(tracer_of "$pid") || tracer=0
   [ "${tracer:-0}" = 0 ] || die "gdb: $what (pid $pid in box '$NAME') is traced already, by pid $tracer (a gdb --watch?): omabox run -b $NAME -- kill $tracer ends that"
   # shellcheck disable=SC2054 # setpriv's capability lists
@@ -9490,7 +9490,7 @@ cmd_gdb() {
   local log=/home/sbx/gdb.log head
   head=$(printf '\n== omabox gdb --watch %s (pid %s in the box), %s' "$what" "$pid" "$(date -Is)")
   # shellcheck disable=SC2016 # the inner sh's
-  stdio_relay timeout 10 "${ns[@]}" sh -c '{ [ ! -L "$1" ] && [ ! -p "$1" ]; } || rm -f -- "$1"; printf "%s\n" "$2" >> "$1"' sh "$log" "$head" ||
+  stdio_relay fds_only "" timeout 10 "${ns[@]}" sh -c '{ [ ! -L "$1" ] && [ ! -p "$1" ]; } || rm -f -- "$1"; printf "%s\n" "$2" >> "$1"' sh "$log" "$head" ||
     die "gdb: cannot write the box's gdb log"
   # shellcheck disable=SC2016 # the inner sh's
   stdio_relay fds_only "" "${caps[@]}" setsid -f sh -c 'log=$1; shift; exec "$@" >> "$log" 2>&1 </dev/null' sh "$log" \
@@ -10262,7 +10262,7 @@ cmd_restart_shell() {
     # kill takes the pid as the host's, and would signal whatever host process has that number.
     local bp; bp=$(box_pid); covers_held
     # shellcheck disable=SC2016 # the inner sh's
-    [ -z "$bp" ] || stdio_relay nsenter -t "$bp" -U -m -p --preserve-credentials -- /usr/bin/sh -c 'pp=$(sed -n "s/^PPid:[[:space:]]*//p" "/proc/$1/status")
+    [ -z "$bp" ] || stdio_relay fds_only "" nsenter -t "$bp" -U -m -p --preserve-credentials -- /usr/bin/sh -c 'pp=$(sed -n "s/^PPid:[[:space:]]*//p" "/proc/$1/status")
       [ -z "$pp" ] || ! grep -qa omarchy-launch-shell "/proc/$pp/cmdline" || kill "$pp"; kill -KILL "$1"' sh "$old" 2>/dev/null || true
     say "box '$NAME': its shell (pid $old) did not answer (hung): killed"
   fi

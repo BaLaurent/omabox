@@ -6637,6 +6637,13 @@ from them.
     4 KiB read of 3 MB, a pipe kept open elsewhere does not hold the call past about a second, bash's
     line for a signal passes) and `t_run_stdio` (other output on that stderr during ten `run -- true`:
     each status 0, nothing else printed, under 8 KB in all, each back in tens of ms).
+    The same rule for fds above 2: `gdb`'s steps in the box (its `pgrep`, `test`, `cat` and `sed`,
+    and the header `--watch` writes) and `restart-shell`'s end of a hung shell entered the box's pid
+    namespace without `fds_only`, so they had every fd omabox had open, a caller's own included
+    (`omabox gdb ... 7<FILE`). All six now run through it, as `box_exec` and gdb itself did.
+    `t_unit_ns_fds` reads bin/omabox for any `stdio_relay`, `nsenter ... -p` or run of the `ns`/`caps`
+    arrays that does not (it finds those six in the old code); `t_gdb` checks from the box that a
+    caller's fd 7 is in none of its processes over five `gdb` runs (it was, in the old code).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

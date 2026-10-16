@@ -11,7 +11,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   nsenter's.** What nsenter (and the shell it starts in the box) said before a command's own stderr
   took over was held in a temporary file and printed whole; it is now held in a pipe, read up to
   4 KiB, and only nsenter's own lines, without control characters, are printed; anything else is
-  dropped and counted.
+  dropped and counted. `gdb`'s and `restart-shell`'s own steps in a box now get only the files they
+  are meant to have, as `run`'s commands do, not every one omabox had open.
 
 ## 0.6.1 — 2026-10-14
 
