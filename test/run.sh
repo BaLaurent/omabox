@@ -9198,6 +9198,19 @@ t_unit_window_select() {
   check_eq "an unmapped window is not a window" 2 "$(lib win_select "$W" 'title:^gone$' >/dev/null 2>&1; echo $?)"
   check_match "a bad regex: exit 2, said" "bad window selector" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
   check_match "...rc 2" "rc=2" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
+  # A hyphen-separated part of the class (#244), only when nothing matches the word otherwise.
+  local hc='[{"address":"0xp","class":"xdg-desktop-portal-gtk","title":"Back up","onscreen":true,"active":false,"workspace":"1"},
+    {"address":"0xk","class":"xdg-desktop-portal-kde","title":"Open","onscreen":true,"active":false,"workspace":"1"},
+    {"address":"0xn","class":"org.gnome.Nautilus","title":"Home","onscreen":true,"active":false,"workspace":"1"}]'
+  hsel() { lib win_select "$1" "${@:2}" 2>/dev/null | jq -r .address; }
+  check_eq "a word: a hyphen-separated part of the class (#244)" 0xp "$(hsel "$hc" gtk)"
+  check_eq "...one in the middle" 0xk "$(hsel "$hc" kde)"
+  check_match "...several: refused, each named" "matches 2 windows.*0xp.*0xk" "$(lib win_select "$hc" portal 2>&1 | tr '\n' ' ')"
+  check_eq "...whole, not part of a part" 2 "$(lib win_select "$hc" port >/dev/null 2>&1; echo $?)"
+  check_eq "...narrowed by another selector" 0xp "$(hsel "$hc" portal 'title:^back')"
+  check_eq "...a whole class wins over it" 0xg "$(hsel "$(jq -c '. + [{"address":"0xg","class":"gtk","title":"x","onscreen":true,"active":false,"workspace":"2"}]' <<<"$hc")" gtk)"
+  check_eq "...so does a title" 0xt "$(hsel "$(jq -c '. + [{"address":"0xt","class":"foot","title":"gtk notes","onscreen":true,"active":false,"workspace":"2"}]' <<<"$hc")" gtk)"
+  check_eq "...wait window counts the same" "yes 2" "$(lib win_answer present "$hc" portal | cut -d' ' -f1-2)"
   # wait window (#37): any of several matching windows is an answer, and all are named.
   check_match "wait window: several match, satisfied, each named" '^yes 4 windows: 0xa foot "A" at 0,0 1000x1000; 0xb foot "B" at 1000,0 900x1000, focused; 0xg .*; 0xd ' "$(lib win_answer present "$W" foot)"
   check_match "...one: as before" '^yes 0xh org.gnome.Nautilus "Home" at 0,0 800x600$' "$(lib win_answer present "$W" nautilus)"

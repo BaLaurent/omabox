@@ -15,6 +15,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   can ask to see in full or change. Your paths, names, hosts, tokens, projects and the session's
   content are taken out of every draft first; a safety problem is never filed, only pointed to
   SECURITY.md. It runs only when you ask; `/omabox-feedback auto` files without the question.
+- **`--window` takes a hyphen-separated part of the class.** `--window portal` (or `gtk`) finds a
+  window of class `xdg-desktop-portal-gtk` when nothing matches the word as a whole class, a last
+  dotted part or part of a title; those still win, and a word matching several windows is still
+  refused with each one listed.
 
 ### Fixed
 

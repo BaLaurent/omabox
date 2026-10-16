@@ -44,8 +44,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   have none and say "no accessibility tree": shots for those. An unnamed control (a switch beside its
   label) matches by its role (`--find switch`), or read the whole tree.
 - `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a
-  title; `title:RE`, `class:RE`, `pid:N` or an address (`0x…`) narrow it; `wait window SEL` is
-  satisfied by any window it matches. `shot --window SEL -g "X,Y WxH"` crops the window in its own
+  title, failing those a hyphen-separated part of the class (`portal` for `xdg-desktop-portal-gtk`);
+  `title:RE`, `class:RE`, `pid:N` or an address (`0x…`) narrow it; `wait window SEL` is satisfied by
+  any window it matches. `shot --window SEL -g "X,Y WxH"` crops the window in its own
   coordinates.
 - Coordinates are screenshot pixels. A cropped, scaled or zoomed shot says so on stderr: then `click
   --in SHOT X Y` (and `drag`, `pointer`, `scroll`, `pixel --in`), X Y read from that image. Screen

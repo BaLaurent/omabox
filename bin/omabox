@@ -267,7 +267,8 @@ session and suspend paths never run in a box (the lock screen does, without a re
 @ shot windows keys click drag pointer wait pixel
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
-org.gnome.Nautilus, or part of its title); repeat to narrow. None or
+org.gnome.Nautilus, or part of its title; failing those, a hyphen-separated part of the class,
+portal for xdg-desktop-portal-gtk); repeat to narrow. None or
 several is exit 2, with the candidates (\`wait window SEL\` asks for a window like it: any of several
 does, each named). \`shot --window\` (-w; --active is --window active) is the
 window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
@@ -4754,18 +4755,23 @@ box_windows() {
 # A window selector (SEL): active, an address (0x..., address:0x...), pid:N, class:RE, title:RE,
 # initialClass:RE, initialTitle:RE (regular expressions, any case), or a word: the class or its last
 # dot-separated part, whole (nautilus for org.gnome.Nautilus, issue #20), or part of the title (any case). Several are all to match. Exactly one window or nothing: none or several is
-# exit 2 with the candidates, never the first match.
+# exit 2 with the candidates, never the first match. Only when no window matches that way does a
+# word also match a whole hyphen-separated part of the class (portal or gtk for
+# xdg-desktop-portal-gtk, #244): a selector that found one window before still finds it (a class gtk
+# beside xdg-desktop-portal-gtk), and several hyphen matches are refused as several.
 # shellcheck disable=SC2016 # jq, not shell
 WIN_SEL_JQ='
-  def m($s):
+  def m($s; $loose):
     if $s == "active" then .active
     elif ($s | test("^(address:)?0x[0-9a-fA-F]+$")) then .address == ($s | sub("^address:"; "") | ascii_downcase)
     elif ($s | test("^pid:[0-9]+$")) then .pid == ($s[4:] | tonumber)
     elif ($s | test("^(class|title|initialClass|initialTitle):")) then
       ($s | capture("^(?<k>[A-Za-z]+):(?<v>.*)$")) as $kv | (.[$kv.k] // "") | test($kv.v; "i")
     else (.class | ascii_downcase) as $c | ($s | ascii_downcase) as $w
-      | $c == $w or ($c | split(".") | last) == $w or (.title | ascii_downcase | contains($w)) end;
-  [.[] | select(. as $w | all($ARGS.positional[]; . as $s | $w | m($s)))]'
+      | $c == $w or ($c | split(".") | last) == $w or (.title | ascii_downcase | contains($w))
+        or ($loose and any($c | split("-")[]; . == $w)) end;
+  def hits($loose): [.[] | select(. as $w | all($ARGS.positional[]; . as $s | $w | m($s; $loose)))];
+  hits(false) as $h | if $h | length > 0 then $h else hits(true) end'
 # win_select WINDOWS SEL...: the one window (win_annotate's object), or exit 2.
 win_select() {
   local wins=$1 hits; shift

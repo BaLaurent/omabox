@@ -6737,3 +6737,13 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     `gdb`, `output` in the "Also" line (each is named further down), "text first" (rule 1), step 5's
     `omabox down` (the loop and the box paragraph), the interactive box's "no frame: ask" (its
     symptom row). `t_unit_version` checks the loop line.
+331. **A bare `--window` word matches a hyphen-separated part of the class** (2026-10-16, #244).
+    `--window portal` found nothing for `xdg-desktop-portal-gtk` (finding 97 matched the class, its
+    last dotted part or part of the title), and the agent retried with the dialog's title. Now, when
+    no window matches a word those ways, a whole `-`-separated part of the class matches it
+    (`portal`, `gtk`, `xdg`; not `port`). It is a second tier, not a fourth way at the same level:
+    a selector that found one window before still finds that one (`gtk` with windows of class `gtk`
+    and `xdg-desktop-portal-gtk`, or a title holding the word), so no working selector turns into
+    "matches 2 windows". Within the tier several matches are refused as before (`portal` for a gtk
+    and a kde portal), and `wait window`/`gone` count the same way (one jq, `WIN_SEL_JQ`).
+    `t_unit_window_select` checks it on made-up windows.
