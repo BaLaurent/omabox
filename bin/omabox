@@ -111,9 +111,9 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..."    where you see each mark: 1:1, or the --fit N that maps it
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox tree [-b NAME] [--window SEL] [--find TEXT] [--json] [--all]   a window's accessibility tree as text
-  omabox check run [--approve [--runs 3]] [--base DIR] [-o DIR] [--speck 32] [UP OPTIONS] -- SCENARIO [ARG...]
+  omabox check run [--approve [--runs 3]] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO [ARG...]
                                                          a visual check: the scenario's checkpoints against a baseline
-  omabox check point ID [-b NAME] [--window SEL | -g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
+  omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
                                                          a checkpoint, in a scenario: once still, a shot (and the tree)
   omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png]   what differs, as a check sees it
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
@@ -484,22 +484,30 @@ of its own each run (UP OPTIONS: --plugin, --theme, --size...; OMABOX names the 
 (./omabox-check): for each checkpoint the run most others match; where any run differed is
 "unstable", said and left out from then on (one run of three: the app is not the same from one
 start to the next there, or a time changed; every run: data or a time the scenario does not pin).
+It also writes baseline.png, every checkpoint kept in one image, unstable regions amber: look at it
+before you keep the baseline (what most runs showed is kept, a wrong screen too).
 Without --approve it runs once and says for each checkpoint same, changed (each region "at X,Y WxH",
 marked on ID.diff.png; with --window, the tree's moved, resized, text, state, appeared and vanished
 elements), holes, new or missing: exit 0 when all are the same, 1 when not, 3 when the scenario
-failed. When any changed, report.png: each change cropped beside its baseline, in one image (look
-first). Shots are compared exactly, as users see them, leaving out specks: parts of the difference
-under 32 px (--speck), what Qt Quick's text varies by from one start of an app to the next; a fill a
-few levels off, a 1 px shift of a text block or a clipped glyph is far more. A change smaller than a
-speck (a 2 px move of a few dots) can only show in the tree. \`check point\` waits until the shot is
-still (15 s, --timeout; then taken anyway, noted), shoots the screen, -g or --window (with its tree,
-when it has one); --ignore leaves a region of that shot out (a clock of the app's own). It also
-finds holes: the #ff00ff wallpaper enclosed by a window, the bar or a popup (in a window's own
-pixels, fully transparent ones), not the wallpaper around and between them, nor rounded corners;
-only where the wallpaper is behind (a popup over a window hides them). --approve says each ("holes
-ID: ... at X,Y WxH") and keeps them; a check fails on holes the baseline lacks. \`check diff A B\`
-compares two shots of yours the same way (exit 0 same, 1 not; --report too). A baseline made on
-another omabox, Hyprland, Omarchy, GPU, theme or size is said. Not inside ai-jail yet.
+failed, 4 when there is no baseline. When any changed, report.png: each change cropped beside its
+baseline, in one image (look first). Shots are compared exactly, as users see them, leaving out
+specks: parts of the difference smaller than twice the largest stray part the --approve runs
+differed by (Qt Quick's text varies from one start of an app to the next; 16 to 32 px, a window's
+largest for each checkpoint of it; none when the runs agreed to the pixel; --speck N for all);
+"same" says what it left out. A change smaller than that can only show in the tree. A scenario puts
+files in the box under \$(omabox path)/home (/home/sbx in it); a date shown relative ("9 months
+ago") needs its file's mtime fixed (\`omabox run -- touch -d ...\`, on the box's clock).
+\`check point\` waits until the shot is still (15 s, --timeout; then taken anyway, noted), shoots the
+screen, -g, --window (with its tree, when it has one) or a crop of the window (--window SEL -g, in
+its coordinates; the tree's elements touching it); --ignore leaves a region of that shot out (a
+clock of the app's own). It also finds holes: the #ff00ff wallpaper enclosed by a window, the bar
+or a popup (in a window's own pixels, fully transparent ones), not the wallpaper around and between
+them, nor rounded corners; only where the wallpaper is behind (a popup over a window hides them:
+take its checkpoint over an empty workspace). --approve says each ("holes ID: ... at X,Y WxH") and
+keeps them; a check fails on holes the baseline lacks. \`check diff A B\`
+compares two shots of yours the same way (exit 0 same, 1 not; --speck 32, --report too). A baseline
+made on another omabox, Hyprland, Omarchy, GPU, theme, size, locale or timezone is said. Not inside
+ai-jail yet.
 @ drag
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
@@ -3291,20 +3299,12 @@ clean_has() { [[ ,$CLEAN_KEEP, == *,$1,* ]]; }
 clock_instant_file() {
   local tz="" at up
   while [ $# -ge 3 ]; do [ "$2" != TZ ] || tz=$3; shift 3; done
+  [ -n "$tz" ] || tz=$CLEAN_ZONE
   if [ -n "$tz" ]; then at=$(TZ=$tz date -d "$CLEAN_CLOCK_AT" +%s) || return 1
   else at=$(env -u TZ date -d "$CLEAN_CLOCK_AT" +%s) || return 1; fi
   up=$(cut -d' ' -f1 /proc/uptime) && [[ $up =~ ^[0-9]+\.[0-9]{2}$ ]] || return 1
   echo "$at $((10#${up/./}))0000000"
 }
-# What a clean box is, as `up` says it. clean_text THEME NET
-clean_text() {
-  local parts=() s
-  [ -n "$tz" ] || tz=$CLEAN_ZONE
-  if clean_has bar; then parts+=("your bar"); else parts+=("Omarchy's bar"); fi
-  parts+=("theme $1")
-  clean_has wallpaper || parts+=("wallpaper $CLEAN_WALLPAPER (any of it inside a window or the bar is a hole)")
-  clean_has clock || parts+=("the clock from Friday 12:00")
-  clean_has pointer || parts+=("no pointer")
 # A clean box's locale and timezone as its box.json records them (check.json's, a check compares
 # them): its own, or with --keep locale the host's (LANG and any LC_* the box is given) and a TZ
 # --env gives (the --setenv triples, cmd_up's envs), else the host's /etc/localtime's zone.
@@ -3323,6 +3323,15 @@ clean_zone_rec() {
   z=$(readlink -f /etc/localtime 2>/dev/null) || z=""
   echo "${z#/usr/share/zoneinfo/}"
 }
+# What a clean box is, as `up` says it. clean_text THEME NET
+clean_text() {
+  local parts=() s
+  if clean_has bar; then parts+=("your bar"); else parts+=("Omarchy's bar"); fi
+  parts+=("theme $1")
+  clean_has wallpaper || parts+=("wallpaper $CLEAN_WALLPAPER (any of it inside a window or the bar is a hole)")
+  clean_has clock || parts+=("the clock from Friday 12:00")
+  clean_has locale || parts+=("locale ${CLEAN_LANG:-$(clean_locale)} in ${CLEAN_ZONE:-$CLEAN_TZ}")
+  clean_has pointer || parts+=("no pointer")
   [ "$2" != isolated ] || parts+=("no network")
   clean_has animations || parts+=("animations off")
   s=$(IFS=,; echo "${parts[*]}")
@@ -3330,7 +3339,6 @@ clean_zone_rec() {
 }
 
 up_already() {
-  clean_has locale || parts+=("locale ${CLEAN_LANG:-$(clean_locale)} in ${CLEAN_ZONE:-$CLEAN_TZ}")
   touch "$D/used" 2>/dev/null || true
   local diff=() p id ids
   case " $given " in *" interactive "*) [ "$(meta mode)" = interactive ] || diff+=("--interactive (it is $(meta mode))") ;; esac
@@ -3388,6 +3396,7 @@ up_already() {
 
 cmd_up() {
   STOCK_BAR=0 THEME="" DESK_SHELL=0 DESK="" DESK_SHOWN="" DESK_IDS="" DESK_FILES="" NO_SEED="" CLEAN=0 CLEAN_KEEP=""
+  CLEAN_LANG="" CLEAN_ZONE=""
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 audio=0 audio_missing="" owner=""
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 nopointer=0 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
@@ -3396,7 +3405,6 @@ cmd_up() {
   local given="" json=0   # the options up_already compares, as given; --json: the box as ls --json has it
   local named=() g        # the host paths --ro-bind, --seed and --overlay name, as named (refuse_src)
   # A jailed caller's host paths (#198): each followed only inside the jail's folders (jail_path) before
-  CLEAN_LANG="" CLEAN_ZONE=""
   # anything looks at it, and refused as written (jail_refuse), one way whatever the host has there;
   # the paths as given, for the refusals checked after the options are read.
   local plugin_given=() theme_given=() hypr_given="" omarchy_given=""
@@ -3485,6 +3493,7 @@ cmd_up() {
     [ -n "$THEME" ] || THEME=$CLEAN_THEME
     clean_has pointer || nopointer=1
     [ $net_set = 1 ] || net=isolated
+    clean_has locale || CLEAN_LANG=$(clean_locale) CLEAN_ZONE=$CLEAN_TZ
   else
     [ -z "$CLEAN_KEEP" ] || die "up: --keep goes with --clean (what of the clean desktop to keep as it is)"
   fi
@@ -3493,7 +3502,6 @@ cmd_up() {
   # A jailed caller's (finding 99): a folder of the jail's, whole, or one inside a folder the box has
   # (linked to at its own path: finding 241), its manifest.json followed only inside the jail's folders
   # (#198); checked before resolve_plugin reads it, and refused as written, however it fails.
-    clean_has locale || CLEAN_LANG=$(clean_locale) CLEAN_ZONE=$CLEAN_TZ
   PLUGINS=()
   local p i m
   for i in "${!plugin_args[@]}"; do
@@ -3933,14 +3941,6 @@ cmd_up() {
     { cat /etc/ld.so.preload 2>/dev/null || true; echo "$BOX_CLOCK"; } > "$D/etc/ld.so.preload"
     clock_instant_file "${envs[@]}" > "$D/clock" || die "up --clean: could not work out the box's clock ($CLEAN_CLOCK_AT)"
   fi
-  for f in "$D"/etc/*; do
-    [ -e "$f" ] || continue
-    if [ -e "/etc/${f##*/}" ] && [ ! -L "$f" ]; then etc_args+=(--ro-bind "$f" "/etc/${f##*/}"); else etc_new=1; fi
-  done
-  [ $etc_new = 0 ] || etc_args=(--overlay-src /etc --overlay-src "$D/etc" --ro-overlay /etc)
-  # Safety invariant (finding 5): Hyprland tries DRM first. Never bind /dev/dri/card*, /dev/input,
-  # /run/seatd.sock, the system bus or the real XDG_RUNTIME_DIR: only a render node goes in (on NVIDIA,
-  # an empty file at the card's path, never the device: finding 294).
   # --clean's locale and timezone (finding 362): the session's LANG (launch.sh below) and, for what
   # reads the files instead (a --systemd box's user manager reads locale.conf; glibc, Qt and ICU
   # localtime), /etc/locale.conf and /etc/localtime. localtime is a link, as the host's, which Qt
@@ -3950,6 +3950,14 @@ cmd_up() {
     echo "LANG=$CLEAN_LANG" > "$D/etc/locale.conf"
     ln -s "/usr/share/zoneinfo/$CLEAN_ZONE" "$D/etc/localtime"
   fi
+  for f in "$D"/etc/*; do
+    [ -e "$f" ] || continue
+    if [ -e "/etc/${f##*/}" ] && [ ! -L "$f" ]; then etc_args+=(--ro-bind "$f" "/etc/${f##*/}"); else etc_new=1; fi
+  done
+  [ $etc_new = 0 ] || etc_args=(--overlay-src /etc --overlay-src "$D/etc" --ro-overlay /etc)
+  # Safety invariant (finding 5): Hyprland tries DRM first. Never bind /dev/dri/card*, /dev/input,
+  # /run/seatd.sock, the system bus or the real XDG_RUNTIME_DIR: only a render node goes in (on NVIDIA,
+  # an empty file at the card's path, never the device: finding 294).
   # The host's name in both network modes (finding 54): pasta's own UTS namespace would otherwise
   # name an isolated box pasta-HOST.
   local args=(--info-fd 3 --unshare-pid --unshare-ipc --unshare-uts --hostname "$(uname -n)"
@@ -7843,10 +7851,14 @@ shot_burst() {
 # Parts CHECK_GAP px apart or less are one region.
 CHECK_SPECK=32
 CHECK_GAP=12
+# A checkpoint's own speck (finding 362), measured at --approve, is at least this when its runs
+# differed at all: three runs see the text noise but not its tail (5 px in them, 10 in the next
+# check on AMD; 13 the most seen on NVIDIA).
+CHECK_SPECK_MIN=16
 CHECK_PY=$ROOT/share/check.py
 CHECK_ID_RE='^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
 
-# Where two shots of one size differ: "X,Y WxH PIXELS" a region, then "specks N PIXELS". Each MASK
+# Where two shots of one size differ: "X,Y WxH PIXELS" a region, then "specks N PIXELS LARGEST". Each MASK
 # ("X Y W H", image pixels) is painted black in both first, so it is left out. Fails when magick does
 # (never an empty answer read as "same"). check_regions A B SPECK [MASK]...
 check_regions() {
@@ -7877,11 +7889,12 @@ check_mark() {
 # sees in one look); one look where the ID.diff.png of each changed checkpoint was ~1.5k image tokens
 # apiece, mostly of what did not change. PLAN: check.py's (a "title" line, then per checkpoint a
 # "point" line and its "region"/"size" lines). Prints what was left out of it ("" when nothing); fails
-# when magick does. check_report PLAN OUT.png
+# when magick does. KIND overview: --approve's image of the baseline instead (check.py overview's plan).
+# check_report PLAN OUT.png [KIND]
 check_report() {
-  local plan=$1 png=$2 font a=()
+  local plan=$1 png=$2 kind=${3:-sheet} font a=()
   font=$(fc-match -f '%{file}' monospace 2>/dev/null) && [ -f "$font" ] || font=""
-  /usr/bin/python3 -I "$CHECK_PY" sheet "$plan" "$png.part" "$font" > "$plan.args" || { rm -f -- "$plan.args"; return 1; }
+  /usr/bin/python3 -I "$CHECK_PY" "$kind" "$plan" "$png.part" "$font" > "$plan.args" || { rm -f -- "$plan.args"; return 1; }
   mapfile -d '' a < "$plan.args"
   rm -f -- "$plan.args"
   [ ${#a[@]} -gt 1 ] || return 1
@@ -8010,6 +8023,7 @@ check_diff() {
   local res; res=$(check_regions "${files[0]}" "${files[1]}" "$speck" ${masks[@]+"${masks[@]}"}) || die "check diff: could not compare them (magick)"
   local regions; regions=$(grep -v '^specks ' <<<"$res" || true)
   local sp; sp=$(sed -n 's/^specks //p' <<<"$res")
+  sp=${sp% *}   # (N PIXELS; not the largest)
   if [ -z "$regions" ]; then
     [ -z "$plan" ] || rm -f -- "${plan:?}"
     echo "same (specks: ${sp% *}, ${sp#* } px)"; return 0
@@ -8040,7 +8054,9 @@ check_diff_report() {
 }
 
 # check point ID: a checkpoint of a `check run` scenario: once the screen is still, a shot (and the
-# window's tree, with --window) into the run's folder ($OMABOX_CHECK_OUT, or -o DIR).
+# window's tree, with --window) into the run's folder ($OMABOX_CHECK_OUT, or -o DIR). --window SEL
+# -g GEOM: a crop of the window, in its own coordinates (as `shot --window -g`), its tree the
+# elements that touch the crop (check.py crop-tree), so a change elsewhere in the window is not its.
 check_point() {
   local name="" id="" sels=() geom="" masks=() out=${OMABOX_CHECK_OUT:-} tmo=15s g
   while [ $# -gt 0 ]; do
@@ -8061,14 +8077,15 @@ check_point() {
   [ -n "$id" ] || die "check point: which checkpoint? (an ID: letters, digits, . _ -)"
   [[ $id =~ $CHECK_ID_RE ]] || die "check point: an ID is letters, digits, . _ - (64 at most, not starting with . _ -), got $id"
   [ -n "$out" ] || die "check point: outside a check run (omabox check run -- SCENARIO calls it), give -o DIR"
-  [ -z "$geom" ] || [ ${#sels[@]} = 0 ] || die "check point: -g or --window, not both"
   mkdir -p "$out"
   [ ! -e "$out/$id.png" ] || die "check point: $id was taken already in this run (each ID once)"
   select_box "$name"; need_box
   local self=$ROOT/bin/omabox wargs=() sargs=() settled=yes rc=0 w
   for w in ${sels[@]+"${sels[@]}"}; do wargs+=(--window "$w"); done
-  [ -z "$geom" ] || wargs=(-g "$geom")
-  sargs=("${wargs[@]}")
+  # (wait still takes the window or a region: a crop of a window waits for the whole window)
+  sargs=(${wargs[@]+"${wargs[@]}"})
+  [ -z "$geom" ] || sargs+=(-g "$geom")
+  [ -z "$geom" ] || [ ${#sels[@]} -gt 0 ] || wargs=(-g "$geom")
   "$self" -b "$NAME" wait --timeout "$tmo" still --quiet 500ms ${wargs[@]+"${wargs[@]}"} >/dev/null 2>"$out/$id.wait" || rc=$?
   case $rc in
     0) ;;
@@ -8081,7 +8098,14 @@ check_point() {
   rm -f -- "${out:?}/${id:?}.shot"
   local tree=none
   if [ ${#sels[@]} -gt 0 ]; then
-    rc=0; "$self" -b "$NAME" tree "${sargs[@]}" --json > "$out/$id.tree.json" 2>/dev/null || rc=$?
+    rc=0; "$self" -b "$NAME" tree "${wargs[@]}" --json > "$out/$id.tree.json" 2>/dev/null || rc=$?
+    if [ $rc = 0 ] && [ -n "$geom" ]; then
+      local cg; cg=$(geom_parse "$geom") || cg=""
+      # shellcheck disable=SC2086 # X Y W H
+      [ -n "$cg" ] && /usr/bin/python3 -I "$CHECK_PY" crop-tree "$out/$id.tree.json" $cg > "$out/$id.tree.crop" &&
+        mv -f -- "$out/$id.tree.crop" "$out/$id.tree.json" || rc=1
+      rm -f -- "${out:?}/${id:?}.tree.crop"
+    fi
     if [ $rc = 0 ]; then tree=yes; else rm -f -- "${out:?}/${id:?}.tree.json"; fi
   fi
   # Holes: a window's own transparent pixels; on the screen, the sentinel wallpaper enclosed by
@@ -8116,7 +8140,8 @@ check_point() {
     holes+="hole $hr"$'\n'
   done <<<"$hres"
   {
-    if [ ${#sels[@]} -gt 0 ]; then echo "of window ${sels[*]}"; elif [ -n "$geom" ]; then echo "of region $geom"; else echo "of screen"; fi
+    if [ ${#sels[@]} -gt 0 ]; then echo "of window ${sels[*]}"; [ -z "$geom" ] || echo "crop $geom"
+    elif [ -n "$geom" ]; then echo "of region $geom"; else echo "of screen"; fi
     echo "settled $settled"
     echo "tree $tree"
     for g in ${masks[@]+"${masks[@]}"}; do echo "ignore $g"; done
@@ -8137,11 +8162,11 @@ check_ids() {
 }
 
 # One checkpoint of NEW against BASE (two folders), leaving out the point's --ignore regions and what
-# UNSTABLE lists (regions, and "tree KEY" lines). Sets CHK_REGIONS (lines), CHK_SPECKS ("N PX"),
+# UNSTABLE lists (regions, and "tree KEY" lines). Sets CHK_REGIONS (lines), CHK_SPECKS ("N PX LARGEST"),
 # CHK_SIZE ("" or "WxH -> WxH") and CHK_TREE (lines). check_one BASE NEW ID SPECK [UNSTABLE]
 check_one() {
   local base=$1 new=$2 id=$3 speck=$4 unstable=${5:-} masks=() m l sa sb res
-  CHK_REGIONS="" CHK_SPECKS="0 0" CHK_SIZE="" CHK_TREE=""
+  CHK_REGIONS="" CHK_SPECKS="0 0 0" CHK_SIZE="" CHK_TREE=""
   while read -r l m; do [ "$l" != ignore ] || masks+=("$m"); done < "$new/$id.point"
   if [ -n "$unstable" ] && [ -f "$unstable" ]; then
     while IFS= read -r l; do
@@ -8172,15 +8197,16 @@ check_one() {
 check_env() {
   "$ROOT/bin/omabox" ls --json 2>/dev/null | jq -c --arg n "$1" --arg v "$(cat "$ROOT/VERSION" 2>/dev/null)" \
     'first(.[] | select(.name == $n)) | {omabox: $v, hyprland: .hyprland_version, omarchy: .omarchy_version, theme,
-      size, gpu: (.render.driver // null), clean}' 2>/dev/null || echo '{}'
+      size, gpu: (.render.driver // null), locale: (.clean.locale // null), timezone: (.clean.timezone // null), clean}' 2>/dev/null || echo '{}'
 }
 
 # check run [--approve] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO...: the scenario
 # (a command of yours that drives a box and calls `omabox check point ID` at each checkpoint) in a
 # fresh `up --clean` box of its own; its checkpoints against the baseline in DIR. --approve runs it
-# 3 times (--runs N) and makes the baseline, check_approve's way.
+# 3 times (--runs N) and makes the baseline, check_approve's way. --speck N: for every checkpoint
+# (else each its own, measured at --approve).
 check_run() {
-  local approve=0 runs="" base=omabox-check out="" speck=$CHECK_SPECK upopts=() scen=()
+  local approve=0 runs="" base=omabox-check out="" speck="" upopts=() scen=()
   while [ $# -gt 0 ]; do
     case $1 in
       --approve) approve=1 ;;
@@ -8206,13 +8232,15 @@ check_run() {
   ! in_jail || die "check run: not inside ai-jail yet (it starts boxes of its own and reads their shots on the host)"
   command -v magick >/dev/null || die "check: needs ImageMagick's magick (package imagemagick, part of Omarchy)"
   [ -x /usr/bin/python3 ] || die "check: needs /usr/bin/python3 (package python)"
+  # No baseline: exit 4, its own (1 is "changed": a script must not read a missing baseline as that).
   if [ $approve = 0 ] && ! compgen -G "$base/*.png" >/dev/null; then
-    die "check run: no baseline in $base: omabox check run --approve [--base DIR] -- ${scen[*]} makes one"
+    say "check run: no baseline in $base: omabox check run --approve [--base DIR] -- ${scen[*]} makes one"
+    exit 4
   fi
   [ -n "$out" ] || out=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/check/$(date +%Y%m%d-%H%M%S)-$$
   mkdir -p "$out"
   out=$(cd "$out" && pwd)
-  local k box rc self=$ROOT/bin/omabox
+  local k box rc t0 self=$ROOT/bin/omabox
   if [ $approve = 0 ]; then runs=1; else runs=${runs:-3}; fi
   CHECK_BOXES=()
   trap 'for b in ${CHECK_BOXES[@]+"${CHECK_BOXES[@]}"}; do "$ROOT/bin/omabox" down "$b" >/dev/null 2>&1 || true; done' EXIT
@@ -8220,8 +8248,11 @@ check_run() {
     box=${OMABOX_CHECK_NAME:-check-$$}-$k   # (OMABOX_CHECK_NAME: internal, the suite's t<pid>-* names)
     say "check: run $k of $runs: a clean box ($box), then: ${scen[*]}"
     CHECK_BOXES+=("$box")
+    t0=$SECONDS
     OMABOX_SESSION="" "$self" up "$box" --clean --idle 30m ${upopts[@]+"${upopts[@]}"} >/dev/null 2>"$out/run$k.up.log" ||
       die "check: the box for run $k did not start: $(grep . "$out/run$k.up.log" | tail -n 1) ($out/run$k.up.log)"
+    # How long it took (under load one took 31 s, with nothing said).
+    say "check: run $k of $runs: box up in $((SECONDS - t0)) s"
     [ $k != 1 ] || check_env "$box" > "$out/env.json"
     mkdir -p "$out/run$k"
     rc=0
@@ -8238,14 +8269,30 @@ check_run() {
   if [ $approve = 1 ]; then check_approve "$out" "$base" "$speck" "$runs"; else check_compare "$out" "$base" "$speck"; fi
 }
 
+# What a checkpoint's speck is, said at --approve: check_speck_text SPECK LARGEST GIVEN
+check_speck_text() {
+  if [ -n "$3" ]; then echo "specks under $1 px left out (--speck)"
+  elif [ "$1" = 0 ]; then echo "compared exactly: the runs agreed to the pixel"
+  else echo "specks under $1 px left out: the runs' largest stray part was $2 px"; fi
+}
+
 # --approve: the scenario ran RUNS times. For each checkpoint the baseline is the run most others
 # match (the first of those that tie), and the regions (and tree elements) where any run differed from
 # it are unstable, left out from then on. One run of three differing is the app (a layout that is
-# not the same from one start to the next); every run differing is data or a time the scenario does
-# not pin. check_approve OUT BASE SPECK RUNS
+# not pin. Each checkpoint's speck (its .point's "speck N") is measured here: twice the largest part
+# of the difference left between the baseline and the other runs once the unstable regions are out
+# (the noise of that checkpoint: Qt Quick's text), CHECK_SPECK_MIN at least and CHECK_SPECK at most;
+# 0 when the runs agreed to the pixel (then it is compared exactly). A fixed speck hid
+# real changes: a bar widget's 2 px spacing made a 16 px part, a vanished sort arrow 26. The noise is
+# the app's, so checkpoints of one window (--window SEL, a crop of it too) take the largest of theirs:
+# a crop holding one button agreed in three runs and showed a pixel in the fourth. SPECK given
+# (--speck): that one for all. check_approve OUT BASE SPECK RUNS
 check_approve() {
   local out=$1 base=$2 speck=$3 runs=$4 id r k j n=0 unst=0 best agree most odd l holed=() hoff="" what
+  local cs=${3:-$CHECK_SPECK} big ps m plan=$out/baseline.plan
+  local -A pspeck=() wspeck=() wof=()
   mkdir -p "$base"
+  : > "$plan.body"
   for ((k = 2; k <= runs; k++)); do
     for id in $(check_ids "$out/run1"); do
       [ -f "$out/run$k/$id.point" ] || die "check: run $k took no $id: the scenario must take the same checkpoints each time"
@@ -8270,7 +8317,7 @@ check_approve() {
       agree=0
       for ((j = 1; j <= runs; j++)); do
         [ $j != "$k" ] || continue
-        check_one "$out/run$k" "$out/run$j" "$id" "$speck" || die "check: could not compare $id's runs (magick)"
+        check_one "$out/run$k" "$out/run$j" "$id" "$cs" || die "check: could not compare $id's runs (magick)"
         [ -n "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ] || agree=$((agree + 1))
       done
       if [ $agree -gt $most ]; then best=$k most=$agree; fi
@@ -8279,7 +8326,7 @@ check_approve() {
     odd=()
     for ((j = 1; j <= runs; j++)); do
       [ $j != "$best" ] || continue
-      check_one "$out/run$best" "$out/run$j" "$id" "$speck" || die "check: could not compare $id's runs (magick)"
+      check_one "$out/run$best" "$out/run$j" "$id" "$cs" || die "check: could not compare $id's runs (magick)"
       [ -z "$CHK_SIZE" ] || die "check: $id is $CHK_SIZE between runs $best and $j: a window that is not the same size each time cannot have a baseline"
       [ -n "$CHK_REGIONS$CHK_TREE" ] || continue
       odd+=("$j")
@@ -8289,7 +8336,27 @@ check_approve() {
       } >> "$out/$id.unstable"
     done
     sort -u -o "$out/$id.unstable" "$out/$id.unstable"
+    # The noise: what is left between the runs outside the unstable regions (a part inside one is
+    # not noise), all specks.
+    big=0
+    for ((j = 1; j <= runs; j++)); do
+      [ $j != "$best" ] || continue
+      check_one "$out/run$best" "$out/run$j" "$id" "$cs" "$out/$id.unstable" || die "check: could not compare $id's runs (magick)"
+      [ "${CHK_SPECKS##* }" -le "$big" ] || big=${CHK_SPECKS##* }
+    done
+    if [ -n "$speck" ]; then ps=$speck
+    else
+      ps=$((2 * big))
+      [ "$big" = 0 ] || [ $ps -ge "$CHECK_SPECK_MIN" ] || ps=$CHECK_SPECK_MIN
+      [ $ps -le "$CHECK_SPECK" ] || ps=$CHECK_SPECK
+    fi
     cp -- "$out/run$best/$id.png" "$out/run$best/$id.point" "$base/"
+    pspeck[$id]=$ps
+    l=$(sed -n '1s/^of window //p' "$base/$id.point")
+    if [ -n "$l" ]; then
+      wof[$id]=$l
+      [ "${wspeck[$l]:-0}" -ge "$ps" ] || wspeck[$l]=$ps
+    fi
     if [ -f "$out/run$best/$id.tree.json" ]; then cp -- "$out/run$best/$id.tree.json" "$base/"; else rm -f -- "${base:?}/${id:?}.tree.json"; fi
     if [ -s "$out/$id.unstable" ]; then
       unst=$((unst + 1))
@@ -8300,9 +8367,10 @@ check_approve() {
         echo "unstable $id: every run differed: data or a time the scenario does not pin (left out from now on):"
       fi
       sed 's/^/  /' "$out/$id.unstable"
+      echo "  $(check_speck_text "$ps" "$big" "$speck")"
     else
       rm -f -- "${base:?}/${id:?}.unstable"
-      echo "baseline $id"
+      echo "baseline $id ($(check_speck_text "$ps" "$big" "$speck"))"
     fi
     if grep -qx 'settled no' "$out/run$best/$id.point"; then echo "  note: $id was not still when taken"; fi
     # Holes go into the baseline as they are (a check fails only on new ones), so they are said here.
@@ -8314,9 +8382,43 @@ check_approve() {
       done < "$out/run$best/$id.point"
     fi
     [ -n "$hoff" ] || hoff=$(sed -n 's/^holes off: //p' "$out/run$best/$id.point")
+    # The overview's card: the checkpoint as kept, what is left out of it, its holes.
+    what=$(sed -n '1s/^of //p' "$base/$id.point")
+    l=0
+    [ ! -f "$base/$id.unstable" ] || l=$(grep -vc '^tree ' "$base/$id.unstable" || true)
+    r=$(grep -c '^hole ' "$base/$id.point" || true)
+    printf 'point\t%s\t%s\t%s%s%s\n' "$id" "$base/$id.png" "$what" "$([ "${l:-0}" = 0 ] || echo ", $l unstable (amber)")" \
+      "$([ "${r:-0}" = 0 ] || echo ", $r hole$([ "$r" = 1 ] || echo s) (red)")" >> "$plan.body"
+    if [ -f "$base/$id.unstable" ]; then
+      while IFS= read -r l; do m=$(check_mask_of "$l") && printf 'unstable\t%s\n' "${m// /$'\t'}" >> "$plan.body"; done < "$base/$id.unstable"
+    fi
+    while read -r l r; do
+      [ "$l" = hole ] || continue
+      m=$(check_mask_of "$r") && printf 'hole\t%s\n' "${m// /$'\t'}" >> "$plan.body"
+    done < "$base/$id.point"
+  done
+  # Each checkpoint's speck in its .point, a window's largest for each of its checkpoints.
+  for id in $(check_ids "$out/run1"); do
+    ps=${pspeck[$id]}
+    if [ -z "$speck" ] && [ -n "${wof[$id]:-}" ] && [ "${wspeck[${wof[$id]}]}" -gt "$ps" ]; then
+      ps=${wspeck[${wof[$id]}]}
+      echo "speck    $id: under $ps px, as the other checkpoints of its window (the app's noise; its own runs differed by less)"
+    fi
+    echo "speck $ps" >> "$base/$id.point"
   done
   cp -- "$out/env.json" "$base/check.json"
   echo "check: baseline of $n checkpoints in $base ($unst with regions left out); runs in $out"
+  # The baseline in one image (finding 362): a person or an agent looks before keeping it, since what
+  # most runs agree on is kept, a wrong screen (an error, a page not loaded yet) as well.
+  { printf 'title\tthe baseline in %s, each checkpoint as a check will compare it; amber: unstable, left out; red: holes\n' "$base"
+    cat -- "$plan.body"; } > "$plan"
+  if check_report "$plan" "$out/baseline.png" overview >/dev/null; then
+    echo "overview: $out/baseline.png (the baseline's $n checkpoints in one image)"
+    echo "check: look at it before you keep this baseline: what most runs showed is kept, a wrong screen too (an error, a page not loaded yet)"
+  else
+    say "check: the baseline's image could not be drawn (magick): look at its shots in $base before you keep it"
+  fi
+  rm -f -- "${plan:?}" "${plan:?}.body"
   [ -z "$hoff" ] || echo "note: no holes looked for on the screen: $hoff"
   if [ ${#holed[@]} -gt 0 ]; then
     echo "check: HOLES in ${#holed[@]} of $n checkpoints (${holed[*]}): see-through inside a window, the bar or a popup (a transparent part, a gap, a surface that did not draw). Approved as they are, a check fails only on new ones: look at them (the shots in $base), fix them and approve again, unless that is how it should look."
@@ -8324,16 +8426,20 @@ check_approve() {
 }
 
 # A run against the baseline: same, changed (regions, tree), new, missing. Exit 1 unless all same.
+# Each checkpoint with its own speck (the baseline's .point; 32 for one from before it), unless SPECK.
 check_compare() {
   local out=$1 base=$2 speck=$3 id fail=0 same=0 n=0 r regs=() e holes=() nh old what m changed=0 left bt nt
-  local plan=$out/report.plan
+  local plan=$out/report.plan ps nholed=0 new=0 missing=0 sp spa=()
   : > "$plan.body"
   for id in $(check_ids "$out/run1"); do
     n=$((n + 1))
     if [ ! -f "$base/$id.png" ]; then
-      echo "new      $id: no baseline (omabox check run --approve adds it)"; fail=1; continue
+      echo "new      $id: no baseline (omabox check run --approve adds it)"; fail=1 new=$((new + 1)); continue
     fi
-    check_one "$base" "$out/run1" "$id" "$speck" "$base/$id.unstable" || die "check: could not compare $id (magick)"
+    ps=$speck
+    [ -n "$ps" ] || ps=$(sed -n 's/^speck \([0-9]\{1,6\}\)$/\1/p' "$base/$id.point" | head -n 1) || ps=""
+    [ -n "$ps" ] || ps=$CHECK_SPECK
+    check_one "$base" "$out/run1" "$id" "$ps" "$base/$id.unstable" || die "check: could not compare $id (magick)"
     # Holes the baseline does not have fail it even where the shots match (in an unstable region, or
     # smaller than a speck); the baseline's own were approved with it, and are only noted.
     holes=()
@@ -8342,12 +8448,17 @@ check_compare() {
     old=$(grep -c '^hole ' "$out/run1/$id.point" || true)
     old=$((old - ${#holes[@]}))
     what=$(check_hole_what "$out/run1/$id.point")
+    # What the comparison left out, said (nothing is dropped without a word).
+    sp="" spa=()
+    read -r -a spa <<<"$CHK_SPECKS"
+    [ "${spa[0]:-0}" = 0 ] || sp="${spa[0]} speck$([ "${spa[0]}" = 1 ] || echo s) left out, the largest ${spa[2]:-?} px"
     if [ -z "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ] && [ ${#holes[@]} = 0 ]; then
-      same=$((same + 1)); echo "same     $id"
+      same=$((same + 1)); echo "same     $id${sp:+ ($sp)}"
       [ $old -le 0 ] || echo "  note: $old hole$([ $old = 1 ] || echo s) as in the baseline ($what there: approved)"
       continue
     fi
-    fail=1 changed=$((changed + 1)) bt="" nt=""
+    fail=1 bt="" nt=""
+    if [ -z "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ]; then nholed=$((nholed + 1)); else changed=$((changed + 1)); fi
     regs=()
     if [ -f "$base/$id.tree.json" ] && [ -f "$out/run1/$id.tree.json" ]; then bt=$base/$id.tree.json nt=$out/run1/$id.tree.json; fi
     printf 'point\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$base/$id.png" "$out/run1/$id.png" "$bt" "$nt" \
@@ -8372,17 +8483,17 @@ check_compare() {
     regs+=(${holes[@]+"${holes[@]}"})
     [ -n "$CHK_SIZE" ] || [ ${#regs[@]} = 0 ] || check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || true
     if [ -n "$CHK_TREE" ]; then while IFS= read -r r; do echo "  tree: $r"; done <<<"$CHK_TREE"; fi
-    [ "${CHK_SPECKS%% *}" = 0 ] || echo "  specks left out: ${CHK_SPECKS%% *} (${CHK_SPECKS#* } px; parts under $speck px)"
+    [ -z "$sp" ] || echo "  $sp (parts under $ps px)"
     if grep -qx 'settled no' "$out/run1/$id.point"; then echo "  note: $id was not still when taken"; fi
   done
   for r in "$base"/*.point; do
     [ -f "$r" ] || continue
     id=$(basename "$r" .point)
-    [ -f "$out/run1/$id.point" ] || { echo "missing  $id: in the baseline, not taken this run"; fail=1; }
+    [ -f "$out/run1/$id.point" ] || { echo "missing  $id: in the baseline, not taken this run"; fail=1 missing=$((missing + 1)); }
   done
-  if [ $changed -gt 0 ]; then
+  if [ $((changed + nholed)) -gt 0 ]; then
     { printf 'title\tcheck: %s of %s changed. Each pair: the baseline, then this run; red: pixels that changed, blue: only the tree\n' \
-        "$changed" "$n"; cat -- "$plan.body"; } > "$plan"
+        "$((changed + nholed))" "$n"; cat -- "$plan.body"; } > "$plan"
     if left=$(check_report "$plan" "$out/report.png"); then
       echo "report:  $out/report.png (every change beside its baseline in one image: look at it first)"
       [ -z "$left" ] || echo "  not in it, no room: $left (their changes are listed above)"
@@ -8393,12 +8504,20 @@ check_compare() {
   rm -f -- "${plan:?}" "${plan:?}.body"
   # A baseline from another omabox, Hyprland, Omarchy or GPU: differences may be that.
   if [ -f "$base/check.json" ]; then
+    # (locale and timezone only when the baseline says them: one from before them does not)
     e=$(jq -rn --slurpfile a "$base/check.json" --slurpfile b "$out/env.json" \
-      '($a[0] // {}) as $x | ($b[0] // {}) as $y | [("omabox", "hyprland", "omarchy", "gpu", "theme", "size")
-        | select($x[.] != $y[.]) | "\(.) \($x[.] // "?") -> \($y[.] // "?")"] | join(", ")' 2>/dev/null) || e=""
+      '($a[0] // {}) as $x | ($b[0] // {}) as $y | [("omabox", "hyprland", "omarchy", "gpu", "theme", "size", "locale", "timezone")
+        | select($x[.] != $y[.] and ((. != "locale" and . != "timezone") or $x[.] != null))
+        | "\(.) \($x[.] // "?") -> \($y[.] // "?")"] | join(", ")' 2>/dev/null) || e=""
     [ -z "$e" ] || echo "note: the baseline was made with another setup ($e): a difference may be that"
   fi
-  echo "check: $same of $n same; shots in $out/run1"
+  # Every checkpoint counted: those of this run, and those of the baseline it did not take.
+  e=""
+  [ $changed = 0 ] || e+=", $changed changed"
+  [ $nholed = 0 ] || e+=", $nholed with new holes"
+  [ $new = 0 ] || e+=", $new new"
+  [ $missing = 0 ] || e+=", $missing missing"
+  echo "check: $same of $((n + missing)) same$e; shots in $out/run1"
   return $fail
 }
 

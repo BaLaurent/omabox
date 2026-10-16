@@ -6,7 +6,7 @@
       two shots differ). Parts under SPECK pixels are specks (distance-field text varies by a few
       pixels a glyph from one start of an app to the next: never a part over 13 px measured), the
       rest are merged when GAP px apart or less. Prints "X,Y WxH PIXELS" a region, then
-      "specks N PIXELS".
+      "specks N PIXELS LARGEST" (LARGEST: the biggest speck's pixels, 0 for none).
   check.py holes screen|window W H CORNER GAP [X Y RW RH] < VERBOSE
       VERBOSE: the listing of a W x H mask, white where a shot is see-through (the sentinel
       wallpaper in a screen shot, alpha 0 in a window's own pixels). A part touching a screen
@@ -28,6 +28,13 @@
       BASE.tree.json NEW.tree.json UNSTABLE" (empty fields: none) and its "region X Y W H" or "size
       TEXT" lines. Prints magick's arguments NUL-separated, the first being what was left out ("" when
       nothing).
+  check.py overview PLAN OUT.png [FONT]
+      The baseline in one image (--approve): PLAN's "title TEXT", then per checkpoint "point ID PNG
+      TEXT" and its "unstable X Y W H" (amber: left out) and "hole X Y W H" (red) lines; every shot
+      scaled to fit one look. Prints magick's arguments as sheet does (the first always "").
+  check.py crop-tree TREE.json X Y W H
+      A window's tree for a crop of it (in the window's coordinates): the elements that touch the
+      crop, their ancestors, their keys from the whole tree. JSON on stdout.
 """
 import json
 import sys
@@ -74,16 +81,17 @@ def show(b):
 
 
 def regions(speck, gap):
-    boxes, specks, speck_px = [], 0, 0
+    boxes, specks, speck_px, largest = [], 0, 0, 0
     for b in parts(sys.stdin):
         if b[4] < speck:
             specks += 1
             speck_px += b[4]
+            largest = max(largest, b[4])
             continue
         boxes.append(b)
     for b in merge(boxes, gap):
         show(b)
-    print(f"specks {specks} {speck_px}")
+    print(f"specks {specks} {speck_px} {largest}")
 
 
 def holes(kind, width, height, corner, gap, region):
@@ -123,6 +131,11 @@ def load(path):
         nodes = json.load(f)
     out, stack, counts = {}, [], []
     for n in nodes:
+        if "key" in n:
+            # A crop's tree (crop-tree): its keys are the whole window's, so an element outside the
+            # crop does not shift the places of those inside.
+            out[n["key"]] = n
+            continue
         d = n["depth"]
         del stack[d:]
         while len(stack) < d:
@@ -145,12 +158,26 @@ def at(n):
     return f"@{n['x']},{n['y']} {n['w']}x{n['h']}" if "x" in n else ""
 
 
+def place(key, nodes):
+    """Where an element without a name is: from its nearest ancestor with one (the window at the
+    latest) down to its own place, 'frame "W" > panel#1 > button#3' (the 3rd button there)."""
+    parts = key.split("/")
+    for i in range(len(parts) - 1, 0, -1):
+        a = nodes.get("/".join(parts[:i]))
+        if a and a.get("name"):
+            return " > ".join([label(a)] + parts[i:])
+    root = nodes.get(parts[0])
+    return " > ".join(([label(root)] if root else [parts[0]]) + parts[1:])
+
+
 def changes(base, new):
-    """(key, line) for each difference, in the base's order, then what appeared."""
+    """(key, line) for each difference, in the base's order, then what appeared. An element with no
+    name that vanished or appeared says where it is (in what, which of its kind there)."""
     for key, b in base.items():
         n = new.get(key)
         if n is None:
-            yield key, f"vanished  {label(b)}" + (f"  (was {at(b)})" if "x" in b else "")
+            where = "" if b.get("name") else f"  (in {place(key, base)})"
+            yield key, f"vanished  {label(b)}" + (f"  (was {at(b)})" if "x" in b else "") + where
             continue
         if b.get("name", "") != n.get("name", ""):
             yield key, f"name  {b['role']}  {json.dumps(b.get('name', ''))} -> {json.dumps(n.get('name', ''))}"
@@ -172,7 +199,40 @@ def changes(base, new):
             yield key, f"state  {short}  [{','.join(b.get('states', []))}] -> [{','.join(n.get('states', []))}]"
     for key, n in new.items():
         if key not in base:
-            yield key, f"appeared  {label(n)}  {at(n)}".rstrip()
+            where = "" if n.get("name") else f"  (in {place(key, new)})"
+            yield key, f"appeared  {label(n)}  {at(n)}".rstrip() + where
+
+
+def crop_tree(path, x, y, w, h):
+    """A window's tree for a checkpoint of a crop of it (check point --window SEL -g): the window,
+    the elements that touch the crop and their ancestors, each with its key in the whole tree, so
+    one outside the crop that moves or goes changes nothing inside; an element without bounds goes
+    with its nearest ancestor that has some. The window's node says the crop ("crop"), in its own
+    coordinates, for the report's marks. JSON on stdout."""
+    nodes = load(path)
+    crop = (x, y, w, h)
+    keep, inside = [], {}
+    for key, n in nodes.items():
+        if "/" not in key:
+            inside[key] = True
+            continue
+        parent = key.rsplit("/", 1)[0]
+        b = bounds(n)
+        inside[key] = overlaps(b, crop) if b else inside.get(parent, False)
+    for key in list(inside):
+        if inside[key]:
+            # its ancestors too
+            parts = key.split("/")
+            for i in range(1, len(parts)):
+                inside["/".join(parts[:i])] = True
+    for key, n in nodes.items():
+        if inside[key]:
+            m = dict(n, key=key)
+            if "/" not in key:
+                m["crop"] = {"x": x, "y": y, "w": w, "h": h}
+            keep.append(m)
+    json.dump(keep, sys.stdout)
+    sys.stdout.write("\n")
 
 
 # The report (finding 360): what a model sees in one look is 1568 px a side and ~1.15 MP (finding
@@ -236,8 +296,14 @@ def marks_of(pt):
         return marks
     base, new = load(bt), load(nt)
     root = next(iter(new.values()), None)
-    if not root or (root.get("w"), root.get("h")) != pt["size"]:
+    # A crop of the window (crop-tree): its elements' bounds less the crop's corner.
+    crop = root.get("crop") if root else None
+    ox, oy = (crop["x"], crop["y"]) if crop else (0, 0)
+    if not root or ((crop["w"], crop["h"]) if crop else (root.get("w"), root.get("h"))) != pt["size"]:
         return marks   # the tree's pixels are not the shot's (a scale): no marks from it
+
+    def bounds(n):
+        return (n["x"] - ox, n["y"] - oy, n["w"], n["h"]) if n and "x" in n else None
     ignore = set()
     if pt["unstable"]:
         with open(pt["unstable"], encoding="utf-8") as f:
@@ -477,6 +543,67 @@ def sheet(plan, out_png, font):
     sys.stdout.write("\0".join([left_text] + a) + "\0")
 
 
+# The baseline's overview (--approve): every checkpoint as it was kept, in one look, what a check
+# will leave out (unstable regions, amber) and its holes (red) marked on it. A person or an agent
+# looks at it before keeping the baseline: when most runs showed the same wrong screen (an error, a
+# page not loaded yet), that is what the baseline is.
+AMBER = "#e09000"
+
+
+def overview(plan, out_png, font):
+    title, points = "", []
+    with open(plan, encoding="utf-8") as f:
+        for line in f:
+            p = line.rstrip("\n").split("\t")
+            if p[0] == "title":
+                title = p[1]
+            elif p[0] == "point":
+                points.append({"id": p[1], "png": p[2], "text": p[3], "marks": []})
+                points[-1]["size"] = png_size(p[2])
+            elif p[0] in ("unstable", "hole"):
+                points[-1]["marks"].append((AMBER if p[0] == "unstable" else RED, tuple(int(v) for v in p[1:5])))
+    # Each shot at most the sheet's width, then all of them smaller together until they fit.
+    room = SHEET_W - 2 * GAP - 2 * PAD
+    f, placed = 1.0, None
+    while True:
+        cards = []
+        for pt in points:
+            w, h = pt["size"]
+            s = min(1.0, room / w) * f
+            sw, sh = max(1, round(w * s)), max(1, round(h * s))
+            lines = [(clean(f"{pt['id']}: {pt['text']}"), INK)]
+            textw = len(lines[0][0]) * CW
+            cw = max(sw, min(textw, TEXT_MAX)) + 2 * PAD
+            cards.append({"pt": pt, "s": s, "sw": sw, "sh": sh, "lines": lines, "w": int(cw), "h": int(PAD + LH + 4 + sh + PAD)})
+        placed, W, H, tlines = layout(cards, 0, title)
+        if (W <= SHEET_W and H <= SHEET_H and W * H <= SHEET_PX) or f < 0.05:
+            break
+        f *= 0.9
+    a = ["-size", f"{W}x{H}", "xc:white"] + (["-font", font] if font else []) + ["-pointsize", str(PT)]
+
+    def text(x, y, t, colour):
+        a.extend(["-stroke", "none", "-fill", colour, "-annotate", f"+{x}+{y + LH - 5}", esc(t)])
+
+    for i, t in enumerate(tlines):
+        text(GAP, GAP + i * LH, t, INK)
+    for c, x, y in placed:
+        a.extend(["-stroke", "none", "-fill", "#e6e6e6", "-draw", f"rectangle {x},{y} {x + c['w'] - 1},{y + c['h'] - 1}"])
+        text(x + PAD, y + PAD, fit(c["lines"][0][0], c["w"] - 2 * PAD), INK)
+        iy, s = y + PAD + LH + 4, c["s"]
+        a.extend(["(", c["pt"]["png"], "-alpha", "off"] + (["-scale"] if s >= 1 else ["-resize"]) + [f"{c['sw']}x{c['sh']}!"])
+        for colour, (mx, my, mw, mh) in c["pt"]["marks"]:
+            x0, y0 = int(mx * s), int(my * s)
+            x1, y1 = max(x0 + 1, int((mx + mw) * s + 0.999) - 1), max(y0 + 1, int((my + mh) * s + 0.999) - 1)
+            if colour == AMBER:
+                # Left out: a see-through fill over it and its edge, so what is under it still reads.
+                a.extend(["-stroke", colour, "-strokewidth", "1", "-fill", colour + "40", "-draw", f"rectangle {x0},{y0} {x1},{y1}"])
+            else:
+                a.extend(["-stroke", colour, "-strokewidth", "2", "-fill", "none", "-draw", corners(x0 - 3, y0 - 3, x1 + 3, y1 + 3)])
+        a.extend([")", "-geometry", f"+{x + PAD}+{iy}", "-composite"])
+    a.extend(["-alpha", "off", "-depth", "8", f"PNG:{out_png}"])
+    sys.stdout.write("\0".join([""] + a) + "\0")
+
+
 def main():
     if len(sys.argv) >= 4 and sys.argv[1] == "regions":
         regions(int(sys.argv[2]), int(sys.argv[3]))
@@ -507,6 +634,12 @@ def main():
         for key in keys:
             print(f"{key}  ({what[key]})")
         return 1 if found and sys.argv[1] == "tree" else 0
+    if len(sys.argv) == 7 and sys.argv[1] == "crop-tree":
+        crop_tree(sys.argv[2], *(int(a) for a in sys.argv[3:7]))
+        return 0
+    if len(sys.argv) in (4, 5) and sys.argv[1] == "overview":
+        overview(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else "")
+        return 0
     if len(sys.argv) in (4, 5) and sys.argv[1] == "sheet":
         sheet(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) == 5 else "")
         return 0
