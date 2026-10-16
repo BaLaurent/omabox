@@ -125,16 +125,18 @@ names what was not the same from one run to the next, left out from then on: one
 differing is the app (a layout that changes from start to start: worth a look) or a minute that
 ticked; every run differing is data or a time the scenario does not pin (a random port, a time the
 app shows): pin it in the scenario's data or `--ignore` it. Then `omabox check run -- ./visual.sh`
-(same UP OPTIONS) after a change: `same ID`, or `changed ID` with each region (`at X,Y WxH`, drawn on
-`ID.diff.png` beside the run's shots: Read that, not the whole shot) and the tree's
-`moved/resized/name/text/state/appeared/vanished` lines; `new`/`missing` for checkpoints the
-baseline lacks or this run did not take. Exit 0 all same, 1 not, 3 the scenario failed (its log
+(same UP OPTIONS) after a change: `same ID`, or `changed ID` with each region (`at X,Y WxH`) and the
+tree's `moved/resized/name/text/state/appeared/vanished` lines; `new`/`missing` for checkpoints the
+baseline lacks or this run did not take. When anything changed, Read the `report:` image first: one
+image, ~150-800 image tokens, each change cropped from the baseline beside this run (red: pixels,
+blue: a move only the tree has), with its checkpoint, region and tree line; what did not fit is
+named. `ID.diff.png` is the whole shot marked (~1.5k tokens each): for the context a crop lacks. Exit 0 all same, 1 not, 3 the scenario failed (its log
 named). A change you meant: `--approve` again. Shots are compared exactly, leaving out specks (parts
 of the difference under 32 px, `--speck`): Qt Quick's text varies by that from one start to the
 next, nothing visible. A change smaller than a speck (a 2 px move of a few dots) shows only in the
 tree. Baselines are per GPU: another GPU, omabox, Hyprland, Omarchy, theme or size is said in the
 report. The Omarchy shell and its plugins have no tree: their checks are pixels only. `omabox check
-diff A.png B.png [--ignore G]` compares two shots of yours the same way. Not inside ai-jail yet.
+diff A.png B.png [--ignore G] [--report R.png]` compares two shots of yours the same way. Not inside ai-jail yet.
 
 ## Symptoms
 
