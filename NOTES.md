@@ -6651,48 +6651,6 @@ from them.
     no false `GUARD`; `t_unit_setup` (no link from a plain setup, opt in, kept, opt out, `--remove`)
     and `t_unit_install` (none from install.sh), `t_unit_version` for the description and `--help`. The skill's flow itself (asking, filing) is not exercised by the suite.
 
-## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
-
-- Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
-- Docker: user not in `docker` group (= root); image drift vs host packages.
-- Qt offscreen: Qt-only, no shell/tray, clicks don't deliver.
-- sway / weston / cage as the parent compositor: protocol versions (finding 2).
-- Keeping labwc's lazy Xwayland off the host's abstract X11 sockets without a network namespace
-  (finding 89): `WLR_XWAYLAND=/bin/false` or a missing path still binds the sockets, and host X11
-  clients then hang or fail; copying the host's `/tmp/.X*-lock` files into the box does not hold
-  them, since their pids look stale from the box's pid namespace.
-
-The spike installed sway, weston and cage to try them as the parent compositor; omabox needs none
-of them, nor wayvnc (finding 34). It needs labwc.
-
-## Open
-
-Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
-
-- The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
-  aquamarine patched downstream with #415 is recognised by the symbol it adds (finding 246).
-- More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44;
-  `--omarchy DIR` is done, finding 135): `--quickshell PATH` and `--lib DIR` (library dirs ahead of
-  the system's; `/opt/omabox/lib` comes first now) are parked until a project needs them (→ #81). A
-  `--hyprland` build whose RUNPATH points outside its own folder finds those libraries on the host
-  (`ldd` passes) but not in the box.
-- Portals (findings 12, 148): ScreenCast needs PipeWire in the box (started by hand it worked; an
-  `up --audio` box has it now, finding 313, ScreenCast there not rechecked); portal
-  errors are not logged (dbus-daemon drops an activated service's stderr).
-- AMD and Intel iGPUs, an RTX 4070 SUPER (finding 77) and an RTX 5070 Ti (finding 124: the full
-  suite, nothing skipped, 2026-09-30) tested; other NVIDIA cards, multi-GPU and other setups: → #84.
-- Marks (finding 85) are for peek only: an interactive box is not marked (no window of ours to draw
-  in; an overlay would touch the real desktop; → #81). A peek that starts while a `click` is
-  deciding whether to write can miss marks until it is opened again (the file removed under it; since
-  finding 233 the box's other peek windows share the new file); not seen.
-- The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
-  `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
-  `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried (→ #81).
-- A jailed agent's `--plugin`, `--theme-dir`, `--omarchy` or `--hyprland` inside a project the jail
-  hides a path in, and an `--overlay` of one, are still refused (finding 292): the broker reads them
-  on the host, and an overlay's covers cannot be checked. Reading through the jail's own mounts
-  (`/proc/PID/root`, no link followed, as jail_verify walks) would allow the first four.
-
 327. **`ls` refuses what it does not take** (2026-10-16, #236). `cmd_ls` read only its first
     argument, as `--json`, and dropped the rest: `omabox ls -b NAME --json` printed the table and
     exited 0, so a script piping it into a JSON parser got a table and no error, and `ls --bogus` was
@@ -6932,3 +6890,45 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     probe bind after `hyprctl reload`; monitors.lua and autostart.lua not run, the screen 1920x1080
     at 1; a syntax error in input.lua said by `hyprctl reload` and `reload`, the box alive, the bind
     of bindings.lua (loaded after it) still there; fixed, nothing said.
+
+## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
+
+- Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
+- Docker: user not in `docker` group (= root); image drift vs host packages.
+- Qt offscreen: Qt-only, no shell/tray, clicks don't deliver.
+- sway / weston / cage as the parent compositor: protocol versions (finding 2).
+- Keeping labwc's lazy Xwayland off the host's abstract X11 sockets without a network namespace
+  (finding 89): `WLR_XWAYLAND=/bin/false` or a missing path still binds the sockets, and host X11
+  clients then hang or fail; copying the host's `/tmp/.X*-lock` files into the box does not hold
+  them, since their pids look stale from the box's pid namespace.
+
+The spike installed sway, weston and cage to try them as the parent compositor; omabox needs none
+of them, nor wayvnc (finding 34). It needs labwc.
+
+## Open
+
+Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
+
+- The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
+  aquamarine patched downstream with #415 is recognised by the symbol it adds (finding 246).
+- More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44;
+  `--omarchy DIR` is done, finding 135): `--quickshell PATH` and `--lib DIR` (library dirs ahead of
+  the system's; `/opt/omabox/lib` comes first now) are parked until a project needs them (→ #81). A
+  `--hyprland` build whose RUNPATH points outside its own folder finds those libraries on the host
+  (`ldd` passes) but not in the box.
+- Portals (findings 12, 148): ScreenCast needs PipeWire in the box (started by hand it worked; an
+  `up --audio` box has it now, finding 313, ScreenCast there not rechecked); portal
+  errors are not logged (dbus-daemon drops an activated service's stderr).
+- AMD and Intel iGPUs, an RTX 4070 SUPER (finding 77) and an RTX 5070 Ti (finding 124: the full
+  suite, nothing skipped, 2026-09-30) tested; other NVIDIA cards, multi-GPU and other setups: → #84.
+- Marks (finding 85) are for peek only: an interactive box is not marked (no window of ours to draw
+  in; an overlay would touch the real desktop; → #81). A peek that starts while a `click` is
+  deciding whether to write can miss marks until it is opened again (the file removed under it; since
+  finding 233 the box's other peek windows share the new file); not seen.
+- The window confirm-close opens for a box kept running (finding 70) has no `render_unfocused`, so
+  `shot` gets no frame from it while it is hidden (finding 90). The host could give it one: a Lua
+  `window.open` hook matching the box's client, then `set_prop` and a re-check. Untried (→ #81).
+- A jailed agent's `--plugin`, `--theme-dir`, `--omarchy` or `--hyprland` inside a project the jail
+  hides a path in, and an `--overlay` of one, are still refused (finding 292): the broker reads them
+  on the host, and an overlay's covers cannot be checked. Reading through the jail's own mounts
+  (`/proc/PID/root`, no link followed, as jail_verify walks) would allow the first four.
