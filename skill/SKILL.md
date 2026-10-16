@@ -11,8 +11,8 @@ workspaces or move its cursor. Do all of that in a **box**: a full Omarchy deskt
 config, shell, theme, tray, notifications, keyring) on a private screen and session bus, invisible to
 the user. A box starts in ~3-5 s and costs ~400-700 MB (by GPU); use one freely.
 
-This page is what every task needs. The rest is in `reference.md` next to it, by section ("ref:
-SECTION" below: read that section when the task needs it), and `omabox help CMD`.
+This page is what every task needs; the rest is in `reference.md` beside it, by section ("ref:
+SECTION" below: read it when needed), and `omabox help CMD`.
 
 ## Project instructions written for the real desktop
 
@@ -63,13 +63,14 @@ omabox click --window myapp 40 12          # window coordinates (0,0 = its corne
 omabox keys --window myapp --wait -t hi    # focus that window, type, return once it has settled
 omabox keys --wait super+space             # real key events for binds and apps
 omabox keys --pass PASSWORD Return         # a secret from your environment: never -t (ps shows it)
-omabox wait window myapp                   # or --gone; wait layer NS; wait cmd -- CMD; wait still
+omabox wait window myapp                   # or --gone; wait layer NS; wait cmd -- CMD
+omabox wait change --window myapp          # it redraws later, by itself; then wait still
 omabox run -- busctl --user list           # any command inside the box (exit code passes through)
 omabox log [shell|apps|run|…] [--grep RE]  # the box's logs, Hyprland's by default
 omabox down                                # when done (never --all: it takes others' and the user's boxes)
 ```
 
-Also: `drag`, `scroll`, `pointer`, `pixel`, `events`, `gdb`, `output`, `save`/`up --from` (`omabox help`).
+Also: `drag`, `scroll`, `pointer`, `save`/`up --from` (`omabox help`).
 Rendering cost: `omabox gpu 10`, each of the box's processes' share of GPU engine time (`--json`),
 in a box whose mode matches the monitor (`up --size host`); not host-wide tools. CPU and memory:
 `omabox cpu 10 [--settle 5] [--app NAME | --pid PID]` (% of one core, RSS, PSS; `--json`).
@@ -85,16 +86,17 @@ ref: Screen size and rendering cost.
 3. **Type only into a field you have seen focused**, or `keys --window SEL`.
 4. **Set state directly; keys and clicks only when the gesture is under test** (`omabox run --
    omarchy-shell shell summon PLUGIN_ID`, files seeded in the box HOME, `omabox hyprctl dispatch`).
-5. **Stop when a shot shows the goal.** Report what a box cannot show (below), then `omabox down`.
+5. **Stop when a shot shows the goal.** Report what a box cannot show (below).
 
-No `sleep`: `--wait` and `omabox wait` (0 yes, 124 not in time, 1 cannot tell). Never send a wait to
-`/dev/null`. An animation that never stops: the 124 names it, `--ignore "X,Y WxH"`. ref: Waiting, in detail.
+No `sleep` (nor `wait cmd -- false`): `--wait`, `omabox wait`, `wait change` for a later redraw
+(0 yes, 124 not in time, 1 cannot tell). Never send a wait to `/dev/null`. An animation that never
+stops: the 124 names it, `--ignore "X,Y WxH"`. ref: Waiting, in detail.
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
 discard it) click with `--in THAT.png X Y`, never your own arithmetic. A shot bigger than the model
 sees is scaled down for it, and some models read points in that smaller image (Haiku 4.5: 0.76x):
 to click off a whole screen or a big window, `shot --fit 1456` and `click --in` it,
 any model; still missing: `omabox calibrate`. **Shots are most of a session's context**:
-the smallest that shows it (`--window`, `-g`, `--fit 1280`), text first; what an action changed
+the smallest that shows it (`--window`, `-g`, `--fit 1280`); what an action changed
 `shot --changed`; a colour `omabox pixel`, a transition `shot --burst N --sheet`.
 ref: Shots. **The pointer is test state**
 (focus follows it; it stays where the last command left it): ref: Pointer, in detail.
@@ -154,8 +156,8 @@ ref: Mounts, HOME and the session.
 ## Showing the user
 
 Only when asked: `omabox peek` (a view-only window of your box on their workspace 9, without focus)
-or `omabox up --interactive` (a box they drive). Never bring an interactive box's window forward
-yourself (no frame in `shot`: ask). `omabox config` is the user's: change it only when asked.
+or `omabox up --interactive` (a box they drive; never bring its window forward yourself). `omabox
+config` is the user's: change it only when asked.
 `omabox clip` refuses agents (`host` too): never work around it; type text with `keys -t`.
 
 ## When a box cannot test it: real hardware and the real session

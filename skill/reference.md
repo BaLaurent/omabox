@@ -263,12 +263,16 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 ## Waiting, in detail
 
 - `omabox wait [--timeout 10s] [--json] COND`, one condition per call (chain with `&&`): `still
-  [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]`, `change [-g | --window]
-  [--ignore GEOM]...`, `window SEL [--gone
-  | --focused]`, `layer NAMESPACE [--gone]` (`omarchy-menu`, `omarchy-notifications`, ...), `cmd --
-  CMD` (exit 0 inside the box). `window SEL` is satisfied by any window SEL matches, and the line
+  [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]`, `change [-g GEOM |
+  --window SEL] [--ignore GEOM]...`, `window SEL [--gone | --focused]`, `layer NAMESPACE [--gone]`
+  (`omarchy-menu`, `omarchy-notifications`, ...), `cmd -- CMD` (exit 0 inside the box). Options go
+  before or after COND. `window SEL` is satisfied by any window SEL matches, and the line
   names them all (`--focused`: when one of them has focus); only commands acting on one window
   refuse a SEL that matches several.
+- An app that redraws later, by itself (after a server sync, a timer): `omabox wait --timeout 30s
+  change --window APP` (satisfied at the first change there; the window must be on screen), then
+  `omabox wait still` for it to finish. Never `wait cmd -- false` (or `-- true`) as a sleep: the first
+  is a fixed wait ending in 124, the second no wait at all.
 - `keys`, `click`, `scroll`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s]
   [-g GEOM] [--ignore GEOM]... [--json]`: the screen before the action, a change within `--start` (5 s
   for `run -d`), then `--quiet` with none. `-g` watches only that part of the screen.

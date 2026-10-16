@@ -26,6 +26,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   exited 0, as did `ls` with any unknown flag. Now `-b` after `ls` says "ls takes no -b", as before
   it, and anything else but `--json` is an unknown argument; both exit 2. `omabox saves` too:
   `saves --json --bogus` printed the JSON and exited 0.
+- **The skill shows `wait change` again**, for an app that redraws later by itself (a sync, a
+  timer): `omabox wait change --window APP`, then `wait still`. Without it agents slept with
+  `wait cmd -- false`. `omabox help wait` says what `change` waits for.
 - **The guard no longer piles its line into Claude Code's session environment.** Its hook added the
   line again on every resume and compaction, so a long session sourced it many times before each
   command. It is written once now, an older omabox's replaced. `omabox guard` reads the hook as

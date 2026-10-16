@@ -1780,6 +1780,8 @@ t_unit_version() {
   check "SKILL.md points to reference.md by section" test -n "$refs"
   check_eq "...every section it names is there" "" "$gone"
   check "...and stays short (under 14 KB: #143)" test "$(wc -c < "$ROOT/skill/SKILL.md")" -lt 14000
+  # #241, finding 330: without wait change in the loop, agents slept with wait cmd -- false.
+  check "...and its loop has wait change" grep -qE '^omabox wait change --window ' "$ROOT/skill/SKILL.md"
   if command -v omarchy-plugin-validate >/dev/null; then
     check "the widget passes omarchy-plugin-validate" omarchy-plugin-validate "$ROOT/plugin"
   else

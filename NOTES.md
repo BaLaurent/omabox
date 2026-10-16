@@ -6725,3 +6725,15 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     when one is null, and that the commit to report is the project's own (`ls --json` has none).
     `t_unit_hyprland` (both kinds of box, stubbed), `t_uwsm_app` (a stock box's key against its own
     `hyprctl version`, no `Hyprland:` line under it in `ls`).
+330. **The skill's loop has `wait change` again** (2026-10-16, #241). Finding 184 put it there; the
+    shortening that moved the rest to reference.md (#143) left it out, and the quick list kept only
+    `wait window`, `layer`, `cmd` and `still`. For an app that redraws later on its own (a server
+    sync, a timer), agents of one session slept with `wait cmd --timeout 15 -- false` (a fixed wait
+    ending in 124, sent to /dev/null) or ran `wait cmd -- true` (no wait at all). Now the loop has
+    `omabox wait change --window myapp` (then `wait still`), the "No `sleep`" rule names it and says
+    not `wait cmd -- false`, reference.md's "Waiting, in detail" has the use with `--timeout 30s`
+    and says options go before or after COND, and `help wait` says what `change` is (the first
+    change there). SKILL.md stays under its 14 KB by dropping what it said twice: `pixel`, `events`,
+    `gdb`, `output` in the "Also" line (each is named further down), "text first" (rule 1), step 5's
+    `omabox down` (the loop and the box paragraph), the interactive box's "no frame: ask" (its
+    symptom row). `t_unit_version` checks the loop line.

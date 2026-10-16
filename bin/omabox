@@ -439,7 +439,9 @@ scaled or cropped one says so, for \`click --in\`). --wait ignores the cursor al
 (it is in every frame): what the drag changes beside it counts, a change wholly under it may not.
 @ wait keys click run scroll drag
 \`wait still\`: nothing on screen changed for --quiet; a caret blinking in place (4 px thin, 40 long at
-most) and the cursor do not count, and are said (--strict counts them). \`keys\`, \`click\`, \`scroll\`,
+most) and the cursor do not count, and are said (--strict counts them). \`wait change\`: the first
+change there, for an app that redraws later, by itself (a sync, a timer): then \`wait still\`; never
+\`wait cmd -- false\` as a sleep. \`keys\`, \`click\`, \`scroll\`,
 \`drag\` and \`run -d\` take --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore
 GEOM]... [--json]: a change within --start (5s for run -d), then quiet. --ignore "X,Y WxH" (up to 16)
 leaves out an animation that never stops (a spinner, a glow); a 124 "still changing" names it when
