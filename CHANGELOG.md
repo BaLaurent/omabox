@@ -13,7 +13,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   fires the press bind, then the release bind, as a held key does. A held key joins the others as on
   a real keyboard (`down:super`, then `keys a` is SUPER+A; `down:shift` types capitals), and a held
   letter repeats in the app until let go. Pressing a held key again, or letting go of one that is not
-  held, is an error; anything still held goes with the box.
+  held, is an error, before any key of that call is sent; anything still held goes with the box, and
+  a key whose holder was killed outright is let go, once, by the next `keys`.
 
 - **A box has a journal: `omabox log journal`.** A program that logs only to the journal failed in a
   box: a test harness that starts its own accessibility bus from a cleaned environment got

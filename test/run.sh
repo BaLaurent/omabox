@@ -9151,6 +9151,20 @@ t_keys_down_up() {
   check_match "up:KEY not held, with another held: names what is" "up:shift: not held \(held: Super_L\)" "$(ob keys -b "$B" up:shift 2>&1)"
   ob keys -b "$B" up:super >/dev/null
   check "down:super, then keys a: SUPER+A" until_ok 5 evs_are "custom>>tools-press custom>>tools-release custom>>super-a"
+  # A holder killed outright (finding 347): its key let go once, by the next keys, never twice.
+  local e0="custom>>tools-press custom>>tools-release custom>>super-a" tp="custom>>tools-press custom>>tools-release"
+  # shellcheck disable=SC2329
+  kill_holder() { ob run -b "$B" -- sh -c 'kill -KILL $(pgrep -f "^/opt/omabox/bin/omabox-keyboard")'; }
+  ob keys -b "$B" down:XF86Tools >/dev/null; kill_holder
+  out=$(ob keys -b "$B" up:XF86Tools 2>&1); rc=$?
+  check_eq "up: of a killed holder's key: exit 0 (the release is its)" 0 "$rc"
+  check_match "...said" "killed with XF86Tools down: let go" "$out"
+  check "...its release bind fires once" until_ok 5 evs_are "$e0 $tp"
+  ob keys -b "$B" down:XF86Tools >/dev/null; kill_holder
+  ob keys -b "$B" down:XF86Tools >/dev/null 2>&1; ob keys -b "$B" up:XF86Tools >/dev/null
+  check "a killed holder's key pressed again: one release each" until_ok 5 evs_are "$e0 $tp $tp $tp"
+  sleep 0.3
+  check_eq "...and no more" "$e0 $tp $tp $tp" "$(evs)"
   # The app: shift held types capitals; a held letter repeats in it, and stops once let go.
   ob run -b "$B" -d -q -- foot --app-id=omabox.typed sh -c 'stty raw -echo; exec cat > /tmp/typed'
   until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j activewindow | jq -e '.class == \"omabox.typed\"'" >/dev/null
@@ -9158,6 +9172,11 @@ t_keys_down_up() {
   typed() { [ "$(ob run -b "$B" -- cat /tmp/typed 2>/dev/null)" = "$1" ]; }
   ob keys -b "$B" down:shift a >/dev/null; ob keys -b "$B" b up:shift c >/dev/null
   check "down:shift a, b, up:shift c: ABc" until_ok 5 typed ABc
+  out=$(ob keys -b "$B" d up:super 2>&1); rc=$?
+  check_eq "keys d up:super with nothing held: exit 1" 1 "$rc"
+  check_match "...said" "up:super: no key is held" "$out"
+  sleep 0.3
+  check "...before typing the d" typed ABc
   # shellcheck disable=SC2329
   size() { ob run -b "$B" -- stat -c %s /tmp/typed; }
   # shellcheck disable=SC2329

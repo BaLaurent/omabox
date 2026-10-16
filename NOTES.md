@@ -6995,7 +6995,7 @@ from them.
     event that switches it is lost to the client (finding 14), so the holder spends a modifiers event
     before each key and a run spends one again after a `down:`/`up:`. A holder killed outright
     (SIGKILL) leaves its key down for Hyprland: the next `down:` takes over its stale socket, and its
-    `up:` fired the release bind twice (*assumed*: once for each keyboard's press). Test: `t_keys_down_up` (the
+    `up:` fired the release bind twice (*assumed*: once for each keyboard's press; fixed: finding 347). Test: `t_keys_down_up` (the
     issue's press and release binds with `pointer move` between, SUPER+A, capitals, the repeat
     stopping, a key held at `down` gone with the box). The Hotkey Wheel gesture itself not tried.
 344. **A box's own journal sockets: `omabox log journal`** (2026-10-16, #234). `dbus-broker-launch`
@@ -7046,6 +7046,22 @@ from them.
     hash, both hooks carry their stamps, a current stamp adds nothing, a changed one adds the line for
     each agent apart, no file adds nothing). Seen with `sh` (bash's POSIX mode; no dash here), not in a
     live Claude Code or Codex session.
+347. **A killed key holder's keys are let go once; `down:`/`up:` checked before any key is sent**
+    (2026-10-16, finding 343's loose ends). A holder killed outright (SIGKILL) left its key down for
+    Hyprland: the next `down:` took over its stale socket and the following `up:` fired the release
+    bind twice. The holder now keeps the keys it has down in `omabox-held-keys.keys` beside its socket
+    (replaced whole on each change; saved before a press, after a release; gone with the socket). The
+    first keyboard-tool run that finds the socket dead (connect refused or no socket) and that file
+    not empty takes it (a rename: one run only) and sends one release for each key, on its own
+    keyboard or one made for the moment, and says so on stderr ("a key holder had been killed with
+    XF86Tools down: let go"). Seen in a box: a release alone, from a keyboard that never pressed the
+    key, fires Hyprland's release bind once (*assumed*: it keeps the press by keycode, whoever made it);
+    down:, SIGKILL, up: gave press, release (up: exit 0: the release was its); down:, SIGKILL, down:,
+    up: gave press, release, press, release; down:super, SIGKILL, `keys a` fired no SUPER+A. Also a
+    run checks its `down:`/`up:` against what is held (a `codes` request to the holder, or the dead
+    holder's file) and against its own earlier ones before it sends anything: `keys a up:super` with
+    nothing held typed `a`, then failed; now exit 1 with nothing sent (a holder's own answer still
+    decides when a key is sent, for a race). Test: `t_keys_down_up` (both cases).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

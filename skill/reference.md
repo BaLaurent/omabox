@@ -260,7 +260,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   true})`) or a gesture made while a key is held. One key each (`down:XF86Tools`, `down:super`,
   `down:a`). It joins the other keys as on a real keyboard: `down:super` then `keys a` fires SUPER+A,
   `down:shift` types capitals; a held letter repeats in the focused app until another key is pressed.
-  A second `down:` of the same key, or an `up:` of one not held, is exit 1. A key still held goes with
+  A second `down:` of the same key, or an `up:` of one not held, is exit 1, before any key of that call
+  is sent (`keys a up:super` with nothing held types nothing). A holder killed outright leaves its keys
+  down: the next `keys` lets go of them, once, and says so (an `up:` of one is that release). A key still held goes with
   the box (`down`, or your agent exiting, for a box named after your session): a box you keep (`up
   --new`) keeps it down until `up:KEY`.
 - **Travel** (`--steps N` on `click` and `pointer`; 1-999, 1 is a jump): N moves in a straight line

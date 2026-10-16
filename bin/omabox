@@ -291,8 +291,9 @@ focusing anything: close the layer first (Escape; twice in a launcher with text 
 is one key (XF86Tools, super, shift, a; down:A holds a). Hyprland joins it with the other keys:
 \`keys down:super\`, then \`keys a\` fires SUPER+A; shift held types capitals. A held letter repeats
 in the focused app, as a real key does, until another key is pressed. A key already held, or an
-up:KEY not held, is exit 1. Anything still held is let go when the box goes down (with your agent,
-for a box named after your session). Not with --pass.
+up:KEY not held, is exit 1, before any key of the call is sent. Anything still held is let go when
+the box goes down (with your agent, for a box named after your session); a holder killed outright,
+by the next keys (said). Not with --pass.
 @ shot click drag pointer pixel
 --fit N scales a shot's image down to N pixels on its longest side (a scaled screen's image is its
 layout times the scale: 2560 px for a 1280 px layout at 2). --zoom N (2-16, with -g) shows each pixel of

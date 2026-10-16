@@ -479,6 +479,9 @@ static int kbd_connect(void) {
 #define HELD_MAX 32
 static int is_held_tok(const char *t) { return !strncmp(t, "down:", 5) || !strncmp(t, "up:", 3); }
 
+// The socket, and beside it the keys its holder has down (held_state: one keycode a line), so that the
+// keys of a holder killed outright (SIGKILL), still down for Hyprland, can be let go once.
+static char held_state[sizeof(((struct sockaddr_un *)0)->sun_path) + 8];
 static int held_addr(struct sockaddr_un *a) {
     const char *rt = getenv("XDG_RUNTIME_DIR");
     memset(a, 0, sizeof(*a));
@@ -487,6 +490,7 @@ static int held_addr(struct sockaddr_un *a) {
         fprintf(stderr, "omabox-keyboard: no XDG_RUNTIME_DIR for the held keys' socket\n");
         return 0;
     }
+    snprintf(held_state, sizeof(held_state), "%s.keys", a->sun_path);
     return 1;
 }
 
@@ -527,9 +531,29 @@ static int held_ino_ok;
 static ino_t held_ino;
 static struct sockaddr_un held_sa;
 static void held_unlink(void) {
-    struct stat st;   // only its own socket: a new holder's may be there by now
-    if (held_ino_ok && stat(held_sa.sun_path, &st) == 0 && st.st_ino == held_ino) unlink(held_sa.sun_path);
+    struct stat st;   // only its own socket (and keys): a new holder's may be there by now
+    if (held_ino_ok && stat(held_sa.sun_path, &st) == 0 && st.st_ino == held_ino) { unlink(held_state); unlink(held_sa.sun_path); }
     held_ino_ok = 0;
+}
+// The holder's keys, in held_state (replaced whole: a reader never sees half of it).
+static void held_save(const xkb_keycode_t *codes, int n) {
+    char tmp[sizeof(held_state) + 8];
+    snprintf(tmp, sizeof(tmp), "%s.new", held_state);
+    FILE *f = fopen(tmp, "we");
+    if (!f) return;
+    for (int k = 0; k < n; k++) fprintf(f, "%u\n", codes[k]);
+    if (fclose(f) == 0) rename(tmp, held_state); else unlink(tmp);
+}
+// The keycodes in a held_state file (at most HELD_MAX), how many.
+static int held_read(const char *path, xkb_keycode_t *codes) {
+    FILE *f = fopen(path, "re");
+    if (!f) return 0;
+    int n = 0;
+    unsigned c;
+    while (n < HELD_MAX && fscanf(f, "%u", &c) == 1)
+        if (c >= xkb_keymap_min_keycode(keymap) && c <= xkb_keymap_max_keycode(keymap)) codes[n++] = c;
+    fclose(f);
+    return n;
 }
 static void push_state(struct xkb_state *st) {
     zwp_virtual_keyboard_v1_modifiers(kbd, xkb_state_serialize_mods(st, XKB_STATE_MODS_DEPRESSED),
@@ -581,14 +605,20 @@ static void held_serve(int lfd, int ready) {
         req[len] = 0;
         unsigned code = 0;
         int k = -1, down = sscanf(req, "down %u", &code) == 1, up = !down && sscanf(req, "up %u", &code) == 1;
+        int codes = !down && !up && !strncmp(req, "codes", 5);
         for (int j = 0; j < n; j++) if (held[j] == code) k = j;
-        if ((down || up) && (code < xkb_keymap_min_keycode(keymap) || code > xkb_keymap_max_keycode(keymap))) {
+        if (codes) {   // what is held, as keycodes: a run checks its down:/up: against it before sending anything
+            size_t at = (size_t)snprintf(out, sizeof(out), "codes");
+            for (int j = 0; j < n; j++) at += (size_t)snprintf(out + at, sizeof(out) - at, " %u", held[j]);
+            snprintf(out + at, sizeof(out) - at, "\n");
+        } else if ((down || up) && (code < xkb_keymap_min_keycode(keymap) || code > xkb_keymap_max_keycode(keymap))) {
             snprintf(out, sizeof(out), "bad\n");
         } else if (down && k >= 0) {
             snprintf(out, sizeof(out), "held\n");
         } else if (down && n == HELD_MAX) {
             snprintf(out, sizeof(out), "full\n");
         } else if (down || (up && k >= 0)) {
+            if (down) { held[n++] = code; held_save(held, n); }   // saved before it is down, gone once it is up
             push_state(st);   // spent (finding 14): another keyboard may have had a turn since
             sync_or_die();
             sleep_ms(20);
@@ -596,7 +626,7 @@ static void held_serve(int lfd, int ready) {
             xkb_state_update_key(st, code, down ? XKB_KEY_DOWN : XKB_KEY_UP);
             push_state(st);
             sync_or_die();
-            if (down) held[n++] = code; else held[k] = held[--n];
+            if (up) { held[k] = held[--n]; held_save(held, n); }
             if (!n) held_unlink();   // a down: from now on starts a new holder
             snprintf(out, sizeof(out), "ok\n");
         } else {
@@ -606,7 +636,7 @@ static void held_serve(int lfd, int ready) {
         }
         send(c, out, strlen(out), MSG_NOSIGNAL);
         close(c);
-        if (!n) break;
+        if (!n && !codes) break;
     }
     // Let go of whatever is still down (a signal), then of the keyboard.
     held_unlink();
@@ -690,10 +720,106 @@ static int held_ask(const char *req, char *reply, size_t len) {
     return 1;
 }
 
+// A holder killed outright (SIGKILL) leaves its keys down for Hyprland, and a later press and release
+// of one fired its release bind twice (finding 347). The first run to find its socket dead takes its
+// keys (rename: only one run does) and releases each once, on this run's keyboard or one of its own
+// for the moment, said on stderr. How many it let go (in gone).
+static int held_dead(void) {
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return 0;
+    int dead = connect(fd, (struct sockaddr *)&held_sa, sizeof(held_sa)) < 0 && (errno == ECONNREFUSED || errno == ENOENT);
+    close(fd);
+    return dead;
+}
+static xkb_keycode_t gone[HELD_MAX];   // the killed holder's keys this run let go: an up: of one is done
+static int ngone;
+static int held_stale(void) {
+    char claim[sizeof(held_state) + 16];
+    struct stat st;
+    xkb_keycode_t *codes = gone;
+    if (ngone || !getenv("XDG_RUNTIME_DIR") || !held_addr(&held_sa)) return 0;
+    if (stat(held_state, &st) < 0 || !st.st_size || !held_dead()) return 0;
+    snprintf(claim, sizeof(claim), "%s.%d", held_state, (int)getpid());
+    if (rename(held_state, claim) < 0) return 0;   // another run took them
+    int n = held_read(claim, codes);
+    unlink(claim);
+    if (!n) return 0;
+    int own = !display;
+    if (own && !kbd_connect()) exit(1);
+    spent = 0;
+    spend(kept_mask);
+    for (int k = 0; k < n; k++) key(codes[k], 0);
+    sync_or_die();
+    sleep_ms(20);
+    if (own) {
+        zwp_virtual_keyboard_v1_destroy(kbd);
+        sync_or_die();
+        wl_display_disconnect(display);
+        display = NULL; kbd = NULL; seat = NULL; manager = NULL;
+    }
+    spent = 0;
+    char names[HELD_MAX * 64];
+    held_names(codes, n, names, sizeof(names));
+    fprintf(stderr, "omabox-keyboard: a key holder had been killed with %s down: let go\n", names);
+    return ngone = n;
+}
+
+// What is held, for the check before anything is sent (tokens, run = 0): the holder's keys, or a
+// killed holder's (*dead: let go before this run's down: and up:, so an up: of one is that release and
+// a down: of one presses it again). 0 if the holder did not answer.
+static int held_now(xkb_keycode_t *codes, int *n, int *dead) {
+    char reply[HELD_MAX * 16 + 16];
+    *n = 0;
+    *dead = 0;
+    int r = held_ask("codes\n", reply, sizeof(reply));
+    if (r < 0) { *n = held_read(held_state, codes); *dead = 1; return 1; }
+    if (r == 0 || strncmp(reply, "codes", 5)) return 0;
+    char *p = reply + 5, *end;
+    while (*n < HELD_MAX) {
+        unsigned long c = strtoul(p, &end, 10);
+        if (end == p) break;
+        codes[(*n)++] = (xkb_keycode_t)c;
+        p = end;
+    }
+    return 1;
+}
+
+// down:/up:, checked against what is held and the run's earlier down:/up: (so `keys a up:super` with
+// nothing held types nothing). The holder's own answer still decides when the run sends them.
+static xkb_keycode_t sim[HELD_MAX];
+static int nsim = -1, simdead;
+static unsigned simlive;   // bit k: sim[k] is down by a live holder or this run (else a killed one's)
+static int held_check(const char *tok, xkb_keycode_t code) {
+    int down = tok[0] == 'd', k = -1;
+    if (nsim < 0) {
+        if (!held_now(sim, &nsim, &simdead)) { nsim = -1; return 1; }
+        simlive = simdead ? 0 : ~0u;
+    }
+    for (int j = 0; j < nsim; j++) if (sim[j] == code) k = j;
+    const char *name = tok + (down ? 5 : 3);
+    if (down && k >= 0 && !(simlive & (1u << k))) { simlive |= 1u << k; return 1; }
+    if (down && k >= 0) { fprintf(stderr, "omabox-keyboard: %s: held already (up:%s lets go)\n", tok, name); return 0; }
+    if (down && nsim == HELD_MAX) { fprintf(stderr, "omabox-keyboard: %s: %d keys held already\n", tok, HELD_MAX); return 0; }
+    if (!down && k < 0 && !nsim) { fprintf(stderr, "omabox-keyboard: %s: no key is held\n", tok); return 0; }
+    if (!down && k < 0) {
+        char names[HELD_MAX * 64];
+        held_names(sim, nsim, names, sizeof(names));
+        fprintf(stderr, "omabox-keyboard: %s: not held (held: %s)\n", tok, names);
+        return 0;
+    }
+    if (down) { simlive |= 1u << nsim; sim[nsim++] = code; }
+    else {
+        nsim--;
+        sim[k] = sim[nsim];
+        simlive = (simlive & ~(1u << k)) | (((simlive >> nsim) & 1u) << k);
+    }
+    return 1;
+}
+
 static int do_held(const char *tok, int run) {
     xkb_keycode_t code;
     if (!held_code(tok, &code)) return 0;
-    if (!run) return 1;
+    if (!run) return held_check(tok, code);
     int down = tok[0] == 'd';
     char req[32], reply[HELD_MAX * 64 + 16];
     snprintf(req, sizeof(req), "%s %u\n", down ? "down" : "up", code);
@@ -701,13 +827,20 @@ static int do_held(const char *tok, int run) {
     for (int tries = 0; tries < 3; tries++) {
         r = held_ask(req, reply, sizeof(reply));
         if (r > 0) break;
+        int dead = r < 0 && (errno == ENOENT || errno == ECONNREFUSED);
+        if (dead) held_stale();
         if (r < 0 && !down) break;
-        if (r < 0 && (errno == ENOENT || errno == ECONNREFUSED) && !held_start()) return 0;
+        if (dead && !held_start()) return 0;
     }
     spent = 0;   // the holder's keyboard had a turn: this run's next key spends one again
+    for (int j = 0; j < ngone; j++) {
+        if (gone[j] != code) continue;
+        gone[j] = gone[--ngone];   // let go already; a down: of it (pressed again) leaves no up: to spare
+        if (r < 0 && !down) return 1;   // a killed holder's key: its release was this up:
+        break;
+    }
     if (r < 0 && !down) {
-        fprintf(stderr, "omabox-keyboard: %s: no key is held%s\n", tok, errno == ECONNREFUSED
-            ? " (its holder was killed: a key it held may still be down for Hyprland; down: and up: of it again let go)" : "");
+        fprintf(stderr, "omabox-keyboard: %s: no key is held\n", tok);
         return 0;
     }
     if (r <= 0) { fprintf(stderr, "omabox-keyboard: %s: the key holder did not answer\n", tok); return 0; }
@@ -864,6 +997,7 @@ int main(int argc, char **argv) {
     // Its first event spent before the first key (finding 14); also what clears modifiers a killed
     // run left down (finding 112), in a run that types nothing.
     spend(0);
+    held_stale();   // a killed holder's keys, let go before this run's (finding 347)
     int ok = tokens(argc, argv, i, 1);
     release_held();
     if (stop) { fprintf(stderr, "omabox-keyboard: stopped by signal %d; modifiers released\n", (int)stop); ok = 0; }
