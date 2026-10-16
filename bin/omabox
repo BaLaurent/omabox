@@ -114,7 +114,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                                                          a visual check: the scenario's checkpoints against a baseline
   omabox check point ID [-b NAME] [--window SEL | -g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
                                                          a checkpoint, in a scenario: once still, a shot (and the tree)
-  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png]   what differs, as a check sees it
+  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png]   what differs, as a check sees it
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
                [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
@@ -483,14 +483,16 @@ start to the next there, or a time changed; every run: data or a time the scenar
 Without --approve it runs once and says for each checkpoint same, changed (each region "at X,Y WxH",
 marked on ID.diff.png; with --window, the tree's moved, resized, text, state, appeared and vanished
 elements), new or missing: exit 0 when all are the same, 1 when not, 3 when the scenario failed.
+When any changed, report.png: each change cropped beside its baseline, in one image (look first).
 Shots are compared exactly, as users see them, leaving out specks: parts of the difference under 32
 px (--speck), what Qt Quick's text varies by from one start of an app to the next; a fill a few
 levels off, a 1 px shift of a text block or a clipped glyph is far more. A change smaller than a
 speck (a 2 px move of a few dots) can only show in the tree. \`check point\` waits until the shot is
 still (15 s, --timeout; then taken anyway, noted), shoots the screen, -g or --window (with its tree,
 when it has one); --ignore leaves a region of that shot out (a clock of the app's own). \`check
-diff A B\` compares two shots of yours the same way (exit 0 same, 1 not). A baseline made on another
-omabox, Hyprland, Omarchy, GPU, theme or size is said. Not inside ai-jail yet.
+diff A B\` compares two shots of yours the same way (exit 0 same, 1 not; --report too). A
+baseline made on another omabox, Hyprland, Omarchy, GPU, theme or size is said. Not inside ai-jail
+yet.
 @ drag
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
@@ -7794,6 +7796,24 @@ check_mark() {
   magick "$new" -fill none -stroke '#ff2020' -strokewidth 2 "${draw[@]}" "$out" 2>/dev/null
 }
 
+# The report (finding 360): every change of a check in one image, each region cropped with some
+# context from the baseline beside the new shot (share/check.py sheet lays it out inside what a model
+# sees in one look); one look where the ID.diff.png of each changed checkpoint was ~1.5k image tokens
+# apiece, mostly of what did not change. PLAN: check.py's (a "title" line, then per checkpoint a
+# "point" line and its "region"/"size" lines). Prints what was left out of it ("" when nothing); fails
+# when magick does. check_report PLAN OUT.png
+check_report() {
+  local plan=$1 png=$2 font a=()
+  font=$(fc-match -f '%{file}' monospace 2>/dev/null) && [ -f "$font" ] || font=""
+  /usr/bin/python3 -I "$CHECK_PY" sheet "$plan" "$png.part" "$font" > "$plan.args" || { rm -f -- "$plan.args"; return 1; }
+  mapfile -d '' a < "$plan.args"
+  rm -f -- "$plan.args"
+  [ ${#a[@]} -gt 1 ] || return 1
+  magick "${a[@]:1}" 2>/dev/null || { rm -f -- "$png.part"; return 1; }
+  mv -f -- "$png.part" "$png"
+  echo "${a[0]}"
+}
+
 # A region line's "X Y W H" (for a mask), from "X,Y WxH ...".
 check_mask_of() {
   [[ $1 =~ ^(-?[0-9]+),(-?[0-9]+)\ ([0-9]+)x([0-9]+) ]] || return 1
@@ -7819,12 +7839,13 @@ cmd_check() {
 
 # check diff A.png B.png: what differs between two shots, as `check run` compares a checkpoint.
 check_diff() {
-  local files=() masks=() speck=$CHECK_SPECK out="" g
+  local files=() masks=() speck=$CHECK_SPECK out="" report="" g
   while [ $# -gt 0 ]; do
     case $1 in
       --ignore) optarg "$@"; g=$(geom_parse "$2") || die "check diff: --ignore is \"X,Y WxH\", got $2"; masks+=("$g"); shift ;;
       --speck) optarg "$@"; [[ $2 =~ ^[0-9]{1,6}$ ]] || die "check diff: --speck is a number of pixels, got $2"; speck=$((10#$2)); shift ;;
       -o) optarg "$@"; out=$2; shift ;;
+      --report) optarg "$@"; report=$2; shift ;;
       -h|--help) usage check; return ;;
       -*) die "check diff: unknown option $1" ;;
       *) files+=("$1") ;;
@@ -7834,22 +7855,55 @@ check_diff() {
   [ ${#files[@]} = 2 ] || die "check diff: two shots, A.png B.png"
   command -v magick >/dev/null || die "check: needs ImageMagick's magick (package imagemagick, part of Omarchy)"
   local f sa sb
-  for f in "${files[@]}"; do [ -f "$f" ] || die "check diff: no such file: $f"; done
+  for f in "${files[@]}"; do
+    [ -f "$f" ] || die "check diff: no such file: $f"
+    [ -z "$report" ] || [[ $f != *[$'\t\n']* ]] || die "check diff: --report takes no file whose name has a tab or a newline"
+  done
   sa=$(magick identify -format '%wx%h' "${files[0]}" 2>/dev/null) || die "check diff: not an image: ${files[0]}"
   sb=$(magick identify -format '%wx%h' "${files[1]}" 2>/dev/null) || die "check diff: not an image: ${files[1]}"
-  if [ "$sa" != "$sb" ]; then echo "size $sa -> $sb"; return 1; fi
+  # The report's plan: check run's, one pair (the shots' names its label).
+  local plan="" pid
+  if [ -n "$report" ]; then
+    plan=$(mktemp "${TMPDIR:-/tmp}/omabox-check-XXXXXX") || die "check diff: no temporary file for the report"
+    pid=$(basename -- "${files[1]}"); pid=${pid%.png}
+    printf 'title\tcheck diff: %s, then %s; red: pixels that changed\npoint\t%s\t%s\t%s\t\t\t\n' \
+      "$(basename -- "${files[0]}")" "$(basename -- "${files[1]}")" "$pid" "${files[0]}" "${files[1]}" > "$plan"
+  fi
+  if [ "$sa" != "$sb" ]; then
+    echo "size $sa -> $sb"
+    [ -z "$plan" ] || { printf 'size\t%s\n' "$sa -> $sb" >> "$plan"; check_diff_report "$plan" "$report"; }
+    return 1
+  fi
   local res; res=$(check_regions "${files[0]}" "${files[1]}" "$speck" ${masks[@]+"${masks[@]}"}) || die "check diff: could not compare them (magick)"
   local regions; regions=$(grep -v '^specks ' <<<"$res" || true)
   local sp; sp=$(sed -n 's/^specks //p' <<<"$res")
-  if [ -z "$regions" ]; then echo "same (specks: ${sp% *}, ${sp#* } px)"; return 0; fi
-  local r
-  while IFS= read -r r; do echo "${r% *} (${r##* } px)"; done <<<"$regions"
+  if [ -z "$regions" ]; then
+    [ -z "$plan" ] || rm -f -- "${plan:?}"
+    echo "same (specks: ${sp% *}, ${sp#* } px)"; return 0
+  fi
+  local r m
+  while IFS= read -r r; do
+    echo "${r% *} (${r##* } px)"
+    [ -z "$plan" ] || { m=$(check_mask_of "$r") && printf 'region\t%s\n' "${m// /$'\t'}" >> "$plan"; }
+  done <<<"$regions"
   echo "specks: ${sp% *}, ${sp#* } px"
   if [ -n "$out" ]; then
     local rs=(); mapfile -t rs <<<"$regions"
     check_mark "${files[1]}" "$out" "${rs[@]}" || die "check diff: could not draw $out (magick)"
   fi
+  [ -z "$plan" ] || check_diff_report "$plan" "$report"
   return 1
+}
+
+# check diff --report: the report of a plan, then the plan gone; a failure said (the answer stands).
+check_diff_report() {
+  local left=""
+  if left=$(check_report "$1" "$2"); then
+    echo "report: $2${left:+ (not in it, no room: $left)}"
+  else
+    say "check diff: the report could not be drawn (magick, to $2)"
+  fi
+  rm -f -- "${1:?}"
 }
 
 # check point ID: a checkpoint of a `check run` scenario: once the screen is still, a shot (and the
@@ -8088,7 +8142,9 @@ check_approve() {
 
 # A run against the baseline: same, changed (regions, tree), new, missing. Exit 1 unless all same.
 check_compare() {
-  local out=$1 base=$2 speck=$3 id fail=0 same=0 n=0 r regs=() e
+  local out=$1 base=$2 speck=$3 id fail=0 same=0 n=0 r regs=() e m changed=0 left bt nt
+  local plan=$out/report.plan
+  : > "$plan.body"
   for id in $(check_ids "$out/run1"); do
     n=$((n + 1))
     if [ ! -f "$base/$id.png" ]; then
@@ -8098,13 +8154,20 @@ check_compare() {
     if [ -z "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ]; then
       same=$((same + 1)); echo "same     $id"; continue
     fi
-    fail=1
+    fail=1 changed=$((changed + 1)) bt="" nt=""
+    if [ -f "$base/$id.tree.json" ] && [ -f "$out/run1/$id.tree.json" ]; then bt=$base/$id.tree.json nt=$out/run1/$id.tree.json; fi
+    printf 'point\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$base/$id.png" "$out/run1/$id.png" "$bt" "$nt" \
+      "$([ ! -f "$base/$id.unstable" ] || echo "$base/$id.unstable")" >> "$plan.body"
+    [ -z "$CHK_SIZE" ] || printf 'size\t%s\n' "$CHK_SIZE" >> "$plan.body"
     if [ -n "$CHK_SIZE" ]; then echo "changed  $id: size $CHK_SIZE"
     else
       regs=()
       [ -z "$CHK_REGIONS" ] || mapfile -t regs <<<"$CHK_REGIONS"
       echo "changed  $id: ${#regs[@]} region$([ ${#regs[@]} = 1 ] || echo s)$([ ${#regs[@]} = 0 ] || echo " (marked: $out/$id.diff.png)")"
-      for r in ${regs[@]+"${regs[@]}"}; do echo "  at ${r% *} (${r##* } px)"; done
+      for r in ${regs[@]+"${regs[@]}"}; do
+        echo "  at ${r% *} (${r##* } px)"
+        m=$(check_mask_of "$r") && printf 'region\t%s\n' "${m// /$'\t'}" >> "$plan.body"
+      done
       [ ${#regs[@]} = 0 ] || check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || true
     fi
     if [ -n "$CHK_TREE" ]; then while IFS= read -r r; do echo "  tree: $r"; done <<<"$CHK_TREE"; fi
@@ -8116,6 +8179,17 @@ check_compare() {
     id=$(basename "$r" .point)
     [ -f "$out/run1/$id.point" ] || { echo "missing  $id: in the baseline, not taken this run"; fail=1; }
   done
+  if [ $changed -gt 0 ]; then
+    { printf 'title\tcheck: %s of %s changed. Each pair: the baseline, then this run; red: pixels that changed, blue: only the tree\n' \
+        "$changed" "$n"; cat -- "$plan.body"; } > "$plan"
+    if left=$(check_report "$plan" "$out/report.png"); then
+      echo "report:  $out/report.png (every change beside its baseline in one image: look at it first)"
+      [ -z "$left" ] || echo "  not in it, no room: $left (their changes are listed above)"
+    else
+      say "check: the report could not be drawn (magick); each change is marked in its ID.diff.png"
+    fi
+  fi
+  rm -f -- "${plan:?}" "${plan:?}.body"
   # A baseline from another omabox, Hyprland, Omarchy or GPU: differences may be that.
   if [ -f "$base/check.json" ]; then
     e=$(jq -rn --slurpfile a "$base/check.json" --slurpfile b "$out/env.json" \
