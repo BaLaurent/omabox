@@ -6960,6 +6960,20 @@ from them.
     checks SRE is off at `up` and on after a `tree` (fails with the old helper). Assumed: other
     AccessKit toolkits on old accesskit_unix (Slint, iced, Bevy) behave the same; SRE changes nothing
     for Qt, GTK or Chromium (finding 244: it does not turn Chromium's tree on).
+342. **t_wait's thin-line checks take a 3 px change: a window drawn a fraction of a pixel off**
+    (2026-10-16, #222). Under the full suite's load the toggling 2 px underline's last change came out
+    3 px high now and then. The dumps: the underline's two rows plus a one-level fringe (the row above
+    +1, its last row -1, one column past its end +1). The failing box's whole screen showed why: its
+    Hyprland drew window U a fraction of a pixel off its integer box, Hyprland's own border included
+    (top and bottom borders a level off, outward; A's edges and U's left border exact), still 10 s
+    after the map and again for the next window; `clients` gave the goal geometry. *Assumed*: the
+    map's animation stopped just short of its goal (Hyprland's Lua exposes only goal values). Not
+    reproduced alone, nor beside CPU load (up to load 44): it seems to need many boxes drawing at
+    once. omabox-still is right (those pixels changed); a 3 px change is still thin (THIN 4), so
+    `thin_check` accepts 2 or 3 and keeps the frame dumps, now with a whole-screen shot beside them,
+    for anything else. *Decided*: no per-level tolerance in omabox-still (it would change what every
+    `wait still` counts). Verified: t_wait 3 runs, 109/0 each; a forced failure wrote both dumps
+    and the 1920x1080 screen.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -11036,16 +11036,20 @@ t_unit_wait() {
 
 # omabox wait and --wait (finding 82) in a box of their own: two terminals side by side, one of them
 # repainting 20 times a second.
-# t_wait's thin-line checks: 124, and a last change 2 px high (the underline). Under the full suite's
-# load they got 3 now and then (#222, not reproduced since): the frames before and after that change
-# (the still tool's --dump, through OMABOX_STILL_DUMP) go to the evidence, to see the third row.
+# t_wait's thin-line checks: 124, and a last change 2 px high (the underline), or 3: under the full
+# suite's load the box's Hyprland can draw the window a fraction of a pixel off its box (#222, finding
+# 342), and every edge, the line's too, gets a one-level fringe (the row above it one level up, its
+# last row one down). Still thin (THIN is 4), so it tests the same thing. Anything else: the frames
+# before and after that change (the still tool's --dump, through OMABOX_STILL_DUMP) and the whole
+# screen (where a window drawn off its box shows, at its borders) go to the evidence.
 # thin_check DESC OUT RC DUMP (box $B)
 thin_check() {
   local got; got="$3 $(jq -r '.change.h' <<<"$2" 2>/dev/null)"
-  [ "$got" != "124 2" ] || { ok "$1"; return; }
+  if [[ $got =~ ^124\ [23]$ ]]; then ok "$1"; return; fi
   local e=$EVID/$CUR f; mkdir -p "$e"
   for f in before after; do ob run -b "$B" -- cat "$4/$f.ppm" > "$e/${4##*/}-$f.ppm" 2>/dev/null; done
-  no "$1" "want [124 2] got [$got]; frames before and after the last change: $e/${4##*/}-{before,after}.ppm; ${2:0:400}"
+  ob shot -b "$B" -o "$e/${4##*/}-screen.png" >/dev/null 2>&1 || true
+  no "$1" "want [124 2] or [124 3] got [$got]; frames before and after the last change: $e/${4##*/}-{before,after}.ppm, the screen: $e/${4##*/}-screen.png; ${2:0:400}"
 }
 t_wait() {
   local B=$P-wait out rc
