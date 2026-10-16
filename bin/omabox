@@ -1344,6 +1344,10 @@ box_exec() {
   # open them again through /proc/PID/fd. A caller at a terminal (stdin and stdout, in the
   # foreground) gets the command a terminal of its own; everyone else's are relayed through pipes
   # held here (a terminal on stdin alone is not read: /dev/null).
+  # A command's output that is a pipe or a socket goes through the relay too (finding 337): else a
+  # process it leaves running (wl-copy's server) would hold the caller's `$(...)` or pipe until it
+  # ends. Not for omabox's own helpers, which leave none (and some are asked every 100 ms).
+  local RELAY_PIPES=1; [ -z "$sys" ] || RELAY_PIPES=""
   if [ -z "$sys" ] && [ -t 0 ] && [ -t 1 ] && fg_tty && [ -x /usr/bin/script ]; then
     box_pty "${pfd:-} ${BOX_KEEP:-}" "${nsline[@]}" || rc=$?
   else
@@ -1368,6 +1372,20 @@ fd_exposed() {
   ! [ -p "$f" ] && ! [ -S "$f" ] || return 1
   ! [ -c "$f" ] || ! [ "$f" -ef /dev/null ]
 }
+# relay_out N: fd N, an output of a command bound for a box, goes through a relay of stdio_relay's:
+# fd_exposed says a box could reach it, or (RELAY_PIPES, box_exec's for a user's command) it is a pipe
+# or a socket a process the command leaves running would hold (finding 337; omabox-relay's copy is
+# what lets that go, so only with it).
+relay_out() {
+  fd_exposed "$1" && return 0
+  [ -n "${RELAY_PIPES:-}" ] && [ -x "$RELAY" ] || return 1
+  [ -p "/dev/fd/$1" ] || [ -S "/dev/fd/$1" ]
+}
+# relay_copy: what an output relay runs, on its stdin to its stdout: omabox-relay copy, whose copy
+# relay_drain can end (SIGURG) once the command is over; `cat` where this omabox has none built.
+relay_copy() {
+  if [ -x "$RELAY" ]; then exec "$RELAY" copy; else exec cat; fi
+}
 # Whether this process is in its terminal's foreground process group: one in the background must
 # neither read the terminal (SIGTTIN would stop it) nor put it in raw mode (SIGTTOU).
 fg_tty() {
@@ -1385,17 +1403,19 @@ fg_tty() {
 # command, and stop a backgrounded one): the command gets /dev/null there; one at a terminal with
 # its output goes through box_pty instead. The one reading a file for a command that never took it
 # is ended with the command (what it had read ahead is gone, as it would be to a `head`). Output is
-# drained before this returns (relay_drain).
+# drained before this returns (relay_drain), and no longer: what a process the command left running
+# writes later is dropped (finding 337). With RELAY_PIPES, a pipe or socket output is relayed too
+# (relay_out).
 stdio_relay() {
   local ifd=0 ofd=1 efd=2 ipid="" opid="" epid="" rc=0
   if [ -t 0 ]; then exec {ifd}</dev/null
   elif fd_exposed 0; then exec {ifd}< <(cat); ipid=$!; fi
   # (Each relay started later closes the earlier pipes' ends it was born with, or the earlier
   # relay never sees its EOF before the later one ends.)
-  if fd_exposed 1; then exec {ofd}> >(if [ "$ifd" != 0 ]; then exec {ifd}<&-; fi; exec cat); opid=$!; fi
-  if fd_exposed 2; then
+  if relay_out 1; then exec {ofd}> >(if [ "$ifd" != 0 ]; then exec {ifd}<&-; fi; relay_copy); opid=$!; fi
+  if relay_out 2; then
     if [ "$ofd" != 1 ] && [ /dev/fd/1 -ef /dev/fd/2 ]; then efd=$ofd
-    else exec {efd}> >(if [ "$ifd" != 0 ]; then exec {ifd}<&-; fi; if [ "$ofd" != 1 ]; then exec {ofd}>&-; fi; exec cat >&2); epid=$!; fi
+    else exec {efd}> >(if [ "$ifd" != 0 ]; then exec {ifd}<&-; fi; if [ "$ofd" != 1 ]; then exec {ofd}>&-; fi; relay_copy >&2); epid=$!; fi
   fi
   "$@" <&"$ifd" >&"$ofd" 2>&"$efd" || rc=$?
   # This side's ends closed first, every one, then the output drained.
@@ -1405,16 +1425,22 @@ stdio_relay() {
   relay_drain $opid $epid
   return $rc
 }
-# relay_drain PID...: each output relay given a second to end (it does when the command's side of
-# its pipe is closed: at once, as a rule); one a background process of the command's still writes
-# to is left running (it ends with that process; bash does not wait for it at exit), so a `run` is
-# not held by what its command left behind.
+# relay_drain PID...: each output relay (relay_copy), once the command is over, given a second to end.
+# It does at once, as a rule: the command's side of its pipe is closed. One still running after
+# 100 ms has a process the command left running (wl-copy's server, a `daemon &`) holding that side
+# (finding 337, #239): it is told the command has ended (SIGURG, every 50 ms till it takes: one sent
+# before omabox-relay set its handler is ignored, and so is every one by `cat`), copies what the pipe
+# holds then, all the command wrote, and ends, so the caller's pipe or `$(...)` is not held by the
+# leftover; what that writes later is read into nothing. One still copying to a slow reader after the
+# second, or a `cat`, is left running (it ends with its writer; bash does not wait for it at exit).
 relay_drain() {
-  local p st _ i
+  local p st pp _ i
   for p; do
     for i in $(seq 100); do
-      st=""; read -r _ _ st _ 2>/dev/null < "/proc/$p/stat" || st=Z
+      st=""; read -r _ _ st pp _ 2>/dev/null < "/proc/$p/stat" || st=Z
       [ "$st" != Z ] || break
+      # (Ours, the shell's own child: not a pid the system gave another process since.)
+      if [ "$i" -ge 10 ] && [ $((i % 5)) = 0 ] && [ "$pp" = "$BASHPID" ]; then kill -URG "$p" 2>/dev/null || true; fi
       sleep 0.01
     done
     [ "$st" != Z ] || wait "$p" 2>/dev/null || true
@@ -1429,7 +1455,7 @@ relay_drain() {
 box_pty() {
   local keep=$1 efd="" epid="" a nsline=() rc=0; shift
   if ! [ -t 2 ]; then
-    if fd_exposed 2; then exec {efd}> >(cat >&2); epid=$!; else exec {efd}>&2; fi
+    if relay_out 2; then exec {efd}> >(relay_copy >&2); epid=$!; else exec {efd}>&2; fi
     keep+=" $efd"
   fi
   local set=0

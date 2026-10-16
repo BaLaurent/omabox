@@ -34,6 +34,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`run -- wl-copy TEXT` returns.** A command that left a process running (`wl-copy`'s server, a
+  `daemon &`) kept `run`'s output open, so `$(omabox run -- wl-copy TEXT)`, or a run whose output went
+  to a pipe, waited until that process ended, and every `run` writing to a file paid a second for it.
+  Now `run` returns as soon as its command exits, with its status and all of its output; what the
+  process it left writes after that is dropped (that process keeps running). For a process you want
+  to keep the output of, use `run -d` and its log.
 - **A call that crashes the box's Hyprland says it crashed, with the signal.** `omabox lua` (and
   `hyprctl`, `windows`, `shot` and the rest) said "its Hyprland did not answer (hung?)" when Hyprland
   had just segfaulted. Now: "went down: its Hyprland crashed (SIGSEGV)", with how to get a backtrace

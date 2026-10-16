@@ -720,6 +720,20 @@ t_unit_fd_exposed() {
     "$(wc -l < "$f.both")|$(head -n 4 "$f.both" | paste -sd ' ')|$(tail -n 2 "$f.both" | paste -sd ' ')"
   check_eq "...a terminal on stdin alone: the command gets /dev/null, not a relay" "/dev/null" \
     "$( (sleep 2) | script -q -e -c "bash -c 'source $TMP/lib/bin/omabox; stdio_relay sh -c \"readlink /proc/self/fd/0\" > $f.tty'" /dev/null >/dev/null 2>&1; cat "$f.tty")"
+  # finding 337 (#239): a process the command leaves running holds neither the caller's pipe nor
+  # `run`; what the command wrote gets through, what the leftover writes later is dropped, and it
+  # lives on (its writes do not fail).
+  local rl="RELAY=$ROOT/tools/relay/omabox-relay RELAY_PIPES=1;" t1 out
+  t1=$(date +%s%N); rc=0
+  out=$(lib eval "$rl stdio_relay sh -c 'sleep 10 & echo hi; exit 3'" 2>&1) || rc=$?
+  check_eq "stdio_relay: a pipe held by a leftover (sleep &) is let go: its output, its status" "hi|3" "$out|$rc"
+  check "...at once ($(( ($(date +%s%N) - t1) / 1000000 )) ms)" test $(( ($(date +%s%N) - t1) / 1000000 )) -lt 5000
+  rm -f -- "$f.alive"
+  out=$(lib eval "$rl stdio_relay sh -c '(sleep 0.5; echo later; echo late >&2; touch $f.alive) & echo hi'" 2>&1)
+  check_eq "...what the leftover writes later is dropped" hi "$out"
+  check "...and it lives on, its writes not failing" until_ok 5 test -f "$f.alive"
+  lib eval "$rl stdio_relay sh -c 'sleep 10 & cat'" < "$f.rnd" | cat > "$f.rnd.held"
+  check "...200 kB through a held pipe, byte for byte" cmp -s "$f.rnd" "$f.rnd.held"
 }
 
 # finding 63: what may go into a box, and where.
@@ -2638,6 +2652,28 @@ t_run_stdio() {
   fi
   rc=0; out=$(printf 'echo typed\nexit 3\n' | ob run -b "$B" -- bash 2>&1) || rc=$?
   check_eq "a shell fed by a pipe (no terminal): runs it, its status" "typed|3" "$out|$rc"
+  # A process the command leaves running (#239, finding 337) holds neither `run` nor the caller's
+  # pipe: `run` returns with the command's status, its output whole.
+  local t1; t1=$(date +%s%N); rc=0
+  out=$(ob run -b "$B" -- sh -c 'sleep 30 & echo hi' 2>&1) || rc=$?
+  check_eq "a command that leaves a process holding its output: \$(run ...) gets it, status 0" "hi|0" "$out|$rc"
+  check "...at once ($(( ($(date +%s%N) - t1) / 1000000 )) ms)" test $(( ($(date +%s%N) - t1) / 1000000 )) -lt 5000
+  rc=0; out=$(ob run -b "$B" -- sh -c 'sleep 30 & echo hi; exit 3' 2>&1) || rc=$?
+  check_eq "...a non-zero status" "hi|3" "$out|$rc"
+  ob run -b "$B" -- sh -c 'sleep 30 & cat' < "$d/rnd" | cat > "$d/rnd.held"
+  check "...3 MB through a pipe it holds, byte for byte" cmp -s "$d/rnd" "$d/rnd.held"
+  if ob run -b "$B" -- sh -c 'command -v wl-copy && command -v wl-paste' >/dev/null 2>&1; then
+    t1=$(date +%s%N); rc=0
+    out=$(ob run -b "$B" -- wl-copy 'magnet:?xt=urn:btih:239' 2>&1) || rc=$?
+    check_eq "run -- wl-copy TEXT returns (its server keeps stderr)" "|0" "$out|$rc"
+    check "...at once ($(( ($(date +%s%N) - t1) / 1000000 )) ms)" test $(( ($(date +%s%N) - t1) / 1000000 )) -lt 5000
+    check_eq "...and the box's clipboard serves it" 'magnet:?xt=urn:btih:239' "$(ob run -b "$B" -- wl-paste -n 2>&1)"
+  else skip "run -- wl-copy" "no wl-copy in the box"; fi
+  if [ -x /usr/bin/script ]; then
+    out=$( (sleep 3) | script -q -e -c "t=\$(date +%s%N); $CLI run -b $B -- sh -c 'sleep 30 & echo hi' 2>$d/e4; echo rc=\$? ms=\$(( (\$(date +%s%N) - t) / 1000000 ))" /dev/null 2>&1 | tr -d '\r')
+    check_match "...on a terminal of its own too" '^hi rc=0 ms=[0-9]+$' "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+    check "...at once (${out##*ms=} ms)" test "${out##*ms=}" -lt 5000
+  fi
   ob down "$B" >/dev/null 2>&1
 }
 

@@ -2,6 +2,7 @@
 //
 //   omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... -- ARG...     (in the sandbox)
 //   omabox-relay listen [--socket PATH] -- OMABOX [ARG...]                   (the broker, outside)
+//   omabox-relay copy                                                        (bin/omabox's stdio relay)
 //
 // A sandboxed agent cannot enter a box's namespaces (its seccomp filter refuses setns and unshare),
 // so `omabox` there hands its command to the broker: `call` sends its working directory, the
@@ -16,6 +17,14 @@
 // sandbox). What the command may do for that caller is omabox's to decide (bin/omabox, broker mode).
 // When the caller goes (killed, Ctrl-C), the command's session is killed too.
 //
+// `copy` is bin/omabox's relay of a box command's output (stdio_relay, findings 325 and 337): stdin
+// (the pipe the command writes) to stdout, bytes as they are, as `cat` would, until EOF. SIGURG (whose
+// default is to be ignored, so one sent before the handler is set is lost, not fatal: omabox sends it
+// again) says the command has ended while something it left running still holds the pipe: what the
+// pipe holds then (FIONREAD), all of the command's own output, is copied, and the copy ends; a child
+// goes on reading the pipe into nothing, so what the leftover process writes later is dropped rather
+// than its writes failing (SIGPIPE would kill it), and nothing of the caller's is held for it.
+//
 // `listen` takes the socket from systemd (socket activation, LISTEN_FDS) or makes --socket PATH
 // itself. Only callers with its own uid are served.
 #define _GNU_SOURCE
@@ -27,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -365,10 +375,51 @@ static int cmd_listen(int argc, char **argv) {
     }
 }
 
+static volatile sig_atomic_t ended;
+static void on_urg(int sig) { (void)sig; ended = 1; }
+
+static int cmd_copy(void) {
+    // Only the pipe and the output: nothing else of omabox's (or the caller's) is held while it runs.
+    for (int fd = 3; fd < 1024; fd++) close(fd);
+    struct sigaction sa = {0};
+    sa.sa_handler = on_urg;  // no SA_RESTART: a read blocked on an empty pipe returns to see the flag
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGURG, &sa, NULL);
+    static char buf[1 << 17];
+    while (!ended) {
+        ssize_t r = read(0, buf, sizeof buf);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) return r < 0;
+        if (write_all(1, buf, (size_t)r) < 0) return 1;
+    }
+    // The command is over: what it wrote is in the pipe now; anything later is a leftover's.
+    int left = 0;
+    if (ioctl(0, FIONREAD, &left) < 0) left = 0;
+    while (left > 0) {
+        ssize_t r = read(0, buf, (size_t)left < sizeof buf ? (size_t)left : sizeof buf);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) return r < 0;
+        if (write_all(1, buf, (size_t)r) < 0) return 1;
+        left -= (int)r;
+    }
+    pid_t pid = fork();
+    if (pid != 0) return 0;  // (a failed fork: the copy ends all the same, and a later write fails)
+    int null = open("/dev/null", O_RDWR | O_CLOEXEC);
+    if (null < 0 || dup2(null, 1) < 0 || dup2(null, 2) < 0) _exit(1);
+    signal(SIGURG, SIG_IGN);
+    for (;;) {
+        ssize_t r = read(0, buf, sizeof buf);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) _exit(0);
+    }
+}
+
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "copy") == 0) return cmd_copy();
     if (argc >= 2 && strcmp(argv[1], "call") == 0) return cmd_call(argc - 1, argv + 1);
     if (argc >= 2 && strcmp(argv[1], "listen") == 0) return cmd_listen(argc - 1, argv + 1);
     fprintf(stderr, "usage: omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... -- ARG...\n"
-                    "       omabox-relay listen [--socket PATH] -- /ABSOLUTE/omabox [ARG...]\n");
+                    "       omabox-relay listen [--socket PATH] -- /ABSOLUTE/omabox [ARG...]\n"
+                    "       omabox-relay copy\n");
     return 2;
 }

@@ -6843,3 +6843,35 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     host, outside the repo; the note and a refused target), t_link_out (a scratch repo whose `target`
     links to a scratch folder: up's and run's notes, the command still run, none for in-repo words or
     with `--ro-bind` of it, a throwaway's note once with `run --ro-bind`).
+
+337. **`run -- wl-copy TEXT` never returned to a `$(...)` or a pipe: the fork held the output**
+    (2026-10-16, #239). `wl-copy` forks a server that serves the item until the next copy; the server
+    points stdin and stdout at /dev/null but keeps stderr. A caller whose stdout or stderr is a pipe
+    (`$(omabox run -- …)`, `2>&1 |`, a harness reading pipes) waited for its EOF, so for the server's
+    life (65 s in a check, till a later copy replaced it); so does any `sh -c 'daemon &'`. Since
+    0.1.0: before 0.6.1 nsenter gave the command the caller's fds as they were (a file: no wait; a
+    pipe: the hang, seen with 0.6.0's bin); 0.6.1's relay (finding 325) relayed files (`run` then
+    waited its 1 s bound for the relay a leftover held, every time: 1.08 s for `wl-copy` to a file)
+    and passed pipes and sockets through, so the hang stayed for them. A command on a terminal of its
+    own (box_pty) was never held: util-linux `script -e` ends with its child. Now, in `box_exec` for
+    a user's command (`RELAY_PIPES`; not `box_sys`, whose helpers leave nothing and some run every
+    100 ms), an output that is a pipe or a socket is relayed too (`relay_out`), and every output relay
+    is `omabox-relay copy` (`relay_copy`, tools/relay) instead of `cat`: stdin to stdout as `cat`
+    does it, till EOF. One still running 100 ms after the command ended is held by a leftover:
+    `relay_drain` sends it SIGURG (every 50 ms till it takes: SIGURG's default is to be ignored, so
+    one sent before the handler is set is lost, never fatal; a `cat` ignores them all), and it copies
+    what the pipe holds then (FIONREAD), all the command wrote, since the command is over, and ends;
+    `run` returns with the command's status, its output whole and in place before `run` ends. A child
+    of the relay goes on reading the pipe into nothing, holding only that pipe and /dev/null, so the
+    leftover lives on and its later writes neither fail (EPIPE) nor kill it (SIGPIPE): what it writes
+    after the command ended is dropped. *Decided*: dropped, not passed on. On a desktop shell a
+    `daemon &` keeps the terminal and its later lines show there, but a `$(...)` there waits for it
+    too; `run`'s answer is the command's, and a process meant to outlive it belongs in `run -d`, whose
+    log keeps everything. The command's own output is never cut: one still being copied to a slow
+    reader after the 1 s bound is left running, as before, and ends once copied. Without its tools
+    built (another omabox's checkout), `cat` and the old behaviour. Checked: t_unit_fd_exposed
+    (stdio_relay with a `sleep &` holding a pipe: output and status 3 in ~120 ms, a leftover's later
+    lines dropped and it alive after, 200 kB byte for byte; with `cat` the same call took the
+    leftover's 4 s), t_run_stdio (`$(run -- sh -c 'sleep 30 & echo hi')` in ~140 ms with 0, then 3;
+    3 MB through a held pipe byte for byte; `run -- wl-copy TEXT` in ~140 ms and `wl-paste -n` gives
+    TEXT back; the same on a terminal of its own, stderr to a file, in ~50 ms).

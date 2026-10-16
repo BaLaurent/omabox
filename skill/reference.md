@@ -138,7 +138,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   command line, or a whole file with `--env-file`: `omabox run --env-file ./dev.env -- ctest …`
   (KEY=VAL lines, read as data); a plain value: `run --env KEY=VAL` (never a secret: that is in the
   process list). A `run -d` command's output, a Qt app's warnings and QML errors too, is in the log
-  file it prints (`-q`: no line; `--print-log`: only the path, on stdout).
+  file it prints (`-q`: no line; `--print-log`: only the path, on stdout). A plain `run` returns when
+  its command exits, even one that leaves a process running (`run -- wl-copy TEXT` puts TEXT on the
+  box's clipboard); what that process writes afterwards is dropped: `run -d` for its output.
 - Check what a keyring or D-Bus test left behind inside the box (`omabox run -- secret-tool …`), never
   with `secret-tool` on the host: that is the user's real keyring, and `search --all` prints the
   secrets themselves.
