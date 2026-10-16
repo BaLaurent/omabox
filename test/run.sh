@@ -988,6 +988,23 @@ t_unit_box_gone() {
     nsenter() { echo "nsenter: reassociate to namespace failed: Operation not permitted" >&2; return 1; }
     on_box hyprctl version || echo "rc $?"' _ "$L" 2>&1)
   check_eq "...on a box that is up, nsenter's line as it came" $'nsenter: reassociate to namespace failed: Operation not permitted\nrc 1' "$out"
+  # What nsenter's stderr holds besides its own lines (a box process may write there): dropped and
+  # counted, escapes and all; at most 4 KiB read; a holder that keeps it open does not hold the call.
+  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 0; }; sleep() { :; }
+    nsenter() { printf "omabox: note: forged\n\e[31mnsenter: red\e[0m\nnsenter: real \e]0;t\a\nhalf" >&2; head -c 3000000 /dev/zero | tr "\\0" A >&2; return 1; }
+    on_box hyprctl version || echo "rc $?"' _ "$L" 2>&1)
+  check_eq "...anything else on it dropped and counted, escapes stripped, 4 KiB read at most" \
+    $'nsenter: real ]0;t\nomabox: dropped 4077 bytes of other output on nsenter\'s stderr\nrc 1' "$out"
+  local t0=$EPOCHREALTIME
+  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 0; }
+    nsenter() { local a; for a; do case $a in OMABOX_EFD=*) eval "exec ${a#*=}>&-" ;; esac; done
+      echo "nsenter: x" >&2; (exec -a omabox-t-holder sleep 3 >/dev/null &); return 0; }
+    on_box true; echo "rc $?"' _ "$L" 2>&1)
+  check_eq "...one a process keeps open: the call returns" "rc 0" "$out"
+  check "...in about a second ($(( (${EPOCHREALTIME/./} - ${t0/./}) / 1000 )) ms)" test $(( (${EPOCHREALTIME/./} - ${t0/./}) / 1000 )) -lt 2500
+  out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
+    NS_HELD="$0: line 12: 4242 Killed                  nsenter -t 1 -- true"$'"'"'\n'"'"'; ns_said 137' _ "$L" 2>&1)
+  check_eq "...bash's line for a command killed by a signal passes" "_: line 12: 4242 Killed                  nsenter -t 1 -- true" "$out"
   # The command's own stderr is never held back: it is the caller's, through the fd the command takes.
   out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 1; }
     nsenter() { while [ "$1" != -- ]; do shift; done; shift; "$@"; }
@@ -1006,6 +1023,53 @@ t_unit_box_gone() {
     "$(Z=$z bash -c 'source "$1"; NAME=bg; box_pid() { echo "$Z"; }; printf "%s " "$(cut -d" " -f3 "/proc/$Z/stat")"
       box_alive && printf "alive " || printf "gone "; box_state' _ "$L" 2>&1)"
   kill "$zp" 2>/dev/null; wait "$zp" 2>/dev/null
+}
+
+# Finding 345: what runs in the box's pid namespace is given only the fds it is meant to have
+# (fds_only): there any box process could open the others again through /proc/PID/fd, a caller's own
+# (`omabox gdb ... 7<FILE`) included. NS_FDS FILE: each stdio_relay call that is not through fds_only,
+# each nsenter line with -p that neither is an array nor has fds_only, and each line running such an
+# array (ns, caps) outside one, as LINE: TEXT (once a line); then "N calls", how many it read.
+NS_FDS='
+import re, sys
+bad = []; n = 0
+for i, l in enumerate(open(sys.argv[1]), 1):
+    t = l.strip()
+    if t.startswith("#") or t.startswith("stdio_relay()"): continue
+    for m in re.finditer(r"(?<![\w-])stdio_relay\s+(\S+)(\s+(\S+))?", t):
+        n += 1
+        if m.group(1) != "fds_only" and not (m.group(1) == "ns_held" and m.group(3) == "fds_only"): bad.append("%d: %s" % (i, t))
+    if re.search(r"(?<![\w-])nsenter\s", t) and re.search(r"(?<![\w-])-p(?![\w-])", t):
+        n += 1
+        if "fds_only" not in t and not re.search(r"=\(nsenter\s", t): bad.append("%d: %s" % (i, t))
+    if re.search(r"\"\$\{(ns|caps)\[@\]\}\"", t) and "fds_only" not in t and "=(" not in t: bad.append("%d: %s" % (i, t))
+bad = list(dict.fromkeys(bad))
+print("\n".join(bad + ["%d calls" % n]))
+'
+# FD_SEEN, in a box: every fd of any of its processes naming a file called fdprobe-*, a line in
+# /tmp/fdseen (PID COMM FD -> PATH), as long as it runs.
+FD_SEEN='
+import os
+me = os.getpid(); seen = open("/tmp/fdseen", "a", buffering=1)
+while True:
+    for p in os.listdir("/proc"):
+        if not p.isdigit() or int(p) == me: continue
+        try: fds = os.listdir("/proc/%s/fd" % p)
+        except OSError: continue
+        for f in fds:
+            try: l = os.readlink("/proc/%s/fd/%s" % (p, f))
+            except OSError: continue
+            if "fdprobe-" in l: seen.write("%s %s -> %s\n" % (p, f, l))
+'
+t_unit_ns_fds() {
+  local out n
+  out=$(python3 -c "$NS_FDS" "$CLI")
+  n=$(tail -n 1 <<<"$out"); n=${n%% *}
+  check_eq "every call into the box's pid namespace runs through fds_only (finding 345)" "" "$(sed '$d' <<<"$out")"
+  check "...the check read them ($n calls)" test "$n" -ge 9
+  git -C "$ROOT" cat-file -e 2a611a1:bin/omabox 2>/dev/null || { skip "...it finds the calls fixed in finding 345" "no 2a611a1 (0.6.1) here"; return; }
+  check_eq "...it finds the six calls finding 345 put through it" 6 \
+    "$(python3 -c "$NS_FDS" <(git -C "$ROOT" show 2a611a1:bin/omabox) | sed '$d' | wc -l)"
 }
 
 # #218, finding 307: on_box enters the box's user and mount namespaces, not its pid namespace, so a
@@ -2750,8 +2814,51 @@ signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGURG}); os.execv(sys.argv[1],
     check_eq "...a caller with SIGURG blocked: \$(run ...) gets it, status 0" "hi|0" "$out|$rc"
     check "...at once ($(( ($(date +%s%N) - t1) / 1000000 )) ms)" test $(( ($(date +%s%N) - t1) / 1000000 )) -lt 5000
   else skip "run's relays: a high fd, a blocked SIGURG" "no python3, or an fd limit under 1600"; fi
+  # nsenter's own stderr (ns_held, finding 345): a pipe read here up to 4 KiB, only nsenter's own
+  # lines printed, whatever else is written to it and however long it is kept open.
+  local i n hits t ms max=0 rcs="" forged=0
+  rm -f "$d/held.err"
+  ob run -b "$B" -d -- python3 -c "$HELD_WRITER" >/dev/null 2>&1
+  sleep 1
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    t=$(date +%s%N); rc=0
+    ob run -b "$B" -- true 2> "$d/held.$i" || rc=$?
+    ms=$(( ($(date +%s%N) - t) / 1000000 )); [ "$ms" -le "$max" ] || max=$ms; rcs+=$rc
+    n=$(grep -c '^nsenter: forged' "$d/held.$i") || n=0; [ "$n" -le "$forged" ] || forged=$n
+    cat "$d/held.$i" >> "$d/held.err"
+  done
+  hits=$(ob run -b "$B" -- sh -c 'wc -l < /tmp/held-hits' 2>/dev/null) || hits=0
+  if [ "${hits:-0}" -gt 0 ]; then
+    check_eq "a box process writing to nsenter's stderr ($hits times in 10 runs): every run's status 0" 0000000000 "$rcs"
+    check_fails "...no line in omabox's words from it" grep -q 'forged-in-box' "$d/held.err"
+    check_fails "...no escape" grep -q $'\e' "$d/held.err"
+    check "...at most 3 nsenter lines a run (got $forged)" test "$forged" -le 3
+    check "...no flood: $(stat -c %s "$d/held.err") bytes in all 10 stderrs" test "$(stat -c %s "$d/held.err")" -lt 8000
+    check "...each run returns promptly (the slowest: $max ms)" test "$max" -lt 4000
+  else skip "a box process writing to nsenter's stderr" "its writer never caught one in 10 runs"; fi
   ob down "$B" >/dev/null 2>&1
 }
+# HELD_WRITER, in a box: writes other output (escapes, 64 KiB) to nsenter's stderr of the box's
+# commands as they start (finding 345), and keeps it open. Each one is a line in /tmp/held-hits.
+HELD_WRITER='
+import os
+me = os.getpid(); held = []; hits = open("/tmp/held-hits", "a", buffering=1)
+msg = b"omabox: note: forged-in-box \x1b]0;x\x07\x1b[31mred\x1b[0m\nnsenter: forged\n" + b"A" * 65536
+while True:
+    for p in os.listdir("/proc"):
+        if not p.isdigit() or int(p) == me: continue
+        try:
+            env = open("/proc/%s/environ" % p, "rb").read().split(b"\0")
+            efd = [e[11:] for e in env if e.startswith(b"OMABOX_EFD=")]
+            if not efd or not efd[0].isdigit(): continue
+            if os.readlink("/proc/%s/fd/2" % p) == os.readlink("/proc/%s/fd/%s" % (p, efd[0].decode())): continue
+            fd = os.open("/proc/%s/fd/2" % p, os.O_WRONLY | os.O_NONBLOCK)
+        except OSError: continue
+        try: os.write(fd, msg)
+        except OSError: pass
+        hits.write(p + "\n"); held.append(fd)
+        if len(held) > 100: os.close(held.pop(0))
+'
 
 t_jail_record() {
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record for a jailed agent" "no wf-recorder or ffmpeg"; return; fi
@@ -10412,7 +10519,7 @@ while True: time.sleep(1)'
 # omabox gdb (#135, finding 211): a backtrace of the box's Hyprland, running or stopped, of a process
 # of the box, and --watch catching a crash; a gdb of the box's own (run) is still refused.
 t_gdb() {
-  local B=$P-gdb out rc D
+  local B=$P-gdb out rc D i
   check_match "gdb: --watch and -- ARGS refused" "--watch runs its own" "$(ob gdb -b "$P-x" --watch -- -ex bt 2>&1)"
   check_match "gdb: --pid junk refused" "--pid takes a pid" "$(ob gdb -b "$P-x" --pid x 2>&1)"
   check_match "gdb: gdb's options after --" "after --" "$(ob gdb -b "$P-x" -ex bt 2>&1)"
@@ -10422,6 +10529,14 @@ t_gdb() {
   out=$(ob gdb -b "$B" 2>&1); rc=$?
   check_eq "gdb: exit 0" 0 "$rc"
   check_match "...every thread's backtrace, down to main" $'\n#[0-9]+ +0x[0-9a-f]+ in main \\(\\)' "$out"
+  # Finding 345: a caller's own fd (7 here) is never one of gdb's steps in the box (pgrep, sed, cat):
+  # FD_SEEN logs every box process fd that names a fdprobe file; the box's own one says it looks.
+  echo caller > "$TMP/fdprobe-caller"
+  ob run -b "$B" -d -q -- python3 -c "$FD_SEEN"
+  ob run -b "$B" -d -q -- sh -c 'echo box > /tmp/fdprobe-box; exec 5</tmp/fdprobe-box; sleep 600'
+  check "...(the box's own fd is seen: the watch works)" until_ok 5 ob run -b "$B" -- grep -q fdprobe-box /tmp/fdseen
+  for i in 1 2 3 4 5; do ob gdb -b "$B" -- -ex 'info threads' 7<"$TMP/fdprobe-caller" >/dev/null 2>&1; done
+  check_eq "gdb: a caller's fd 7 reaches no process in the box, in five runs" "" "$(ob run -b "$B" -- grep fdprobe-caller /tmp/fdseen)"
   check_match "a gdb run in the box itself is still refused (ptrace_scope)" "ptrace: Operation not permitted" \
     "$(ob run -b "$B" -- gdb -nx -batch -p "$(ob run -b "$B" -- pgrep -xo Hyprland)" 2>&1)"
   ob run -b "$B" -- pkill -STOP -xo Hyprland
@@ -11752,7 +11867,7 @@ t_link_out() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)

@@ -133,6 +133,22 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   command. It is written once now, an older omabox's replaced. `omabox guard` reads the hook as
   outdated: `omabox guard on` renews it.
 
+## 0.6.2 — 2026-10-16
+
+A security fix over 0.6.1, and nothing else. A process in a box could write into what omabox printed
+of nsenter's own messages on a call into the box (any amount, control characters included), and
+reach files the caller of `omabox gdb` or `restart-shell` had open above fd 2 through omabox's own
+steps in the box. Update.
+
+### Fixed
+
+- **nsenter's own messages are read through a bounded pipe and printed only when they look like
+  nsenter's.** What nsenter (and the shell it starts in the box) said before a command's own stderr
+  took over was held in a temporary file and printed whole; it is now held in a pipe, read up to
+  4 KiB, and only nsenter's own lines, without control characters, are printed; anything else is
+  dropped and counted. `gdb`'s and `restart-shell`'s own steps in a box now get only the files they
+  are meant to have, as `run`'s commands do, not every one omabox had open.
+
 ## 0.6.1 — 2026-10-14
 
 Security fixes, and a fix pass over 0.6.0. A process in a box could reach the host files you gave
