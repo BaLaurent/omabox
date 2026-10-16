@@ -970,7 +970,9 @@ covers_held() {
 need_box() {
   if box_alive; then covers_held; touch "$D/used" 2>/dev/null || true; take_over && return 0; fi
   [ -f "$BOXES/.expired-$NAME" ] && die "box '$NAME' went down after $(cat "$BOXES/.expired-$NAME") idle (start it again with: omabox up $NAME; --idle 0 keeps it)"
-  [ -f "$D/box.json" ] && die "box '$NAME' is dead (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
+  # How its Hyprland ended, when labwc said (#232).
+  local end; end=$(hypr_end) || end=""
+  [ -f "$D/box.json" ] && die "box '$NAME' is dead${end:+: its Hyprland $end} (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
   # A name derived in another directory than the session's box was started in (issue #136): that box
   # first, by name.
   local mine; [ "${NAME_DERIVED:-0}" = 0 ] || mine=$(session_boxes)
@@ -1093,7 +1095,81 @@ ns_said() {
 
 # A box whose PID 1 lives but whose Hyprland does not answer (stopped, or deadlocked by a plugin under
 # test; #124, findings 181-182) is said so in these words. hung_text [IN]: IN is how long it was given.
-hung_text() { echo "box '$NAME': its Hyprland did not answer${1:+ in $1} (hung? omabox log -b $NAME; omabox down $NAME)"; }
+# A Hyprland that crashed or exited meanwhile is said so instead (hypr_lost, #232).
+hung_text() {
+  local t; if t=$(hypr_lost); then echo "$t"; return 0; fi
+  echo "box '$NAME': its Hyprland did not answer${1:+ in $1} (hung? omabox log -b $NAME; omabox down $NAME)"
+}
+# Whether the box's Hyprland is gone, or held by gdb --watch at a fatal signal, after a call to it got
+# no answer (#232): its socket closes as it dies, a moment before its pid goes (labwc reaps it, then
+# the box ends: up to ~1 s), so a box still up after a failed call is no hung Hyprland. Up to 2 s for
+# the box or labwc's line to say how it ended; a Hyprland that runs (twice, 0.2 s apart: a stopped one
+# too) is not lost. Prints what happened: 0; 1 for one that runs, or a box it cannot tell of.
+hypr_lost() {
+  local i pids p hp is lock run=0 st sig
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    box_alive || { hypr_down_text; return 0; }
+    pids=$(box_pids) && [ -n "$pids" ] || return 1
+    # Its pid as the box numbers it, from its instance lock (a box-written file: only a number taken),
+    # matched to the host's through NSpid; none running (or no lock: removed as it exits) is gone.
+    hp="" is=$(box_env HYPRLAND_INSTANCE_SIGNATURE) || return 1
+    lock=""; [ -L "$D/run/hypr" ] || [ -L "$D/run/hypr/$is" ] || lock=$(run_read "hypr/$is/hyprland.lock" | head -n 1) || lock=""
+    if [[ $lock =~ ^[1-9][0-9]{0,6}$ ]]; then
+      for p in $pids; do
+        [ "$(awk '/^NSpid:/ { print $NF }' "/proc/$p/status" 2>/dev/null)" = "$lock" ] && running "$p" && { hp=$p; break; }
+      done
+    fi
+    if [ -n "$hp" ]; then
+      st=$(pid_state "$hp")
+      # gdb --watch stops it at the signal (tracing stop, t) while it writes the backtraces.
+      if [[ $st == t* ]] && sig=$(hypr_gdb_sig); then
+        echo "box '$NAME': its Hyprland crashed ($sig), held by gdb --watch while it writes the backtrace (omabox log -b $NAME gdb --crash; the box goes down after it)"
+        return 0
+      fi
+      [[ $st == t* ]] || run=$((run + 1))
+      [ $run -lt 2 ] || return 1
+    elif hypr_end >/dev/null; then hypr_down_text; return 0
+    fi
+    sleep 0.2
+  done
+  # Gone, and the box not down yet (an interactive box's has no labwc to say how).
+  [ -n "$hp" ] && return 1
+  hypr_down_text
+}
+# A process's state as /proc/PID/status says it ("S (sleeping)", "t (tracing stop)"), nothing for none.
+pid_state() { sed -n 's/^State:[[:space:]]*//p' "/proc/$1/status" 2>/dev/null || true; }
+# How the box's Hyprland ended, from labwc's line (headless boxes: labwc's -S child is Hyprland): crashed
+# (SIGSEGV), exited (status N), or a failure for none. The box writes its log: only that line read.
+hypr_end() {
+  local f line n
+  f=$(box_home_file labwc.log) || return 1
+  line=$(tail -c 65536 -- "$f" | grep -aoE 'spawned child [0-9]+ (terminated with signal [0-9]{1,2}|exited with -?[0-9]{1,3})' | tail -n 1) || line=""
+  if [[ $line =~ signal\ ([0-9]+)$ ]]; then
+    n=$(kill -l "${BASH_REMATCH[1]}" 2>/dev/null) || n=""
+    if [ -n "$n" ]; then echo "crashed (SIG$n)"; else echo "crashed (signal ${BASH_REMATCH[1]})"; fi
+  elif [[ $line =~ with\ (-?[0-9]+)$ ]]; then echo "exited (status ${BASH_REMATCH[1]})"
+  else return 1; fi
+}
+# The fatal signal gdb --watch caught in the box's Hyprland, in its log's last watch of it: SIGSEGV, or
+# a failure for none.
+hypr_gdb_sig() {
+  local f; f=$(box_home_file gdb.log) || return 1
+  tail -c 1048576 -- "$f" | awk '/^== omabox gdb --watch / { w = ($0 ~ /^== omabox gdb --watch Hyprland /); s = ""; next }
+    w && /^(Thread [0-9]+ .*|Program) received signal SIG[A-Z0-9]+/ { match($0, /SIG[A-Z0-9]+/); s = substr($0, RSTART, RLENGTH) }
+    END { if (s == "") exit 1; print s }'
+}
+# A box that went down, or is going, in words: how its Hyprland ended when labwc said (#232), and for a
+# crash where its backtrace is (gdb --watch's), or how to get one (a box keeps no core dump).
+hypr_down_text() {
+  local end hint
+  end=$(hypr_end) || { echo "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"; return 0; }
+  case $end in
+    crashed*) if hypr_gdb_sig >/dev/null; then hint="its backtrace: omabox log -b $NAME gdb --crash"
+              else hint="a backtrace: the same call in a new box after omabox gdb --watch; boxes keep no core dumps"; fi ;;
+    *) hint="why: omabox log -b $NAME all" ;;
+  esac
+  echo "box '$NAME' went down: its Hyprland $end ($hint; clear it with: omabox down $NAME)"
+}
 # 0 when the box's Hyprland answers over IPC within SECS (default 2). hypr_answers [SECS]
 hypr_answers() { box_alive && on_box timeout "${1:-2}" hyprctl version >/dev/null 2>&1; }
 # `hyprctl -j ARGS` in the box, its answer checked as JSON (#125, finding 182). A Hyprland that does
@@ -1107,7 +1183,7 @@ hypr_json() {
   # (At most 64 MiB: the box's Hyprland may be a build of the box's user's.)
   out=$(on_box timeout 6 hyprctl -j "$@" 2>/dev/null | head -c 67108864) || out=""
   if jq -e type >/dev/null 2>&1 <<<"$out"; then printf '%s\n' "$out"; return 0; fi
-  box_alive || die "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"
+  box_alive || die "$(hypr_down_text)"
   die "$(hung_text)"
 }
 # PID and every process under it, deepest first, SIGKILLed: a tool left waiting on a hung box.
@@ -7739,7 +7815,7 @@ ptr_live() {
   PTR_ERR=$out; return 1
 }
 ptr_fail() {
-  box_alive || die "box '$NAME' went down (why: omabox log -b $NAME all)"
+  box_alive || die "$(hypr_down_text)"
   hypr_answers || die "$(hung_text)"
   die "$1: the box's Hyprland did not answer as expected: ${PTR_ERR:-nothing}"
 }
@@ -8270,7 +8346,7 @@ cmd_hyprctl() {
   exec {o}>&-
   if [ $rc != 0 ]; then
     box_alive || { exec {i}<&-; [ -n "${BOX_GONE_SAID:-}" ] && exit 1
-      die "box '$NAME' went down (why: omabox log -b $NAME all; clear it with: omabox down $NAME)"; }
+      die "$(hypr_down_text)"; }
     [ $rc = 124 ] && { exec {i}<&-; die "$(hung_text "$HYPR_LIMIT s")"; }
     hypr_answers || { exec {i}<&-; die "$(hung_text)"; }
   fi
@@ -8320,7 +8396,7 @@ $code
   case $out in
     "error: omabox-lua-ok:"*) vals=${out#"error: omabox-lua-ok:"} ;;
     "error: omabox-lua-error:"*) echo "lua: ${out#"error: omabox-lua-error:"}" >&2; return 1 ;;
-    *) box_alive || die "box '$NAME' went down"
+    *) box_alive || die "$(hypr_down_text)"
        # No answer in time (#139), or hyprctl's own "didn't respond": a hung Hyprland, in its words.
        [ $rc != 124 ] || die "$(hung_text "$HYPR_LIMIT s")"
        hypr_answers || die "$(hung_text)"
@@ -10293,8 +10369,9 @@ cmd_reload() {
   local rc=0
   on_box timeout "$HYPR_LIMIT" hyprctl reload >/dev/null || rc=$?
   if [ $rc != 0 ]; then
-    box_alive || die "box '$NAME' went down"
+    box_alive || die "$(hypr_down_text)"
     [ $rc != 124 ] || die "$(hung_text "$HYPR_LIMIT s")"
+    local lost; ! lost=$(hypr_lost) || die "$lost"
     die "reload: hyprctl reload failed (exit $rc)"
   fi
   say "box '$NAME': config reloaded from $ROOT/share/hyprland.lua (binds, rules and Lua state added since are gone)"

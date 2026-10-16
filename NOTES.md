@@ -6779,3 +6779,24 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     `t_unit_gdb_crashes` (killed, a worker thread's crash, two single-threaded ones), `t_gdb` (the
     killed watch: no crash; the SIGSEGV: the thread it hit between the signal and "every thread", and
     --crash down to main with the signal's thread number).
+334. **A call that crashes the box's Hyprland says so, with the signal** (2026-10-16, #232). `omabox lua`
+    with two binds of one key both unbound segfaults Hyprland (a Hyprland bug), and lua said "its
+    Hyprland did not answer (hung? …)" while `ls` said `hung`, then `dead` a moment later. Its socket
+    closes as it dies, before its pid goes: the process is a zombie until labwc reaps it (and says
+    "spawned child N terminated with signal 11" in labwc.log), and only then does the box end, so every
+    caller's `box_alive` check came too early and took the hung branch. `hung_text`, which every
+    caller already says after a failed call (lua, hyprctl, `hypr_json`'s windows/wait/…, shot, pixel,
+    keys and the pointer tools, reload), now asks `hypr_lost` first: up to 2 s, the box gone, or the
+    Hyprland its instance lock names (NSpid matched to a box process) not running, or labwc's line
+    there, is "box 'N' went down: its Hyprland crashed (SIGSEGV) (a backtrace: the same call in a new
+    box after omabox gdb --watch; boxes keep no core dumps; …)"; with a crash in the gdb log, "its
+    backtrace: omabox log -b N gdb --crash" instead; a Hyprland in tracing stop with the watch's
+    signal written is "crashed (SIGSEGV), held by gdb --watch while it writes the backtrace". A
+    Hyprland that runs (twice, 0.2 s apart: a SIGSTOPped one is `T`, not gdb's `t`) is hung as before,
+    0.2 s later. The callers' own "went down" (box gone already) and a later call's "is dead" name
+    labwc's line too ("exited (status N)" for an exit). Not for an interactive box: no labwc, so no line
+    (a gone Hyprland there is "went down" without the signal, after the 2 s). In a box: the repro
+    plain (crashed, SIGSEGV, the gdb --watch hint, 0.1 s) and under gdb --watch (the gdb log's
+    backtrace named; the held branch not hit there: gdb wrote its backtraces before lua looked).
+    `t_unit_hypr_lost` (stopped, held, traced but running, gone with and without a watch, an exit's
+    status, no line, a linked log), `t_hyprland_crash`, `t_hung` unchanged.

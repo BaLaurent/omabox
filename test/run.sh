@@ -4915,6 +4915,29 @@ t_hyprland_dies() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# #232: a Lua call that crashes the box's Hyprland (a Hyprland bug: two binds of one key, both unbound)
+# is said as a crash with its signal, not "did not answer (hung?)": its socket closed before its pid
+# went, and lua read the box as up. Under gdb --watch, it names the backtrace instead.
+t_hyprland_crash() {
+  local B=$P-hcrash out rc
+  local crash='local a = hl.bind("F9", function() end, {}); local b = hl.bind("F9", function() end, {}); a:unbind(); b:unbind(); return "x"'
+  check "up" ob up "$B" --no-shell --net isolated
+  rc=0; out=$(timeout 30 "$CLI" lua -b "$B" "$crash" 2>&1) || rc=$?
+  check_eq "lua that crashes Hyprland: exit 1" 1 "$rc"
+  check_match "...said as a crash with its signal, and how to get a backtrace" \
+    "^omabox: box '$B' went down: its Hyprland crashed \\(SIGSEGV\\) \\(a backtrace: .*omabox gdb --watch; boxes keep no core dumps; clear it with: omabox down $B\\)$" "$out"
+  check_match "...a later call: dead, and why" "box '$B' is dead: its Hyprland crashed \\(SIGSEGV\\)" "$(ob lua -b "$B" 'return 1' 2>&1)"
+  ob down "$B" >/dev/null 2>&1
+  check "up again" ob up "$B" --no-shell --net isolated
+  check "gdb --watch" ob gdb -b "$B" --watch
+  rc=0; out=$(timeout 30 "$CLI" lua -b "$B" "$crash" 2>&1) || rc=$?
+  check_eq "...under gdb --watch: exit 1" 1 "$rc"
+  check_match "...a crash, its backtrace in the gdb log (held, or after)" \
+    "^omabox: box '$B'( went down: its Hyprland crashed \\(SIGSEGV\\) \\(its backtrace|: its Hyprland crashed \\(SIGSEGV\\), held by gdb --watch).*omabox log -b $B gdb --crash" "$out"
+  check "...which has it" until_ok 15 bash -c "'$CLI' log -b '$B' gdb --crash 2>/dev/null | grep -q 'received signal SIGSEGV'"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # A box whose pasta died (OOM, a killall) ends with it rather than stay up with no network (finding 89).
 t_pasta_dies() {
   local B=$P-pdie
@@ -10008,6 +10031,39 @@ os.write(os.open("/proc/self/comm", os.O_WRONLY), b"x\x1b[1my\nz"); open("/tmp/t
   ob down "$B" >/dev/null 2>&1
 }
 
+# #232: a call that got no answer from a Hyprland that crashed is not "hung". hypr_lost on a fake box
+# dir: its Hyprland (a sleep of ours, named by the lock) stopped, held by gdb --watch at a signal, or
+# gone with labwc's line; hypr_down_text and need_box's words from that line.
+t_unit_hypr_lost() {
+  local d=$TMP/hlost out sp
+  mkdir -p "$d/run/hypr/sig" "$d/home"
+  printf 'HYPRLAND_INSTANCE_SIGNATURE=sig\0' > "$d/run/omabox.env"
+  sleep 300 & sp=$!
+  echo "$sp" > "$d/run/hypr/sig/hyprland.lock"
+  hl() { timeout 10 bash -c 'source "$1"; NAME=u D=$2 SP=$3 ST=$4; box_alive() { return 0; }; box_pids() { echo "$SP"; }
+    pid_state() { echo "$ST"; }; t0=$SECONDS; hung_text; echo "in $((SECONDS - t0))s"' _ "$TMP/lib/bin/omabox" "$d" "$sp" "$1" 2>&1; }
+  out=$(hl "T (stopped)")
+  check_match "hypr_lost: a stopped Hyprland is hung, said at once" \
+    $'^box \'u\': its Hyprland did not answer \\(hung\\? omabox log -b u; omabox down u\\)\nin [01]s$' "$out"
+  printf '\n== omabox gdb --watch Hyprland (pid 55 in the box), T\nThread 1 "Hyprland" received signal SIGSEGV, Segmentation fault.\n' > "$d/home/gdb.log"
+  check_match "...held by gdb --watch at a signal: crashed, held, and where the backtrace goes" \
+    "^box 'u': its Hyprland crashed \\(SIGSEGV\\), held by gdb --watch .*omabox log -b u gdb --crash" "$(hl "t (tracing stop)")"
+  check_match "...traced but not stopped at a signal: hung" "did not answer \\(hung" "$(hl "S (sleeping)")"
+  kill "$sp"; wait "$sp" 2>/dev/null
+  printf '[ERROR] [../labwc/src/server.c:207] spawned child %s terminated with signal 11 (Segmentation fault)\n' "$sp" > "$d/home/labwc.log"
+  check_match "...gone, labwc's line: went down, crashed (SIGSEGV), the gdb log's backtrace named" \
+    "^box 'u' went down: its Hyprland crashed \\(SIGSEGV\\) \\(its backtrace: omabox log -b u gdb --crash; clear it with: omabox down u\\)" "$(hl "")"
+  rm "$d/home/gdb.log"
+  check_match "...with no watch: how to get a backtrace" \
+    "^box 'u' went down: its Hyprland crashed \\(SIGSEGV\\) \\(a backtrace: .*omabox gdb --watch; boxes keep no core dumps;" "$(hl "")"
+  printf 'x spawned child 9 exited with 1\n' > "$d/home/labwc.log"
+  check_eq "hypr_end: an exit's status" "exited (status 1)" "$(D=$d lib hypr_end)"
+  : > "$d/home/labwc.log"
+  check_match "...no line, gone for 2 s: went down, in the usual words" "^box 'u' went down \\(why: omabox log -b u all; clear it with: omabox down u\\)"$'\nin [23]s$' "$(hl "")"
+  ln -sf /etc/passwd "$d/home/labwc.log"
+  check_fails "hypr_end: a link is not read" lib eval "D='$d'; hypr_end"
+}
+
 # log gdb --crash (#233) on a gdb log of two watches: one whose process was killed (gdb runs its crash
 # commands anyway: no crash), one that crashed in thread 3. Only that one, without the other threads.
 t_unit_gdb_crashes() {
@@ -11098,10 +11154,10 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_gdb_crashes t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

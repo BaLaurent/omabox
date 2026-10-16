@@ -22,6 +22,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **A call that crashes the box's Hyprland says it crashed, with the signal.** `omabox lua` (and
+  `hyprctl`, `windows`, `shot` and the rest) said "its Hyprland did not answer (hung?)" when Hyprland
+  had just segfaulted. Now: "went down: its Hyprland crashed (SIGSEGV)", with how to get a backtrace
+  (`omabox gdb --watch` before the call, in a new box: boxes keep no core dumps), or where it is
+  when one was watching (`omabox log gdb --crash`). A later call to that box says it too.
 - **`omabox log gdb` puts the thread a crash hit first.** After `gdb --watch` caught a fatal
   signal, every thread's backtrace followed it with Hyprland's main thread last, after its worker
   threads. The thread the signal hit now comes right under the signal line, then every thread; `omabox
