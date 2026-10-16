@@ -17,7 +17,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   changed its text or state, appeared or vanished (`moved -6,+0 button "Save"`). Shots are
   compared exactly, as users see them, leaving out only specks a few pixels big (what Qt Quick's
   text varies by from one start of an app to the next), so a colour a few levels off is still
-  caught. `check diff A.png B.png` compares two shots of yours the same way.
+  caught. Each checkpoint is searched for holes too: the clean wallpaper showing through inside a
+  window, the bar or a popup (a transparent part, a gap, a surface that did not draw), not around
+  them or at rounded corners; `--approve` says each, and a check fails on any the baseline lacks.
+  `check diff A.png B.png` compares two shots of yours the same way.
 - **`up --clean`: a desktop where only what is tested moves.** Omarchy's own bar on tokyo-night, a
   solid `#ff00ff` wallpaper (any of it inside a window or the bar is a hole), the clock frozen at
   "Friday 12:00" in its usual place, no pointer, no network and no animations (over reloads too).

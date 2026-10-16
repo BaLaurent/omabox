@@ -136,6 +136,16 @@ tree. Baselines are per GPU: another GPU, omabox, Hyprland, Omarchy, theme or si
 report. The Omarchy shell and its plugins have no tree: their checks are pixels only. `omabox check
 diff A.png B.png [--ignore G]` compares two shots of yours the same way. Not inside ai-jail yet.
 
+Each checkpoint is also searched for holes: the `#ff00ff` wallpaper showing through inside a window,
+the bar or a popup (a transparent part, a gap, a card that forgot its background), and in a
+`--window` shot fully transparent pixels. The wallpaper around and between surfaces and rounded
+corners are not holes. A hole shows only where the wallpaper is behind it: take a popup's checkpoint
+over an empty workspace, not over your app. `--approve` says each (`holes ID: the wallpaper shows
+through at X,Y WxH`) and ends `check: HOLES in N of M checkpoints`: look before keeping that
+baseline; it keeps them, and a check then fails only on holes it lacks (`holes ID: ... the baseline
+does not have`, marked on `ID.diff.png`), even ones too small to change the shot. None are looked for
+with `--keep wallpaper` or after a theme set in the box.
+
 ## Symptoms
 
 | Symptom | Next step |

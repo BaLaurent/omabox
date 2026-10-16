@@ -482,15 +482,19 @@ of its own each run (UP OPTIONS: --plugin, --theme, --size...; OMABOX names the 
 start to the next there, or a time changed; every run: data or a time the scenario does not pin).
 Without --approve it runs once and says for each checkpoint same, changed (each region "at X,Y WxH",
 marked on ID.diff.png; with --window, the tree's moved, resized, text, state, appeared and vanished
-elements), new or missing: exit 0 when all are the same, 1 when not, 3 when the scenario failed.
-Shots are compared exactly, as users see them, leaving out specks: parts of the difference under 32
-px (--speck), what Qt Quick's text varies by from one start of an app to the next; a fill a few
-levels off, a 1 px shift of a text block or a clipped glyph is far more. A change smaller than a
+elements), holes, new or missing: exit 0 when all are the same, 1 when not, 3 when the scenario
+failed. Shots are compared exactly, as users see them, leaving out specks: parts of the difference
+under 32 px (--speck), what Qt Quick's text varies by from one start of an app to the next; a fill a
+few levels off, a 1 px shift of a text block or a clipped glyph is far more. A change smaller than a
 speck (a 2 px move of a few dots) can only show in the tree. \`check point\` waits until the shot is
 still (15 s, --timeout; then taken anyway, noted), shoots the screen, -g or --window (with its tree,
-when it has one); --ignore leaves a region of that shot out (a clock of the app's own). \`check
-diff A B\` compares two shots of yours the same way (exit 0 same, 1 not). A baseline made on another
-omabox, Hyprland, Omarchy, GPU, theme or size is said. Not inside ai-jail yet.
+when it has one); --ignore leaves a region of that shot out (a clock of the app's own). It also
+finds holes: the #ff00ff wallpaper enclosed by a window, the bar or a popup (in a window's own
+pixels, fully transparent ones), not the wallpaper around and between them, nor rounded corners;
+only where the wallpaper is behind (a popup over a window hides them). --approve says each ("holes
+ID: ... at X,Y WxH") and keeps them; a check fails on holes the baseline lacks. \`check diff A B\`
+compares two shots of yours the same way (exit 0 same, 1 not). A baseline made on another omabox,
+Hyprland, Omarchy, GPU, theme or size is said. Not inside ai-jail yet.
 @ drag
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
