@@ -5267,9 +5267,43 @@ t_unit_check() {
     rc=0; out=$(ob check diff "$d/a.png" "$d/wide.png") || rc=$?
     check_eq "...another size: said, exit 1" "size 200x100 -> 201x100|1" "$out|$rc"
     check_fails "...one file only refused" ob check diff "$d/a.png"
+    # Holes (finding 361): the sentinel enclosed by surfaces, not the wallpaper around them.
+    local hl="CHECK_PY=$ROOT/share/check.py; check_holes"
+    magick -size 400x300 xc:'#ff00ff' -fill '#202030' -draw 'rectangle 10,10 190,289' -draw 'rectangle 200,10 389,289' \
+      -fill '#ff00ff' -draw 'rectangle 60,100 99,129' "$d/hole.png"
+    check_eq "holes: one inside a window; the gap between two windows reaches the margin, open" \
+      $'60,100 40x30 1200\ncorners 0' "$(lib eval "$hl $d/hole.png screen" 2>&1)"
+    check_eq "...a region cutting it: its part, in the region's pixels" $'10,10 20x20 400\ncorners 0' \
+      "$(lib eval "$hl $d/hole.png screen '50 90 30 30'" 2>&1)"
+    check_eq "...a region beside it: none" "corners 0" "$(lib eval "$hl $d/hole.png screen '250 90 30 30'" 2>&1)"
+    magick -size 400x300 xc:'#ff00ff' -fill '#7aa2f7' -draw 'rectangle 10,10 389,289' -fill '#ff00ff' -draw 'rectangle 12,12 387,287' \
+      -fill '#202030' -draw 'roundrectangle 12,12 387,287 14,14' "$d/round.png"
+    check_eq "...rounded content inside a window's border: its 4 corners, no hole" "corners 4" "$(lib eval "$hl $d/round.png screen" 2>&1)"
+    magick -size 400x300 xc:'#ff00ff' -fill '#202030' -draw 'rectangle 10,10 389,289' -fill '#ff00ff' -draw 'rectangle 380,100 399,140' "$d/edge.png"
+    check_eq "...a gap that reaches the screen's edge: open wallpaper" "corners 0" "$(lib eval "$hl $d/edge.png screen" 2>&1)"
+    magick -size 200x100 xc:none -fill '#202030' -draw 'roundrectangle 0,0 199,99 12,12' \
+      \( -size 40x20 xc:none \) -geometry +50+30 -compose copy -composite \( -size 20x30 xc:none \) -geometry +180+40 -compose copy -composite "$d/win.png"
+    check_eq "...a window's own pixels: its transparent parts, one at its edge too; its rounded corners not" \
+      $'50,30 40x20 800\n180,40 20x30 600\ncorners 4' "$(lib eval "$hl $d/win.png window" 2>&1)"
+    check_eq "...an opaque window: none" "corners 0" "$(lib eval "$hl $d/a.png window" 2>&1)"
+    printf 'of screen\nholes checked\nhole 10,10 5x5 25\n' > "$d/hb.point"
+    printf 'of screen\nholes checked\nhole 12,12 5x5 25\nhole 100,100 5x5 25\n' > "$d/hn.point"
+    check_eq "...new holes: those the baseline has none overlapping" "100,100 5x5 25" "$(lib check_new_holes "$d/hb.point" "$d/hn.point" 2>&1)"
+    check_eq "...a baseline from before holes: all of them" $'12,12 5x5 25\n100,100 5x5 25' "$(lib check_new_holes "$d/a.json" "$d/hn.point" 2>&1)"
   else
     skip "check diff on made images" "no magick (imagemagick)"
   fi
+  # Whether a box's screen can show holes: a clean box whose background is still the sentinel's.
+  mkdir -p "$d/hbox/home/.local/state/omarchy/current"
+  echo '{}' > "$d/hbox/box.json"
+  check_eq "holes off: not a clean box" "not a clean box" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
+  echo '{"clean": {"keep": ["clock", "wallpaper"]}}' > "$d/hbox/box.json"
+  check_eq "...--keep wallpaper" "--keep wallpaper" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
+  echo '{"clean": {"keep": []}}' > "$d/hbox/box.json"
+  ln -sfn /home/sbx/.config/omabox/clean-wallpaper.png "$d/hbox/home/.local/state/omarchy/current/background"
+  check_eq "...clean, the sentinel's wallpaper: on" "" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
+  ln -sfn /home/sbx/.local/state/omarchy/current/theme/backgrounds/1.jpg "$d/hbox/home/.local/state/omarchy/current/background"
+  check_match "...a theme's wallpaper since" "not the sentinel" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
   # --keep: a list of what the clean desktop keeps, once each.
   check_eq "--keep: comma-separated, once each" "clock,animations" "$(lib clean_keep clock,animations,clock 2>&1)"
   check_match "--keep: anything else refused, naming what it takes" "takes animations, bar, clock, pointer, wallpaper.*got blur" \
@@ -5302,6 +5336,9 @@ t_clean() {
   out=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | [.clean, .bar, .net, .theme]')
   check_eq "...ls --json: clean, the stock bar, no network, tokyo-night" '[{"keep":[]},"stock","isolated","tokyo-night"]' "$out"
   check_eq "...the wallpaper is the sentinel" "#ff00ff" "$(ob pixel -b "$B" 960 700 2>&1)"
+  ob check point -b "$B" -o "$TMP/clnp" desk >/dev/null 2>&1
+  check_eq "...check point looks for holes there (finding 361), and the stock bar has none" "holes checked|" \
+    "$(grep '^holes' "$TMP/clnp/desk.point" 2>&1)|$(grep '^hole ' "$TMP/clnp/desk.point" || true)"
   check_eq "...the clock's format is a literal" "'Friday 12:00'" \
     "$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' "$H/.config/omarchy/shell.json")"
   check_eq "...animations off" false "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"
@@ -5315,13 +5352,16 @@ t_clean() {
   check_eq "...animations on" true "$(ob lua -b "$K" 'hl.get_config("animations:enabled")' 2>&1)"
   check_match "...the theme's wallpaper, not the sentinel" '^#' "$(ob pixel -b "$K" 960 700 2>&1)"
   if [ "$(ob pixel -b "$K" 960 700 2>&1)" = "#ff00ff" ]; then no "...not the sentinel" "#ff00ff"; else ok "...not the sentinel"; fi
+  ob check point -b "$K" -o "$TMP/clnp" kept >/dev/null 2>&1
+  check_eq "...so check point looks for no holes on its screen" "holes off: --keep wallpaper" "$(grep '^holes' "$TMP/clnp/kept.point" 2>&1)"
   check_eq "...its network and keep list" '["connected",["animations","wallpaper","pointer"]]' \
     "$(ob ls --json | jq -c --arg n "$K" '.[] | select(.name == $n) | [.net, .clean.keep]')"
   check "down" ob down "$K"
 }
 
 # check run (#252): a scenario's checkpoints against a baseline, end to end, with a Qt Quick window
-# whose button a variable moves, a label that differs every run (unstable), and an extra checkpoint.
+# whose button a variable moves, a label that differs every run (unstable), an extra checkpoint, and
+# a transparent hole HOLE px a side in its rounded background (finding 361).
 t_check() {
   local d=$TMP/chk out rc
   if ! command -v qml6 >/dev/null 2>&1 || ! command -v magick >/dev/null; then
@@ -5335,9 +5375,14 @@ H=$(omabox path)/home
 cat > "$H/c.qml" <<QML
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Shapes
 ApplicationWindow {
     width: 400; height: 240; visible: true; title: "Check demo"
-    color: "#202030"
+    color: "transparent"
+    Shape { id: bg; anchors.fill: parent
+      ShapePath { fillColor: "#202030"; strokeColor: "transparent"; fillRule: ShapePath.OddEvenFill
+        PathRectangle { x: 0; y: 0; width: bg.width; height: bg.height; radius: 14 }
+        PathRectangle { x: 300; y: 150; width: ${HOLE:-0}; height: ${HOLE:-0} } } }
     Button { x: $((20 + ${MOVE:-0})); y: 20; width: 120; height: 40; text: "Save" }
     Label { x: 20; y: 120; color: "white"; text: "run " + Math.floor(Math.random() * 1000000) }
 }
@@ -5346,6 +5391,7 @@ omabox check point desk -g "0,0 1920x26"
 omabox run -d -- qml6 /home/sbx/c.qml
 omabox wait --timeout 20s window 'title:^Check demo$'
 omabox check point demo --window 'title:^Check demo$'
+omabox check point screen
 [ -z "${EXTRA:-}" ] || omabox check point extra -g "0,0 200x26"
 SH
   chmod +x "$d/scenario.sh"
@@ -5355,8 +5401,17 @@ SH
   check_match "...the bar's checkpoint is a plain baseline" $'(^|\n)baseline desk' "$out"
   check_match "...the random label: unstable, every run differing" $'unstable demo: every run differed[^\n]*\n  [0-9]+,[0-9]+ [0-9]+x[0-9]+' "$out"
   check "...the baseline's files" test -s "$d/base/demo.png" -a -s "$d/base/demo.tree.json" -a -s "$d/base/demo.unstable" -a -s "$d/base/check.json"
+  check_eq "...no holes: the window's rounded corners are not one" "|holes checked" "$(grep -E '^holes ' <<<"$out" || true)|$(grep '^holes' "$d/base/screen.point")"
   rc=0; out=$(ob check run --base "$d/base" -o "$d/b" -- "$d/scenario.sh" 2>&1) || rc=$?
-  check_eq "check, nothing changed: same, the label left out, exit 0" $'same     desk\nsame     demo|0' "$(grep -E '^(same|changed|new|missing) ' <<<"$out")|$rc"
+  check_eq "check, nothing changed: same, the label left out, exit 0" $'same     desk\nsame     demo\nsame     screen|0' "$(grep -E '^(same|changed|new|missing) ' <<<"$out")|$rc"
+  rc=0; out=$(HOLE=5 ob check run --base "$d/base" -o "$d/h" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_eq "a 5 px hole (a speck to the shots' comparison): exit 1" 1 "$rc"
+  check_match "...the window's: transparent there" $'holes    demo: the window is transparent at 1 place the baseline does not have[^\n]*\n  hole: the window is transparent at 300,150 5x5 \\(25 px\\)' "$out"
+  check_match "...the screen's: the wallpaper shows through" 'holes    screen: the wallpaper shows through at 1 place' "$out"
+  check "...marked" test -s "$d/h/demo.diff.png"
+  rc=0; out=$(HOLE=40 ob check run --approve --runs 2 --base "$d/hbase" -o "$d/ha" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_match "approve with a hole: said for each checkpoint, exit 0" $'holes    demo: the window is transparent at 300,150 40x40 \\(1600 px\\)[^|]*\\|0$' "$out|$rc"
+  check_match "...and loudly at the end" 'check: HOLES in 2 of 3 checkpoints \(demo screen\)' "$out"
   rc=0; out=$(MOVE=6 ob check run --base "$d/base" -o "$d/c" -- "$d/scenario.sh" 2>&1) || rc=$?
   check_eq "the button 6 px to the right: exit 1" 1 "$rc"
   check_match "...changed, a region at the button" $'changed  demo: [0-9]+ regions? \\(marked: [^\n]*demo.diff.png\\)\n  at [0-9]+,[0-9]+ ' "$out"

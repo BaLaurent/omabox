@@ -482,15 +482,19 @@ of its own each run (UP OPTIONS: --plugin, --theme, --size...; OMABOX names the 
 start to the next there, or a time changed; every run: data or a time the scenario does not pin).
 Without --approve it runs once and says for each checkpoint same, changed (each region "at X,Y WxH",
 marked on ID.diff.png; with --window, the tree's moved, resized, text, state, appeared and vanished
-elements), new or missing: exit 0 when all are the same, 1 when not, 3 when the scenario failed.
-Shots are compared exactly, as users see them, leaving out specks: parts of the difference under 32
-px (--speck), what Qt Quick's text varies by from one start of an app to the next; a fill a few
-levels off, a 1 px shift of a text block or a clipped glyph is far more. A change smaller than a
+elements), holes, new or missing: exit 0 when all are the same, 1 when not, 3 when the scenario
+failed. Shots are compared exactly, as users see them, leaving out specks: parts of the difference
+under 32 px (--speck), what Qt Quick's text varies by from one start of an app to the next; a fill a
+few levels off, a 1 px shift of a text block or a clipped glyph is far more. A change smaller than a
 speck (a 2 px move of a few dots) can only show in the tree. \`check point\` waits until the shot is
 still (15 s, --timeout; then taken anyway, noted), shoots the screen, -g or --window (with its tree,
-when it has one); --ignore leaves a region of that shot out (a clock of the app's own). \`check
-diff A B\` compares two shots of yours the same way (exit 0 same, 1 not). A baseline made on another
-omabox, Hyprland, Omarchy, GPU, theme or size is said. Not inside ai-jail yet.
+when it has one); --ignore leaves a region of that shot out (a clock of the app's own). It also
+finds holes: the #ff00ff wallpaper enclosed by a window, the bar or a popup (in a window's own
+pixels, fully transparent ones), not the wallpaper around and between them, nor rounded corners;
+only where the wallpaper is behind (a popup over a window hides them). --approve says each ("holes
+ID: ... at X,Y WxH") and keeps them; a check fails on holes the baseline lacks. \`check diff A B\`
+compares two shots of yours the same way (exit 0 same, 1 not). A baseline made on another omabox,
+Hyprland, Omarchy, GPU, theme or size is said. Not inside ai-jail yet.
 @ drag
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
@@ -7800,6 +7804,63 @@ check_mask_of() {
   echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"
 }
 
+# Holes (finding 361): where a shot is see-through inside a surface. A clean box's wallpaper is the
+# sentinel colour, so any of it in a window, the bar or a popup is a transparent part, a gap or a
+# surface that did not draw. What Hyprland knows does not say where: a Quickshell popup is drawn in a
+# full-screen layer. So pixels: the parts of exactly the sentinel (antialiased edges blend it away)
+# that do not reach the screen's edge are enclosed by surfaces; the wallpaper around them and in the
+# gaps between them does. A window's own pixels have no wallpaper behind them: there, a hole is a part
+# of fully transparent pixels. Parts of at most CHECK_CORNER px a side that fill under half their box
+# are rounded corners (the outside of an arc fills 21% of its square), not holes.
+CHECK_CORNER=32
+
+# A shot's holes: "X,Y WxH PIXELS" a hole, then "corners N". KIND is screen (the sentinel) or window
+# (alpha 0); REGION ("X Y W H", the shot's pixels) keeps what is inside it, in its own pixels.
+# check_holes SHOT KIND [REGION]
+check_holes() {
+  local f=$1 kind=$2 within=() sz cc mask
+  [ -z "${3:-}" ] || read -r -a within <<<"$3"
+  sz=$(magick identify -format '%w %h' "$f" 2>/dev/null) || return 1
+  if [ "$kind" = window ]; then mask=(-alpha extract -threshold 0 -negate)
+  else mask=(-alpha off -fill black +opaque "$CLEAN_WALLPAPER" -fill white -opaque "$CLEAN_WALLPAPER"); fi
+  cc=$(magick "$f" "${mask[@]}" -define connected-components:verbose=true -connected-components 8 null: 2>/dev/null) || return 1
+  # shellcheck disable=SC2086 # W H
+  /usr/bin/python3 -I "$CHECK_PY" holes "$kind" $sz "$CHECK_CORNER" "$CHECK_GAP" ${within[@]+"${within[@]}"} <<<"$cc"
+}
+
+# Why a box's screen cannot show holes, or nothing when it can (its wallpaper is the sentinel): not a
+# clean box, --keep wallpaper, or a theme set since (its wallpaper replaced the sentinel's link).
+check_holes_off() {
+  local bg
+  if [ "$(jq -r '.clean != null' "$D/box.json" 2>/dev/null)" != true ]; then echo "not a clean box"; return; fi
+  if jq -e '.clean.keep | index("wallpaper")' "$D/box.json" >/dev/null 2>&1; then echo "--keep wallpaper"; return; fi
+  bg=$(readlink "$D/home/.local/state/omarchy/current/background" 2>/dev/null) || bg=""
+  [ "$bg" = /home/sbx/.config/omabox/clean-wallpaper.png ] || echo "the wallpaper is not the sentinel (a theme set in the box?)"
+}
+
+# What a hole is, said of a checkpoint (its .point): check_hole_what POINT
+check_hole_what() {
+  if grep -q '^of window ' "$1" 2>/dev/null; then echo "the window is transparent"; else echo "the wallpaper shows through"; fi
+}
+
+# The holes of NEW's point that BASE's point has none overlapping (a baseline approved with a hole
+# keeps it; each new one fails the check), "X,Y WxH PIXELS" a line. check_new_holes BASE NEW
+check_new_holes() {
+  local l n b bx by bw bh nx ny nw nh old=()
+  while read -r l b; do [ "$l" != hole ] || old+=("$b"); done < "$1"
+  while read -r l n; do
+    [ "$l" = hole ] || continue
+    [[ $n =~ ^(-?[0-9]+),(-?[0-9]+)\ ([0-9]+)x([0-9]+) ]] || continue
+    nx=${BASH_REMATCH[1]} ny=${BASH_REMATCH[2]} nw=${BASH_REMATCH[3]} nh=${BASH_REMATCH[4]}
+    for b in ${old[@]+"${old[@]}"}; do
+      [[ $b =~ ^(-?[0-9]+),(-?[0-9]+)\ ([0-9]+)x([0-9]+) ]] || continue
+      bx=${BASH_REMATCH[1]} by=${BASH_REMATCH[2]} bw=${BASH_REMATCH[3]} bh=${BASH_REMATCH[4]}
+      if ((nx < bx + bw && bx < nx + nw && ny < by + bh && by < ny + nh)); then continue 2; fi
+    done
+    echo "$n"
+  done < "$2"
+}
+
 cmd_check() {
   # omabox -b NAME check point ...: the box for a checkpoint (run makes its own, diff reads files).
   local name=""
@@ -7897,12 +7958,49 @@ check_point() {
     rc=0; "$self" -b "$NAME" tree "${sargs[@]}" --json > "$out/$id.tree.json" 2>/dev/null || rc=$?
     if [ $rc = 0 ]; then tree=yes; else rm -f -- "${out:?}/${id:?}.tree.json"; fi
   fi
+  # Holes: a window's own transparent pixels; on the screen, the sentinel wallpaper enclosed by
+  # surfaces. A region's are the screen's (a hole its edge cuts is still one), shot once more whole.
+  local holes="" hoff="" hres="" hr x y w h iw ih
+  if [ ${#sels[@]} -gt 0 ]; then
+    hres=$(check_holes "$out/$id.png" window) || hoff="could not read the shot (magick)"
+  else
+    hoff=$(check_holes_off)
+    if [ -z "$hoff" ] && [ -z "$geom" ]; then
+      hres=$(check_holes "$out/$id.png" screen) || hoff="could not read the shot (magick)"
+    elif [ -z "$hoff" ]; then
+      read -r x y w h < <(geom_parse "$geom")
+      read -r iw ih < <(png_size "$out/$id.png") || iw=$w
+      # The region in the screen shot's pixels (both are in the highest scale's: the region's image
+      # is W times that scale wide).
+      if OMABOX_SHOT_NO_BASELINE=1 "$self" -b "$NAME" shot -o "$out/$id.screen.png" >/dev/null 2>&1; then
+        hres=$(check_holes "$out/$id.screen.png" screen "$((x * iw / w)) $((y * iw / w)) $iw $((h * iw / w))") || hoff="could not read the shot (magick)"
+      else
+        hoff="the screen's shot failed"
+      fi
+      rm -f -- "${out:?}/${id:?}.screen.png"
+    fi
+  fi
+  # A hole inside an --ignore region is left out with it.
+  while IFS= read -r hr; do
+    [[ $hr =~ ^(-?[0-9]+),(-?[0-9]+)\ ([0-9]+)x([0-9]+)\ [0-9]+$ ]] || continue
+    for g in ${masks[@]+"${masks[@]}"}; do
+      read -r x y w h <<<"$g"
+      if ((BASH_REMATCH[1] >= x && BASH_REMATCH[2] >= y && BASH_REMATCH[1] + BASH_REMATCH[3] <= x + w && BASH_REMATCH[2] + BASH_REMATCH[4] <= y + h)); then continue 2; fi
+    done
+    holes+="hole $hr"$'\n'
+  done <<<"$hres"
   {
     if [ ${#sels[@]} -gt 0 ]; then echo "of window ${sels[*]}"; elif [ -n "$geom" ]; then echo "of region $geom"; else echo "of screen"; fi
     echo "settled $settled"
     echo "tree $tree"
     for g in ${masks[@]+"${masks[@]}"}; do echo "ignore $g"; done
+    if [ -n "$hoff" ]; then echo "holes off: $hoff"; else echo "holes checked"; printf '%s' "$holes"; fi
   } > "$out/$id.point"
+  if [ -z "$hoff" ] && [ -n "$holes" ]; then
+    while read -r g hr; do
+      say "check point $id: $(check_hole_what "$out/$id.point") at ${hr% *} (${hr##* } px): a hole"
+    done <<<"${holes%$'\n'}"
+  fi
   echo "$out/$id.png"
 }
 
@@ -8020,7 +8118,7 @@ check_run() {
 # not the same from one start to the next); every run differing is data or a time the scenario does
 # not pin. check_approve OUT BASE SPECK RUNS
 check_approve() {
-  local out=$1 base=$2 speck=$3 runs=$4 id r k j n=0 unst=0 best agree most odd
+  local out=$1 base=$2 speck=$3 runs=$4 id r k j n=0 unst=0 best agree most odd l holed=() hoff="" what
   mkdir -p "$base"
   for ((k = 2; k <= runs; k++)); do
     for id in $(check_ids "$out/run1"); do
@@ -8081,32 +8179,60 @@ check_approve() {
       echo "baseline $id"
     fi
     if grep -qx 'settled no' "$out/run$best/$id.point"; then echo "  note: $id was not still when taken"; fi
+    # Holes go into the baseline as they are (a check fails only on new ones), so they are said here.
+    if grep -q '^hole ' "$out/run$best/$id.point"; then
+      holed+=("$id")
+      what=$(check_hole_what "$out/run$best/$id.point")
+      while read -r l r; do
+        [ "$l" != hole ] || echo "holes    $id: $what at ${r% *} (${r##* } px)"
+      done < "$out/run$best/$id.point"
+    fi
+    [ -n "$hoff" ] || hoff=$(sed -n 's/^holes off: //p' "$out/run$best/$id.point")
   done
   cp -- "$out/env.json" "$base/check.json"
   echo "check: baseline of $n checkpoints in $base ($unst with regions left out); runs in $out"
+  [ -z "$hoff" ] || echo "note: no holes looked for on the screen: $hoff"
+  if [ ${#holed[@]} -gt 0 ]; then
+    echo "check: HOLES in ${#holed[@]} of $n checkpoints (${holed[*]}): see-through inside a window, the bar or a popup (a transparent part, a gap, a surface that did not draw). Approved as they are, a check fails only on new ones: look at them (the shots in $base), fix them and approve again, unless that is how it should look."
+  fi
 }
 
 # A run against the baseline: same, changed (regions, tree), new, missing. Exit 1 unless all same.
 check_compare() {
-  local out=$1 base=$2 speck=$3 id fail=0 same=0 n=0 r regs=() e
+  local out=$1 base=$2 speck=$3 id fail=0 same=0 n=0 r regs=() e holes=() nh old what
   for id in $(check_ids "$out/run1"); do
     n=$((n + 1))
     if [ ! -f "$base/$id.png" ]; then
       echo "new      $id: no baseline (omabox check run --approve adds it)"; fail=1; continue
     fi
     check_one "$base" "$out/run1" "$id" "$speck" "$base/$id.unstable" || die "check: could not compare $id (magick)"
-    if [ -z "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ]; then
-      same=$((same + 1)); echo "same     $id"; continue
+    # Holes the baseline does not have fail it even where the shots match (in an unstable region, or
+    # smaller than a speck); the baseline's own were approved with it, and are only noted.
+    holes=()
+    nh=$(check_new_holes "$base/$id.point" "$out/run1/$id.point") || nh=""
+    [ -z "$nh" ] || mapfile -t holes <<<"$nh"
+    old=$(grep -c '^hole ' "$out/run1/$id.point" || true)
+    old=$((old - ${#holes[@]}))
+    what=$(check_hole_what "$out/run1/$id.point")
+    if [ -z "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ] && [ ${#holes[@]} = 0 ]; then
+      same=$((same + 1)); echo "same     $id"
+      [ $old -le 0 ] || echo "  note: $old hole$([ $old = 1 ] || echo s) as in the baseline ($what there: approved)"
+      continue
     fi
     fail=1
+    regs=()
     if [ -n "$CHK_SIZE" ]; then echo "changed  $id: size $CHK_SIZE"
+    elif [ -z "$CHK_REGIONS$CHK_TREE" ]; then
+      echo "holes    $id: $what at ${#holes[@]} place$([ ${#holes[@]} = 1 ] || echo s) the baseline does not have (marked: $out/$id.diff.png)"
     else
-      regs=()
       [ -z "$CHK_REGIONS" ] || mapfile -t regs <<<"$CHK_REGIONS"
-      echo "changed  $id: ${#regs[@]} region$([ ${#regs[@]} = 1 ] || echo s)$([ ${#regs[@]} = 0 ] || echo " (marked: $out/$id.diff.png)")"
+      echo "changed  $id: ${#regs[@]} region$([ ${#regs[@]} = 1 ] || echo s)$([ $((${#regs[@]} + ${#holes[@]})) = 0 ] || echo " (marked: $out/$id.diff.png)")"
       for r in ${regs[@]+"${regs[@]}"}; do echo "  at ${r% *} (${r##* } px)"; done
-      [ ${#regs[@]} = 0 ] || check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || true
     fi
+    for r in ${holes[@]+"${holes[@]}"}; do echo "  hole: $what at ${r% *} (${r##* } px)"; done
+    [ $old -le 0 ] || echo "  note: $old hole$([ $old = 1 ] || echo s) as in the baseline (approved)"
+    regs+=(${holes[@]+"${holes[@]}"})
+    [ -n "$CHK_SIZE" ] || [ ${#regs[@]} = 0 ] || check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || true
     if [ -n "$CHK_TREE" ]; then while IFS= read -r r; do echo "  tree: $r"; done <<<"$CHK_TREE"; fi
     [ "${CHK_SPECKS%% *}" = 0 ] || echo "  specks left out: ${CHK_SPECKS%% *} (${CHK_SPECKS#* } px; parts under $speck px)"
     if grep -qx 'settled no' "$out/run1/$id.point"; then echo "  note: $id was not still when taken"; fi

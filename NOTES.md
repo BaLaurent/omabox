@@ -7319,6 +7319,48 @@ from them.
     --json), t_check (a Qt Quick window: approve with an unstable random label, same, a button moved
     6 px: region and `moved +6,+0 button "Save"`, a new checkpoint, a failing scenario: exit 3).
 
+361. **`check point` finds holes: the sentinel wallpaper inside a surface** (2026-10-16, #252, built
+    on finding 358). `up --clean`'s `#ff00ff` is no theme's colour, so any of it inside a window, the
+    bar or a popup is a defect, and nothing looked for it. Hyprland's rectangles cannot say where: a
+    Quickshell popup is drawn in a full-screen layer (`omarchy-keyboard-panel` is 1920x1080, its card
+    ~400x790 at the top right). So pixels: the 8-connected parts of exactly the sentinel (antialiased
+    edges blend it, so no edge pixel is ever exactly it); a part that reaches the screen's edge is the
+    open wallpaper (gaps between tiled windows join gaps_out), the rest are enclosed by surfaces:
+    holes. A window's own pixels (`--window`, grim -T: alpha kept, no wallpaper behind) have holes
+    where alpha is 0, an edge included (all of the buffer is the window). Rounded corners: Omarchy's
+    windows are square (rounding 0; GTK4 draws square, tiled), but an app's rounded background inside
+    Hyprland's border leaves a pocket at each corner that the border encloses (radius 14: 42 px in a
+    10x10 box); so a part at most 32 px a side filling under half its box (outside an arc: 21% of its
+    square) is a corner, left out and counted. Holes 12 px apart merge (a text's counters with the hole
+    it sits in). A -g checkpoint's holes come from a second, whole-screen shot, kept where they meet
+    the region, in its pixels: on the region alone, a hole its edge cuts would read as open. Holes
+    inside an --ignore region are left out. Off (`holes off: WHY` in ID.point) outside a clean box,
+    with --keep wallpaper, and once a theme set in the box replaced the background link
+    (`current/background` no longer the sentinel's PNG: checked, not assumed). Results: ID.point's
+    `hole X,Y WxH PX` lines (a baseline keeps its own), said by `check point` on stderr. --approve
+    says each (`holes    ID: the wallpaper shows through at ...`, for a window "the window is
+    transparent") and ends with `check: HOLES in N of M checkpoints (IDs)`, exit 0: a design may be
+    see-through on purpose, and an approve is a person's decision; a check fails (`holes    ID: ... at
+    N places the baseline does not have`, or `hole:` lines under `changed`, marked on ID.diff.png) on
+    a hole no baseline hole overlaps, even where the shots match: a hole in an unstable region, or
+    one under the 32 px speck (a 5 px one in t_check). Approved holes are a note under `same`.
+    Measured in boxes (NVIDIA): the stock bar, none; a Qt Quick window with a rounded transparent
+    background, none (its four corners left out), with an 80x50 odd-even hole: found on the screen, by
+    -g and in the window (alpha 0); a GTK4 (libadwaita) window with a transparent background and an
+    80 px gap in a 60 px row, found (80x60) on both, on solitude (rounding 6) too, with no false ones
+    from its rounded windows; a stock popup (KeyboardPanel) over the wallpaper and a real widget's popup
+    (~400x790, its app moved to another workspace), none; a popup whose card forgot its background,
+    one hole of 316x176, and by -g in the region's pixels. ~0.5 s a checkpoint. Limits: a popup over
+    a window shows the window through a hole, not the wallpaper (take a popup's checkpoint over an
+    empty workspace); a hole opening onto the open wallpaper (a card's gap reaching its edge) is open;
+    blur is off in Omarchy's defaults; a theme or a user config that turns it on would blur and tint
+    what a see-through window shows, no longer exactly the sentinel.
+    Tests: t_unit_check (made images: a hole, the gap to the margin, a gap at the edge, rounded
+    content in a border, a region cutting a hole, a window's alpha holes, new against a baseline's,
+    when off), t_check (the window's rounded transparent background: none approved; a 5 px hole fails
+    a check whose shots match; 40 px said at --approve), t_clean (the stock bar none, --keep
+    wallpaper off).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -7337,9 +7379,10 @@ of them, nor wayvnc (finding 34). It needs labwc.
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
-- Visual checks (findings 357-358, #252): a box's clock cannot be pinned (no libfaketime here), so an
-  app's own times differ when a minute ticks between baseline and check; Quickshell popups are drawn
-  in a full-screen layer, so the sentinel cannot be counted inside one yet; an exploratory mode
+- Visual checks (findings 357-358, 361, #252): a box's clock cannot be pinned (no libfaketime here), so an
+  app's own times differ when a minute ticks between baseline and check; holes (finding 361) show
+  only where the wallpaper is behind (a popup over a window hides them) and not where a gap opens
+  onto the open wallpaper; an exploratory mode
   (an agent walking the UI, getting only flagged changes) is not built; not inside ai-jail.
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
   aquamarine patched downstream with #415 is recognised by the symbol it adds (finding 246).
