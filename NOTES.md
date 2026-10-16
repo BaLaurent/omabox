@@ -7200,6 +7200,33 @@ from them.
     desk's bar and toml in the box; then `--from` its save with `--stock-bar`: no line, Omarchy's
     layout, no toml). On the real desk: the line names its shell.json layout and `[font], [bar]`.
 
+355. **Outside a repo a throwaway `run` ran in the box HOME unsaid; `run` names a path word**
+    (2026-10-16, #251). An agent copied a plugin into a scratch dir (no git), broke a line to see a
+    test fail, and ran `omabox run -- python3 tests/runtime.py` there: python3 could not open
+    `/home/sbx/tests/runtime.py`, exit 2, read as a wrong path (piped through `grep`: as no output). A
+    throwaway mounts only the repo it runs from (finding 63: never the dir we happen to be in), and
+    box_exec runs a command in the caller's dir only when the box has it, else in its HOME. Now
+    `run_cwd_note` says it before the command runs (it still runs; `-q` does not hide it): "note:
+    tests/runtime.py is relative to DIR, which is in no repo, so not in this throwaway box: the command
+    runs in the box HOME (/home/sbx); run --overlay DIR (or --ro-bind, read-only) mounts it". A box up
+    whose mounts lack the dir (`run -b`, `run -d`, the session's box from a scratch dir, finding 136)
+    says "which box 'NAME' does not have … down, then up --overlay DIR …"; a dir refuse_src keeps out
+    (HOME itself) says why and offers none. `--from` changes nothing here. *Decided*: said only when a
+    word of the command, or of a script in one (`sh -c 'cd tests && …'`, split at blanks, never
+    globbed; 64 looked at), is a relative path there on the host (not `-…`, `/…`, `~…`) and not one the
+    box HOME has too (`.config/…`: the command may mean the box's). A plain `run -- app` says nothing,
+    nor does a `make` or `pytest` that names no path (the note would be noise for every app run from a
+    scratch dir, and a guess). The note offers `--overlay` first: a test writes into its tree. The cwd
+    test is box_exec's own, now `box_cwd` (same device and inode, or under an overlay), run only when a
+    word qualified. Not for a jailed caller (its dir is its jail's). The skill's "Tests that touch the
+    desktop" says it in a few words (SKILL.md 13995 B: `--json` of gpu/cpu and a sentence on the
+    runtime dir shortened), reference.md and `help run` in full. Tests: t_unit_run_cwd_note (the word:
+    a path, `./x`, a script's, `..`, none for an app, absolute, option, `~`, the box HOME's, a glob;
+    the note's three forms, `?` for a control character), t_run_cwd (a throwaway from a scratch dir:
+    the note, the command's own error and status; with `run --overlay` of it: there, nothing said; a
+    box up: nothing from its repo, the note from the scratch dir for a script's word, none for `true`
+    or `.config`, said for `run -d` too).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

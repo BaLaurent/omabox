@@ -132,7 +132,8 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   the session bus, the tray, notifications, the keyring or a compositor; tests that talk to 127.0.0.1:
   `omabox run --net isolated --allow PORTS -- ctest ...` (`up`'s options work here). With a box
   already up, `run` uses it and the repo is **read-only** there: a test that writes into the tree
-  fails; `omabox down` first.
+  fails; `omabox down` first. Outside a repo (a scratch copy of a project) nothing of the current dir
+  is in the box and the command runs in its HOME: `omabox run --overlay "$PWD" -- python3 tests/x.py`.
 - `run` gives the command the box's environment, not your shell's: a variable a test needs (a test
   server's password from `dev.env`; a test that skips is the sign) goes with `--pass NAME`, off the
   command line, or a whole file with `--env-file`: `omabox run --env-file ./dev.env -- ctest …`
@@ -367,7 +368,10 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   `~/.config/omabox/ro-bind` or passed with `--ro-bind` (`DIR:DEST` for another path, e.g. testing
   path mapping with `--ro-bind ~/nas:/mnt/nas`), mise's toolchains (`omabox run` keeps your PATH, so
   node/python/uv are the host's) and `--plugin` dirs; nothing else of the user's HOME is mounted.
-  Outside a repo a throwaway `run` mounts nothing of the current dir.
+  Outside a repo a throwaway `run` mounts nothing of the current dir: the command runs in the box
+  HOME, and `run` says so when a word of it is a path there ("note: tests/x.py is relative to DIR,
+  which is in no repo, so not in this throwaway box"; a box up without that dir too): `run --overlay
+  DIR` (writable, discarded) or `--ro-bind DIR` brings it in (for a box up: `down`, then `up` with it).
 - A link in the repo that leads out of it (a build cache's `target/ -> ~/.cache/…`) dangles in the
   box: `up` names each at the top of the repo, `run` each argument through one ("outside the box,
   where the link dangles"), with the `--ro-bind TARGET` that mounts it (`down`, then `up` with it)

@@ -186,6 +186,9 @@ XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, \`omabox path --
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
 A box named with -b or \$OMABOX must be up: \`run\` fails rather than start a throwaway. With a
 box up, \`run\` uses it and the repo is read-only there (tests that write into the tree: down first).
+Outside any repo a throwaway mounts nothing of the current dir: the command runs in the box HOME
+(/home/sbx), said when a word of it is a path there; \`run --overlay DIR\` (or --ro-bind DIR)
+brings it in.
 --net isolated --allow PORTS on a throwaway \`run\` keeps tests off your real local services.
 @ up run ports
 Every box has its own network (pasta): by default the internet, the LAN and your servers. Across
@@ -1369,10 +1372,21 @@ caller_path() {
   local IFS=:; printf '%s' "${out[*]}"
 }
 
+# The dir box_exec runs a command in, of the box whose PID 1 is PID, for the caller's dir WD: WD when it
+# is the same directory in the box (a mount of it: same device and inode, or an overlay of it), else
+# the box HOME. Not just any dir of that name: /home/USER and /tmp exist in a box too, empty or the
+# box's own (finding 63). box_cwd PID WD
+box_cwd() {
+  local here there
+  here=$(stat -c %d:%i -- "$2" 2>/dev/null) || here=""
+  there=$(nsenter -t "$1" -U -m --preserve-credentials stat -c %d:%i -- "$2" 2>/dev/null) || there=""
+  if [ -n "$here" ] && [ "$here" = "$there" ]; then echo "$2"
+  elif [ -n "$there" ] && jq -e --arg p "$2/" 'any(.overlays[]?; . as $o | $p | startswith($o + "/"))' "$D/box.json" >/dev/null 2>&1; then echo "$2"
+  else echo /home/sbx; fi
+}
 # Run a command inside the box's namespaces (unprivileged: we own its user namespace) with the
-# session environment. Working directory: $PWD when it is the same directory in the box (a mount of
-# it: same device and inode, or an overlay of it), else the box HOME. Not just any dir of that name:
-# /home/USER and /tmp exist in a box too, empty or the box's own (finding 63).
+# session environment. Working directory: box_cwd's ($PWD when the box has it, else the box HOME;
+# run_cwd_note says the second when the command names a path there, #251).
 # PATH (findings 47, 57): omabox's stand-ins, the box HOME's ~/.local/bin (stubs), then the caller's
 # PATH in its order (so the same node or python wins as on the host), keeping only absolute dirs the
 # box can see, then the rest of the box's own: the order the session itself has.
@@ -1387,7 +1401,7 @@ box_exec() {
   local env=() cwd=/home/sbx pid sys=${BOX_SYS:-} v
   pid=$(box_pid); [ -n "$pid" ] || die "box '$NAME' is not up"
   covers_held
-  local here there wd=$PWD
+  local wd=$PWD
   if [ -n "$sys" ]; then
     [[ ${1:-} == /* ]] || die "box_exec: omabox's own helper goes by its full path, got ${1:-nothing}"
     env=(HOME=/home/sbx LANG="${LANG:-C.UTF-8}" XDG_RUNTIME_DIR="/run/user/$UID" OMABOX_SYS=1)
@@ -1407,13 +1421,7 @@ box_exec() {
     mapfile -d '' env < <(run_read omabox.env)
     ! in_jail || wd=$(jail_get '.cwd // empty')   # a jailed caller's, when its jail and the host agree on it
   fi
-  if [ -n "$wd" ]; then
-    here=$(stat -c %d:%i -- "$wd" 2>/dev/null) || here=""
-    there=$(nsenter -t "$pid" -U -m --preserve-credentials stat -c %d:%i -- "$wd" 2>/dev/null) || there=""
-    if [ -n "$here" ] && [ "$here" = "$there" ]; then cwd=$wd
-    elif [ -n "$there" ] && jq -e --arg p "$wd/" 'any(.overlays[]?; . as $o | $p | startswith($o + "/"))' "$D/box.json" >/dev/null 2>&1; then cwd=$wd
-    fi
-  fi
+  [ -z "$wd" ] || cwd=$(box_cwd "$pid" "$wd")
   # The box's own network namespace (every box has one since finding 89), so its local services are
   # reachable. A box started before that shares the host's, which is not ours to join (EPERM).
   local ns=(-U -m -p -u -i)
@@ -2948,6 +2956,51 @@ run_link_notes() {
     said[$c]=1
     link_note "$w leads through " "$c" "$r" "$how"
   done
+}
+
+# cwd_path_word DIR BOXHOME WORD... (#251): the first word of a command, or of a script in one (`sh -c
+# 'cd sub && make'`, split at blanks, never globbed), that is a relative path there in DIR (`tests/x.py`,
+# `./run.sh`, `.`), and not one BOXHOME has too (`.config/…`: the command may mean the box's; a word
+# with a `..` in it is not looked for there, outside it). Fails when none; 64 looked at at most.
+cwd_path_word() {
+  local dir=$1 home=$2 w t n=0 parts; shift 2
+  for w; do
+    IFS=$' \t\n' read -r -d '' -a parts <<<"$w" || true
+    for t in "${parts[@]}"; do
+      n=$((n + 1)); [ $n -le 64 ] || return 1
+      case $t in -*|/*|'~'*) continue ;; esac
+      [ -e "$dir/$t" ] || continue
+      [[ /$t/ != */../* ]] && [ -e "$home/$t" ] && continue
+      printf '%s\n' "$t"; return 0
+    done
+  done
+  return 1
+}
+# cwd_note HOW WORD DIR NOREPO (#251): that WORD names a path relative to the caller's dir DIR, which
+# the box does not have, so the command runs in the box HOME, with the mount that brings DIR in (HOW:
+# `run` for a throwaway, `down, then up` for a box up), or why a box may not mount it. NOREPO 1: a
+# throwaway started outside any repo, which mounts nothing of DIR.
+cwd_note() {
+  local w=${2//[[:cntrl:]]/?} d=${3//[[:cntrl:]]/?} where fix why
+  if [ "$4" = 1 ]; then where="is in no repo, so not in this throwaway box"; else where="box '$NAME' does not have"; fi
+  if why=$(refuse_src "$3"); then fix="a box may not mount it ($why)"
+  else fix="$1 --overlay $d (or --ro-bind, read-only) mounts it"; fi
+  say "note: $w is relative to $d, which $where: the command runs in the box HOME (/home/sbx); $fix"
+}
+# run_cwd_note HOW WORD... (#251): before `run` runs its command (it still runs): when a word of it is
+# a path in the caller's dir (cwd_path_word) and the box runs it in its HOME, not there (box_cwd),
+# cwd_note says so. A throwaway outside any repo mounts nothing of that dir, and its `No such file`
+# read like a wrong path. Words only: a plain `run -- app` (or `make`, which names no path) says
+# nothing. Not for a jailed caller (its dir is its jail's). No command in the box unless a word is
+# such a path: then box_exec's own stat of the dir.
+run_cwd_note() {
+  local how=$1 w pid norepo=0; shift
+  ! in_jail || return 0
+  w=$(cwd_path_word "$PWD" "$D/home" "$@") || return 0
+  pid=$(box_pid) && [ -n "$pid" ] || return 0
+  [ "$(box_cwd "$pid" "$PWD")" = /home/sbx ] || return 0
+  [ "$how" != run ] || repo_top >/dev/null || norepo=1
+  cwd_note "$how" "$w" "$PWD" "$norepo"
 }
 
 # up --seed SRC:DEST (#80): a file or folder of the host's, copied into the box HOME at DEST before the
@@ -5037,6 +5090,7 @@ cmd_run() {
     touch "$D/used" 2>/dev/null || true   # use, for idle expiry (so is its end, below)
     take_over || need_box   # gone while it waited: says so
     run_link_notes "down, then up" 0 "$@"   # its words through a link out of the repo (#235)
+    run_cwd_note "down, then up" "$@"       # a path in this dir, which the box does not have (#251)
     if [ $detach = 1 ]; then
       # --replace: the earlier job of this command stopped and its windows gone before the screen is
       # watched (their closing is not what --wait waits for) and before it starts again (finding 110).
@@ -5118,6 +5172,7 @@ cmd_run() {
   # Its warnings and notes still reach the caller (another Hyprland version than hyprctl's, finding 116).
   printf '%s\n' "$err" | grep -E '^omabox: (warning|note):' >&2 || true
   run_link_notes run 1 "$@"   # (links at the top of the repo: its up said them)
+  run_cwd_note run "$@"       # outside a repo: nothing of this dir in the box (#251)
   local rc=0
   box_exec "$@" || rc=$?
   run_gone $rc

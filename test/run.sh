@@ -12018,12 +12018,65 @@ t_link_out() {
   check_fails "...no note" grep -q 'outside the box' "$TMP/lo.err"
 }
 
+# #251: the word of a command that names a path in the caller's dir, and the note `run` says of it.
+t_unit_run_cwd_note() {
+  local d=$TMP/ucw; mkdir -p "$d/dir/tests" "$d/dir/.config" "$d/home/.config" "$d/h"
+  : > "$d/dir/tests/x.py"; : > "$d/dir/run.sh"
+  check_eq "cwd_path_word: a relative path there" tests/x.py "$(lib cwd_path_word "$d/dir" "$d/home" python3 tests/x.py)"
+  check_eq "...a ./ path, the command itself" ./run.sh "$(lib cwd_path_word "$d/dir" "$d/home" ./run.sh --fast)"
+  check_eq "...a word of a script (sh -c)" tests "$(lib cwd_path_word "$d/dir" "$d/home" sh -c 'cd tests && make')"
+  check_eq "...one with .. in it" ../run.sh "$(lib cwd_path_word "$d/dir/tests" "$d/home" cat ../run.sh)"
+  check_fails "...a plain app: none" lib cwd_path_word "$d/dir" "$d/home" foot --version
+  # shellcheck disable=SC2088 # a literal ~/x, as a command's word has it
+  check_fails "...absolute, an option, ~: none" lib cwd_path_word "$d/dir" "$d/home" cat "$d/dir/run.sh" --file=tests '~/x'
+  check_fails "...one the box HOME has too: none" lib cwd_path_word "$d/dir" "$d/home" ls .config
+  check_fails "...a glob is not expanded" lib cwd_path_word "$d/dir" "$d/home" 'ls *'
+  check_eq "cwd_note: a throwaway outside any repo" \
+    "omabox: note: tests/x.py is relative to $d/dir, which is in no repo, so not in this throwaway box: the command runs in the box HOME (/home/sbx); run --overlay $d/dir (or --ro-bind, read-only) mounts it" \
+    "$(NAME=bx lib cwd_note run tests/x.py "$d/dir" 1 2>&1)"
+  check_eq "...a box up that does not have the dir" \
+    "omabox: note: tests/x.py is relative to $d/dir, which box 'bx' does not have: the command runs in the box HOME (/home/sbx); down, then up --overlay $d/dir (or --ro-bind, read-only) mounts it" \
+    "$(NAME=bx lib cwd_note "down, then up" tests/x.py "$d/dir" 0 2>&1)"
+  check_match "...a dir a box may not mount (HOME): why, no mount offered" "the command runs in the box HOME \(/home/sbx\); a box may not mount it \(it contains $d/h/\)$" \
+    "$(HOME=$d/h NAME=bx lib cwd_note run x "$d/h" 1 2>&1)"
+  check_match "...a control character printed as ?" "note: e\?\[31m is relative to" "$(NAME=bx lib cwd_note run $'e\e[31m' "$d/dir" 1 2>&1)"
+}
+
+# #251: a command whose words name a path in the caller's dir, run where the box does not have that
+# dir (a throwaway outside any repo, a box up from elsewhere), is said with the mount that brings the
+# dir in, and still runs, in the box HOME. Nothing said with the dir mounted, from the box's repo, for a
+# plain command, or for a word the box HOME has too.
+t_run_cwd() {
+  local B=$P-cwd repo s=$TMP/cwd-scratch err rc
+  repo=$(tmp_repo cwd); mkdir -p "$s/tests" "$s/.config" "$repo/tests"; echo hi > "$s/tests/x"; echo repo > "$repo/tests/x"
+  err=$(cd "$s" && env -u OMABOX "$CLI" run --no-shell -- cat tests/x 2>&1); rc=$?
+  check_match "a throwaway outside a repo: said, with the mount" \
+    "note: tests/x is relative to $s, which is in no repo, so not in this throwaway box: the command runs in the box HOME \(/home/sbx\); run --overlay $s \(or --ro-bind, read-only\) mounts it" "$err"
+  check_match "...the command still ran, in the box HOME" "cat: tests/x: No such file or directory" "$err"
+  check_eq "...its status" 1 "$rc"
+  check_eq "a throwaway with run --overlay of it: there" hi "$(cd "$s" && env -u OMABOX "$CLI" run --no-shell --overlay "$s" -- cat tests/x 2>"$TMP/cwd.err")"
+  check_fails "...nothing said" grep -q 'is relative to' "$TMP/cwd.err"
+  err=$(cd "$repo" && ob up "$B" --no-shell 2>&1 >/dev/null) || { no "up $B" "$err"; return; }
+  check_eq "a box up, run from its repo: there" repo "$(cd "$repo" && ob run -b "$B" -- cat tests/x 2>"$TMP/cwd.err")"
+  check_fails "...nothing said" grep -q 'is relative to' "$TMP/cwd.err"
+  err=$(cd "$s" && ob run -b "$B" -- sh -c 'cat tests/x' 2>&1)
+  check_match "...from another dir: said for a script's word, with down, then up" \
+    "note: tests/x is relative to $s, which box '$B' does not have: the command runs in the box HOME \(/home/sbx\); down, then up --overlay $s \(or --ro-bind, read-only\) mounts it" "$err"
+  err=$(cd "$s" && ob run -b "$B" -- true 2>&1)
+  check_fails "...a plain command: nothing said" grep -q 'is relative to' <<<"$err"
+  err=$(cd "$s" && ob run -b "$B" -- ls -d .config 2>&1)
+  check_fails "...a word the box HOME has too: nothing said" grep -q 'is relative to' <<<"$err"
+  err=$(cd "$s" && ob run -b "$B" -d -q -- cat tests/x 2>&1)
+  check_match "...run -d: said too" "note: tests/x is relative to $s, which box '$B' does not have" "$err"
+  check "down" ob down "$B"
+}
+
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

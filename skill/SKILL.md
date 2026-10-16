@@ -71,9 +71,9 @@ omabox down                                # when done (never --all: it takes ot
 ```
 
 Also: `drag`, `scroll`, `pointer`, `save`/`up --from` (`omabox help`).
-Rendering cost: `omabox gpu 10`, each of the box's processes' share of GPU engine time (`--json`),
+Rendering cost: `omabox gpu 10`, each of the box's processes' share of GPU engine time,
 in a box whose mode matches the monitor (`up --size host`); not host-wide tools. CPU and memory:
-`omabox cpu 10 [--settle 5] [--app NAME | --pid PID]` (% of one core, RSS, PSS; `--json`).
+`omabox cpu 10 [--settle 5] [--app NAME | --pid PID]` (% of one core, RSS, PSS).
 ref: Screen size and rendering cost.
 
 ## Driving an app
@@ -112,9 +112,10 @@ ref: Shots. **The pointer is test state**
 ## Tests that touch the desktop
 
 `omabox run -- ctest --test-dir build --output-on-failure`. With no box up, `run` uses a throwaway box
-with the repo as a discarded overlay; with one up, the repo is read-only in it. A secret a test needs:
-`--pass NAME` or `--env-file FILE`, never on the command line. Check a keyring **inside the box**
-(`omabox run -- secret-tool …`), never on the host (the user's real keyring). ref: Tests that touch the desktop.
+with the repo as a discarded overlay (outside a repo: in the box HOME, without the current dir;
+`run --overlay DIR`); with one up, the repo is read-only in it. A secret a test needs: `--pass NAME`
+or `--env-file FILE`, never on the command line. Check a keyring **inside the box** (`omabox run --
+secret-tool …`), never the host's. ref: Tests that touch the desktop.
 
 ## Inside ai-jail
 
@@ -148,9 +149,8 @@ checkout; never `omarchy dev link` on the host: ref: Reviewing an Omarchy change
 Read-only in it: the repo (same path), `--ro-bind`, `--plugin` and `--theme-dir` dirs, mise's
 toolchains; nothing else of the user's HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret
 stores or the runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`;
-`omabox path` → `<dir>/home` on the host). The box's /run/user/$UID is `<dir>/run` from the host
-(`omabox path --run`); the host's own /run/user/$UID is the real session's: never read app state
-there. Private session bus and keyring; no system bus or devices; audio: `up --audio`; `/sys`: the host's.
+`omabox path` → `<dir>/home` on the host). The box's /run/user/$UID is `omabox path --run` on the host; the
+host's own is the real session's: never read app state there. Private session bus and keyring; no system bus or devices; audio: `up --audio`; `/sys`: the host's.
 ref: Mounts, HOME and the session.
 
 ## Showing the user

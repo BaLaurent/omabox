@@ -30,6 +30,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   starts from Omarchy's default)" when they differ from Omarchy's (names only), and the skill's row
   for theme-dependent results says `--theme NAME --stock-bar`. `--stock-bar` from a save now drops
   the save's `shell.toml` too.
+- **`run` says when the command runs in the box HOME because the box lacks your current dir.**
+  Outside a repo a throwaway `run` mounts nothing of the current dir, so `omabox run -- python3
+  tests/x.py` from a scratch copy failed with "can't open file '/home/sbx/tests/x.py'", which read as
+  a wrong path. When a word of the command (or of an `sh -c` script) is a path in your current dir
+  and the box does not have that dir, `run` now says so first, with the mount that brings it in
+  (`run --overlay DIR`, or `--ro-bind DIR`; for a box that is up, `down`, then `up` with it). A plain
+  `run -- app` says nothing.
 
 ## 0.7.0 — 2026-10-16
 
