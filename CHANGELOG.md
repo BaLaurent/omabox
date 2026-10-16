@@ -19,6 +19,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   window of class `xdg-desktop-portal-gtk` when nothing matches the word as a whole class, a last
   dotted part or part of a title; those still win, and a word matching several windows is still
   refused with each one listed.
+- **`up` says when a plugin under test gets your desktop's settings, and `--no-seed extensions`
+  starts without them.** A box gets a copy of your `~/.config/omarchy/extensions`, where shell
+  plugins keep their settings (an on/off switch for their key binds, say). A `--plugin` whose switch
+  was off on the desktop bound nothing in the box, and the test failed with only a timeout. Now `up`
+  prints "seeded extensions/NAME.json from your desk: plugin ID reads it" for each such file, and
+  `--no-seed extensions` gives the box a new Omarchy user's `extensions` instead. The skill now lists
+  everything `up` copies from your desktop.
 
 ### Fixed
 

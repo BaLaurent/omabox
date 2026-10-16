@@ -6800,3 +6800,25 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     backtrace named; the held branch not hit there: gdb wrote its backtraces before lua looked).
     `t_unit_hypr_lost` (stopped, held, traced but running, gone with and without a watch, an exit's
     status, no line, a linked log), `t_hyprland_crash`, `t_hung` unchanged.
+335. **A plugin under test got the desk's settings unsaid; `up` names them, `--no-seed extensions`**
+    (2026-10-16, #231). `seed_home` copies the desk's `~/.config/omarchy/extensions` (finding 69),
+    where shell plugins keep their settings (`hotkey-wheel.json`, read by its QML, its Lua binds and
+    its CLI). Its on/off switch was off on the desk, so the `--plugin` box bound nothing and the test
+    failed with only `unsatisfied: no layer … after 10s`. `seed_extensions` now says, for each file or
+    folder of the desk's `extensions/` that a `--plugin`'s files name as `extensions/NAME` (grep -rI,
+    `.git` and `node_modules` left out; the name followed by no name character, so `x` is not
+    `x.json`'s), "up: seeded extensions/NAME from your desk: plugin ID reads it (--no-seed extensions
+    starts without it)". Only `--plugin` ones: every copied file would be noise (the menu's extension,
+    other plugins'), and a `--desk-shell` box is the desk as it is, said as a whole. A plugin that
+    builds the path from parts is not seen. `up --no-seed extensions` (comma-separated, repeatable;
+    only `extensions`: nothing else of the look has had a case yet) leaves the folder out, so the box
+    has `/etc/skel`'s (a new user's; a `--from` save's stay), and a `--seed` puts a fixture there;
+    `box.json`/`ls --json` have `no_seed`; `up` again with another is refused (seeded at start only);
+    `run` passes it to a throwaway box. The folder comes from `OMABOX_DESK_CONFIG` when set (the
+    suite's fake desk, as `--desk-shell`'s; never a jailed caller's), else `~/.config/omarchy`;
+    `branding/` and the rest still from `~/.config/omarchy`. The skill's "Mounts, HOME and the
+    session" lists everything `up` copies from the desk, from `seed_home`. Tests: t_unit_no_seed
+    (what is copied and said, two plugins, a `--desk-shell` one, the opt-out, the jail, the list's
+    parsing and refusals), t_no_seed (a box on a fake desk: the line and the desk's copy; with
+    `--no-seed extensions` none, skel's file and a `--seed`; `ls --json`, `up` again both ways). On the
+    real desk: `up --plugin` of the hotkey wheel says its `hotkey-wheel.json`.

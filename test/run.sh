@@ -1643,6 +1643,56 @@ sneaky.json|a link to api-keys.env: a secret's name"
   check_fails "...none of them made the box" test -e "$(ob path "$P-ds0" 2>/dev/null || echo /nonexistent)"
 }
 
+# #231: what `up` copies of the desk's ~/.config/omarchy/extensions (OMABOX_DESK_CONFIG: a fake desk),
+# the line for each file a --plugin's code names there, and --no-seed's parsing.
+ext_fixture() {   # DIR PREFIX: a desk with extensions/ and two plugins naming files in it
+  local d=$1 p=$2 n
+  mkdir -p "$d/desk/extensions/$p-scripts" "$d/pa" "$d/pb" "$d/pc"
+  echo '{"enabled": false}' > "$d/desk/extensions/$p-wheel.json"
+  echo '{"other": 1}' > "$d/desk/extensions/other.json"
+  echo bare > "$d/desk/extensions/$p-wheel"
+  echo '{"hidden": 1}' > "$d/desk/extensions/.hidden.json"
+  echo 'echo hi' > "$d/desk/extensions/$p-scripts/x"
+  for n in pa pb pc; do
+    jq -n --arg id "$p.$n" '{schemaVersion: 1, id: $id, name: $id, version: "0.1.0", kinds: ["bar-widget"],
+      entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$d/$n/manifest.json"
+    printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$n" > "$d/$n/W.qml"
+  done
+  printf 'local f = config .. "/omarchy/extensions/%s-wheel.json"\nlocal s = "/omarchy/extensions/%s-scripts/"\n' "$p" "$p" > "$d/pa/bindings.lua"
+  printf 'path: Quickshell.env("HOME") + "/.config/omarchy/extensions/%s-wheel.json"\n' "$p" > "$d/pb/Settings.qml"
+}
+t_unit_no_seed() {
+  local d=$TMP/$P-ext h out ln
+  ext_fixture "$d" "$P"; h=$d/home; mkdir -p "$h"
+  # seed_extensions HOME DESK_IDS NO_SEED PLUGIN...
+  se() { OMABOX_DESK_CONFIG=$d/desk DESK_IDS=$2 NO_SEED=$3 bash -c 'source "$1"; h=$2; shift 2; PLUGINS=("$@"); seed_extensions "$h"' _ \
+    "$TMP/lib/bin/omabox" "$1" "${@:4}" 2>&1; }
+  out=$(se "$h" "" "" "$P.pa	$d/pa" "$P.pb	$d/pb" "$P.pc	$d/pc")
+  ln="omabox: up: seeded extensions/$P-wheel.json from $d/desk: plugins $P.pa $P.pb read it (--no-seed extensions starts without it)"
+  check_eq "a file two --plugins name: said once, with both" "$ln" "$(grep -F -- "-wheel.json" <<<"$out")"
+  check_match "...a folder one names" "seeded extensions/$P-scripts from $d/desk: plugin $P.pa reads it" "$out"
+  check_eq "...nothing else: not a file no plugin names, nor one whose name only starts another's" 2 "$(grep -c seeded <<<"$out")"
+  check_eq "the box HOME has the desk's extensions, without its hidden files" \
+    "other.json $P-scripts/x $P-wheel $P-wheel.json" \
+    "$(cd "$h/.config/omarchy/extensions" && command find . -type f | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+  check_eq "...as the desk has them" '{"enabled": false}' "$(cat "$h/.config/omarchy/extensions/$P-wheel.json")"
+  check_eq "a --desk-shell plugin's: copied, unsaid (that box says the desk as a whole)" "" \
+    "$(se "$d/home2" "$P.pa $P.pb" "" "$P.pa	$d/pa" "$P.pb	$d/pb" | grep seeded)"
+  check "...still copied" test -f "$d/home2/.config/omarchy/extensions/$P-wheel.json"
+  check_eq "--no-seed extensions: nothing copied, nothing said" "" "$(se "$d/home3" "" extensions "$P.pa	$d/pa")"
+  check_fails "...no extensions folder made" test -e "$d/home3/.config/omarchy/extensions"
+  check_eq "the desk: OMABOX_DESK_CONFIG, but never a jailed caller's" "$d/desk $TMP/fh/.config/omarchy" \
+    "$(OMABOX_DESK_CONFIG=$d/desk lib desk_dir) $(OMABOX_DESK_CONFIG=$d/desk OMABOX_JAIL='{"roots":[]}' HOME=$TMP/fh lib desk_dir)"
+  # --no-seed's list: comma-separated, repeatable, once each; only extensions so far.
+  check_eq "no_seed_spec: a list, once each, with what earlier ones gave" "extensions extensions" \
+    "$(lib no_seed_spec extensions,extensions) $(lib no_seed_spec ,extensions extensions)"
+  check_match "...anything else refused, naming what it takes" "--no-seed: .*comma-separated: extensions .*got 'themes'" \
+    "$(lib no_seed_spec extensions,themes 2>&1)"
+  check_match "up --no-seed themes: refused before anything is made" "--no-seed: .*got 'themes'" "$(ob up "$P-ns0" --no-seed themes 2>&1)"
+  check_fails "...no box dir" test -e "$XDG_RUNTIME_DIR/omabox/$P-ns0"
+  check_match "...from run too (a throwaway box's option)" "--no-seed: .*got 'x'" "$(ob run --no-seed x -- true 2>&1)"
+}
+
 t_unit_bar_filter() {
   # shellcheck disable=SC2329 # called below
   bar() { lib shell_json_filter "$1" true "$2" <<<"$3" | jq -c "${4:-.bar.layout}"; }
@@ -4412,6 +4462,30 @@ t_desk_shell() {
   check_eq "...a linked one mounted from where its link leads, as --plugin mounts it" "$d/elsewhere/db mounted" \
     "$(jq -r --arg i "$P.db" '"\(.plugin_dirs[$i]) \(.plugin_via[$i])"' "$(ob path "$B")/box.json")"
   check_match "up --desk-shell again: already up" "already up" "$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --desk-shell 2>&1)"
+  ob down "$B" >/dev/null 2>&1
+}
+
+# #231: a --plugin's settings file in the desk's extensions/ (a fake desk, OMABOX_DESK_CONFIG; never the
+# user's) is copied into the box and said; with --no-seed extensions it is not, and a --seed puts one in.
+t_no_seed() {
+  local B=$P-ns d=$TMP/$P-ns out c=/home/sbx/.config/omarchy/extensions
+  ext_fixture "$d" "$P"
+  out=$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --no-shell --plugin "$d/pa" 2>&1) || { no "up --plugin on a fake desk" "$out"; return; }
+  check_match "up says the plugin's file it seeded from the desk" \
+    "up: seeded extensions/$P-wheel.json from $d/desk: plugin $P.pa reads it \(--no-seed extensions starts without it\)" "$out"
+  check_eq "...the desk's copy is in the box" '{"enabled": false}' "$(ob run -b "$B" -- cat "$c/$P-wheel.json")"
+  check_match "up --no-seed extensions on that box: refused (seeded only at start)" \
+    "already up, without what you asked for: --no-seed extensions \(it started with all of it; files are seeded only when a box starts\)" \
+    "$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --no-seed extensions 2>&1)"
+  ob down "$B" >/dev/null 2>&1
+  echo '{"enabled": true}' > "$d/fixture.json"
+  out=$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --no-shell --plugin "$d/pa" --no-seed extensions \
+    --seed "$d/fixture.json:~/.config/omarchy/extensions/$P-fixed.json" 2>&1) || { no "up --no-seed extensions" "$out"; return; }
+  check_fails "--no-seed extensions: nothing said" grep -q seeded <<<"$out"
+  check_eq "...none of the desk's in the box; a new user's, and the --seed" "omarchy-menu.jsonc $P-fixed.json" \
+    "$(ob run -b "$B" -- sh -c "ls $c 2>/dev/null" | LC_ALL=C sort | paste -sd ' ')"
+  check_eq "...ls --json: no_seed" '["extensions"]' "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | .no_seed')"
+  check_match "...up again with it: already up" "already up" "$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --no-seed extensions 2>&1)"
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -11154,10 +11228,10 @@ t_inspect() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_gdb_crashes t_unit_hypr_lost t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

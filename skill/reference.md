@@ -337,8 +337,25 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   or a submodule, the main checkout's `.git` too: git reads work there, writes fail), plus any dirs listed in
   `~/.config/omabox/ro-bind` or passed with `--ro-bind` (`DIR:DEST` for another path, e.g. testing
   path mapping with `--ro-bind ~/nas:/mnt/nas`), mise's toolchains (`omabox run` keeps your PATH, so
-  node/python/uv are the host's), `--plugin` dirs and the user's git name/email; nothing else of the
-  user's HOME. Outside a repo a throwaway `run` mounts nothing of the current dir.
+  node/python/uv are the host's) and `--plugin` dirs; nothing else of the user's HOME is mounted.
+  Outside a repo a throwaway `run` mounts nothing of the current dir.
+- **Copied from the desk into the box HOME at `up`** (copies: edits after `up` do not reach the box;
+  hidden files and `node_modules` left out, links inside stay links), on top of a new Omarchy user's
+  HOME (`/etc/skel`): `shell.json` (the bar's settings, with only built-in widgets and the mounted
+  plugins; `--stock-bar`: Omarchy's default instead) and `shell.toml` (not with `--stock-bar`); the
+  current theme, its name and background, and your wallpapers for it (`backgrounds/THEME/`; none of
+  it with `--theme NAME`); your custom themes (`themes/*`); `branding/`; **`extensions/`**, where
+  plugins keep their settings; the terminal configs (`~/.config/{foot,alacritty,ghostty,kitty}`, the
+  `*xdg-terminals.list` choice); the Hyprland toggles (`~/.local/state/omarchy/toggles/hypr`); git's
+  `user.name` and `user.email` only. Never `api-keys.env`, `hooks/`, keyrings, tokens or the rest of
+  git's config. `--desk-shell` adds every plugin, `shell.json` unfiltered and the other files beside
+  it; `--seed SRC:DEST` adds what you name.
+- **A plugin under test reads its settings from the desk's `extensions/`**
+  (`~/.config/omarchy/extensions/NAME.json`), an on/off switch too: one off on the desk leaves its
+  binds or widget off in the box, and the test fails with only a wait's timeout. `up` says each such
+  file a `--plugin`'s code names (`seeded extensions/NAME.json from your desk: plugin ID reads it`);
+  `up --no-seed extensions` starts without the desk's (a new user's, `/etc/skel`'s), and a test
+  that needs a setting seeds it (`--seed ./fixture.json:.config/omarchy/extensions/NAME.json`).
 - Your custom themes (`~/.config/omarchy/themes/*`) are copied into the box HOME at `up`, a theme
   that is a link to a working copy too: edits after `up` do not reach the box, and from a git
   worktree that copy is the link's checkout (usually main), not yours; `up` notes it. `omabox up
@@ -515,6 +532,9 @@ most people will. Then:
   menu or overlay loads its QML only when summoned: its errors show then, in `omabox log shell`. A
   widget placed in another mounted plugin's layout is `hosted` (`plugin_status`'s `host` names that
   plugin), with no warning: check it with that plugin's IPC.
+- **Its settings** are the desk's (`~/.config/omarchy/extensions/NAME.json`, copied at `up`, which
+  says so): an on/off switch off on the desk is off in the box. `up --no-seed extensions` starts
+  without them; `--seed` a fixture for a known state (Mounts, HOME and the session above).
 - **Linked or mounted**: a plugin inside the repo `up` runs from (or a same-path `--ro-bind`, or an
   `--overlay`) is a link in the box HOME to its own path, as a plugin linked from its repo is on a
   desk, so a helper that finds the rest of its repo through `readlink -f "$0"` works; any other PATH

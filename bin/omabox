@@ -79,6 +79,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...]
             [--env KEY=VAL]...
+            [--no-seed extensions]                       your plugins' settings files left on the desk
             [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/
             [--theme NAME]                               start on that theme, not your desktop's current one
             [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
@@ -219,6 +220,12 @@ before its session starts, for a plugin that reads its config once at start; the
 box's changes stay in the box; a link already in DEST is replaced, never written through. Never
 into a --plugin's or --theme-dir's folder there (refused: it would replace the plugin or theme):
 write the file in that folder instead.
+@ up run
+--no-seed extensions: the box starts without your ~/.config/omarchy/extensions (the plugins' settings
+files, the menu's extension), with a new Omarchy user's (/etc/skel's; a --from save's own stay).
+Otherwise \`up\` copies it, and says each file a --plugin's code names there ("seeded
+extensions/NAME.json from your desk"): that plugin starts on your desk's settings, an on/off switch
+in them too. Comma-separated, repeatable; only extensions so far.
 @ up run
 --theme-dir DIR: a theme you are editing, live: the box HOME's ~/.config/omarchy/themes/NAME (DIR's
 name) is a link to DIR at its own path, in place of the copy \`up\` makes of each of your themes. The
@@ -2377,7 +2384,8 @@ seed_home() {
     [ -e "$p" ] || continue
     home_unlink "$h" ".config/${p##*/}"; cp "$p" "$h/.config/" 2>/dev/null || true
   done
-  for dir in branding extensions; do seed_copy "$HOME/.config/omarchy/$dir" "$h" ".config/omarchy/$dir"; done
+  seed_copy "$HOME/.config/omarchy/branding" "$h" .config/omarchy/branding
+  seed_extensions "$h"
   # Each theme on its own: one linked in from the repo it is developed in is followed that far, a copy
   # made now (said when that repo is the one `up` runs from, or another checkout of it: #170). A theme
   # `up --theme-dir` names is a link instead, to its dir at its own path in the box: live.
@@ -2426,6 +2434,60 @@ seed_home() {
     say "--desk-shell: $(wc -w <<<"$DESK_IDS") plugins of $DESK_SHOWN/plugins, its shell.json (idle held off)," \
       "and ${#copied[@]} files copied into the box's ~/.config/omarchy${copied[*]:+: ${copied[*]}}"
   fi
+}
+
+# The desk's Omarchy config folder seed_extensions copies from (#231): OMABOX_DESK_CONFIG, the suite's
+# fake desk (as desk_config's for --desk-shell), never a jailed caller's; else ~/.config/omarchy.
+desk_dir() {
+  if [ -n "${OMABOX_DESK_CONFIG:-}" ] && ! in_jail; then echo "$OMABOX_DESK_CONFIG"; else echo "$HOME/.config/omarchy"; fi
+}
+
+# up --no-seed WHAT (#231): what of the desk a box starts without, comma-separated, repeatable; HAVE
+# is what earlier ones gave. Only `extensions` so far (the desk's ~/.config/omarchy/extensions: the
+# box has /etc/skel's, a new Omarchy user's, or a --from save's). Prints the list, comma-separated.
+# no_seed_spec LIST [HAVE]
+no_seed_spec() {
+  local w out=() IFS=,
+  for w in ${2:-} $1; do
+    [ -n "$w" ] || continue
+    case $w in
+      extensions) ;;
+      *) say "--no-seed: what a box starts without of your desk, comma-separated: extensions (~/.config/omarchy/extensions, your plugins' settings), got '$w'"; return 1 ;;
+    esac
+    [[ ",${out[*]}," == *",$w,"* ]] || out+=("$w")
+  done
+  echo "${out[*]}"
+}
+
+# The desk's extensions/ into the box HOME HOME (seed_home), but with --no-seed extensions (NO_SEED).
+# Each of its files and folders a --plugin's files name ("extensions/NAME") is said (#231): that
+# plugin's settings in the box are the desk's, an on/off switch in them too, which once left a
+# plugin's binds unregistered with only a wait's timeout to show. Not a --desk-shell plugin's: that
+# box is the desk as it is, said as a whole. Nor one whose path a plugin builds (no "extensions/NAME").
+seed_extensions() {
+  local h=$1 src s e n re p ids line shown
+  [[ ",${NO_SEED:-}," != *,extensions,* ]] || return 0
+  src=$(desk_dir)/extensions
+  seed_copy "$src" "$h" .config/omarchy/extensions
+  s=$(readlink -f -- "$src" 2>/dev/null) && [ -d "$s" ] || return 0
+  ! refuse_src "$s" look >/dev/null || return 0
+  shown="your desk"; [ "$src" = "$HOME/.config/omarchy/extensions" ] || shown=${src%/extensions}
+  for e in "$s"/*; do
+    n=${e##*/}
+    case $n in node_modules|api-keys.env) continue ;; esac   # (seed_copy leaves them out)
+    { [ -e "$h/.config/omarchy/extensions/$n" ] || [ -L "$h/.config/omarchy/extensions/$n" ]; } || continue
+    # shellcheck disable=SC2016,SC2001 # a regex, escaped for one
+    re=$(sed 's/[][\.*^$+?(){}|]/\\&/g' <<<"$n")
+    ids=()
+    for p in "${PLUGINS[@]}"; do
+      [[ " ${DESK_IDS:-} " != *" ${p%%$'\t'*} "* ]] || continue
+      grep -rqsIE --exclude-dir=.git --exclude-dir=node_modules -e "extensions/$re([^A-Za-z0-9_.-]|\$)" -- "${p#*$'\t'}/" &&
+        ids+=("${p%%$'\t'*}")
+    done
+    [ ${#ids[@]} -gt 0 ] || continue
+    line="plugin ${ids[0]} reads it"; [ ${#ids[@]} = 1 ] || line="plugins ${ids[*]} read it"
+    say "up: seeded extensions/$n from $shown: $line (--no-seed extensions starts without it)"
+  done
 }
 
 # The user's own wallpapers for THEME, ~/.config/omarchy/backgrounds/THEME (where
@@ -2834,6 +2896,9 @@ up_already() {
   case " $given " in *" seed "*)
     [ "$(printf '%s\n' "${seeds[@]}" | jq -R . | jq -sc .)" = "$(jq -c '.seeds // []' "$D/box.json" 2>/dev/null)" ] ||
       diff+=("--seed (files are seeded only when a box starts)") ;; esac
+  case " $given " in *" no-seed "*)
+    [ "$(jq -r '.no_seed // [] | join(",")' "$D/box.json" 2>/dev/null)" = "$NO_SEED" ] ||
+      diff+=("--no-seed $NO_SEED (it started with $(jq -r '.no_seed // [] | if length == 0 then "all of it" else "all but " + join(",") end' "$D/box.json" 2>/dev/null); files are seeded only when a box starts)") ;; esac
   case " $given " in *" theme "*) [ "$(meta theme)" = "$THEME" ] || diff+=("--theme $THEME (it started on $(meta theme | grep . || echo "your desktop's theme"))") ;; esac
   case " $given " in *" theme-dir "*)
     [ "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R . | jq -sc .)" = "$(jq -c '.theme_dirs // []' "$D/box.json" 2>/dev/null)" ] ||
@@ -2852,7 +2917,7 @@ up_already() {
 }
 
 cmd_up() {
-  STOCK_BAR=0 THEME="" DESK_SHELL=0 DESK="" DESK_SHOWN="" DESK_IDS="" DESK_FILES=""
+  STOCK_BAR=0 THEME="" DESK_SHELL=0 DESK="" DESK_SHOWN="" DESK_IDS="" DESK_FILES="" NO_SEED=""
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 audio=0 audio_missing="" owner=""
   local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 nopointer=0 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
@@ -2873,7 +2938,7 @@ cmd_up() {
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--stock-bar|--desk-shell|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--monitor|--theme-dir|--theme)
+      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--omarchy|--stock-bar|--desk-shell|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--no-seed|--monitor|--theme-dir|--theme)
         given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
@@ -2893,6 +2958,7 @@ cmd_up() {
       --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || { ! in_jail || jail_refuse --ro-bind "${2%%:/*}" "$W_WHOLE"; die "--ro-bind: no such path: ${2%%:/*}"; }
         robinds+=("$spec"); g=${2%%:/*}; named+=("mount ${g/#\~/$HOME} into"); shift ;;
       --seed) optarg "$@"; spec=$(seed_spec "$2") || exit 1; seeds+=("$spec"); g=${2%%:*}; named+=("seed ${g/#\~/$HOME} into"); shift ;;
+      --no-seed) optarg "$@"; NO_SEED=$(no_seed_spec "$2" "$NO_SEED") || exit 1; shift ;;
       --monitor) optarg "$@"; monitor_spec "$2" >/dev/null || exit 1; monitors+=("$2"); shift ;;
       --theme-dir) optarg "$@"
         if in_jail; then { g=$(jail_path "$2") && [ -d "$g" ] && g=$(jail_sees "$g"); } || jail_refuse --theme-dir "$2" "$W_THEME"
@@ -3317,7 +3383,7 @@ cmd_up() {
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --arg aq_main "${AQ_MAIN:-}" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
     --argjson themes "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R 'select(. != "")' | jq -s .)" --arg theme "$THEME" \
     --arg desk "$DESK" --arg desk_ids "$DESK_IDS" --arg desk_files "$DESK_FILES" \
-    --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" \
+    --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" --arg no_seed "$NO_SEED" \
     '{name: $name, mode: $mode, size: $size, scale: $scale, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs,
       plugin_via: (reduce $plugins[] as $i ({}; .[$i] = (if $linked | index($i) then "linked" else "mounted" end))), net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, audio: $audio, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
@@ -3325,6 +3391,7 @@ cmd_up() {
       aquamarine: ({kind: $aq_kind, version: $aq_ver, fixed: $aq_fixed} + (if $aq_main != "" then {main_checkout: $aq_main} else {} end))}
       + (if $render != null then {render: $render} else {} end)
       + (if ($seeds | length) > 0 then {seeds: $seeds} else {} end)
+      + (if $no_seed != "" then {no_seed: ($no_seed | split(","))} else {} end)
       + (if $bar == "desk" then {desk_shell: {config: $desk, plugins: ($desk_ids | split(" ") | map(select(. != ""))),
           copied: [$desk_files | splits("\n") | select(startswith("copied ")) | .[7:]],
           skipped: [$desk_files | splits("\n") | select(startswith("skipped ")) | .[8:] | split("\t") | {path: .[0], why: .[1]}]}} else {} end)
@@ -4660,7 +4727,7 @@ cmd_run() {
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "run: --env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "run: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=("$2"); shift ;;
-      --size|--plugin|--ro-bind|--overlay|--seed|--theme-dir|--theme|--monitor|--net|--allow|--addr|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
+      --size|--plugin|--ro-bind|--overlay|--seed|--no-seed|--theme-dir|--theme|--monitor|--net|--allow|--addr|--idle|--from|--hyprland|--omarchy) optarg "$@"; up_args+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--no-pointer|--stock-bar|--desk-shell|--systemd|--audio) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
@@ -11244,7 +11311,7 @@ box_json() {
       client_render: (.client_render // null),
       monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end),
-      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}' "$D/box.json" 2>/dev/null ||
+      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + (if .no_seed then {no_seed} else {} end) + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false, orphan: false}'
 }
 

@@ -495,6 +495,9 @@ blocks the network and every other socket, omabox's included), or see
 - `--seed SRC:DEST` copies a file or folder into the box HOME before the session
   starts (`--seed ./fixture.json:.config/myplugin/config.json`), for a plugin that reads its config
   once at start; the same sources are refused as for `--ro-bind`.
+- `--no-seed extensions` starts the box without your `~/.config/omarchy/extensions` (plugins'
+  settings files). Without it `up` copies them, and names each file a `--plugin`'s code reads there:
+  a plugin under test starts on your desktop's settings, an on/off switch in them too.
 - `--theme-dir DIR` puts a theme you are editing in the box live: the box's
   `~/.config/omarchy/themes/NAME` links to DIR, which the box sees at its own path (the repo, or a
   read-only mount). Your other themes are copies made at `up`, a linked one too.
