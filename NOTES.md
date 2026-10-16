@@ -6756,7 +6756,9 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
     and says so on stderr by edge (`-g clipped to 1380,40 474x330 of window …: 6 px past the right
     edge`), exit 0, stdout still the path; the shot record has the clipped region, so `click --in`
     maps from its origin. Only a region with nothing inside is refused ("has nothing inside window",
-    "has nothing on the screen"). Not clipped: `pixel` (a point cannot be), `wait -g` (a region
+    "has nothing on the screen"). `--zoom`'s 2000 px a side is checked on the clipped region (it
+    was the typed one, before any box was asked), so a zoom that fits once cut is taken. Not clipped: `pixel` (a point cannot be), `wait -g` (a region
     watched), gaps between monitors inside the extent (grim's, as before). `record` has no `-g`.
-    `t_unit_wait` (geom_clip), `t_window` (window and screen, `click --in` the clipped crop),
+    `t_unit_wait` (geom_clip), `t_window` (window and screen, `click --in` the clipped crop,
+    `--zoom` on it),
     `t_scale`/`t_scale_nvidia` (past a window's corner at scale 2, against its whole shot).

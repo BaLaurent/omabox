@@ -6457,8 +6457,6 @@ cmd_shot() {
   if [ -n "$zoom" ]; then
     [ -z "$fit" ] || die "shot: --zoom or --fit, not both"
     [ -n "$g" ] || die "shot: --zoom goes with -g, a small crop (shot -g \"X,Y 40x30\" --zoom 8)"
-    local zw zh; read -r _ _ zw zh <<<"$g"
-    [ $(((zw > zh ? zw : zh) * zoom)) -le 2000 ] || die "shot: --zoom $zoom of ${zw}x$zh is $((zw * zoom))x$((zh * zoom)): at most 2000 px a side, a smaller -g"
     command -v magick >/dev/null || die "shot: --zoom needs ImageMagick's magick (package imagemagick, part of Omarchy)"
   fi
   # file: what is written and read back; out: its name, for the caller. A path that cannot be written
@@ -6550,6 +6548,9 @@ cmd_shot() {
     local ext; ext=$(extent)
     where="screen 0,0" lw=${ext%x*} lh=${ext#*x}
   fi
+  # --zoom's limit on the region left once -g was cut to the window or screen (#240).
+  [ -z "$zoom" ] || [ $(((lw > lh ? lw : lh) * zoom)) -le 2000 ] ||
+    die "shot: --zoom $zoom of ${lw}x$lh is $((lw * zoom))x$((lh * zoom)): at most 2000 px a side, a smaller -g"
   # --fit: grim scales the capture (-s); it truncates the size, so the factor is rounded up. What is
   # compared with N is the image grim writes without -s (#227): the layout's size times the highest
   # scale of the outputs captured (a scale-2 screen's 1280 px is a 2560 px image). -s replaces that

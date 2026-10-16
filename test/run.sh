@@ -9366,6 +9366,12 @@ t_window() {
   ob click -b "$B" --in "$o/cl.png" 5 6 >/dev/null 2>&1
   check_eq "...click --in it: from the clipped crop's origin" "1095, 316" "$(pos)"
   check_match "-g with nothing inside the window refused" "has nothing inside window" "$(ob shot -b "$B" -w 'title:^C$' -g "400,10 20x20" 2>&1)"
+  # --zoom's 2000 px on what is left once clipped (#240): 300 px wide as typed, 10 once cut to C.
+  err=$(ob shot -b "$B" -w 'title:^C$' -g "390,10 300x10" --zoom 8 -o "$o/cz.png" 2>&1 >/dev/null)
+  check_match "shot -w -g --zoom 8 that fits once clipped: taken (80x80)" "80 x 80," "$(file "$o/cz.png")"
+  check_match "...said clipped" "-g clipped to 390,10 10x10 of window" "$err"
+  check_match "shot --zoom past 2000 px refused, on the region inside" "of 300x10 is 2400x80: at most 2000 px" \
+    "$(ob shot -b "$B" -w 'title:^C$' -g "0,0 300x10" --zoom 8 2>&1)"
   # pointer --window (#25): moves in the window's coordinates; --hold is omabox's own.
   ob pointer -b "$B" --window 'title:^C$' -- move 3 4 >/dev/null 2>&1
   check_eq "pointer --window: window coordinates" "703, 304" "$(pos)"
@@ -9388,7 +9394,8 @@ t_window() {
   ob down "$B" >/dev/null
 }
 
-# pixel and shot --zoom (#133, finding 209): what is refused before any box is asked.
+# pixel and shot --zoom (#133, finding 209): what is refused before any box is asked (--zoom's size:
+# t_window, on the region once clipped).
 # Multi-monitor edges (#161) that need no box.
 t_unit_monitors() {
   # Every command whose usage takes -b NAME takes it before the command too: monitor was left out.
@@ -9449,7 +9456,6 @@ t_unit_pixel() {
   check_match "shot --zoom needs -g" "goes with -g" "$(ob shot -b "$P-x" --zoom 4 2>&1)"
   check_match "shot --zoom 2-16" "takes 2-16" "$(ob shot -b "$P-x" -g "0,0 9x9" --zoom 17 2>&1)"
   check_match "shot --zoom or --fit" "not both" "$(ob shot -b "$P-x" -g "0,0 9x9" --zoom 4 --fit 100 2>&1)"
-  check_match "shot --zoom past 2000 px refused" "is 2400x80: at most 2000 px" "$(ob shot -b "$P-x" -g "0,0 300x10" --zoom 8 2>&1)"
   # shot --burst (#132, finding 212)
   check_match "shot --every without --burst refused" "go with --burst" "$(ob shot -b "$P-x" --every 1s 2>&1)"
   # #191, finding 249: --every 0 is back to back (the default is 100 ms apart); a stray unit is not 0.
