@@ -398,10 +398,13 @@ digit is still), no input (with --show-input, 3 s after it while it is drawn), n
 whole frames, the sound by the same times, the marks and captions moved with them. The input comes
 from omabox's own commands (\`run\`'s app moving its own windows is not input).
 A video is at most 16 GiB (an hour of 4K at 36 Mbit/s): omabox copies no more out of a box, and
-\`stop\` says so and keeps a larger one in the box. Inside ai-jail all of it works through the
-broker: the jail's own omabox resolves -o and opens the video, its marks, captions and sheet (and
-\`record sheet\`'s video) itself, and the broker writes and reads them only through those, never at
-a path the jail names; one stopped outside the jail goes to ~/.cache/omabox/records.
+\`stop\` says so and keeps a larger one in the box. Each ffmpeg step of \`stop\` and \`sheet\` has a
+time limit (60 s, and 5 s more a second of 1080p30 recorded; ffmpeg 9.0.1 can deadlock): one that
+runs out is killed and run once more, then said, the recording's raw files kept in the box. Inside
+ai-jail all of it works through the broker: the jail's own omabox resolves -o and opens the video,
+its marks, captions and sheet (and \`record sheet\`'s video) itself, and the broker writes and
+reads them only through those, never at a path the jail names; one stopped outside the jail goes
+to ~/.cache/omabox/records.
 @ audio
 \`audio [SECONDS]\` listens to the box's speaker for SECONDS (3) from now, 100 ms at a time: "sound for
 1.1s of 3s: peak -21.1 dBFS, RMS -24.5 dBFS while it sounded; at 0.4-1.5s", or "silence for 3s".
@@ -5982,6 +5985,39 @@ rec_traps() {
   trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
 }
 
+# Every ffmpeg and ffprobe a recording runs in the box goes through rec_ff (finding 356): ffmpeg
+# 9.0.1 now and then deadlocks (every thread waiting, no CPU; the same compose 1 run in ~50), and
+# `record stop` waited for ever. Each run has REC_FF_SECS (rec_ff_bound; REC_FF_FLOOR before one is
+# known) by timeout in the box, which TERMs the stuck one and KILLs it 5 s on; one that ran out of
+# time is run once more, and a second that does is said, its exit 124 for the caller to say what is
+# kept. $OMABOX_RECORD_FF_SECS lowers the bound (the suite's, as OMABOX_RECORD_MAX lowers the cap).
+# rec_ff [-o|-e] /usr/bin/FFMPEG ARG...: -o its stdout (-e with its stderr) printed when it ends,
+# at most 16 MiB, the last run's only; else its output goes as it comes.
+REC_FF_FLOOR=60 REC_FF_SECS=""
+rec_ff() {
+  local cap="" secs rc try out=""
+  case $1 in -o|-e) cap=$1; shift ;; esac
+  secs=${REC_FF_SECS:-$REC_FF_FLOOR}
+  if [[ ${OMABOX_RECORD_FF_SECS:-} =~ ^[1-9][0-9]{0,6}$ ]] && [ "$OMABOX_RECORD_FF_SECS" -lt "$secs" ]; then secs=$OMABOX_RECORD_FF_SECS; fi
+  for try in 1 2; do
+    rc=0
+    case $cap in
+      -o) out=$(box_sys /usr/bin/timeout -k 5 "$secs" "$@" </dev/null 2>/dev/null | head -c 16777216; exit "${PIPESTATUS[0]}") || rc=$? ;;
+      -e) out=$(box_sys /usr/bin/timeout -k 5 "$secs" "$@" </dev/null 2>&1 | head -c 16777216; exit "${PIPESTATUS[0]}") || rc=$? ;;
+      *) box_sys /usr/bin/timeout -k 5 "$secs" "$@" </dev/null || rc=$? ;;
+    esac
+    [ $rc = 124 ] || [ $rc = 137 ] || break
+    if [ $try = 1 ]; then say "record: ${1##*/} did not finish in $secs s (stuck: finding 356): killed, run once more"
+    else say "record: ${1##*/} did not finish in $secs s again: killed"; rc=124; fi
+  done
+  [ -z "$cap" ] || [ -z "$out" ] || printf '%s\n' "$out"
+  return $rc
+}
+# The bound for a video of FRAMES frames of PIXELS each (rec_ff): REC_FF_FLOOR, and 5 s more for
+# each second of 1080p at 30 fps (2.4 such frames a second: an encode many times slower than
+# libx264's medium preset is on a laptop core, for a box sharing the machine with others).
+rec_ff_bound() { echo $((REC_FF_FLOOR + ($1 * $2 + 12441599) / 12441600)); }
+
 # record -- ACTION's action: one that acts, on the recorded box.
 record_action_check() {
   local w rown=()
@@ -6333,11 +6369,22 @@ record_stop() {
   # A recording that stopped by itself (no wf-recorder left) still has its sound's ffmpeg to end.
   [ $alive = 1 ] || [ "$REC_N" -gt 1 ] || record_audio_end "$apid"
   rm -f "$D/record" "$D/record.audio" "$D/record.as"
+  # The bound on its ffmpeg runs (rec_ff, finding 356): as many frames as it ran for, of its size (the
+  # layout's, or the monitor's as wf-recorder wrote it; 4K's when that cannot be read).
+  local px fr
+  if [ "$REC_N" -gt 1 ]; then px=$(record_size); px=$((${px%x*} * ${px#*x}))
+  else
+    px=$(rec_ff -o /usr/bin/ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$REC_DIR/raw.mkv" | head -n 1) || px=""
+    if [[ $px =~ ^([1-9][0-9]{0,4}),([1-9][0-9]{0,4})$ ]]; then px=$((BASH_REMATCH[1] * BASH_REMATCH[2])); else px=$((3840 * 2160)); fi
+  fi
+  fr=0; [[ ! "$REC_START $REC_FPS" =~ ^[0-9]{1,17}\ [0-9]{1,3}$ ]] || fr=$(( (${EPOCHREALTIME//[!0-9]/} - REC_START) * REC_FPS / 1000000 ))
+  [ "$fr" -ge 0 ] || fr=0
+  REC_FF_SECS=$(rec_ff_bound "$fr" "$px")
   # Its sound (#226), put in the video's clock: REC_AFILT, the filter for the third input of the fps
   # pass (or record_compose's last); none when it has no sound.
   REC_AFILT=""
   if [ -n "$apid" ]; then
-    if box_sys /usr/bin/ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$REC_DIR/audio.mka" 2>/dev/null | head -c 4096 | grep -q .; then
+    if rec_ff -o /usr/bin/ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$REC_DIR/audio.mka" | head -c 4096 | grep -q .; then
       local vfirst; vfirst=$(record_first_us) || vfirst=$REC_START
       REC_AFILT=$(record_audio_filter "$vfirst") || {
         REC_AFILT="asetpts=N/SR/TB,apad"
@@ -6378,8 +6425,8 @@ record_stop() {
     # the video's clock stays wf-recorder's, so a mark's time is still its time (finding 306).
     local ain=() aout=()
     [ -z "$REC_AFILT" ] || { ain=(-i "$REC_DIR/audio.mka"); aout=(-map 0:v:0 -map 1:a:0 -af "$REC_AFILT" "${REC_AAC[@]}" -shortest); }
-    box_sys /usr/bin/ffmpeg -v error -y -i "$REC_DIR/raw.mkv" "${ain[@]}" -vf "fps=$REC_FPS,$REC_YUV$REC_VASS" -c:v libx264 -preset medium -crf "$(rec_crf "$cut")" \
-      "${REC_TAGS[@]}" "${aout[@]}" -movflags +faststart "$REC_DIR/out.mp4" </dev/null >&2 ||
+    rec_ff /usr/bin/ffmpeg -v error -y -i "$REC_DIR/raw.mkv" "${ain[@]}" -vf "fps=$REC_FPS,$REC_YUV$REC_VASS" -c:v libx264 -preset medium -crf "$(rec_crf "$cut")" \
+      "${REC_TAGS[@]}" "${aout[@]}" -movflags +faststart "$REC_DIR/out.mp4" >&2 ||
       die "record: ffmpeg could not make the video ($REC_DIR/raw.mkv in box '$NAME' is kept)"
   fi
   # --cut-idle (#176): its still stretches cut short, REC_CUTS the frames taken out.
@@ -6387,7 +6434,7 @@ record_stop() {
   [ -z "$cut" ] || record_cut "$cut" "$first" "$input" "$marks" "$show" || say "record --cut-idle: could not cut it: the video as it was recorded"
   [ -z "$input" ] || rm -f -- "$input"
   # (ffprobe in the box too: its file, never read on the host but as bytes.)
-  local info dur=""; info=$(box_sys /usr/bin/ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | head -c 4096 | paste -sd ' ') || info=""
+  local info dur=""; info=$(rec_ff -o /usr/bin/ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration -of csv=p=0 "$REC_DIR/out.mp4" | head -c 4096 | paste -sd ' ') || info=""
   [[ ! $info =~ \ ([0-9]+)(\.([0-9]{1,3}))?[0-9]*$ ]] || dur=$((10#${BASH_REMATCH[1]} * 1000 + 10#$(printf '%-3s' "${BASH_REMATCH[3]}" | tr ' ' 0)))
   local base=${REC_FILE%.mp4} sp="" tmpd=""
   if [ -n "$tofd" ]; then
@@ -6438,8 +6485,10 @@ record_compose() {
   mapfile -t lay < <(tail -n +2 "$D/record.layout")
   mapfile -t dirs < <(rec_dirs)
   mapfile -t firsts < <(record_firsts)
-  # shellcheck disable=SC2016 # the inner sh's
-  mapfile -t durs < <(box_sys /usr/bin/sh -c 'for d; do ffprobe -v error -show_entries format=duration -of csv=p=0 "$d/raw.mkv" 2>/dev/null | head -n 1 | grep . || echo; done' omabox-record "${dirs[@]}" 2>/dev/null | head -c 4096)
+  for d in "${dirs[@]}"; do
+    off=$(rec_ff -o /usr/bin/ffprobe -v error -show_entries format=duration -of csv=p=0 "$d/raw.mkv" | head -c 256 | head -n 1) || off=""
+    durs+=("$off")
+  done
   n=${#dirs[@]}
   [ ${#lay[@]} = "$n" ] && [ ${#firsts[@]} = "$n" ] || { say "record: the layout's recordings do not match its record"; return 1; }
   for ((i = 0; i < n; i++)); do
@@ -6477,7 +6526,7 @@ record_compose() {
     args+=(-i "$REC_DIR/audio.mka"); fc+=";[$((k + 1)):a]${REC_AFILT}[a]"; amap=(-map "[a]" "${REC_AAC[@]}" -shortest)
   fi
   args+=(-filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf "$(rec_crf "${REC_CUT:-}")" "${REC_TAGS[@]}" "${amap[@]}" "${tlim[@]}" -movflags +faststart "$REC_DIR/out.mp4")
-  box_sys /usr/bin/ffmpeg "${args[@]}" </dev/null >&2
+  rec_ff /usr/bin/ffmpeg "${args[@]}" >&2
 }
 
 # record_marks MARKS FIRST_US DURATION_MS BASE [SHOWN]: the marks ("WALL_US TEXT" lines) in the video's clock
@@ -6528,7 +6577,7 @@ record_ass() {
   [[ $x0 =~ ^-?[0-9]{1,6}$ && $y0 =~ ^-?[0-9]{1,6}$ && $k =~ ^[0-9]{1,3}(\.[0-9]{1,12})?$ ]] && [[ $first =~ ^[0-9]+$ ]] || return 1
   if [ "$REC_N" -gt 1 ]; then sz=$(record_size); w=${sz%x*} h=${sz#*x}
   else
-    sz=$(box_sys /usr/bin/ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$REC_DIR/raw.mkv" 2>/dev/null | head -c 256 | head -n 1) || sz=""
+    sz=$(rec_ff -o /usr/bin/ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 "$REC_DIR/raw.mkv" | head -c 256 | head -n 1) || sz=""
     [[ $sz =~ ^([1-9][0-9]{0,4}),([1-9][0-9]{0,4})$ ]] || return 1
     w=${BASH_REMATCH[1]} h=${BASH_REMATCH[2]}
   fi
@@ -6551,14 +6600,14 @@ record_ass() {
 # kept), for record_marks. record_cut CUT_MS FIRST_US INPUT MARKS SHOW
 record_cut() {
   local cut=$1 first=$2 input=$3 marks=$4 show=$5 nb fz sl="" act cuts
-  nb=$(box_sys /usr/bin/ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$REC_DIR/out.mp4" 2>/dev/null | head -c 256 | head -n 1) || nb=""
+  nb=$(rec_ff -o /usr/bin/ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$REC_DIR/out.mp4" | head -c 256 | head -n 1) || nb=""
   [[ $nb =~ ^[1-9][0-9]{0,8}$ ]] || return 1
   # What ffmpeg says, a value a line at most: the host reads no more than that, and checks each.
-  fz=$(box_sys /usr/bin/ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:v:0 \
-    -vf "freezedetect=n=-60dB:d=$(awk -v m="$cut" 'BEGIN { printf "%.3f", m / 1000 }')" -f null - 2>&1 </dev/null |
+  fz=$(rec_ff -e /usr/bin/ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:v:0 \
+    -vf "freezedetect=n=-60dB:d=$(awk -v m="$cut" 'BEGIN { printf "%.3f", m / 1000 }')" -f null - |
     grep -oE 'freeze_(start|end): [0-9]{1,9}(\.[0-9]{1,9})?' | head -n 20000) || fz=""
   if [ -n "$REC_AFILT" ]; then
-    sl=$(box_sys /usr/bin/ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:a:0 -af silencedetect=n=-50dB:d=0.1 -f null - 2>&1 </dev/null |
+    sl=$(rec_ff -e /usr/bin/ffmpeg -nostdin -hide_banner -nostats -i "$REC_DIR/out.mp4" -map 0:a:0 -af silencedetect=n=-50dB:d=0.1 -f null - |
       grep -oE 'silence_(start|end): -?[0-9]{1,9}(\.[0-9]{1,9})?' | head -n 20000) || sl=""
   fi
   # The times something happened, ms in the video ("A FROM TO"): the input, the marks.
@@ -6614,8 +6663,8 @@ record_cut() {
     fc+=";$ac${alist}concat=n=$((n + 1)):v=0:a=1[a]"
     amap=(-map "[a]" "${REC_AAC[@]}" -shortest)
   fi
-  box_sys /usr/bin/ffmpeg -v error -y -i "$REC_DIR/out.mp4" -filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf 18 \
-    "${REC_TAGS[@]}" "${amap[@]}" -movflags +faststart "$REC_DIR/cut.mp4" </dev/null >&2 || { REC_CUTS=""; return 1; }
+  rec_ff /usr/bin/ffmpeg -v error -y -i "$REC_DIR/out.mp4" -filter_complex "$fc" -map "[v]" -c:v libx264 -preset medium -crf 18 \
+    "${REC_TAGS[@]}" "${amap[@]}" -movflags +faststart "$REC_DIR/cut.mp4" >&2 || { REC_CUTS=""; return 1; }
   box_sys /usr/bin/mv -f -- "$REC_DIR/cut.mp4" "$REC_DIR/out.mp4" || { REC_CUTS=""; return 1; }
   say "record: $n still stretch$([ "$n" = 1 ] || echo es) cut to $(ms_s "$cut") ($(ms_s $((tot * 1000 / REC_FPS))) out)"
 }
@@ -6793,6 +6842,10 @@ record_sheet_file() {
     box_sys /usr/bin/bash -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record "$bv" < "$video" ||
       { box_sys /usr/bin/rm -f -- "$bv" 2>/dev/null || true; die "record sheet: could not copy $video into box '$NAME'"; }
   fi
+  # Its ffprobe's bound (rec_ff) by its size, at 10 MiB/s, as box_copy's (it reads every packet).
+  [ -n "$fromfd" ] || size=$(stat -L -c %s -- "$video" 2>/dev/null) || size=""
+  [[ $size =~ ^[0-9]{1,15}$ ]] || size=0
+  REC_FF_SECS=$((REC_FF_FLOOR + size / 10485760))
   sp=$(record_sheet "$bv" "$tsv" "$out" "$3" "$4" "$5" "$as") || rc=$?
   box_sys /usr/bin/rm -f -- "$bv" 2>/dev/null || true
   if [ -n "$tmpd" ]; then
@@ -6811,11 +6864,12 @@ record_sheet_file() {
 # sheet; 5 a row, tiles 320 px wide, or FIT / 5 with a FIT, which the whole sheet then fits. Prints OUT.
 record_sheet() {
   local v=$1 tsv=$2 png=$3 n=${4:-15} every=${5:-} fit=${6:-} shown=${7:-} j nb num den vw vh
-  j=$(box_sys /usr/bin/ffprobe -v error -select_streams v:0 -count_packets \
-    -show_entries stream=nb_read_packets,r_frame_rate,width,height -of json "$v" 2>/dev/null | head -c 65536) || j=""
+  j=$(rec_ff -o /usr/bin/ffprobe -v error -select_streams v:0 -count_packets \
+    -show_entries stream=nb_read_packets,r_frame_rate,width,height -of json "$v" | head -c 65536) || j=""
   read -r nb num den vw vh < <(jq -r '.streams[0] | "\(.nb_read_packets) \(.r_frame_rate | sub("/"; " ")) \(.width) \(.height)"' <<<"$j" 2>/dev/null) || nb=""
   [[ "$nb $num $den $vw $vh" =~ ^[1-9][0-9]{0,8}\ [1-9][0-9]{0,6}\ [1-9][0-9]{0,6}\ [1-9][0-9]{0,5}\ [1-9][0-9]{0,5}$ ]] || {
     say "record: the contact sheet: ffprobe could not read the video's frames"; return 1; }
+  REC_FF_SECS=$(rec_ff_bound "$nb" $((vw * vh)))   # every frame decoded (rec_ff)
   local ks=() k i last=-1
   if [ -n "$every" ]; then
     for ((i = 0; ; i++)); do
@@ -6837,7 +6891,7 @@ record_sheet() {
   for k in "${ks[@]}"; do sel+="${sel:++}eq(n,$k)"; done
   # shellcheck disable=SC2016 # the inner bash's
   if ! box_sys /usr/bin/bash -c 'rm -rf "$1" && mkdir -p "$1"' omabox-record "$bd" ||
-    ! box_sys /usr/bin/ffmpeg -v error -i "$v" -vf "select='$sel',scale=$tw:-2" -fps_mode passthrough "$bd/t-%03d.png" </dev/null >&2; then
+    ! rec_ff /usr/bin/ffmpeg -v error -i "$v" -vf "select='$sel',scale=$tw:-2" -fps_mode passthrough "$bd/t-%03d.png" >&2; then
     box_sys /usr/bin/rm -rf -- "$bd" 2>/dev/null || true; say "record: the contact sheet: ffmpeg could not take the frames"; return 1
   fi
   # The frames copied out into a folder of the box dir's (gone with the box, and on any end of this
@@ -10205,7 +10259,9 @@ cmd_audio() {
   done
   select_box "$name"; need_box
   [ "$(meta audio)" = true ] || die "audio: box '$NAME' has no audio: a box gets it at up (omabox up --audio; down first, or up --new --audio)"
-  raw=$(box_sys /usr/bin/ffmpeg -nostdin -hide_banner -nostats -v error -f pulse -name omabox-audio -sample_rate 48000 -channels 2 \
+  # In SECONDS and 30 more (finding 356: an ffmpeg 9.0.1 can deadlock), then TERM, and KILL 5 s on.
+  local lim; lim=$(awk -v s="$secs" 'BEGIN { printf "%.1f", s + 30 }') || lim=60
+  raw=$(box_sys /usr/bin/timeout -k 5 "$lim" /usr/bin/ffmpeg -nostdin -hide_banner -nostats -v error -f pulse -name omabox-audio -sample_rate 48000 -channels 2 \
     -i "$AUDIO_SINK.monitor" -t "$secs" \
     -af "asetnsamples=n=4800:p=1,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=Peak_level+RMS_level,ametadata=mode=print:file=/dev/stdout" \
     -f null - </dev/null | head -c 4194304) || die "audio: ffmpeg could not read box '$NAME''s sound (omabox log -b $NAME audio)"

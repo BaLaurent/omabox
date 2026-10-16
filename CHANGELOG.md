@@ -37,6 +37,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   and the box does not have that dir, `run` now says so first, with the mount that brings it in
   (`run --overlay DIR`, or `--ro-bind DIR`; for a box that is up, `down`, then `up` with it). A plain
   `run -- app` says nothing.
+- **`record stop` no longer waits forever on a stuck ffmpeg.** ffmpeg 9.0.1 now and then deadlocks
+  (about 1 run in 100 of the same encode), and `record stop` (or `record sheet`) then hung. Each
+  ffmpeg and ffprobe step a recording runs now has a time limit, 60 s and 5 s more for each second
+  of 1080p at 30 fps it recorded (so a long recording still has the time to encode); one that runs
+  out is killed and run once more, and a second time `stop` says so and fails, keeping the raw
+  recording in the box as its other failures do. `omabox audio`'s ffmpeg is bounded too.
 
 ## 0.7.0 — 2026-10-16
 

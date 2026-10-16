@@ -540,6 +540,28 @@ t_unit_parse_mode() {
     "$(lib size_text 1920x1080@60 1)|$(lib size_text 3840x2160@60 2)"
 }
 
+t_unit_rec_ff() {
+  local out calls t0 f=$TMP/recff-once
+  out=$(python3 -c "$REC_FF" "$CLI"); calls=${out##*$'\n'}; out=${out%"$calls"}
+  check_eq "every ffmpeg and ffprobe a recording runs in the box goes through rec_ff: bounded, run once more on a timeout (finding 356)" "" "$out"
+  check "...the check read them ($calls)" test "${calls% calls}" -ge 14
+  if git -C "$ROOT" cat-file -e 7416abd:bin/omabox 2>/dev/null; then
+    check_eq "...it finds the 13 calls finding 356 bounded" 13 "$(python3 -c "$REC_FF" <(git -C "$ROOT" show 7416abd:bin/omabox) | sed '$d' | wc -l)"
+  else skip "...it finds the calls finding 356 bounded" "no 7416abd here"; fi
+  # rec_ff itself, its box_sys the host's here, on commands that only wait (OMABOX_RECORD_FF_SECS 1).
+  # shellcheck disable=SC2016 # the inner bash's
+  local run='box_sys() { "$@"; }; OMABOX_RECORD_FF_SECS=$1; shift; rc=0; rec_ff "$@" || rc=$?; echo "rc=$rc"'
+  t0=$SECONDS
+  out=$(lib bash -c "source $TMP/lib/bin/omabox; $run" x 1 -o /usr/bin/sh -c 'echo x; exec sleep 30' 2>&1 | paste -sd '|')
+  check_eq "rec_ff: a run out of time is run once more, then said; the last run's output, exit 124" \
+    "omabox: record: sh did not finish in 1 s (stuck: finding 356): killed, run once more|omabox: record: sh did not finish in 1 s again: killed|x|rc=124" "$out"
+  check "...in its two bounds ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -le 8
+  rm -f "$f"
+  out=$(lib bash -c "source $TMP/lib/bin/omabox; $run" x 1 -o /usr/bin/sh -c '[ -e "$1" ] && echo ok && exit 0; : > "$1"; exec sleep 30' sh "$f" 2>&1 | paste -sd '|')
+  check_eq "...stuck once: run again, its output and exit" "omabox: record: sh did not finish in 1 s (stuck: finding 356): killed, run once more|ok|rc=0" "$out"
+  check_eq "...a failure that is not a timeout: not run again" "rc=1" "$(lib bash -c "source $TMP/lib/bin/omabox; $run" x 1 /usr/bin/false 2>&1 | paste -sd '|')"
+  check_eq "...the bound: 60 s, and 5 s a second of 1080p at 30 fps" "60 61 360" "$(lib rec_ff_bound 0 0) $(lib rec_ff_bound 1 1) $(lib rec_ff_bound 1800 2073600)"
+}
 t_unit_record() {
   # Refused before any box is looked at (finding 297).
   check_match "record alone: what it takes" "start, stop, status, mark, sheet, or -- ACTION" "$(ob record 2>&1)"
@@ -1044,6 +1066,27 @@ for i, l in enumerate(open(sys.argv[1]), 1):
         if "fds_only" not in t and not re.search(r"=\(nsenter\s", t): bad.append("%d: %s" % (i, t))
     if re.search(r"\"\$\{(ns|caps)\[@\]\}\"", t) and "fds_only" not in t and "=(" not in t: bad.append("%d: %s" % (i, t))
 bad = list(dict.fromkeys(bad))
+print("\n".join(bad + ["%d calls" % n]))
+'
+# Finding 356: every ffmpeg and ffprobe a recording runs in the box goes through rec_ff (a time bound,
+# and once more after a timeout): ffmpeg 9.0.1 deadlocks now and then. REC_FF FILE: each line that
+# runs one (by /usr/bin, or by name with an option after it in an inner script) neither through
+# rec_ff nor under /usr/bin/timeout, but record_audio_start's (record_audio_end ends it), as LINE:
+# TEXT; then "N calls", how many it read.
+REC_FF='
+import re, sys
+bad = []; n = 0; fn = ""
+run = re.compile(r"(?<!-x )/usr/bin/ff(mpeg|probe)\b|(^|[;|&(]|\b(do|then|exec)|--)\s*ff(mpeg|probe)\s+-")
+for i, l in enumerate(open(sys.argv[1]), 1):
+    t = l.strip()
+    m = re.match(r"(\w+)\(\)\s*\{", t)
+    if m: fn = m.group(1)
+    if t.startswith("#") or not run.search(t): continue
+    n += 1
+    if re.search(r"(?<![\w-])rec_ff\s+(-[oe]\s+)?/usr/bin/ff(mpeg|probe)\b", t): continue
+    if re.search(r"/usr/bin/timeout\s+-k\s+\S+\s+\S+\s+/usr/bin/ff(mpeg|probe)\b", t): continue
+    if fn == "record_audio_start" and re.search(r"setsid --\s+ffmpeg\s", t): continue
+    bad.append("%d: %s" % (i, t))
 print("\n".join(bad + ["%d calls" % n]))
 '
 # FD_SEEN, in a box: every fd of any of its processes naming a file called fdprobe-*, a line in
@@ -8142,7 +8185,44 @@ record_input_on() {
     od -An -tu1 -w3 -v | awk '$1 > 200 && $2 < 80 && $3 < 80 { print NR - 1; exit }')
   check "...the mark after the gap moved with it: the change's first frame no more than a frame early, at most 250 ms late (mark at ${m1:-?} ms, the change at $cv ms, first red frame ${fr:-none} at 30 fps)" \
     awk -v f="${fr:--1}" -v cv="$cv" -v m="${m1:-99999}" 'BEGIN { t = f * 1000 / 30; exit !(f >= 0 && m < 4000 && t >= cv - 1000 / 30 && t <= cv + 250) }'
+  record_stuck_on
   ob down "$B" >/dev/null 2>&1
+}
+# A stuck ffmpeg (finding 356: ffmpeg 9.0.1 deadlocks now and then), in record_input_on's box B: the
+# stop's encode stopped (SIGSTOP, by a watcher in the box) once, then twice; its bound lowered to 3 s
+# (OMABOX_RECORD_FF_SECS). Once: killed and run again, a video. Twice: said, raw.mkv kept, none left.
+# The watcher, in the box: the first N ffmpeg processes it sees stopped.
+RS_STOPPER='seen=" "; n=0
+while [ "$n" -lt "$1" ]; do
+  for p in $(pgrep -x ffmpeg); do
+    case $seen in *" $p "*) continue ;; esac
+    kill -STOP "$p" && seen="$seen$p " && n=$((n + 1))
+  done
+  sleep 0.02
+done'
+record_stuck_on() {
+  local v=$TMP/$B-stuck.mp4 out rc k t0
+  for k in 1 2; do
+    ob record -b "$B" start -o "$v" >/dev/null 2>&1 || { no "record start (a stuck ffmpeg)" "failed"; return; }
+    ob run -b "$B" -d -- timeout 60 sh -c "$RS_STOPPER" t356 "$k" >/dev/null 2>&1
+    sleep 1.5
+    t0=$SECONDS; rc=0
+    out=$(env OMABOX_RECORD_FF_SECS=3 "$CLI" record -b "$B" stop 2>&1) || rc=$?
+    if [ "$k" = 1 ]; then
+      check_match "record stop, its ffmpeg stuck once: killed in its bound, run once more, said" \
+        "ffmpeg did not finish in 3 s \(stuck: finding 356\): killed, run once more" "$out"
+      check_eq "...and the video made" "0 $v" "$rc $(tail -n 1 <<<"$out")"
+      check "...a video" test "$(ffprobe -v error -select_streams v:0 -count_packets -show_entries stream=nb_read_packets -of csv=p=0 "$v" 2>/dev/null)" -gt 10
+    else
+      check_match "record stop, stuck twice: said, and what is kept" \
+        "ffmpeg did not finish in 3 s again: killed.*record: ffmpeg could not make the video \(/home/sbx/.cache/omabox-record/raw.mkv in box '$B' is kept\)" "$(paste -sd ' ' <<<"$out")"
+      check_eq "...it failed" 1 "$rc"
+      check "...raw.mkv kept in the box" ob run -b "$B" -- test -s /home/sbx/.cache/omabox-record/raw.mkv
+    fi
+    check "...in its two bounds ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -le 30
+    check_fails "...no ffmpeg left in the box" ob run -b "$B" -- pgrep -x ffmpeg
+    ob run -b "$B" -- pkill -f t356 >/dev/null 2>&1 || true
+  done
 }
 # Audio in a box (#226, finding 313): up --audio's own PipeWire, its only devices a speaker nobody
 # hears and a silent mic, nothing of the host's audio in it (no /dev/snd, its own sockets; your
@@ -12073,7 +12153,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd)

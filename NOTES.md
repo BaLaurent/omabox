@@ -7227,6 +7227,35 @@ from them.
     box up: nothing from its repo, the note from the scratch dir for a script's word, none for `true`
     or `.config`, said for `run -d` too).
 
+356. **A stuck ffmpeg hung `record stop` for ever; each record ffmpeg step is bounded and run once
+    more** (2026-10-16, found by the suite: no issue). In a full run `t_audio`'s `record stop` waited
+    40 min on the box's compose ffmpeg (record_compose: a lavfi black, two monitors' raw.mkv and the
+    sound through one -filter_complex, libx264 + AAC): 3 s of CPU, its main thread in
+    pthread_cond_timedwait, ~108 others (libavutil slice threads, x264's, the decoders', fftools'
+    own) in pthread_cond_wait: an ffmpeg 9.0.1 deadlock (2:9.0.1-4). That argv, rerun on the host on
+    the kept inputs (15 s limit, ~0.43 s a run): as is 1/100 hung (10/200 in a later, busier run),
+    `-filter_threads 1` 1/100, `-filter_complex_threads 1` 1/100 (and 3.3x slower), both 3/100,
+    `-threads 1` 4/100, without `-shortest` 7/200: no flag avoids it, so none is applied. Every
+    ffmpeg and ffprobe a recording runs in the box (the encode, compose and its duration probes, the
+    --cut-idle pass and its freezedetect/silencedetect/packet count, the sound and size probes, the
+    contact sheet's probe and frames) now goes through `rec_ff`: `timeout -k 5 SECS` in the box
+    (TERM, then KILL: the stuck one goes with it), and on a timeout (124/137) run once more, said
+    ("record: ffmpeg did not finish in N s (stuck: finding 356): killed, run once more"); a second
+    timeout is said too ("... again: killed") and the step fails with its existing message (the
+    encode's: raw.mkv kept in the box). With -o/-e its output is the last run's only. The bound,
+    `rec_ff_bound FRAMES PIXELS`: 60 s, and 5 s for each second of 1080p at 30 fps (frames x pixels
+    / 12441600): the frames are the wall time since `start` at --fps, the pixels the layout's or
+    raw.mkv's (4K when that cannot be read); `record sheet VIDEO` bounds its probe by the file's
+    size (60 s + 1 s a 10 MiB), then its frames by the count it read. `$OMABOX_RECORD_FF_SECS` only
+    lowers the bound (the suite's 3 s, as OMABOX_RECORD_MAX lowers the cap). `omabox audio`'s
+    ffmpeg got a plain `timeout -k 5 SECONDS+30` (no retry: a second take would listen to another
+    moment). *Decided*: the floor 60 s; 5 s per 1080p30-second; one retry; no ffmpeg flag; a
+    double timeout fails the stop rather than waiting more. Tests: t_unit_rec_ff (each such call
+    in bin/omabox through rec_ff or under timeout, and the 13 of 7416abd found; rec_ff on host
+    sleeps: stuck twice, stuck once, a plain failure, the bound), record_stuck_on in
+    t_record_input (a watcher in the box SIGSTOPs the stop's encode once: killed at 3 s, run again,
+    a video; twice: both messages, exit 1, raw.mkv kept, no ffmpeg left).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
