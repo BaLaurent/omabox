@@ -99,6 +99,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   so 28 of them came out 40-70 px wide each. Each shot now keeps a size you can read a screen at
   (about 400x225 for a window), and what does not fit one look goes on more pages, `baseline-2.png`
   and on, all named when `--approve` ends.
+- **One change seen in many checkpoints is said once.** A margin that moved the same rows in 17
+  checkpoints of one sheet listed its regions and tree lines 17 times, and the report showed the same
+  card until it ran out of room. A checkpoint whose change an earlier one had (the same tree changes
+  and no other pixels; without a tree, the same regions) is now one line, `changed  ID: as FIRST`,
+  still counted as changed (`18 changed (16 as another)`), and the report names it on the first one's
+  card.
 
 ## 0.7.0 — 2026-10-16
 

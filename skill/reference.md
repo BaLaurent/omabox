@@ -167,7 +167,10 @@ app shows): pin it in the scenario's data or `--ignore` it (Times, above). Then 
 (same UP OPTIONS) after a change: `same ID` (with what it left out, `(12 specks left out, the
 largest 9 px)`), or `changed ID` with each region (`at X,Y WxH`) and the tree's
 `moved/resized/name/text/state/appeared/vanished` lines (an element with no name says where it is:
-`appeared  button  (in frame "W" > panel#1 > button#3)`); `new`/`missing` for checkpoints the
+`appeared  button  (in frame "W" > panel#1 > button#3)`); a checkpoint whose change is an earlier
+one's (the same tree lines and no other pixels; without a tree, the same regions) is one line,
+`changed  ID: as FIRST (...)`, counted with the others (`18 changed (16 as another)`), and named on
+FIRST's card in the report; `new`/`missing` for checkpoints the
 baseline lacks or this run did not take; the last line counts each kind (`check: 2 of 3 same, 1
 missing`). When anything changed, Read the `report:` image first: one
 image, ~150-800 image tokens, each change cropped from the baseline beside this run (red: pixels,

@@ -5276,6 +5276,11 @@ t_unit_check() {
   check_eq "tree-keys --mask: the same elements left out" 5 \
     "$(python3 -I "$ROOT/share/check.py" tree-keys "$d/a.json" "$d/b.json" "" --shot 400 300 --mask 10 55 100 30 | wc -l)"
   rc=0; python3 -I "$ROOT/share/check.py" tree "$d/a.json" "$d/b.json" "" --mask 1 2 >/dev/null 2>&1 || rc=$?
+  # unexplained (#257): the regions no changed element's box touches.
+  check_eq "unexplained: a region on the moved button is its; one elsewhere is not" "200,250 10x10" \
+    "$(python3 -I "$ROOT/share/check.py" unexplained "$d/a.json" "$d/b.json" "" --shot 400 300 --region 22 22 90 26 --region 200 250 10 10)"
+  check_eq "...every region when the tree's size is not the shot's" $'22,22 90x26\n200,250 10x10' \
+    "$(python3 -I "$ROOT/share/check.py" unexplained "$d/a.json" "$d/b.json" "" --shot 800 600 --region 22 22 90 26 --region 200 250 10 10)"
   check_eq "...an argument it does not take: exit 2" 2 "$rc"
   # check diff on made images: exact, specks left out, a region named, --ignore, a size change.
   if command -v magick >/dev/null; then
@@ -5386,6 +5391,23 @@ t_unit_check() {
       "$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1)"
     echo '{"gpu":"x"}' > "$d/apbase/check.json"
     check_fails "...not for a baseline from before they were recorded" grep -q 'another setup' <<<"$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1)"
+    # One change in several checkpoints (#257): said once, a later one "as" the first, no card of its own.
+    local gb=$d/gbase gc=$d/gc id
+    mkdir -p "$gb" "$gc/run1"
+    for id in s1 s2 s3; do
+      printf 'of screen\nsettled yes\ntree none\nholes off: test\nspeck 8\n' > "$gb/$id.point"; cp "$d/a.png" "$gb/$id.png"
+      printf 'of screen\nsettled yes\ntree none\nholes off: test\n' > "$gc/run1/$id.point"
+    done
+    cp "$d/new.png" "$gc/run1/s1.png"; cp "$d/new.png" "$gc/run1/s2.png"
+    magick "$d/a.png" -fill '#c0c0d0' -draw 'rectangle 120,60 160,80' "$gc/run1/s3.png"
+    cp "$ap/env.json" "$gc/"; cp "$ap/env.json" "$gb/check.json"
+    rc=0; out=$(lib eval "$cp; check_compare $gc $gb ''" 2>&1) || rc=$?
+    check_match "check: one change in two checkpoints: the second said as the first" \
+      $'(^|\n)changed  s2: as s1 \\(its 1 region\\)\n' "$out"
+    check_fails "...not its regions again" grep -q '^changed  s2: 1 region' <<<"$out"
+    check_match "...another change: its own lines" $'(^|\n)changed  s3: 1 region' "$out"
+    check_match "...each counted as changed, the alike said; exit 1" $'check: 0 of 3 same, 3 changed \\(1 as another\\);[^|]*\\|1$' "$out|$rc"
+    check "...its diff image written all the same" test -s "$gc/s2.diff.png"
     # The report (finding 361): every change in one image, each region cropped beside its baseline.
     magick -size 1920x1080 xc:'#202030' -fill '#c0c0d0' -draw 'rectangle 100,100 300,140' -draw 'rectangle 1500,900 1700,940' "$d/big.png"
     magick "$d/big.png" -fill '#c0c0d0' -draw 'rectangle 100,100 306,140' -draw 'rectangle 1500,950 1700,990' "$d/big2.png"
@@ -5609,7 +5631,10 @@ SH
   check_eq "the button 6 px to the right: exit 1" 1 "$rc"
   check_match "...changed, a region at the button" $'changed  demo: [0-9]+ regions? \\(marked: [^\n]*demo.diff.png\\)\n  at [0-9]+,[0-9]+ ' "$out"
   check_match "...the tree names it" 'tree: moved \+6,\+0  button "Save"' "$out"
-  check_match "...in the crop of the window too, by its tree" $'changed  democrop: [^\n]*\n(  [^\n]*\n)*  tree: moved \+6,\+0  button "Save"' "$out"
+  # The crop's change is the window's (the same tree line, its region on the button): said as it (#257).
+  check_match "...in the crop of the window too, said as the window's change" \
+    $'(^|\n)changed  democrop: as demo \\(its tree lines; [0-9]+ regions?, all on what they name\\)\n' "$out"
+  check_match "...counted" 'check: [0-9]+ of 4 same, [0-9]+ changed \(1 as another\)' "$out"
   check "...marked" test -s "$d/c/demo.diff.png"
   # The report (finding 361): every change in one image, its path said; none when all are the same.
   check_match "...the report's path" $'\nreport:  [^\n]*/c/report.png \\(' "$out"

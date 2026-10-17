@@ -24,12 +24,17 @@
       scaled monitor). Prints a line a change; exit 1 when any.
   check.py tree-keys BASE.json NEW.json [IGNORE] [--shot W H [--mask X Y W H]...]
       The keys of the elements that differ, "KEY  (role "name")" a line (for IGNORE); exit 0.
+  check.py unexplained BASE.json NEW.json [IGNORE] --shot W H [--mask X Y W H]... [--region X Y W H]...
+      The regions (of a check's difference, in the shot's pixels) that no changed element's box
+      touches, "X,Y WxH" a line: what the tree's changes do not account for (#257: two checkpoints
+      with the same tree changes and none of these are the same change). Every region when the tree's
+      pixels are not the shot's.
   check.py sheet PLAN OUT.png [FONT]
       The report of a check (finding 361): one image of every change, each region cropped with some
       context from the baseline and the new shot side by side, inside what a model sees in one look.
       PLAN: tab-separated lines, "title TEXT", then per changed checkpoint "point ID BASE.png NEW.png
       BASE.tree.json NEW.tree.json UNSTABLE" (empty fields: none) and its "region X Y W H" or "size
-      TEXT" lines. Prints magick's arguments NUL-separated, the first being what was left out ("" when
+      TEXT" lines; "also FIRST ID": ID's change was FIRST's, named on FIRST's card. Prints magick's arguments NUL-separated, the first being what was left out ("" when
       nothing).
   check.py overview PLAN OUT.png [FONT]
       The baseline in one image (--approve): PLAN's "title TEXT", then per checkpoint "point ID PNG
@@ -315,6 +320,30 @@ def fit(text, width):
     return text if len(text) <= n else text[: n - 1] + "…"
 
 
+def changed_boxes(base, new, size, ignore, masks):
+    """Each changed element's box in the shot's pixels, {key: (box, tree line)}, the keys in ignore
+    and the elements the masks hold left out; None when the tree's pixels are not the shot's (a
+    scale)."""
+    root = next(iter(new.values()), None)
+    # A crop of the window (crop-tree): its elements' bounds less the crop's corner.
+    crop = root.get("crop") if root else None
+    ox, oy = (crop["x"], crop["y"]) if crop else (0, 0)
+    if not root or ((crop["w"], crop["h"]) if crop else (root.get("w"), root.get("h"))) != size:
+        return None
+
+    def at_shot(n):
+        return (n["x"] - ox, n["y"] - oy, n["w"], n["h"]) if n and "x" in n else None
+    masked = masked_by(base, new, size, masks)
+    changed = {}
+    for key, line in changes(base, new):
+        if key in ignore or key in changed or masked(key):
+            continue
+        b, n = at_shot(base.get(key)), at_shot(new.get(key))
+        if b or n:
+            changed[key] = (union(b, n) if b and n else (b or n), line)
+    return changed
+
+
 def marks_of(pt):
     """The checkpoint's marks: [box, colour, tree line or "", the element's box or None] for each
     region, then for each tree change with bounds no region covers (a move under a speck's size
@@ -324,15 +353,6 @@ def marks_of(pt):
     if not (bt and nt):
         return marks
     base, new = load(bt), load(nt)
-    root = next(iter(new.values()), None)
-    # A crop of the window (crop-tree): its elements' bounds less the crop's corner.
-    crop = root.get("crop") if root else None
-    ox, oy = (crop["x"], crop["y"]) if crop else (0, 0)
-    if not root or ((crop["w"], crop["h"]) if crop else (root.get("w"), root.get("h"))) != pt["size"]:
-        return marks   # the tree's pixels are not the shot's (a scale): no marks from it
-
-    def bounds(n):
-        return (n["x"] - ox, n["y"] - oy, n["w"], n["h"]) if n and "x" in n else None
     ignore = set()
     if pt["unstable"]:
         with open(pt["unstable"], encoding="utf-8") as f:
@@ -344,14 +364,15 @@ def marks_of(pt):
             masks = [tuple(int(v) for v in l.split()[1:5]) for l in f if l.startswith("ignore ")]
     except OSError:
         pass
-    masked = masked_by(base, new, pt["size"], masks)
-    changed = {}
-    for key, line in changes(base, new):
-        if key in ignore or key in changed or masked(key):
-            continue
-        b, n = bounds(base.get(key)), bounds(new.get(key))
-        if b or n:
-            changed[key] = (union(b, n) if b and n else (b or n), line)
+    changed = changed_boxes(base, new, pt["size"], ignore, masks)
+    if changed is None:
+        return marks   # the tree's pixels are not the shot's (a scale): no marks from it
+    root = next(iter(new.values()))
+    crop = root.get("crop")
+    ox, oy = (crop["x"], crop["y"]) if crop else (0, 0)
+
+    def bounds(n):
+        return (n["x"] - ox, n["y"] - oy, n["w"], n["h"]) if n and "x" in n else None
     for m in marks:
         hits = [c for c in changed.values() if overlaps(c[0], m[0])]
         if hits:
@@ -416,11 +437,14 @@ def card(pt, box, marks, whole=False, lim=1):
     else:
         head = f"{pt['id']}: in the tree only (under a speck's size in pixels)"
     lines = [(clean(head), INK)]
+    if pt.get("also"):
+        # The checkpoints whose change was this one's (#257): named here, not a card each.
+        lines.append((clean(f"the same in {len(pt['also'])} more: {', '.join(pt['also'])}"), INK))
     seen = []
     for _, colour, line, _ in inside:
         if line and line not in seen:
             seen.append(line)
-            if len(lines) < 4:
+            if len(seen) <= 3:
                 lines.append(("tree: " + clean(line), colour))
     if len(seen) > 3:
         lines[-1] = (f"tree: +{len(seen) - 2} more (check run's output lists them)", INK)
@@ -523,6 +547,10 @@ def sheet(plan, out_png, font):
                 points[-1]["regions"].append(tuple(int(v) for v in p[1:5]))
             elif p[0] == "size":
                 points[-1]["sizechange"] = p[1]
+            elif p[0] == "also":
+                for pt in points:
+                    if pt["id"] == p[1]:
+                        pt.setdefault("also", []).append(p[2])
     marks = [marks_of(pt) if not pt["sizechange"] else [] for pt in points]
     # At full size first; when that leaves some out, each side at half the size, if that shows more.
     best = None
@@ -687,7 +715,7 @@ def main():
         n = [int(a) for a in sys.argv[3:]]
         holes(sys.argv[2], n[0], n[1], n[2], n[3], n[4:] or None)
         return 0
-    if len(sys.argv) >= 4 and sys.argv[1] in ("tree", "tree-keys"):
+    if len(sys.argv) >= 4 and sys.argv[1] in ("tree", "tree-keys", "unexplained"):
         base, new = load(sys.argv[2]), load(sys.argv[3])
         rest = sys.argv[4:]
         ignore = set()
@@ -697,15 +725,22 @@ def main():
                     # "KEY  (what it is)" lines: the key is before the two spaces.
                     ignore = {line.rstrip("\n").split("  (", 1)[0] for line in f if line.strip()}
             rest = rest[1:]
-        shot, masks = None, []
+        shot, masks, regs = None, [], []
         while rest:
             if rest[0] == "--shot" and len(rest) >= 3:
                 shot, rest = (int(rest[1]), int(rest[2])), rest[3:]
-            elif rest[0] == "--mask" and len(rest) >= 5:
-                masks, rest = masks + [tuple(int(v) for v in rest[1:5])], rest[5:]
+            elif rest[0] in ("--mask", "--region") and len(rest) >= 5:
+                (masks if rest[0] == "--mask" else regs).append(tuple(int(v) for v in rest[1:5]))
+                rest = rest[5:]
             else:
                 print(__doc__.strip(), file=sys.stderr)
                 return 2
+        if sys.argv[1] == "unexplained":
+            boxes = changed_boxes(base, new, shot, ignore, masks) if shot else None
+            for r in regs:
+                if boxes is None or not any(overlaps(b, r, 2) for b, _ in boxes.values()):
+                    print(f"{r[0]},{r[1]} {r[2]}x{r[3]}")
+            return 0
         masked = masked_by(base, new, shot, masks)
         found = 0
         keys = []

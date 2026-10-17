@@ -7641,6 +7641,23 @@ from them.
     .../baseline.png and 3 more pages: ...`). Measured on those 28: 4 pages (1218x782, 1218x782,
     1297x681, 1456x777), every settings section readable as itself; 5 checkpoints stay one page.
     Test: t_unit_check (14 screens: more pages, each one look, `OUT-2.png`; 2: one page).
+367. **One change seen in many checkpoints filled the check's output and its report** (2026-10-17,
+    #257). A 2 px margin added above a sheet's navigation moved the same 12 rows in all 17
+    checkpoints of that sheet: 17 listings of 4-7 regions and 12 tree lines each (~340 lines), and
+    17 alike cards in report.png, which then had room for 6 and named 12 it left out. check_compare
+    now gives each changed checkpoint a key (check_change_key): its size change; else its tree lines
+    and the regions they do not account for (`check.py unexplained`: the regions no changed
+    element's box touches, in the shot's pixels, through changed_boxes, which marks_of uses too),
+    or, without a tree, its regions; and its new holes. Regions alone would not do: the selected
+    section's highlight sat inside the moved list, so each section had its own regions (4 to 6) for
+    the same move. A checkpoint whose key an earlier one had is one line, `changed  ID: as FIRST
+    (its tree lines; 6 regions, all on what they name)`, still counted as changed (`18 changed (16
+    as another)`), its ID.diff.png still written, and a plan line `also FIRST ID` puts `the same in
+    16 more: ...` on FIRST's card instead of a card of its own. Measured on that check: 54 lines of
+    output, a report of 2 cards (the other change, a word in another sheet, beside it), every crop
+    larger for the room. Tests: t_unit_check (unexplained: a region on the moved element and one
+    elsewhere, a scaled shot; check_compare on made runs: two checkpoints with one change and a
+    third with another, the line, the count, the diff image).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

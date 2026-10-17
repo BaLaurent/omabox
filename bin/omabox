@@ -486,9 +486,10 @@ point ID\` where a shot should match (once still: the screen, -g, --window SEL w
 leaves a region out); \`check run\` gives it a fresh \`up --clean\` box each run (UP OPTIONS; OMABOX
 names the box). --approve runs it 3 times and writes the baseline to --base DIR (./omabox-check):
 what most runs showed, where they differed "unstable" and left out from then on, and baseline.png,
-every checkpoint kept in one image: look at it before you keep the baseline (a wrong screen most
-runs showed is kept too). Without --approve it runs once and says for each checkpoint same, changed
-(each region "at X,Y WxH", the tree's changes), holes, new or missing; when any changed, look at
+every checkpoint kept in one image (or pages): look at it before you keep the baseline (a wrong
+screen most runs showed is kept too). Without --approve it runs once and says for each checkpoint
+same, changed (each region "at X,Y WxH", the tree's changes; "as ID" for one an earlier one
+had), holes, new or missing; when any changed, look at
 report.png first (each change cropped beside its baseline). Exit 0 all same, 1 not, 3 the scenario
 failed, 4 no baseline. Shots are compared exactly but for specks (stray parts smaller than the
 approve runs differed by, said under "same"), and searched for holes (the #ff00ff wallpaper inside a
@@ -8215,6 +8216,32 @@ check_ids() {
 # One checkpoint of NEW against BASE (two folders), leaving out the point's --ignore regions and what
 # UNSTABLE lists (regions, and "tree KEY" lines). Sets CHK_REGIONS (lines), CHK_SPECKS ("N PX LARGEST"),
 # CHK_SIZE ("" or "WxH -> WxH") and CHK_TREE (lines). check_one BASE NEW ID SPECK [UNSTABLE]
+# What a changed checkpoint's change is, to tell one seen before (#257): its size change; else its
+# tree lines and the regions they do not account for (check.py unexplained: with the same tree lines
+# the rest of its regions are where the moved elements were, wherever its highlight sits), or all its
+# regions without a tree; and its new holes. Uses check_one's CHK_*.
+# check_change_key BASE NEW ID BASE_TREE NEW_TREE [HOLE...]
+check_change_key() {
+  local base=$1 new=$2 id=$3 bt=$4 nt=$5 r m ra=() ign="" g=()
+  shift 5
+  printf 'size %s\ntree %s\n' "$CHK_SIZE" "$CHK_TREE"
+  if [ -n "$CHK_SIZE" ]; then :
+  elif [ -n "$CHK_TREE" ] && [ -n "$bt" ] && [ -n "$CHK_REGIONS" ]; then
+    while IFS= read -r r; do m=$(check_mask_of "$r") && read -r -a g <<<"$m" && ra+=(--region "${g[@]}"); done <<<"$CHK_REGIONS"
+    if [ -f "$base/$id.unstable" ]; then ign=$new/$id.key-ignore; sed -n 's/^tree //p' "$base/$id.unstable" > "$ign"; fi
+    check_tree_masks "$new/$id.point" "$(magick identify -format '%wx%h' "$new/$id.png" 2>/dev/null || true)"
+    if [ ${#CHK_TMASKS[@]} = 0 ]; then
+      read -r -a g <<<"$(magick identify -format '%w %h' "$new/$id.png" 2>/dev/null || true)"
+      CHK_TMASKS=(--shot ${g[@]+"${g[@]}"})
+    fi
+    /usr/bin/python3 -I "$CHECK_PY" unexplained "$bt" "$nt" "$ign" "${CHK_TMASKS[@]}" "${ra[@]}" 2>/dev/null | sed 's/^/region /' || true
+    [ -z "$ign" ] || rm -f -- "${ign:?}"
+  else
+    [ -z "$CHK_REGIONS" ] || cut -d' ' -f1,2 <<<"$CHK_REGIONS" | sed 's/^/region /'
+  fi
+  for r in "$@"; do echo "hole ${r% *}"; done
+}
+
 # The tree diff's view of a checkpoint's --ignore regions, in CHK_TMASKS: "--shot W H --mask X Y W
 # H..." from its .point and its shot's size (WxH), so an element inside one is left out as its pixels
 # are; empty without either. check_tree_masks POINT WxH
@@ -8503,7 +8530,8 @@ check_approve() {
 # Each checkpoint with its own speck (the baseline's .point; 32 for one from before it), unless SPECK.
 check_compare() {
   local out=$1 base=$2 speck=$3 id fail=0 same=0 n=0 r regs=() e holes=() nh old what m changed=0 left bt nt
-  local plan=$out/report.plan ps nholed=0 new=0 missing=0 sp spa=()
+  local plan=$out/report.plan ps nholed=0 new=0 missing=0 sp spa=() key first alike=0
+  local -A firsts=()
   : > "$plan.body"
   for id in $(check_ids "$out/run1"); do
     n=$((n + 1))
@@ -8535,6 +8563,29 @@ check_compare() {
     if [ -z "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ]; then nholed=$((nholed + 1)); else changed=$((changed + 1)); fi
     regs=()
     if [ -f "$base/$id.tree.json" ] && [ -f "$out/run1/$id.tree.json" ]; then bt=$base/$id.tree.json nt=$out/run1/$id.tree.json; fi
+    [ -z "$CHK_REGIONS" ] || mapfile -t regs <<<"$CHK_REGIONS"
+    # One change seen in several checkpoints (#257: a margin under a sheet's list moved the same rows
+    # in all 17 of its checkpoints) is said once: a later one with the same key is a line, not
+    # its regions and tree again, nor a card of the report.
+    key=$(check_change_key "$base" "$out/run1" "$id" "$bt" "$nt" ${holes[@]+"${holes[@]}"})
+    first=${firsts[$key]:-}
+    if [ -n "$first" ]; then
+      alike=$((alike + 1))
+      printf 'also\t%s\t%s\n' "$first" "$id" >> "$plan.body"
+      # Its marked shot is $out/$id.diff.png, as every changed one's (the first's line says the folder).
+      if [ -n "$CHK_SIZE" ]; then echo "changed  $id: as $first (size $CHK_SIZE)"
+      elif [ -n "$CHK_TREE" ]; then
+        echo "changed  $id: as $first (its tree lines; ${#regs[@]} region$([ ${#regs[@]} = 1 ] || echo s), all on what they name)"
+      else
+        echo "changed  $id: as $first (its ${#regs[@]} region$([ ${#regs[@]} = 1 ] || echo s)$([ ${#holes[@]} = 0 ] || echo " and holes"))"
+      fi
+      regs+=(${holes[@]+"${holes[@]}"})
+      [ -n "$CHK_SIZE" ] || [ ${#regs[@]} = 0 ] || check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || true
+      if grep -qx 'settled no' "$out/run1/$id.point"; then echo "  note: $id was not still when taken"; fi
+      continue
+    fi
+    firsts[$key]=$id
+    regs=()
     printf 'point\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$base/$id.png" "$out/run1/$id.png" "$bt" "$nt" \
       "$([ ! -f "$base/$id.unstable" ] || echo "$base/$id.unstable")" >> "$plan.body"
     [ -z "$CHK_SIZE" ] || printf 'size\t%s\n' "$CHK_SIZE" >> "$plan.body"
@@ -8588,6 +8639,7 @@ check_compare() {
   # Every checkpoint counted: those of this run, and those of the baseline it did not take.
   e=""
   [ $changed = 0 ] || e+=", $changed changed"
+  [ $alike = 0 ] || e+=" ($alike as another)"
   [ $nholed = 0 ] || e+=", $nholed with new holes"
   [ $new = 0 ] || e+=", $new new"
   [ $missing = 0 ] || e+=", $missing missing"
