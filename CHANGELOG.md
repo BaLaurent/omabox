@@ -95,6 +95,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   app whose layout moved in one start of three, and a check a minute later read changed. An element
   wholly inside an `--ignore` region is now left out of the tree's comparison and the report; an
   `unstable` tree line says the element's box, so the region can be made to hold it.
+- **`baseline.png` stays readable with many checkpoints.** It fitted every checkpoint into one image,
+  so 28 of them came out 40-70 px wide each. Each shot now keeps a size you can read a screen at
+  (about 400x225 for a window), and what does not fit one look goes on more pages, `baseline-2.png`
+  and on, all named when `--approve` ends.
 
 ## 0.7.0 — 2026-10-16
 

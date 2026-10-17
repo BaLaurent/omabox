@@ -34,7 +34,9 @@
   check.py overview PLAN OUT.png [FONT]
       The baseline in one image (--approve): PLAN's "title TEXT", then per checkpoint "point ID PNG
       TEXT" and its "unstable X Y W H" (amber: left out) and "hole X Y W H" (red) lines; every shot
-      scaled to fit one look. Prints magick's arguments as sheet does (the first always "").
+      scaled to fit one look, but none under OV_MIN_PX in area: then more pages, OUT-2.png...
+      (OUT less a .part suffix). Prints magick's arguments as sheet does, the first being the pages
+      after OUT, a line each ("" for one page).
   check.py crop-tree TREE.json X Y W H
       A window's tree for a crop of it (in the window's coordinates): the elements that touch the
       crop, their ancestors, their keys from the whole tree. JSON on stdout.
@@ -585,6 +587,17 @@ def sheet(plan, out_png, font):
 AMBER = "#e09000"
 
 
+# Each shot at least OV_MIN_PX in area (400x225 for a 16:9 screen; a tall sheet narrower, a bar's
+# strip at the sheet's width), or as it is when smaller, so a wrong screen can be told from a right
+# one; what does not fit one look then goes on more pages (#256: 28 checkpoints in one look were
+# 40-70 px each). A card is its shot's width, its title cut to it, and OV_CARD_MIN at least.
+OV_MIN_PX, OV_CARD_MIN = 90000, 200
+
+
+def fits(W, H):
+    return W <= SHEET_W and H <= SHEET_H and W * H <= SHEET_PX
+
+
 def overview(plan, out_png, font):
     title, points = "", []
     with open(plan, encoding="utf-8") as f:
@@ -597,46 +610,73 @@ def overview(plan, out_png, font):
                 points[-1]["size"] = png_size(p[2])
             elif p[0] in ("unstable", "hole"):
                 points[-1]["marks"].append((AMBER if p[0] == "unstable" else RED, tuple(int(v) for v in p[1:5])))
-    # Each shot at most the sheet's width, then all of them smaller together until they fit.
     room = SHEET_W - 2 * GAP - 2 * PAD
-    f, placed = 1.0, None
-    while True:
+
+    def cards_at(f):
         cards = []
         for pt in points:
             w, h = pt["size"]
-            s = min(1.0, room / w) * f
-            sw, sh = max(1, round(w * s)), max(1, round(h * s))
-            lines = [(clean(f"{pt['id']}: {pt['text']}"), INK)]
-            textw = len(lines[0][0]) * CW
-            cw = max(sw, min(textw, TEXT_MAX)) + 2 * PAD
-            cards.append({"pt": pt, "s": s, "sw": sw, "sh": sh, "lines": lines, "w": int(cw), "h": int(PAD + LH + 4 + sh + PAD)})
-        placed, W, H, tlines = layout(cards, 0, title)
-        if (W <= SHEET_W and H <= SHEET_H and W * H <= SHEET_PX) or f < 0.05:
+            top = min(1.0, room / w)
+            smin = min(top, (OV_MIN_PX / (w * h)) ** 0.5)
+            sc = max(top * f, smin)
+            sw, sh = max(1, round(w * sc)), max(1, round(h * sc))
+            cards.append({"pt": pt, "s": sc, "floor": sc <= smin, "sw": sw, "sh": sh,
+                          "lines": [(clean(f"{pt['id']}: {pt['text']}"), INK)],
+                          "w": max(sw, OV_CARD_MIN) + 2 * PAD, "h": PAD + LH + 4 + sh + PAD})
+        return cards
+
+    # All of them smaller together until they fit one look, each no smaller than its floor; then pages.
+    paged = title + " (page 99 of 99)"
+    f = 1.0
+    while True:
+        cards = cards_at(f)
+        _, W, H, _ = layout(cards, 0, title)
+        if fits(W, H):
+            pages = [cards]
+            break
+        if all(c["floor"] for c in cards) or f < 0.05:
+            pages, page = [], []
+            for c in cards:
+                _, W, H, _ = layout(page + [c], 0, paged)
+                if page and not fits(W, H):
+                    pages.append(page)
+                    page = []
+                page.append(c)
+            pages.append(page)
             break
         f *= 0.9
-    a = ["-size", f"{W}x{H}", "xc:white"] + (["-font", font] if font else []) + ["-pointsize", str(PT)]
+    n = len(pages)
+    paths = [out_png] + [out_png.removesuffix(".part").removesuffix(".png") + f"-{k}.png" for k in range(2, n + 1)]
+    a = (["-font", font] if font else []) + ["-pointsize", str(PT)]
 
     def text(x, y, t, colour):
         a.extend(["-stroke", "none", "-fill", colour, "-annotate", f"+{x}+{y + LH - 5}", esc(t)])
 
-    for i, t in enumerate(tlines):
-        text(GAP, GAP + i * LH, t, INK)
-    for c, x, y in placed:
-        a.extend(["-stroke", "none", "-fill", "#e6e6e6", "-draw", f"rectangle {x},{y} {x + c['w'] - 1},{y + c['h'] - 1}"])
-        text(x + PAD, y + PAD, fit(c["lines"][0][0], c["w"] - 2 * PAD), INK)
-        iy, s = y + PAD + LH + 4, c["s"]
-        a.extend(["(", c["pt"]["png"], "-alpha", "off"] + (["-scale"] if s >= 1 else ["-resize"]) + [f"{c['sw']}x{c['sh']}!"])
-        for colour, (mx, my, mw, mh) in c["pt"]["marks"]:
-            x0, y0 = int(mx * s), int(my * s)
-            x1, y1 = max(x0 + 1, int((mx + mw) * s + 0.999) - 1), max(y0 + 1, int((my + mh) * s + 0.999) - 1)
-            if colour == AMBER:
-                # Left out: a see-through fill over it and its edge, so what is under it still reads.
-                a.extend(["-stroke", colour, "-strokewidth", "1", "-fill", colour + "40", "-draw", f"rectangle {x0},{y0} {x1},{y1}"])
-            else:
-                a.extend(["-stroke", colour, "-strokewidth", "2", "-fill", "none", "-draw", corners(x0 - 3, y0 - 3, x1 + 3, y1 + 3)])
-        a.extend([")", "-geometry", f"+{x + PAD}+{iy}", "-composite"])
-    a.extend(["-alpha", "off", "-depth", "8", f"PNG:{out_png}"])
-    sys.stdout.write("\0".join([""] + a) + "\0")
+    for k, page in enumerate(pages):
+        placed, W, H, tlines = layout(page, 0, title if n == 1 else f"{title} (page {k + 1} of {n})")
+        a.extend(["(", "-size", f"{W}x{H}", "xc:white"])
+        for i, t in enumerate(tlines):
+            text(GAP, GAP + i * LH, t, INK)
+        for c, x, y in placed:
+            a.extend(["-stroke", "none", "-fill", "#e6e6e6", "-draw", f"rectangle {x},{y} {x + c['w'] - 1},{y + c['h'] - 1}"])
+            text(x + PAD, y + PAD, fit(c["lines"][0][0], c["w"] - 2 * PAD), INK)
+            iy, sc = y + PAD + LH + 4, c["s"]
+            a.extend(["(", c["pt"]["png"], "-alpha", "off"] + (["-scale"] if sc >= 1 else ["-resize"]) + [f"{c['sw']}x{c['sh']}!"])
+            for colour, (mx, my, mw, mh) in c["pt"]["marks"]:
+                x0, y0 = int(mx * sc), int(my * sc)
+                x1, y1 = max(x0 + 1, int((mx + mw) * sc + 0.999) - 1), max(y0 + 1, int((my + mh) * sc + 0.999) - 1)
+                if colour == AMBER:
+                    # Left out: a see-through fill over it and its edge, so what is under it still reads.
+                    a.extend(["-stroke", colour, "-strokewidth", "1", "-fill", colour + "40", "-draw", f"rectangle {x0},{y0} {x1},{y1}"])
+                else:
+                    a.extend(["-stroke", colour, "-strokewidth", "2", "-fill", "none", "-draw", corners(x0 - 3, y0 - 3, x1 + 3, y1 + 3)])
+            a.extend([")", "-geometry", f"+{x + PAD}+{iy}", "-composite"])
+        a.extend(["-alpha", "off", "-depth", "8"])
+        # Every page but the last written on the way (and dropped); the last is magick's output.
+        a.extend(["-write", f"PNG:{paths[k]}", "+delete", ")"] if k < n - 1 else [")"])
+    a.append(f"PNG:{paths[-1]}")
+    # The first field: the pages after the first, a line each (the caller says them).
+    sys.stdout.write("\0".join(["\n".join(paths[1:])] + a) + "\0")
 
 
 def main():

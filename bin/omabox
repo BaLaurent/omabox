@@ -8353,7 +8353,7 @@ check_speck_text() {
 # (--speck): that one for all. check_approve OUT BASE SPECK RUNS
 check_approve() {
   local out=$1 base=$2 speck=$3 runs=$4 id r k j n=0 unst=0 best agree most odd l holed=() hoff="" what
-  local cs=${3:-$CHECK_SPECK} big ps m plan=$out/baseline.plan
+  local cs=${3:-$CHECK_SPECK} big ps m plan=$out/baseline.plan pages
   local -A pspeck=() wspeck=() wof=()
   mkdir -p "$base"
   : > "$plan.body"
@@ -8480,9 +8480,15 @@ check_approve() {
   # most runs agree on is kept, a wrong screen (an error, a page not loaded yet) as well.
   { printf 'title\tthe baseline in %s, each checkpoint as a check will compare it; amber: unstable, left out; red: holes\n' "$base"
     cat -- "$plan.body"; } > "$plan"
-  if check_report "$plan" "$out/baseline.png" overview >/dev/null; then
-    echo "overview: $out/baseline.png (the baseline's $n checkpoints in one image)"
-    echo "check: look at it before you keep this baseline: what most runs showed is kept, a wrong screen too (an error, a page not loaded yet)"
+  if pages=$(check_report "$plan" "$out/baseline.png" overview); then
+    if [ -z "$pages" ]; then
+      echo "overview: $out/baseline.png (the baseline's $n checkpoints in one image)"
+      echo "check: look at it before you keep this baseline: what most runs showed is kept, a wrong screen too (an error, a page not loaded yet)"
+    else
+      # Too many to read in one look (#256): pages, each one look.
+      echo "overview: $out/baseline.png and $(wc -l <<<"$pages") more pages: $(tr '\n' ' ' <<<"$pages")(the baseline's $n checkpoints, one look a page)"
+      echo "check: look at them before you keep this baseline: what most runs showed is kept, a wrong screen too (an error, a page not loaded yet)"
+    fi
   else
     say "check: the baseline's image could not be drawn (magick): look at its shots in $base before you keep it"
   fi

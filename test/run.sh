@@ -5396,6 +5396,23 @@ t_unit_check() {
     wh=$(magick identify -format '%w %h' "$d/r.png" 2>/dev/null) || wh="0 0"
     check "...inside one look (1456 px wide at most, under 1.15 MP), a tenth of the shot's area at most" \
       test "${wh% *}" -le 1456 -a $((${wh% *} * ${wh#* })) -le 1150000 -a $((${wh% *} * ${wh#* } * 10)) -le $((1920 * 1080))
+    # The baseline's overview (#256): each shot 90000 px at least, more pages past one look.
+    local k pl=$d/ov.plan pages=() pw ph ova=()
+    { printf 'title\tthe baseline\n'; for k in $(seq 1 14); do printf 'point\tc%s\t%s\twindow W\n' "$k" "$d/big.png"; done; } > "$pl"
+    python3 -I "$ROOT/share/check.py" overview "$pl" "$d/ov.png.part" "" > "$d/ov.args"
+    mapfile -d '' ova < "$d/ov.args"
+    mapfile -t pages <<<"${ova[0]}"
+    magick "${ova[@]:1}" 2>/dev/null && mv "$d/ov.png.part" "$d/ov.png"
+    check "overview: 14 screens past one look: more pages (said in the first field)" test "${#pages[@]}" -ge 1 -a -s "${pages[0]:-/nonexistent}"
+    for k in "$d/ov.png" "${pages[@]}"; do
+      read -r pw ph <<<"$(magick identify -format '%w %h' "$k" 2>/dev/null || echo "0 0")"
+      [ "$pw" -le 1456 ] && [ "$ph" -le 1568 ] && [ $((pw * ph)) -le 1150000 ] || no "...each page one look" "$k ${pw}x$ph"
+    done
+    check_eq "...the page after the first is OUT-2.png" "$d/ov-2.png" "${pages[0]}"
+    { printf 'title\tthe baseline\n'; for k in 1 2; do printf 'point\tc%s\t%s\twindow W\n' "$k" "$d/big.png"; done; } > "$pl"
+    python3 -I "$ROOT/share/check.py" overview "$pl" "$d/ov1.png.part" "" > "$d/ov.args"
+    mapfile -d '' ova < "$d/ov.args"
+    check_eq "...two of them: one page" "" "${ova[0]}"
     # The grown block's crop (54x89, so 2x) at the first card's image row (y 60): the baseline's
     # (x 16) dark where the block grew, the new shot's (16 + 108 + 8) light there.
     check_eq "...the baseline left, the new shot right, a small crop at 2x" "202030 C0C0D0" \

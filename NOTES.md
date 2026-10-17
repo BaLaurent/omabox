@@ -7628,6 +7628,19 @@ from them.
     lines say the box now (`frame#1/label#4  (label "added today 02:13" @1512,91 368x15)`): an
     unstable line shows the region that would hold it. Tests: t_unit_check (a label wholly inside, partly,
     a shot of another size, a crop's pixels, tree-keys, an argument it does not take; the key line's box).
+366. **`baseline.png` was unreadable past a handful of checkpoints** (2026-10-17, #256). Finding
+    363's overview shrank every shot together until all fit one look; with 28 checkpoints (a Qt
+    Quick app's window, its sheets, 17 settings sections, a bar widget's popup) each came out 40-70
+    px wide, under a title strip as wide as its text, and could not tell a right screen from a wrong
+    one, which is what the overview is for. Now each shot keeps OV_MIN_PX (90000 px, 400x225 for a
+    16:9 window; a floor by area, since a floor by width made a tall sheet 400x460 and one row a
+    page: 8 pages of 3), a card is its shot's width (200 at least, its title cut to it), and what
+    does not fit one look goes on more pages, `baseline-2.png`..., written in the same magick call
+    (`-write` and `+delete` in a parenthesised page each, the last the output); check.py overview
+    prints the pages after the first in its first field, and approve names them all (`overview:
+    .../baseline.png and 3 more pages: ...`). Measured on those 28: 4 pages (1218x782, 1218x782,
+    1297x681, 1456x777), every settings section readable as itself; 5 checkpoints stay one page.
+    Test: t_unit_check (14 screens: more pages, each one look, `OUT-2.png`; 2: one page).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

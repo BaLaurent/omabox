@@ -156,7 +156,8 @@ network, no animations; `--keep` takes
 any back, `--keep locale` your locale and timezone; `--theme`/`--size`/`--net connected` as `up`),
 says how long each box took to start, and writes the baseline to `./omabox-check` (`--base DIR`;
 commit it with the project). It also writes `baseline.png` (path printed): every checkpoint as kept,
-in one image, unstable regions in amber, holes in red. Read it before you keep the baseline: the
+in one image (more than about ten: pages, `baseline-2.png`..., one look each, all named), unstable
+regions in amber, holes in red. Read it before you keep the baseline: the
 baseline is what most runs showed, so a screen that was wrong in most of them (an error dialog, a
 page that had not loaded, an empty list) is kept as right. "unstable ID"
 names what was not the same from one run to the next, left out from then on: one run of three
