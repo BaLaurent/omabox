@@ -165,15 +165,36 @@ static char *combo_choice(AtspiAccessible *a) {
     return NULL;
 }
 
-static int extents(AtspiAccessible *a, int b[4]) {
+static int extents_in(AtspiAccessible *a, AtspiCoordType type, int b[4]) {
     AtspiComponent *c = atspi_accessible_get_component_iface(a);
     if (!c) return 0;
     GError *e = NULL;
-    AtspiRect *r = atspi_component_get_extents(c, ATSPI_COORD_TYPE_WINDOW, &e);
+    AtspiRect *r = atspi_component_get_extents(c, type, &e);
     g_object_unref(c);
     if (e || !r) { g_clear_error(&e); g_free(r); return 0; }
     b[0] = r->x, b[1] = r->y, b[2] = r->width, b[3] = r->height;
     g_free(r);
+    return 1;
+}
+
+// Qt measures an element's window coordinates from its nearest dialog or window, and counts a Qt
+// Quick popup with that role inside the window as one: the popup says 0,0 and its contents are
+// relative to it. Its screen coordinates are right relative to the window's (a Wayland window's
+// screen origin is 0,0 to Qt), so the popup's offset is the difference, and its contents take it.
+static int frame_sx, frame_sy, have_frame_screen, off_x, off_y;
+
+static int extents(AtspiAccessible *a, int depth, const char *role, int b[4]) {
+    if (!extents_in(a, ATSPI_COORD_TYPE_WINDOW, b)) return 0;
+    int s[4];
+    if (depth == 0) {
+        have_frame_screen = extents_in(a, ATSPI_COORD_TYPE_SCREEN, s);
+        if (have_frame_screen) frame_sx = s[0], frame_sy = s[1];
+        off_x = off_y = 0;
+    } else if (b[0] == 0 && b[1] == 0 && have_frame_screen && (!strcmp(role, "dialog") || !strcmp(role, "window")) &&
+               extents_in(a, ATSPI_COORD_TYPE_SCREEN, s)) {
+        off_x = s[0] - frame_sx, off_y = s[1] - frame_sy;
+    }
+    b[0] += off_x, b[1] += off_y;
     return 1;
 }
 
@@ -246,7 +267,9 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
     char *role = role_of(a), *name = name_of(a, 80);
     AtspiStateSet *ss = atspi_accessible_get_state_set(a);
 #define HAS(st) (ss && atspi_state_set_contains(ss, (st)))
-    int b[4], hasb = extents(a, b) && b[2] > 0 && b[3] > 0;
+    // A popup's offset (extents) holds for what is under it, and no further.
+    int ox = off_x, oy = off_y;
+    int b[4], hasb = extents(a, depth, role, b) && b[2] > 0 && b[3] > 0;
     char *text = NULL, *val = NULL;
     GPtrArray *states = g_ptr_array_new();
     gint n = 0;
@@ -319,6 +342,7 @@ static void walk(AtspiAccessible *a, int depth, const char *parent_name) {
     if (pushed) g_free(path[--path_n]);
 done:
 #undef HAS
+    off_x = ox, off_y = oy;
     g_ptr_array_free(states, TRUE);
     if (ss) g_object_unref(ss);
     g_free(role);

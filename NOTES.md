@@ -7597,6 +7597,23 @@ from them.
     host's LC_TIME and zone, recorded), t_check (box up said, a crop of the window: plain baseline, its
     tree's move, the baseline's image inside one look, specks in every .point, check.json's locale and
     timezone, counts).
+364. **`tree` put what is inside a Qt Quick dialog at the dialog's coordinates** (2026-10-16, a first
+    real visual check of a Qt Quick app: its settings, add and help sheets are popups with the dialog
+    role). The settings sheet read `@0,0 760x875` and its rows `@16,65`, though it is drawn at 568,78
+    of the window: in WINDOW coordinates Qt says 0,0 for a popup with the dialog role and measures what
+    is inside it from the popup (Qt 6.11.2). So a click at a row's middle hit the table behind, and
+    `check point --window SEL -g` on the sheet kept the elements behind it (crop-tree's overlap test)
+    and lost most of the sheet's: a 2 px move of its rows showed only as pixels, and the report named
+    the background's rows for the sheet's red regions. Qt's SCREEN coordinates are right relative to
+    the window's (a Wayland window's screen origin is 0,0 to Qt), so `tools/tree` now takes, for a
+    dialog or window element below the frame that says 0,0, the offset of its SCREEN position from the
+    frame's, and adds it to that element and everything under it (a dialog inside it sets its own).
+    GTK's dialogs are windows of their own (their own frame), and every other element keeps its
+    WINDOW coordinates. Measured on that app: the sheet at `@568,78`, its rows at x 584 (where `wait`
+    saw one change), a click at a row's middle opened that section; the 2 px move read `moved +0,+2
+    list item "Speed"` and ten more such lines. Test: t_tree's demo window has a non-modal Dialog at
+    260,170: drawn there, its button in window coordinates, a click at the button's middle presses it
+    (all three fail on the old helper: the button at `@6,37`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

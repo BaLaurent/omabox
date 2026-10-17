@@ -86,6 +86,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   of 1080p at 30 fps it recorded (so a long recording still has the time to encode); one that runs
   out is killed and run once more, and a second time `stop` says so and fails, keeping the raw
   recording in the box as its other failures do. `omabox audio`'s ffmpeg is bounded too.
+- **`tree` puts what is inside a Qt Quick dialog where it is drawn.** A Qt Quick popup with the
+  dialog role (a settings or add sheet) read `@0,0`, and everything in it relative to the sheet, not
+  the window (Qt measures from it), so a click at a row's middle landed on what was behind the sheet,
+  and `check point --window SEL -g` on a sheet compared the elements behind it instead of its own.
 
 ## 0.7.0 — 2026-10-16
 

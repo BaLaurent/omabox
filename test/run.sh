@@ -5626,6 +5626,12 @@ ApplicationWindow {
         CheckBox { text: "Dark mode" }
         Switch { text: "Wi-Fi"; checked: true }
     }
+    // Qt measures what is inside a dialog from the dialog, which says 0,0 (finding 364).
+    Dialog {
+        title: "Sheet"; visible: true; modal: false; closePolicy: Popup.NoAutoClose
+        x: 260; y: 170; width: 200; height: 110
+        Button { id: inside; text: "Inside dialog"; onClicked: inside.text = "Clicked inside" }
+    }
 }
 QML
     ob run -b "$B" -d -- qml6 /home/sbx/tree-demo.qml >/dev/null 2>&1
@@ -5642,6 +5648,16 @@ QML
       check "...a click at its bounds' middle (click --window $mid) checks it" until_ok 5 \
         bash -c "'$CLI' tree -b '$B' --window 'Tree demo QML' --find 'dark mode' | grep -q '^check box \"Dark mode\" \[focused checked\]'"
     else no "...a click at its bounds' middle checks it" "no bounds in [$out]"; fi
+    out=$(ob tree -b "$B" --window 'Tree demo QML' 2>&1)
+    check_match "...a Qt Quick dialog where it is drawn, not at 0,0" $'\n *dialog "Sheet" @2[6-9][0-9],1[6-9][0-9] ' $'\n'"$out"
+    out=$(ob tree -b "$B" --window 'Tree demo QML' --find 'inside dialog' 2>&1)
+    check_match "...what is in it in the window's coordinates" '^dialog "Sheet" > button "Inside dialog" @(2[6-9][0-9]|[34][0-9][0-9]),(1[7-9][0-9]|2[0-9][0-9]) ' "$out"
+    if mid=$(tree_mid "$out"); then
+      # shellcheck disable=SC2086 # X Y
+      ob click -b "$B" --window 'Tree demo QML' --wait $mid >/dev/null 2>&1
+      check "...a click at its bounds' middle presses it" until_ok 5 \
+        bash -c "'$CLI' tree -b '$B' --window 'Tree demo QML' --find 'clicked inside' | grep -q 'button \"Clicked inside\"'"
+    else no "...a click at its bounds' middle presses it" "no bounds in [$out]"; fi
   else
     skip "tree of a Qt Quick window" "no qml6 (qt6-declarative)"
   fi
