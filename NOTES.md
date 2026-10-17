@@ -7437,8 +7437,8 @@ from them.
     covers** absolute dates and "today" displays (a date column, a calendar's month, "added today
     16:37"), which drift from run to run without it; no project has needed one yet, so they are
     `--ignore`d. The library and its tests (t_unit_clock: a probe of every deadline call, the
-    never one; t_clean's maps of the shell and the portal) are parked on the `visual-clock` branch,
-    to come back opt-in (never `up --clean`'s default) when a project needs it.
+    never one; t_clean's maps of the shell and the portal) are parked on the `parked/clock-preload`
+    branch, to come back opt-in (never `up --clean`'s default) when a project needs it.
     `up --clean` freezes the bar's clock with the literal format again; `--keep clock` keeps the
     bar's real one.
 361. **`check run`'s report: every change in one image** (2026-10-16, #252, after finding 359). A
@@ -7619,11 +7619,11 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
 - Visual checks (findings 357-363, #252): a checkpoint's speck comes from its --approve runs (3):
   noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; only the
   bar's clock is frozen, so an app's absolute dates and "today" displays drift from run to run and are
-  `--ignore`d (the preload library that pinned every process's clock is parked on the `visual-clock`
-  branch until a project needs it, finding 360); holes (finding 362) show only where the
-  wallpaper is behind (a popup over a window hides them) and not where a gap opens onto the open
-  wallpaper; an exploratory mode (an agent walking the UI, getting only flagged changes) is not
-  built; not inside ai-jail.
+  `--ignore`d (the preload library that pinned every process's clock is parked on the
+  `parked/clock-preload` branch until a project needs it, finding 360); holes (finding 362) show
+  only where the wallpaper is behind (a popup over a window hides them) and not where a gap opens
+  onto the open wallpaper; an exploratory mode (an agent walking the UI, getting only flagged
+  changes) is not built; not inside ai-jail.
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
   aquamarine patched downstream with #415 is recognised by the symbol it adds (finding 246).
 - More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44;
