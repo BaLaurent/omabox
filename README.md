@@ -102,6 +102,9 @@ omabox pixel 40 12                     # the colour there, #rrggbb; shot -g … 
 omabox tree --find 'dark mode'         # text, not a shot: check box "Dark mode" [checked] @12,148 1872x26
 omabox shot --changed --window myapp   # only what changed since its last shot, cropped
 omabox shot --burst 12 --sheet --after -- keys super+space   # a transition in frames
+omabox up --clean                      # a desktop where only what is tested moves (no clock, pointer, network)
+omabox check run --approve -- ./visual.sh   # a scenario's checkpoints (omabox check point ID) as a baseline
+omabox check run -- ./visual.sh        # ...then: same, or what changed (regions, and the tree's moved elements)
 omabox record start -o demo.mp4        # a video of the screen; omabox record stop prints the file
 omabox record start --monitor all      # ...of every monitor, laid out in one video as shot takes them
 omabox record mark "scene 2"           # a mark in the video's clock: demo.marks.tsv and demo.vtt captions
@@ -145,6 +148,13 @@ omabox which 12345                     # the box a host pid is in, a bar like yo
   script, an agent whose process omabox could not find) is gone, `omabox ls` says `orphan` under IDLE,
   and `omabox down --orphans` takes those down. Nothing does by itself, and a box you start at a
   terminal is never one.
+- **Visual checks**: `omabox check run -- SCENARIO` runs a script of yours in a fresh `up --clean`
+  box (Omarchy's bar, one theme, a `#ff00ff` wallpaper, the clock frozen, no pointer, network or
+  animations) and compares each `omabox check point ID` it takes with a baseline (`--approve`: three
+  runs, what most agree on, and what was not the same from one run to the next left out). It names
+  the regions that changed and, for an app with an accessibility tree, the elements that moved,
+  resized or changed; shots are compared exactly, as users see them, leaving out only specks.
+  Baselines are per GPU (an AMD iGPU and an NVIDIA card draw text differently).
 - **More**: `--stock-bar` (Omarchy's default bar instead of a copy of yours, which `up` names when it
   is not Omarchy's; `--theme` does not reset it), `--systemd` (a real systemd user manager, for
   plugins that manage a service or schedule alarms), `--audio` (the box's

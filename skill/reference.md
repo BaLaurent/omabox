@@ -98,6 +98,100 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   a frame stalled its timers). `N of M frames identical to the one before` on stderr: nothing new
   drawn between them.
 
+- A look compared with a baseline over time, no person looking (an app's or a plugin's screens after
+  a change): `omabox check`, next section.
+
+## Visual checks
+
+For "does it still look right" without a person looking: `omabox check`. Write the scenario once, a
+script that sets the box up and drives it with omabox commands, with `omabox check point ID` where
+a shot should match (`--window SEL` for an app's window, which brings its tree; `-g "X,Y WxH"` for
+a region, a bar widget's; both, `--window SEL -g "X,Y WxH"`, for a part of the window in its own
+coordinates, its tree then only the elements touching that part; nothing: the screen):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+H=$(omabox path)/home                                 # the box HOME, /home/sbx inside
+cp -r tests/fixtures/library "$H/library"             # data the app reads, before it starts
+omabox run -- touch -d "9 months ago" /home/sbx/library/old.txt   # relative to now: "9 months ago" each run
+omabox check point bar -g "1700,0 220x26"            # the widget, before anything runs
+omabox run -d --wait -- ./build/myapp
+omabox wait --timeout 20s window myapp
+omabox check point main --window myapp
+omabox check point toolbar --window myapp -g "0,0 800x48"   # a part of it, in its coordinates
+omabox keys --window myapp --wait ctrl+comma
+omabox check point settings --window myapp --ignore "10,400 120x20"   # its own clock: left out
+```
+
+The scenario runs on the host with `OMABOX` naming its box, so a bare `omabox` command goes there
+(and is the omabox running the check: its bin comes first on PATH). Files go in from the host under `$(omabox
+path)/home`, or through stdin: `omabox run -- bash -s < setup.sh` runs a script of yours in the box.
+Seed data before the app starts: a redraw it does on its own can finish before a `wait change` after
+it starts, and that wait then times out; else `omabox wait still`. `check point` waits until the
+shot is still (15 s, `--timeout`; then takes it anyway, noted). A popup (a bar widget's, a menu)
+goes over an empty workspace for its checkpoint: holes (below) show only where the wallpaper is
+behind.
+
+Times: only the bar's clock is frozen ("Friday 12:00", by its format); the box's processes run on
+the real clock, in UTC. So make every time the app shows relative to when the scenario runs:
+
+- Seed data relative to now, in the scenario: `omabox run -- touch -d "9 months ago" FILE` for a
+  "9 months ago" (mtimes), a reset time of `$(date -d "+2 hours 10 minutes" +%s)` for "resets in
+  2h 10m", never a fixed date.
+- A time a daemon in the box stamps as it runs ("added 16:37", a log line's time): `--ignore` its
+  region at that checkpoint.
+- An app with test hooks of its own (a fixed "now", a fake clock): use them.
+- Absolute dates and "today" displays (a date column, a calendar's month, "added today") drift from
+  run to run whatever you seed: `--ignore` them.
+
+`omabox check run --approve [--plugin PATH]... -- ./visual.sh` runs it three times (`--runs N`), each
+in a fresh `up --clean` box (Omarchy's bar on tokyo-night, a `#ff00ff` wallpaper, the bar's clock
+frozen, English (en_US.UTF-8, else C.UTF-8) in UTC whatever your locale and zone, no pointer, no
+network, no animations; `--keep` takes
+any back, `--keep locale` your locale and timezone; `--theme`/`--size`/`--net connected` as `up`),
+says how long each box took to start, and writes the baseline to `./omabox-check` (`--base DIR`;
+commit it with the project). It also writes `baseline.png` (path printed): every checkpoint as kept,
+in one image, unstable regions in amber, holes in red. Read it before you keep the baseline: the
+baseline is what most runs showed, so a screen that was wrong in most of them (an error dialog, a
+page that had not loaded, an empty list) is kept as right. "unstable ID"
+names what was not the same from one run to the next, left out from then on: one run of three
+differing is the app (a layout that changes from start to start: worth a look) or a minute that
+ticked; every run differing is data or a time the scenario does not pin (a random port, a time the
+app shows): pin it in the scenario's data or `--ignore` it (Times, above). Then `omabox check run -- ./visual.sh`
+(same UP OPTIONS) after a change: `same ID` (with what it left out, `(12 specks left out, the
+largest 9 px)`), or `changed ID` with each region (`at X,Y WxH`) and the tree's
+`moved/resized/name/text/state/appeared/vanished` lines (an element with no name says where it is:
+`appeared  button  (in frame "W" > panel#1 > button#3)`); `new`/`missing` for checkpoints the
+baseline lacks or this run did not take; the last line counts each kind (`check: 2 of 3 same, 1
+missing`). When anything changed, Read the `report:` image first: one
+image, ~150-800 image tokens, each change cropped from the baseline beside this run (red: pixels,
+blue: a move only the tree has), with its checkpoint, region and tree line; what did not fit is
+named. `ID.diff.png` is the whole shot marked (~1.5k tokens each): for the context a crop lacks. Exit
+0 all same, 1 not, 3 the scenario failed (its log named), 4 no baseline. A change you meant:
+`--approve` again. Shots are compared exactly, leaving out specks: parts of the difference smaller
+than each checkpoint's own speck, measured at `--approve` as twice the largest stray part between
+its runs (Qt Quick's text varies by a few pixels a glyph from one start to the next: 22 px for an
+app on NVIDIA; 16 at least, 32 at most; every checkpoint of one window takes the window's largest),
+and 8 where the runs agreed to the pixel (the bar, a GTK app: a few runs can agree on a window with
+little text, and the next show a pixel of it), so a 2 px spacing change in a bar widget (16 px) is
+caught. `--speck N` sets one for all
+(a baseline from before this: 32). A change smaller than the speck shows only in the tree.
+Baselines are per GPU: another GPU, omabox, Hyprland, Omarchy, theme, size, locale or timezone is
+said in the report. The Omarchy shell and its plugins have no tree: their checks are pixels only. `omabox check
+diff A.png B.png [--ignore G] [--speck N] [--report R.png]` compares two shots of yours the same way
+(32 px specks unless `--speck`; exit 0 same, 1 not). Not inside ai-jail yet.
+
+Each checkpoint is also searched for holes: the `#ff00ff` wallpaper showing through inside a window,
+the bar or a popup (a transparent part, a gap, a card that forgot its background), and in a
+`--window` shot fully transparent pixels. The wallpaper around and between surfaces and rounded
+corners are not holes. A hole shows only where the wallpaper is behind it: take a popup's checkpoint
+over an empty workspace, not over your app. `--approve` says each (`holes ID: the wallpaper shows
+through at X,Y WxH`) and ends `check: HOLES in N of M checkpoints`: look before keeping that
+baseline; it keeps them, and a check then fails only on holes it lacks (`holes ID: ... the baseline
+does not have`, marked on `ID.diff.png`), even ones too small to change the shot. None are looked for
+with `--keep wallpaper` or after a theme set in the box.
+
 ## Symptoms
 
 | Symptom | Next step |

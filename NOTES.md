@@ -7255,6 +7255,31 @@ from them.
     sleeps: stuck twice, stuck once, a plain failure, the bound), record_stuck_on in
     t_record_input (a watcher in the box SIGSTOPs the stop's encode once: killed at 3 s, run again,
     a video; twice: both messages, exit 1, raw.mkv kept, no ffmpeg left).
+357. **Spike: visual checks, how much changes when nothing does** (2026-10-16, #252; probes and
+    numbers in `spike/visual/`). Before building a `check` with baselines: a clean box made from
+    today's options (stock bar, tokyo-night, a solid `#ff00ff` sentinel wallpaper, the clock frozen
+    by a literal Qt format `'Friday 12:00'` so it keeps its place, `--no-pointer`, `--net isolated`,
+    animations off by `hl.config`), a Qt Quick app with a bar widget of its own against fixed data,
+    four checkpoints shot twice 3 s apart, in seven boxes (on the NVIDIA RTX 5070 Ti: the gpu setting;
+    first written as the AMD iGPU, which was not checked then). **Within a run: pixel-identical** (shots
+    and trees). **Across boxes ~2,000 single pixels differ** on text, and as much between two
+    starts of the app in one box: Qt Quick's distance-field text is not repeatable from one start to
+    the next (the glyph atlas fills in arrival order). It stays with `QSG_RENDER_LOOP=basic` and on
+    llvmpipe, and goes with `QT_QUICK_BACKEND=software` or `QML_DISABLE_DISTANCEFIELD=1` (which
+    renders text natively: 56k px from the default, not visible at 2x). Every noise pixel is below
+    10% of full scale in grey; a synthetic 1 px shift of a text block survives 25%, a painted-over
+    glyph too. At 10% the boxes differ only in content: the server's random port (the test's to
+    pin) and "added … HH:MM" (only a pinned clock fixes that; nothing pins time in a box yet,
+    no libfaketime here). Port pinned: two fresh boxes identical at 10% on all four checkpoints.
+    A spacing changed from 2 to 4 px in a build of the app: caught at 10%, and the tree diff
+    (`treediff.py`) named it ("moved -6,+0 button "add …"", -4, -2 down the row). The sentinel
+    counts 0 in windows and the bar; a Quickshell popup is drawn in a full-screen layer, so its own
+    rectangle comes from pixels, not Hyprland. The widget has no tree (finding 244): pixels only,
+    which held as well. **A threshold misses subtle colour**: a row 3 levels brighter is gone at
+    10% and one 5,000 px blob exactly, while the noise never made a blob over 13 px. So: exact
+    pixels in the users' rendering, isolated blobs under ~32 px dropped (and counted);
+    `QML_DISABLE_DISTANCEFIELD=1` an opt-in strict mode.
+
 358. **`up --quickshell PATH`: the box's shell on a Quickshell build** (2026-10-16, #253: testing a
     shell plugin's accessibility tree needs Quickshell's 916a0dd, released in 0.3.2; up to 0.3.1,
     what Arch ships, no Quickshell window publishes an AT-SPI tree). Built as `--hyprland` is (finding
@@ -7333,6 +7358,246 @@ from them.
     save and `up --from`'s note, the in-box Qt check with a stub), `t_hyprland` (a box without it:
     the installed one, its version line).
 
+359. **`omabox check` and `up --clean`: visual checks against a baseline** (2026-10-16, #252, built on
+    finding 357). `up --clean`: --stock-bar on tokyo-night unless --theme, a 16x16 `#ff00ff` PNG
+    (CLEAN_WALLPAPER_PNG, scaled by the background) that share/session.sh links over the background
+    omarchy-theme-set chose (`OMABOX_CLEAN_WALLPAPER`), the clock's format and verticalFormat Qt
+    literals in the box's shell.json, --no-pointer, --net isolated unless --net, and `animations off`
+    in the run dir's omabox.clean, read by share/hyprland.lua on every load as omabox.pointer is (a
+    reload kept them off). `--keep` takes animations, bar, clock, pointer, wallpaper back; box.json and
+    ls --json have `clean: {keep}`; up_already compares --clean and --keep; `run` forwards both. `check
+    point ID` (in a scenario, `$OMABOX_CHECK_OUT`): `wait still --quiet 500ms` (15 s; not still: taken,
+    noted), a shot (screen, -g or --window, `OMABOX_SHOT_NO_BASELINE`), with --window `tree --json`,
+    and ID.point (what, settled, tree, --ignore regions). `check run`: per run a fresh `up --clean`
+    box (`check-PID-N`; `OMABOX_CHECK_NAME` is the suite's prefix), the scenario with `OMABOX` set,
+    this omabox's bin first on PATH, its output in runN.log; exit 3 when it fails or takes no
+    checkpoint. The comparison (check_regions): both shots with --ignore and unstable regions
+    painted black, `difference`, `-alpha off` again (a -draw brought alpha back, and the parts'
+    colour read `graya(255,...)`, so check.py saw no part at all: every masked comparison read same;
+    found by t_check's moved button, caught before any release), max channel, threshold 0,
+    connected components; share/check.py drops parts under 32 px (specks: the noise never made one
+    over 13 on NVIDIA, 7 on AMD) and merges the rest 12 px apart. The tree diff keys an element by
+    place (role#N under its parent), not by name: keyed by name, a label whose text changes each run
+    (random, a time) read as one vanished and another appeared, never matched by the unstable list;
+    a name change is now a `name` line, an element inserted before others of its role shifts theirs.
+    **--approve runs 3 times, not 2** (--runs N): with 2, the subject's flaky status column (one
+    start in eight 3-4 px left) was run 1 and became the baseline; now each checkpoint's baseline is
+    the run most others match, and the regions and tree elements where any differed are its
+    `ID.unstable`, said ("run 1 of 3 differed": the app or a minute that ticked; "every run
+    differed": data or a time not pinned). A baseline's check.json (omabox, Hyprland, Omarchy, GPU
+    driver, theme, size) is compared on each check: an AMD run against an NVIDIA baseline had 203
+    regions in the app, and the report said "gpu nvidia -> amdgpu". Measured on the subject: approve
+    52 s (3 boxes), a check ~15 s; the same build same but for its "added … HH:MM" when the
+    minute had ticked (no clock pinning: Open); the 2 px spacing change caught (4 regions) and named
+    (6 moved buttons), the ⋯ button's 2 px move only by the tree (its dots' parts are specks). Not
+    inside ai-jail (refused). Tests: t_unit_check (check.py regions and tree, check diff on made
+    images: specks, a block, a 3-level fill, --ignore here and elsewhere, --speck, a size; --keep;
+    refusals), t_clean (sentinel pixel, literal clock, animations off over a reload, --keep, ls
+    --json), t_check (a Qt Quick window: approve with an unstable random label, same, a button moved
+    6 px: region and `moved +6,+0 button "Save"`, a new checkpoint, a failing scenario: exit 3).
+
+360. **`up --clean`'s clock: a library that set every process's wall clock, built and left out**
+    (2026-10-16, #252, built on findings 357-359). The bar's literal format freezes only the bar's
+    text: an app's own times follow the real clock (the subject stamped an item "added today 16:37"
+    and showed it, so a check made a minute later read a change). **What was built**: `tools/clock`,
+    a library of omabox's own (no libfaketime here, no sudo to install it), `omabox-clock.so` in a
+    clean box's own `/etc/ld.so.preload` (through `$D/etc` and the /etc overlay), so every
+    dynamically linked process had it: the session, the shell, `run`'s commands (a clean
+    environment: LD_PRELOAD would not reach them), D-Bus-activated services, a `--systemd` box's
+    units. It read an instant file (Friday 2026-01-02 12:00 in the box's zone, and CLOCK_BOOTTIME at
+    `up`) and ran CLOCK_REALTIME and its relatives from it (clock_gettime, gettimeofday, time,
+    timespec_get, syscall()); CLOCK_MONOTONIC stayed the kernel's; omabox's own helpers kept the
+    real clock (their stamps are compared with the host's). **Measured**: frozen, the shell, a Qt
+    Quick app, a GTK 4 app and a headless Qt daemon idled (0.0-0.2% each) and their timers fired,
+    but bash's `$SECONDS` and python's `time.time()` stood still, and a wait measured on the wall
+    clock never ended (Omarchy has 20 scripts using `$SECONDS` or `date +%s`): so it ran from the
+    instant, and the bar read "Friday 12:00" for the box's first minute only. Absolute deadlines on
+    those clocks had to be moved into the real one, or the kernel returned at once (a busy loop):
+    clock_nanosleep, timerfd_settime and timer_settime with ABSTIME, pthread_cond_timedwait,
+    sem_timedwait, the timed locks and joins, mq, futex WAIT_BITSET/LOCK_PI by syscall(). On the
+    subject: approve (3 boxes, nothing unstable), a check 2 minutes later 4 of 4 same, its item's
+    time 12:00 in both. **Three bugs it found**, worth knowing for any preload of the kind: (1)
+    systemd's TIME_T_MAX timerfd (how it hears of a clock set) overflowed when moved, fired at once,
+    and a `--systemd` box's manager looped ("Looping too fast"; its Hyprland never came up): a
+    deadline that means never must be left alone. (2) A GTK app's NVIDIA driver threads (`[vkps]
+    Update`, `[vkrt] Analysis`) spun at 100% each, 400% in all: libnvidia-eglcore dlopens libc and
+    looks up pthread_cond_timedwait with dlvsym at GLIBC_2.2.5, the compat version, past any
+    interposed symbol; the library had to hand back its own from dlsym and dlvsym (0.1% then). (3)
+    Those lookups first went through dlopen, whose allocation came back into jemalloc, which calls
+    syscall() from its constructor before the library's had run: every Quickshell crashed at start;
+    libc's dlsym and dlvsym had to be found in libc's symbol table (dl_iterate_phdr) instead.
+    **Why it was left out**: it runs inside the app under test, which then is not the app users
+    run; it needed those three crash and spin fixes to work at all, and each new runtime (another
+    driver, allocator, a dlvsym of its own) could need another; it dates TLS (certificates judged at
+    2026-01-02) and the box's logs (journal, apps.log); static binaries, Go programs, io_uring
+    timeouts, 32-bit programs, Flatpak apps and what the kernel stamps (file times, socket stamps)
+    kept the real clock anyway. What it bought can be had without it: data seeded relative to the
+    real time when the scenario runs (`touch -d "9 months ago"`, a reset time of now + 2h10), an
+    app's times `--ignore`d where a daemon in the box stamps them, an app's own test hooks. **Only it
+    covers** absolute dates and "today" displays (a date column, a calendar's month, "added today
+    16:37"), which drift from run to run without it; no project has needed one yet, so they are
+    `--ignore`d. The library and its tests (t_unit_clock: a probe of every deadline call, the
+    never one; t_clean's maps of the shell and the portal) are parked on the `visual-clock` branch,
+    to come back opt-in (never `up --clean`'s default) when a project needs it.
+    `up --clean` freezes the bar's clock with the literal format again; `--keep clock` keeps the
+    bar's real one.
+361. **`check run`'s report: every change in one image** (2026-10-16, #252, after finding 359). A
+    changed checkpoint's `ID.diff.png` is the whole shot marked, ~1.5k image tokens apiece (finding
+    243's count), mostly of what did not change, and an agent read each. Now, when anything changed,
+    `check run` also writes `report.png` and prints `report:  PATH` before its last line
+    (check_report; share/check.py `sheet` lays it out and prints magick's arguments, the first what
+    was left out). Inside one look: 1456 px wide at most, under 1.15 MP and 1568 high. Per changed
+    checkpoint, each region with 24 px around it, its tree element too when that stays within
+    400x120 (a label whose last word changed is read whole), crops of one checkpoint merged when
+    under 24 px apart and within one side (706x360; a card's lines cost more than the pixels
+    between), a crop of 160x120 or less at 2x (a 2 px move is 4 there); the baseline's crop, then
+    this run's, each marked; above them the ID, the regions and up to 3 tree lines (the smallest
+    changed element over a region, else the smallest element there; "+N more"). A mark is its four
+    corners: a whole rectangle hid the digit beside a changed time ("16:37"). Blue marks a tree
+    change with bounds no region covers: the subject's ⋯ button's 2 px move, a tree line only
+    until now, is drawn (tree bounds used only when the tree's frame is the shot's size). A size
+    change: both whole at one scale; more than 6 crops in one checkpoint (another GPU's 203
+    regions): the whole shots, scaled, marked. When not all fit: each checkpoint's first crop before
+    any's second, at full size, then with each side at half if that shows more; the rest named in
+    the image and on stdout ("not in it, no room: ID, ID (2 of 5 crops)"). The legend wraps to the
+    cards' width (360 px at least): unwrapped it made a small report wider than its cards. Texts
+    go through -annotate, which reads % and \ as escapes and a leading @ as a file: escaped, the
+    app's names made printable. Font: fc-match monospace, magick's default without one.
+    `ID.diff.png` stays the full-size record. **Measured** (image tokens, w x h / 750 scaled as
+    finding 243 says): t_check's shape (its window tiled to 1896x1030, the button moved 6 px, 3
+    regions) 559x196, 146 against 1533 (10x less); a Qt Quick window with a toolbar whose spacing
+    grew 2 px and a renamed row, checkpoints of the window and the screen (8 regions each)
+    1242x320, 530 against 3066 (17%); the subject's 2 px spacing change (3 checkpoints, 10 regions)
+    1329x482, 854 against 4599 (19%), each change legible at 1x, read by looking at it. `check diff
+    A B --report R.png` takes the same layout, one pair named after B: an agent comparing two shots
+    of its own read the marked whole shot just the same, and the plan is check run's with one
+    point; `-o` stays the marked shot. Not in the report: a `new` checkpoint (no pair); the same
+    change in two checkpoints (the subject's app and help) is shown twice. Seen once in t_check, not
+    looked into (its files went with the suite's TMP): the bar's checkpoint changed by one region
+    on the check right after --approve, in 1 of 3 runs. Tests: t_unit_check (check diff --report on
+    made images: the path after the regions, inside one look and a tenth of the shot, the
+    baseline's crop left and the new right at 2x by their pixels, a size, no report when same;
+    check.py sheet: a region's tree line with a % doubled, a blue move under a speck, 7 crops as the
+    whole shots, 12 big crops at half size and the 6 left named in the image), t_check (the report's
+    path, inside one look, none and no plan left when same).
+362. **`check point` finds holes: the sentinel wallpaper inside a surface** (2026-10-16, #252, built
+    on finding 359). `up --clean`'s `#ff00ff` is no theme's colour, so any of it inside a window, the
+    bar or a popup is a defect, and nothing looked for it. Hyprland's rectangles cannot say where: a
+    Quickshell popup is drawn in a full-screen layer (`omarchy-keyboard-panel` is 1920x1080, its card
+    ~400x790 at the top right). So pixels: the 8-connected parts of exactly the sentinel (antialiased
+    edges blend it, so no edge pixel is ever exactly it); a part that reaches the screen's edge is the
+    open wallpaper (gaps between tiled windows join gaps_out), the rest are enclosed by surfaces:
+    holes. A window's own pixels (`--window`, grim -T: alpha kept, no wallpaper behind) have holes
+    where alpha is 0, an edge included (all of the buffer is the window). Rounded corners: Omarchy's
+    windows are square (rounding 0; GTK4 draws square, tiled), but an app's rounded background inside
+    Hyprland's border leaves a pocket at each corner that the border encloses (radius 14: 42 px in a
+    10x10 box); so a part at most 32 px a side filling under half its box (outside an arc: 21% of its
+    square) is a corner, left out and counted. Holes 12 px apart merge (a text's counters with the hole
+    it sits in). A -g checkpoint's holes come from a second, whole-screen shot, kept where they meet
+    the region, in its pixels: on the region alone, a hole its edge cuts would read as open. Holes
+    inside an --ignore region are left out. Off (`holes off: WHY` in ID.point) outside a clean box,
+    with --keep wallpaper, and once a theme set in the box replaced the background link
+    (`current/background` no longer the sentinel's PNG: checked, not assumed). Results: ID.point's
+    `hole X,Y WxH PX` lines (a baseline keeps its own), said by `check point` on stderr. --approve
+    says each (`holes    ID: the wallpaper shows through at ...`, for a window "the window is
+    transparent") and ends with `check: HOLES in N of M checkpoints (IDs)`, exit 0: a design may be
+    see-through on purpose, and an approve is a person's decision; a check fails (`holes    ID: ... at
+    N places the baseline does not have`, or `hole:` lines under `changed`, marked on ID.diff.png) on
+    a hole no baseline hole overlaps, even where the shots match: a hole in an unstable region, or
+    one under the 32 px speck (a 5 px one in t_check). Approved holes are a note under `same`.
+    Measured in boxes (NVIDIA): the stock bar, none; a Qt Quick window with a rounded transparent
+    background, none (its four corners left out), with an 80x50 odd-even hole: found on the screen, by
+    -g and in the window (alpha 0); a GTK4 (libadwaita) window with a transparent background and an
+    80 px gap in a 60 px row, found (80x60) on both, on solitude (rounding 6) too, with no false ones
+    from its rounded windows; a stock popup (KeyboardPanel) over the wallpaper and a real widget's popup
+    (~400x790, its app moved to another workspace), none; a popup whose card forgot its background,
+    one hole of 316x176, and by -g in the region's pixels. ~0.5 s a checkpoint. Limits: a popup over
+    a window shows the window through a hole, not the wallpaper (take a popup's checkpoint over an
+    empty workspace); a hole opening onto the open wallpaper (a card's gap reaching its edge) is open;
+    blur is off in Omarchy's defaults; a theme or a user config that turns it on would blur and tint
+    what a see-through window shows, no longer exactly the sentinel.
+    Tests: t_unit_check (made images: a hole, the gap to the margin, a gap at the edge, rounded
+    content in a border, a region cutting a hole, a window's alpha holes, new against a baseline's,
+    when off), t_check (the window's rounded transparent background: none approved; a 5 px hole fails
+    a check whose shots match; 40 px said at --approve), t_clean (the stock bar none, --keep
+    wallpaper off).
+
+363. **What a first visual check missed: specks per checkpoint, the baseline seen, a pinned locale**
+    (2026-10-16, #252, after findings 357-362; a first-time user's report). **Real changes read
+    "same".** A bar widget's spacing changed by 2 px made a 16 px part of the difference, and the fixed
+    32 px speck dropped it; a bar widget has no tree to catch it otherwise. Nautilus's sort arrow
+    vanished: a 26 px part, dropped too. 32 was what Qt Quick's distance-field text needed (finding 357:
+    13 px at most on NVIDIA, 7 on AMD), applied to everything. Now each checkpoint has its own, measured
+    at --approve: the baseline run against each other run with the unstable regions painted out (a part
+    inside one is not noise; a part of 32 px or more is a region, so unstable), the largest part left
+    twice over, CHECK_SPECK_MIN (16) at least and CHECK_SPECK at most; CHECK_SPECK_AGREED (8) when the
+    runs agreed to the pixel. That one was 0 (compared exactly) first, and read noise as changes twice:
+    a crop of a Qt Quick window holding one button agreed in three runs on AMD and showed a 1 px part in
+    the next check, and t_check's window agreed over its 2 runs and showed 2 px of its button's text; 8
+    is under what the changes 32 dropped made (16 px, 26). The 16: three runs see the text noise (it
+    comes with every start of the app) but not its tail; on AMD they saw 5 px and the next check a 10 px
+    part, read as changed at twice 5. And every checkpoint of one window (`of window SEL`, its crops
+    too) takes the window's largest, since the noise is the app's (that crop's window had 16). `speck N`
+    in the baseline's ID.point (check.py regions prints the largest speck now); `--speck N` by hand
+    wins, at --approve too (stored); a baseline without it keeps 32. --approve says it (`baseline ID
+    (specks under 22 px left out: the runs' largest stray part was 11 px)`, `(specks under 8 px left
+    out: the runs agreed to the pixel)`, `speck    ID: under 22 px, as the other checkpoints of its
+    window`), and a `same` line says what it left out (`same     app (121 specks left out, the largest
+    10 px)`): nothing is dropped without a word. **Measured**, a scenario of the bar, its clock
+    (160x26), a Qt Quick window of 8 text rows and a button, a crop of it holding the button and the
+    screen: on NVIDIA the window's runs differed by 11 px at most (speck 22, the screen too); on AMD by
+    5 (speck 16); the bar and its clock agreed to the pixel on both (8), so a bar widget's 2 px spacing
+    (16 px) is caught. Four checks after each approve: all same (the window's largest speck 10-11 px on
+    NVIDIA, 5-6 on AMD); the rows' spacing 1 px wider: changed on both (1 region; the tree, 7 rows
+    moved). **Approve could bless a broken state**: the baseline is what most runs showed, so a wrong
+    screen in most of them (an error, a page not loaded yet) becomes it, unseen. Now --approve writes
+    `baseline.png` in the runs' folder (check.py `overview`, through check_report): every checkpoint as
+    kept, each scaled to the sheet's width and all of them down together until they fit one look
+    (finding 361's 1456 px, 1.15 MP, 1568 high), unstable regions amber (a see-through fill, so what is
+    under them reads), holes red; prints `overview: PATH` and `check: look at it before you keep this
+    baseline`. Five checkpoints (the bar, its clock, a window, a crop of it, the screen): 1100x1015,
+    each legible. **The clean desktop did not pin the locale**: the box took the host's LC_TIME=pt_BR
+    (launch.sh passes LANG and every LC_*, finding 58) and an app's dates read "Há 9 meses". `up
+    --clean` now gives the session LANG=en_US.UTF-8 (when `locale -a` has it, else C.UTF-8) and none of
+    the host's LC_* or LANGUAGE (`run`'s commands take the session's: omabox.env), `/etc/locale.conf`
+    with that LANG for what reads the file (a `--systemd` box's user manager), and `/etc/localtime` a
+    link to UTC. Both in the box's /etc (`$D/etc`); the link goes in through the overlay, never a bind:
+    a bind follows the link at its destination, and would have mounted UTC's data over the host's zone
+    file under its name, which Qt reads the zone's id from. A `--env TZ` still wins over the zone (and
+    is what box.json records). `--keep locale` gives the host's LANG,
+    LC_* and /etc/localtime back. box.json's `clean` and the baseline's check.json have `locale` and
+    `timezone`; the comparison's note names them when they differ and the baseline has them (one from
+    before has not). **Relative dates** ("9 months ago") come from files' mtimes: `omabox run -- touch
+    -d "9 months ago" F`, run by the scenario, is relative to the real time then, as the app's "now"
+    is, so each run reads the same; an absolute date drifts (finding 360). **Timing**: each run says `check: run N of M: box up in N s` (a first box
+    took 31 s, the next 4, with nothing said before). **Output**: the last line counts every kind
+    (`check: 2 of 5 same, 2 changed, 1 new`; missing ones count in the total, holes-only ones as `with
+    new holes`); a check without a baseline exits 4, not 1 as `changed` does; a tree element with no
+    name says where it is (`appeared  button  (in frame "W" > panel#1 > button#2)`: its nearest named
+    ancestor, then each place). **`check point --window SEL -g "X,Y WxH"`**, refused before: a crop of
+    the window in its coordinates, as `shot --window -g` takes it; `wait still` on the whole window (it
+    takes a window or a region); the tree only the elements touching the crop and their ancestors
+    (check.py `crop-tree`, an element without bounds going with its nearest ancestor that has some),
+    each with its key from the whole window (`key`, which `load` takes as it is), so one outside the
+    crop that moves or goes changes nothing inside, nor shifts the places of those inside; the window's
+    node carries the crop, and the report's blue marks are drawn in the crop's pixels. `crop GEOM` in
+    ID.point. Holes from the crop's own alpha. **t_check's unstable label** sat on the window's
+    background: when the two approve runs' random numbers shared their first digit, that digit was in no
+    unstable region and the next check read it as changed (seen once here, 7 failures); it now sits on a
+    backdrop of a random colour, all of it unstable. Its 5 px hole test runs at `--speck 32`, the hole a
+    speck to the shots' comparison as before; at the window's own speck it is a region as well (both
+    checked). Seen by the user, not omabox's: a bar widget sometimes missed a record seeded just after
+    it started. Tests: t_unit_check (regions' largest speck; a nameless element appeared and vanished,
+    where; crop-tree's elements and keys, a move inside and one outside; check_approve on made runs: the
+    specks (16 at least), 8 where the runs agreed, `--speck`, a window's shared, the image;
+    check_compare: same with what it left out, a 10 px part changed at 8 and the same at 16, 32 for a
+    baseline without, `--speck 0` by hand, new and missing counted, locale and timezone said only when
+    the baseline has them; clean_locale; exit 4), t_clean (the session's
+    LANG, no LC_* under a host LC_TIME, UTC, locale.conf, the shell's environment; --keep locale: the
+    host's LC_TIME and zone, recorded), t_check (box up said, a crop of the window: plain baseline, its
+    tree's move, the baseline's image inside one look, specks in every .point, check.json's locale and
+    timezone, counts).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -7351,6 +7616,14 @@ of them, nor wayvnc (finding 34). It needs labwc.
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
+- Visual checks (findings 357-363, #252): a checkpoint's speck comes from its --approve runs (3):
+  noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; only the
+  bar's clock is frozen, so an app's absolute dates and "today" displays drift from run to run and are
+  `--ignore`d (the preload library that pinned every process's clock is parked on the `visual-clock`
+  branch until a project needs it, finding 360); holes (finding 362) show only where the
+  wallpaper is behind (a popup over a window hides them) and not where a gap opens onto the open
+  wallpaper; an exploratory mode (an agent walking the UI, getting only flagged changes) is not
+  built; not inside ai-jail.
 - The aquamarine build step goes once Arch ships a release with #415 (`UPSTREAM.md`, → #48). A system
   aquamarine patched downstream with #415 is recognised by the symbol it adds (finding 246).
 - More of the box's stack from a local build, per box, as `--hyprland` does (finding 116, issue #44;
