@@ -5260,9 +5260,23 @@ t_unit_check() {
   check_eq "...a move outside the crop is not its" "" "$(python3 -I "$ROOT/share/check.py" tree "$d/ca.json" "$d/ca3.json")"
   rc=0; python3 -I "$ROOT/share/check.py" tree-keys "$d/a.json" "$d/b.json" > "$d/keys" || rc=$?
   check_eq "tree-keys: one key a changed element, exit 0 (the keys are the answer)" "6|0" "$(wc -l < "$d/keys")|$rc"
-  check_eq "...a key is its place, what it is beside it" 'frame#1/button#1  (button "Save")' "$(head -n 1 "$d/keys")"
+  check_eq "...a key is its place, what it is and its box beside it" 'frame#1/button#1  (button "Save" @20,20 80x30)' "$(head -n 1 "$d/keys")"
   rc=0; out=$(python3 -I "$ROOT/share/check.py" tree "$d/a.json" "$d/b.json" "$d/keys") || rc=$?
   check_eq "...with them ignored: nothing, exit 0" "|0" "$out|$rc"
+  # A checkpoint's --ignore regions hold for its tree too (finding 365): an element wholly inside one.
+  check_eq "tree --mask: a label's text left out when its whole box is inside the region" \
+    $'moved +4,+0 resized +10x+0  button "Save"  @24,20 90x30\nstate  check box "Dark"  [unchecked] -> [checked]\nname  button  "Gone" -> "New"\nvanished  image "Logo"  (was @300,10 40x40)\nappeared  link "Help"  @5,200 30x10' \
+    "$(python3 -I "$ROOT/share/check.py" tree "$d/a.json" "$d/b.json" "" --shot 400 300 --mask 10 55 100 30)"
+  check_match "...not when the region holds only part of it" 'text  label  "hi" -> "ho"' \
+    "$(python3 -I "$ROOT/share/check.py" tree "$d/a.json" "$d/b.json" "" --shot 400 300 --mask 10 55 60 30)"
+  check_match "...nor when the shot is not the tree's size (a scaled monitor)" 'text  label  "hi" -> "ho"' \
+    "$(python3 -I "$ROOT/share/check.py" tree "$d/a.json" "$d/b.json" "" --shot 800 600 --mask 10 55 100 30)"
+  check_eq "...in a crop, in the crop's pixels" "" \
+    "$(python3 -I "$ROOT/share/check.py" tree "$d/ca.json" "$d/ca2.json" "" --shot 400 250 --mask 10 5 100 40)"
+  check_eq "tree-keys --mask: the same elements left out" 5 \
+    "$(python3 -I "$ROOT/share/check.py" tree-keys "$d/a.json" "$d/b.json" "" --shot 400 300 --mask 10 55 100 30 | wc -l)"
+  rc=0; python3 -I "$ROOT/share/check.py" tree "$d/a.json" "$d/b.json" "" --mask 1 2 >/dev/null 2>&1 || rc=$?
+  check_eq "...an argument it does not take: exit 2" 2 "$rc"
   # check diff on made images: exact, specks left out, a region named, --ignore, a size change.
   if command -v magick >/dev/null; then
     magick -size 200x100 xc:'#202030' -fill '#c0c0d0' -draw 'rectangle 20,20 80,40' "$d/a.png"

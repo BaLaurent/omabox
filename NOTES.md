@@ -7614,6 +7614,20 @@ from them.
     list item "Speed"` and ten more such lines. Test: t_tree's demo window has a non-modal Dialog at
     260,170: drawn there, its button in window coordinates, a click at the button's middle presses it
     (all three fail on the old helper: the button at `@6,37`).
+365. **A checkpoint's `--ignore` held for its pixels, not its tree** (2026-10-16, the same check). An
+    app's "added today 02:13" was `--ignore`d and its pixels left out, but its label's text still
+    changed in the tree, so no two --approve runs agreed: a layout the app moved in one start of three
+    read "every run differed: data or a time the scenario does not pin", not "run 1 of 3 differed",
+    and a check a minute later would read changed. check.py's `tree` and `tree-keys` now take `--shot
+    W H` and `--mask X Y W H` (check_tree_masks makes them from the .point's `ignore` lines and the
+    shot's size, for check_one and check_approve) and leave out an element whose box is wholly inside a
+    mask in each tree that has it, in the shot's pixels (less the crop's corner for a `-g` crop), as
+    its pixels are; the report's marks too (marks_of reads the .point beside the new shot). Only when
+    the tree's size is the shot's (not on a scaled monitor, as marks_of). Partly inside is kept, and an
+    element's box can be wider than its text (that label was 368 px, the region 300), so `tree-keys`
+    lines say the box now (`frame#1/label#4  (label "added today 02:13" @1512,91 368x15)`): an
+    unstable line shows the region that would hold it. Tests: t_unit_check (a label wholly inside, partly,
+    a shot of another size, a crop's pixels, tree-keys, an argument it does not take; the key line's box).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

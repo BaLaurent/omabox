@@ -15,11 +15,14 @@
       its square). The rest are holes, merged when GAP px apart or less. X Y RW RH: only what is
       inside that region, in its own pixels (a -g checkpoint). Prints "X,Y WxH PIXELS" a hole,
       then "corners N".
-  check.py tree BASE.json NEW.json [IGNORE]
+  check.py tree BASE.json NEW.json [IGNORE] [--shot W H [--mask X Y W H]...]
       Two `omabox tree --json` dumps of one window, element by element (by place: see load):
       moved, resized, name, text, value or state changed, appeared, vanished. IGNORE: a file of element keys to leave out
-      (what differed between the baseline's two runs). Prints a line a change; exit 1 when any.
-  check.py tree-keys BASE.json NEW.json
+      (what differed between the baseline's two runs; "" for none). --shot: the checkpoint's shot is
+      W x H, and each --mask a region of it the checkpoint --ignores: an element wholly inside one,
+      in both trees, is left out as its pixels are (when the tree's pixels are the shot's: not on a
+      scaled monitor). Prints a line a change; exit 1 when any.
+  check.py tree-keys BASE.json NEW.json [IGNORE] [--shot W H [--mask X Y W H]...]
       The keys of the elements that differ, "KEY  (role "name")" a line (for IGNORE); exit 0.
   check.py sheet PLAN OUT.png [FONT]
       The report of a check (finding 361): one image of every change, each region cropped with some
@@ -203,6 +206,30 @@ def changes(base, new):
             yield key, f"appeared  {label(n)}  {at(n)}".rstrip() + where
 
 
+def masked_by(base, new, shot, masks):
+    """Whether an element is left out by the checkpoint's --ignore regions (in its shot's pixels):
+    wholly inside one in each tree that has it. Only when the tree's pixels are the shot's (its
+    window's or crop's size is the shot's); else nothing is."""
+    root = next(iter(new.values()), None)
+    if not masks or not shot or not root:
+        return lambda key: False
+    crop = root.get("crop")
+    ox, oy = (crop["x"], crop["y"]) if crop else (0, 0)
+    if ((crop["w"], crop["h"]) if crop else (root.get("w"), root.get("h"))) != shot:
+        return lambda key: False
+
+    def inside(n):
+        if not n or "x" not in n:
+            return None
+        x, y = n["x"] - ox, n["y"] - oy
+        return any(mx <= x and my <= y and x + n["w"] <= mx + mw and y + n["h"] <= my + mh for mx, my, mw, mh in masks)
+
+    def masked(key):
+        held = [inside(t.get(key)) for t in (base, new) if key in t]
+        return bool(held) and all(held)
+    return masked
+
+
 def crop_tree(path, x, y, w, h):
     """A window's tree for a checkpoint of a crop of it (check point --window SEL -g): the window,
     the elements that touch the crop and their ancestors, each with its key in the whole tree, so
@@ -308,9 +335,17 @@ def marks_of(pt):
     if pt["unstable"]:
         with open(pt["unstable"], encoding="utf-8") as f:
             ignore = {l[5:].rstrip("\n").split("  (", 1)[0] for l in f if l.startswith("tree ")}
+    # The checkpoint's --ignore regions, from its .point beside the new shot (none for check diff).
+    masks = []
+    try:
+        with open(pt["new"].removesuffix(".png") + ".point", encoding="utf-8") as f:
+            masks = [tuple(int(v) for v in l.split()[1:5]) for l in f if l.startswith("ignore ")]
+    except OSError:
+        pass
+    masked = masked_by(base, new, pt["size"], masks)
     changed = {}
     for key, line in changes(base, new):
-        if key in ignore or key in changed:
+        if key in ignore or key in changed or masked(key):
             continue
         b, n = bounds(base.get(key)), bounds(new.get(key))
         if b or n:
@@ -612,19 +647,34 @@ def main():
         n = [int(a) for a in sys.argv[3:]]
         holes(sys.argv[2], n[0], n[1], n[2], n[3], n[4:] or None)
         return 0
-    if len(sys.argv) in (4, 5) and sys.argv[1] in ("tree", "tree-keys"):
+    if len(sys.argv) >= 4 and sys.argv[1] in ("tree", "tree-keys"):
         base, new = load(sys.argv[2]), load(sys.argv[3])
+        rest = sys.argv[4:]
         ignore = set()
-        if len(sys.argv) == 5:
-            with open(sys.argv[4], encoding="utf-8") as f:
-                # "KEY  (what it is)" lines: the key is before the two spaces.
-                ignore = {line.rstrip("\n").split("  (", 1)[0] for line in f if line.strip()}
+        if rest and not rest[0].startswith("--"):
+            if rest[0]:
+                with open(rest[0], encoding="utf-8") as f:
+                    # "KEY  (what it is)" lines: the key is before the two spaces.
+                    ignore = {line.rstrip("\n").split("  (", 1)[0] for line in f if line.strip()}
+            rest = rest[1:]
+        shot, masks = None, []
+        while rest:
+            if rest[0] == "--shot" and len(rest) >= 3:
+                shot, rest = (int(rest[1]), int(rest[2])), rest[3:]
+            elif rest[0] == "--mask" and len(rest) >= 5:
+                masks, rest = masks + [tuple(int(v) for v in rest[1:5])], rest[5:]
+            else:
+                print(__doc__.strip(), file=sys.stderr)
+                return 2
+        masked = masked_by(base, new, shot, masks)
         found = 0
         keys = []
         what = {}
         for key, line in changes(base, new):
-            what.setdefault(key, label(base.get(key) or new[key]))
-            if key in ignore:
+            # Its box too: an --ignore meant for it must hold all of it, not only its text.
+            n = base.get(key) or new[key]
+            what.setdefault(key, f"{label(n)} {at(n)}".rstrip())
+            if key in ignore or masked(key):
                 continue
             found += 1
             if sys.argv[1] == "tree":

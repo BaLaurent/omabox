@@ -145,6 +145,10 @@ the real clock, in UTC. So make every time the app shows relative to when the sc
 - Absolute dates and "today" displays (a date column, a calendar's month, "added today") drift from
   run to run whatever you seed: `--ignore` them.
 
+An `--ignore` region leaves out the tree's elements wholly inside it too, so it must hold the
+element's whole box, often wider than its text: an `unstable` tree line says the box (`(label "added
+today 02:13" @1512,91 368x15)`); `tree --find TEXT` before.
+
 `omabox check run --approve [--plugin PATH]... -- ./visual.sh` runs it three times (`--runs N`), each
 in a fresh `up --clean` box (Omarchy's bar on tokyo-night, a `#ff00ff` wallpaper, the bar's clock
 frozen, English (en_US.UTF-8, else C.UTF-8) in UTC whatever your locale and zone, no pointer, no

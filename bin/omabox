@@ -8215,6 +8215,18 @@ check_ids() {
 # One checkpoint of NEW against BASE (two folders), leaving out the point's --ignore regions and what
 # UNSTABLE lists (regions, and "tree KEY" lines). Sets CHK_REGIONS (lines), CHK_SPECKS ("N PX LARGEST"),
 # CHK_SIZE ("" or "WxH -> WxH") and CHK_TREE (lines). check_one BASE NEW ID SPECK [UNSTABLE]
+# The tree diff's view of a checkpoint's --ignore regions, in CHK_TMASKS: "--shot W H --mask X Y W
+# H..." from its .point and its shot's size (WxH), so an element inside one is left out as its pixels
+# are; empty without either. check_tree_masks POINT WxH
+check_tree_masks() {
+  local l x y w h
+  CHK_TMASKS=()
+  [[ $2 =~ ^([0-9]+)x([0-9]+)$ ]] || return 0
+  grep -q '^ignore ' "$1" 2>/dev/null || return 0
+  CHK_TMASKS=(--shot "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")
+  while read -r l x y w h; do [ "$l" != ignore ] || CHK_TMASKS+=(--mask "$x" "$y" "$w" "$h"); done < "$1"
+}
+
 check_one() {
   local base=$1 new=$2 id=$3 speck=$4 unstable=${5:-} masks=() m l sa sb res
   CHK_REGIONS="" CHK_SPECKS="0 0 0" CHK_SIZE="" CHK_TREE=""
@@ -8237,7 +8249,8 @@ check_one() {
   if [ -f "$base/$id.tree.json" ] && [ -f "$new/$id.tree.json" ]; then
     local ign=""
     if [ -n "$unstable" ] && [ -f "$unstable" ]; then ign=$new/$id.tree-ignore; sed -n 's/^tree //p' "$unstable" > "$ign"; fi
-    CHK_TREE=$(/usr/bin/python3 -I "$CHECK_PY" tree "$base/$id.tree.json" "$new/$id.tree.json" ${ign:+"$ign"}) || true
+    check_tree_masks "$new/$id.point" "$sb"
+    CHK_TREE=$(/usr/bin/python3 -I "$CHECK_PY" tree "$base/$id.tree.json" "$new/$id.tree.json" "$ign" ${CHK_TMASKS[@]+"${CHK_TMASKS[@]}"}) || true
     [ -z "$ign" ] || rm -f -- "${ign:?}"
   fi
   return 0
@@ -8383,7 +8396,11 @@ check_approve() {
       odd+=("$j")
       {
         [ -z "$CHK_REGIONS" ] || cut -d' ' -f1,2 <<<"$CHK_REGIONS"
-        [ -z "$CHK_TREE" ] || /usr/bin/python3 -I "$CHECK_PY" tree-keys "$out/run$best/$id.tree.json" "$out/run$j/$id.tree.json" | sed 's/^/tree /'
+        if [ -n "$CHK_TREE" ]; then
+          check_tree_masks "$out/run$j/$id.point" "$(magick identify -format '%wx%h' "$out/run$j/$id.png" 2>/dev/null || true)"
+          /usr/bin/python3 -I "$CHECK_PY" tree-keys "$out/run$best/$id.tree.json" "$out/run$j/$id.tree.json" "" \
+            ${CHK_TMASKS[@]+"${CHK_TMASKS[@]}"} | sed 's/^/tree /'
+        fi
       } >> "$out/$id.unstable"
     done
     sort -u -o "$out/$id.unstable" "$out/$id.unstable"

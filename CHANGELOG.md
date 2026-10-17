@@ -90,6 +90,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   dialog role (a settings or add sheet) read `@0,0`, and everything in it relative to the sheet, not
   the window (Qt measures from it), so a click at a row's middle landed on what was behind the sheet,
   and `check point --window SEL -g` on a sheet compared the elements behind it instead of its own.
+- **`check`'s `--ignore` holds for the tree too.** A region left out of a checkpoint (a time the app
+  shows) still changed its tree, so `--approve` saw every run differ and named the wrong cause for an
+  app whose layout moved in one start of three, and a check a minute later read changed. An element
+  wholly inside an `--ignore` region is now left out of the tree's comparison and the report; an
+  `unstable` tree line says the element's box, so the region can be made to hold it.
 
 ## 0.7.0 — 2026-10-16
 
