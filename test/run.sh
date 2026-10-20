@@ -5141,7 +5141,8 @@ logger -t omarchy-shell omabox shell route' >/dev/null 2>&1
   # ATSPI_DBUS_IMPLEMENTATION), on a private session bus and runtime dir, so it starts dbus-broker-launch.
   # Only from a systemd user unit (sd_pid_get_user_unit), whose cgroup the box's processes have from
   # the suite: run from a login session's scope (root's ssh session through runuser, #249) it starts
-  # dbus-daemon instead.
+  # dbus-daemon instead. The launcher that serves the bus is the one owning org.a11y.Bus: from
+  # at-spi2-core 2.61 the one started here may lose the name to one the call activates (finding 370).
   local cg; cg=$(ob run -b "$B" -- cat /proc/self/cgroup 2>&1) || cg="exit $?: $cg"
   if [ ! -x /usr/bin/dbus-broker-launch ] || [ ! -x /usr/lib/at-spi-bus-launcher ]; then
     skip "journal: a dbus-broker started from a cleaned environment" "no dbus-broker or at-spi-bus-launcher"
@@ -5154,12 +5155,15 @@ logger -t omarchy-shell omabox shell route' >/dev/null 2>&1
       /usr/lib/at-spi-bus-launcher 2>&1 & l=$!
       for _ in $(seq 50); do a=$(busctl --user call org.a11y.Bus /org/a11y/bus org.a11y.Bus GetAddress 2>/dev/null) && break; sleep 0.1; done
       a=${a#s \"}; a=${a%%[,\"]*}
+      o=$(busctl --user status org.a11y.Bus 2>/dev/null | sed -n "s/^PID=//p")
       up=""; for _ in $(seq 50); do busctl --address="$a" list >/dev/null 2>&1 && { up=1; break; }; sleep 0.1; done
-      k=$(pgrep -x dbus-broker-lau -P $l)
-      if [ -z "$up" ]; then echo "no bus at [$a]"
-      elif [ -n "$k" ] && pgrep -x dbus-broker -P "$k" >/dev/null; then echo "bus up: dbus-broker"
-      else echo "bus up, no dbus-broker under the launcher (its children: $(pgrep -l -P $l | paste -sd " "))"; fi
-      kill $l' 2>&1 | grep -v '^dbus-daemon\[')
+      k=$(pgrep -x dbus-broker-lau -P "${o:-$l}")
+      if [ -z "$up" ]; then echo "result: no bus at [$a]"
+      elif [ -n "$k" ] && pgrep -x dbus-broker -P "$k" >/dev/null; then echo "result: bus up: dbus-broker"
+      else echo "result: bus up, no dbus-broker under the launcher ${o:-$l} (its children: $(pgrep -l -P "${o:-$l}" | paste -sd " "))"; fi
+      kill $l $o 2>/dev/null' 2>&1 | grep -v '^dbus-daemon\[')
+    # Its result line; all it printed when it has none (gvfsd's fuse and the launcher's own words aside).
+    out=$(sed -n 's/^result: //p' <<<"$out" | grep . || echo "$out")
     check_eq "...a dbus-broker an a11y launcher starts from a cleaned environment comes up" "bus up: dbus-broker" "$out"
     check "...and logs to it" until_ok 5 bash -c "'$CLI' log -b '$B' journal --grep 'dbus-broker-launch\[[0-9]+\]: Ready' | grep -q ."
   fi

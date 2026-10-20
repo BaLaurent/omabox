@@ -7684,6 +7684,17 @@ from them.
     names a test file lists, and the `sudo` stub logs what it was asked. Tests: t_unit_install (a
     missing package: `sudo pacman -S --needed` with it, install.sh stops when that fails, the
     package named; the rest as before, on any package set).
+370. **An a11y launcher a harness starts can lose its bus name to an activated one** (2026-10-20,
+    #234's check). t_dbus_user_app starts `/usr/lib/at-spi-bus-launcher` from a cleaned environment
+    and at once asks `org.a11y.Bus` for its address, then looked for dbus-broker under that launcher.
+    With at-spi2-core 2.62.1 the launcher first activates `org.gtk.vfs.Daemon` (gvfsd, whose fuse
+    mount prints "fuse: device /dev/fuse not found" in a box), so the call reached the session bus
+    before it owned the name, the bus activated a second launcher from its service file, and the
+    first exited: the bus and its dbus-broker were up, under the other launcher. Nothing for omabox
+    to change (the bus a test gets is the same); the check now looks under the name's owner
+    (`busctl --user status org.a11y.Bus`) and reads only its own result line. Seen in a box: the
+    started launcher gone, the activated one's dbus-broker-launch and dbus-broker serving the bus.
+    Tests: t_dbus_user_app.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
