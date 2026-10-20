@@ -8411,6 +8411,37 @@ from them.
     module-rt has no `module.rt` condition) would still get 0/0. Tests: t_omarchy_restart (the
     shell's RLIMIT_RTTIME holds unlimited once its PipeWire service has tried to connect; it read
     0/0 before).
+402. **1.0: the 0.9 deprecations refused, F8 switched, one deprecation helper, the promise written**
+    (2026-10-20, #287; Diogo's decision on the issue). Each form 0.9.0 warned (findings 381, 385,
+    386, 390) is refused, exit 2 (`run`'s 125) with one line naming what to write, never read
+    another way: `wait cmd` (refused as the word is read, so `wait cmd -- X` says it rather than
+    "-- goes with until"), a bare `up --idle N` / `OMABOX_IDLE=N` (`idle_duration` says it and
+    returns 2, which `up` and `check run` exit with: it runs in `$(...)`), a bare `keys -s N` /
+    `pointer sleep N` (`pause_ms`), `up -i`, `save -f`, `keys --delay` (out of `CMD_OPTS`), two
+    files to `shot`/`calibrate` (`two_files`, the jailed caller's `relay_shot` too), a given box
+    name with other characters or past 40 (`select_box`, naming the one that fits). `cmd_probe`
+    and the minutes and milliseconds readings are gone. The JSON copies go: `config --json`'s
+    kebab keys, `ls --json`'s `allow`, `ports --json`'s `address`. The widget still copies a kebab
+    key it gets from a CLI older than 0.9 (one install updates both; left as it was). **F8**: beside
+    `--window`, `wait still|change --ignore` and `--wait`'s `-g`/`--ignore` (keys, click, scroll,
+    drag) are the window's own coordinates: `settle_in_window X Y` moves the caller's `--region` and
+    `--mask` (the cursor's and a drag's path are `--ignore`, the screen's, added apart), with X Y
+    the point `win_point` gave less the one asked (the window where it is once raised), keys' from
+    the window read again after focusing it, a drag's from its first point; `wait` moves its masks
+    by the window's `at`. A 124's suggested `--ignore` is in the window's coordinates then
+    (`SETTLE_ORIGIN`), beside the screen's place, so pasting it back means what it says; an
+    `--ignore` outside the window is said in its own. `win_region_warn` is gone. **`deprecated OLD
+    NEW`**: the one way a deprecation is said from 1.0, `omabox: deprecated: OLD: write NEW (refused
+    in X.Y)`, X.Y the next minor from VERSION; `OMABOX_STRICT=1` makes it `usage_die` (2, run's
+    125). Called where the words are read, never in `$(...)`. No caller in 1.0: t_unit_deprecated
+    calls it and fails if another warning names a form on its way out. README "Stability": the two
+    tiers, what is not covered, saves and baselines, who it is for; no versioning-scheme claim (the
+    unit check greps for one). Tests: t_unit_duration, t_unit_flag_forms, t_unit_exit_codes,
+    t_unit_refusals, t_unit_wait, t_unit_json (F8, `settle_in_window`), t_unit_config,
+    t_unit_aquamarine/t_unit_aq_worktree/t_unit_gpu (snake_case keys), t_unit_deprecated; box:
+    t_monitors_wait(_nvidia) (the window's `--ignore` and `-g`, the 124's suggestion), t_wait,
+    t_ports, t_json, t_pointer (`sleep 3s`).
+
 403. **Omarchy 4.5's omarchy-shell reaches the desktop's shell past the guard** (2026-10-20, #290,
     read from v4.5.0-rc1 and reproduced with its script). 4.0.6's took the newest `wayland-N` in
     `$XDG_RUNTIME_DIR` only when `$WAYLAND_DISPLAY` was empty, then went through `qs ipc`, which
@@ -8594,37 +8625,6 @@ from them.
     one, as Hyprland has it once `up`'s `monitor add`s are done: `up (1920x1080@60 + 1280x720@60,scale=1.6
     + 1080x1920@60)`. `up --json` and `ls --json` had every one already (`monitors`), unchanged.
     Tests: t_monitors_wait, t_monitors_wait_nvidia.
-
-402. **1.0: the 0.9 deprecations refused, F8 switched, one deprecation helper, the promise written**
-    (2026-10-20, #287; Diogo's decision on the issue). Each form 0.9.0 warned (findings 381, 385,
-    386, 390) is refused, exit 2 (`run`'s 125) with one line naming what to write, never read
-    another way: `wait cmd` (refused as the word is read, so `wait cmd -- X` says it rather than
-    "-- goes with until"), a bare `up --idle N` / `OMABOX_IDLE=N` (`idle_duration` says it and
-    returns 2, which `up` and `check run` exit with: it runs in `$(...)`), a bare `keys -s N` /
-    `pointer sleep N` (`pause_ms`), `up -i`, `save -f`, `keys --delay` (out of `CMD_OPTS`), two
-    files to `shot`/`calibrate` (`two_files`, the jailed caller's `relay_shot` too), a given box
-    name with other characters or past 40 (`select_box`, naming the one that fits). `cmd_probe`
-    and the minutes and milliseconds readings are gone. The JSON copies go: `config --json`'s
-    kebab keys, `ls --json`'s `allow`, `ports --json`'s `address`. The widget still copies a kebab
-    key it gets from a CLI older than 0.9 (one install updates both; left as it was). **F8**: beside
-    `--window`, `wait still|change --ignore` and `--wait`'s `-g`/`--ignore` (keys, click, scroll,
-    drag) are the window's own coordinates: `settle_in_window X Y` moves the caller's `--region` and
-    `--mask` (the cursor's and a drag's path are `--ignore`, the screen's, added apart), with X Y
-    the point `win_point` gave less the one asked (the window where it is once raised), keys' from
-    the window read again after focusing it, a drag's from its first point; `wait` moves its masks
-    by the window's `at`. A 124's suggested `--ignore` is in the window's coordinates then
-    (`SETTLE_ORIGIN`), beside the screen's place, so pasting it back means what it says; an
-    `--ignore` outside the window is said in its own. `win_region_warn` is gone. **`deprecated OLD
-    NEW`**: the one way a deprecation is said from 1.0, `omabox: deprecated: OLD: write NEW (refused
-    in X.Y)`, X.Y the next minor from VERSION; `OMABOX_STRICT=1` makes it `usage_die` (2, run's
-    125). Called where the words are read, never in `$(...)`. No caller in 1.0: t_unit_deprecated
-    calls it and fails if another warning names a form on its way out. README "Stability": the two
-    tiers, what is not covered, saves and baselines, who it is for; no versioning-scheme claim (the
-    unit check greps for one). Tests: t_unit_duration, t_unit_flag_forms, t_unit_exit_codes,
-    t_unit_refusals, t_unit_wait, t_unit_json (F8, `settle_in_window`), t_unit_config,
-    t_unit_aquamarine/t_unit_aq_worktree/t_unit_gpu (snake_case keys), t_unit_deprecated; box:
-    t_monitors_wait(_nvidia) (the window's `--ignore` and `-g`, the 124's suggestion), t_wait,
-    t_ports, t_json, t_pointer (`sleep 3s`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
