@@ -5,6 +5,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Changed
+
+- The skill's reference says a box turns PipeWire's realtime module off for its clients, which hides
+  a realtime-limit bug, and how to run one client without that
+  ([#305](https://github.com/diogochaves/omabox/issues/305)).
+
 ### Fixed
 
 - **A box's shell was now and then killed as it started, under load** (`the shell exited after

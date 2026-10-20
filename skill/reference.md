@@ -1094,6 +1094,12 @@ and data cannot be verified in a box: do not report it as tested. (`systemctl --
   mice, touchpads, tablets, cameras, USB or printers. No systemd user manager unless `up --systemd`
   (never journald or logind), no installed `.desktop` files or URL handlers, no idle or suspend; the
   lock screen locks but takes no real password ("Testing the lock screen").
+- **No PipeWire realtime in a box**: every box writes `~/.config/pipewire/client.conf.d/90-omabox.conf`
+  (`module.rt = false`: a box has no RealtimeKit, and the limit of 0 its portal gave got processes
+  SIGKILLed), so a client's `RLIMIT_RTTIME` stays unlimited where module-rt would set one, and a bug
+  in that (a `0/0` limit) does not show. One client without the file: `omabox run -- env
+  PIPEWIRE_CONFIG_DIR=/usr/share/pipewire APP` (PipeWire's own config only, no drop-ins); in a box
+  module-rt then sets `0/0`, as on a desk without RealtimeKit (one with it gets 200000).
 - Reporting: each plugin's `commit` in `ls --json`'s `plugin_status` ends in `+dirty` for uncommitted
   edits. Virtual monitors are not the user's: say which layout you tested.
 
