@@ -155,7 +155,7 @@ today 02:13" @1512,91 368x15)`); `tree --find TEXT` before.
 in a fresh `up --clean` box (Omarchy's bar on tokyo-night, a `#ff00ff` wallpaper, the bar's clock
 frozen, English (en_US.UTF-8, else C.UTF-8) in UTC whatever your locale and zone, no pointer, no
 network, no animations; `--keep` takes
-any back, `--keep locale` your locale and timezone; `--theme`/`--size`/`--net connected` as `up`),
+any back, `--keep locale` your locale and timezone, `--keep fonts` your fonts (none by default); `--theme`/`--size`/`--net connected` as `up`),
 says how long each box took to start, and writes the baseline to `./omabox-check` (`--base DIR`;
 commit it with the project). It also writes `baseline.png` (path printed): every checkpoint as kept,
 in one image (more than about ten: pages, `baseline-2.png`..., one look each, all named), unstable
@@ -476,7 +476,14 @@ with `--keep wallpaper` or after a theme set in the box.
   or a submodule, the main checkout's `.git` too: git reads work there, writes fail), plus any dirs listed in
   `~/.config/omabox/ro-bind` or passed with `--ro-bind` (`DIR:DEST` for another path, e.g. testing
   path mapping with `--ro-bind ~/nas:/mnt/nas`), mise's toolchains (`omabox run` keeps your PATH, so
-  node/python/uv are the host's) and `--plugin` dirs; nothing else of the user's HOME is mounted.
+  node/python/uv are the host's), `--plugin` dirs and the user's fonts (below); nothing else of the
+  user's HOME is mounted.
+- **The user's fonts** (`~/.local/share/fonts`, `~/.fonts`) are mounted read-only at the same place in
+  the box HOME, so a theme's or plugin's own faces draw as on the desk (`up` says it; `ls --json`:
+  `desk_fonts`). Not in an `up --clean` box (`--keep fonts` brings them), not with `up --no-seed
+  fonts`, and not where the box HOME has its own folder (a `--from` save's, a `--seed` into it: kept,
+  said). A test's own font: `--seed FILE:.local/share/fonts/NAME.ttf` (that folder is then the box's,
+  without the desk's). A link in them that leads out of them leads nowhere in the box (said).
   Outside a repo a throwaway `run` mounts nothing of the current dir: the command runs in the box
   HOME, and `run` says so when a word of it is a path there ("note: tests/x.py is relative to DIR,
   which is in no repo, so not in this throwaway box"; a box up without that dir too): `run --overlay
@@ -502,7 +509,8 @@ with `--keep wallpaper` or after a theme set in the box.
   (`~/.config/omarchy/extensions/NAME.json`), an on/off switch too: one off on the desk leaves its
   binds or widget off in the box, and the test fails with only a wait's timeout. `up` says each such
   file a `--plugin`'s code names (`seeded extensions/NAME.json from your desk: plugin ID reads it`);
-  `up --no-seed extensions` starts without the desk's (a new user's, `/etc/skel`'s), and a test
+  `up --no-seed extensions` starts without the desk's (a new user's, `/etc/skel`'s; `--no-seed
+  fonts` without the user's fonts, which are mounted read-only), and a test
   that needs a setting seeds it (`--seed ./fixture.json:.config/omarchy/extensions/NAME.json`).
 - Your custom themes (`~/.config/omarchy/themes/*`) are copied into the box HOME at `up`, a theme
   that is a link to a working copy too: edits after `up` do not reach the box, and from a git

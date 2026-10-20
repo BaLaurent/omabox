@@ -1859,6 +1859,55 @@ t_unit_no_seed() {
   check_match "...from run too (a throwaway box's option)" "--no-seed: .*got 'x'" "$(ob run --no-seed x -- true 2>&1)"
 }
 
+# #261: the desk's user fonts (seed_fonts, on a fake desk HOME: OMABOX_DESK_HOME; never the user's):
+# each folder for a read-only mount at its place in the box HOME, said; a link out of them said; the box
+# HOME's own folder kept; a refused or missing folder said; --no-seed fonts and --clean leave them out.
+t_unit_desk_fonts() {
+  local d=$TMP/$P-fonts out r
+  mkdir -p "$d/desk/.local/share/fonts/fam" "$d/desk/.fonts" "$d/elsewhere" "$d/fh/.ssh" "$d/desk2" "$d/desk3"
+  echo x > "$d/desk/.local/share/fonts/fam/a.ttf"; echo y > "$d/elsewhere/b.ttf"; echo z > "$d/desk/.fonts/c.otf"
+  ln -s "$d/elsewhere/b.ttf" "$d/desk/.local/share/fonts/out.ttf"
+  ln -s fam/a.ttf "$d/desk/.local/share/fonts/in.ttf"
+  ln -s /usr/share/fonts "$d/desk/.local/share/fonts/sys"
+  ln -s "$d/gone.ttf" "$d/desk/.local/share/fonts/broken.ttf"
+  ln -s "$d/fh/.ssh" "$d/desk2/.fonts"; echo no > "$d/desk3/.fonts"
+  r=$(readlink -f "$d/desk")
+  # sf DESK HOME [NO_SEED [CLEAN [CLEAN_KEEP]]]: what seed_fonts says, then DESK_FONTS (SRC<TAB>REL)
+  sf() { OMABOX_DESK_HOME=$1 NO_SEED=${3:-} HOME=$d/fh bash -c 'source "$1"; CLEAN=$3 CLEAN_KEEP=$4; seed_fonts "$2"; printf "%s\n" ${DESK_FONTS[@]+"${DESK_FONTS[@]}"}' _ \
+    "$TMP/lib/bin/omabox" "$2" "${4:-0}" "${5:-}" 2>&1; }
+  out=$(sf "$d/desk" "$d/h1")
+  check_match "both folders, read-only, said, with the way out" \
+    "omabox: up: your desk's fonts are in the box, read-only: $d/desk/.local/share/fonts $d/desk/.fonts \(--no-seed fonts starts without them\)" "$out"
+  check_eq "...each mounted from where it is, at its place in the box HOME" "$r/.local/share/fonts	.local/share/fonts|$r/.fonts	.fonts" \
+    "$(grep -v '^omabox:' <<<"$out" | paste -sd '|')"
+  check "...their mount points made" test -d "$d/h1/.local/share/fonts" -a -d "$d/h1/.fonts"
+  check_eq "a link out of them said (one inside, one into /usr and a broken one are not)" \
+    "omabox: up: 1 link(s) in $d/desk/.local/share/fonts lead out of it, so they lead nowhere in the box (out.ttf -> $(readlink -f "$d/elsewhere/b.ttf"))" \
+    "$(grep 'link(s)' <<<"$out")"
+  check_eq "--no-seed fonts: nothing, nothing said" "" "$(sf "$d/desk" "$d/h2" fonts)"
+  check_eq "...nor with extensions beside it" "" "$(sf "$d/desk" "$d/h2" extensions,fonts)"
+  check_eq "--clean: nothing, nothing said" "" "$(sf "$d/desk" "$d/h2" "" 1)"
+  check_match "--clean --keep fonts: both" "read-only: $d/desk/.local/share/fonts $d/desk/.fonts" "$(sf "$d/desk" "$d/h3" "" 1 clock,fonts)"
+  mkdir -p "$d/h4/.local/share/fonts/mine"; mkdir -p "$d/h4/.local/share"
+  out=$(sf "$d/desk" "$d/h4")
+  check_match "the box HOME's own folder (a save's, a --seed's): kept, said" \
+    "not mounting $d/desk/.local/share/fonts: the box HOME has a .local/share/fonts of its own \(the save's or a --seed's\), which it keeps" "$out"
+  check_eq "...the other still mounted" "$r/.fonts	.fonts" "$(grep -v '^omabox:' <<<"$out")"
+  check "...its own left as it was" test -d "$d/h4/.local/share/fonts/mine"
+  mkdir -p "$d/h5/.local/share" "$d/h5x"; ln -s "$d/h5x" "$d/h5/.local/share/fonts"
+  out=$(sf "$d/desk" "$d/h5")
+  check "a link there (a save's): replaced by a folder, not mounted through" test -d "$d/h5/.local/share/fonts" -a ! -L "$d/h5/.local/share/fonts"
+  check_match "...and the desk's mounted there" "$r/.local/share/fonts	.local/share/fonts" "$out"
+  check_match "a folder refuse_src refuses (a link to a secret store): said, not mounted" \
+    "omabox: up: not mounting $d/desk2/.fonts: " "$(sf "$d/desk2" "$d/h6")"
+  check_eq "...nothing to mount" "" "$(sf "$d/desk2" "$d/h6" | grep -v '^omabox:')"
+  check_eq "not a folder: said" "omabox: up: not mounting $d/desk3/.fonts: not a folder (or a link to none)" "$(sf "$d/desk3" "$d/h7")"
+  check_eq "none on the desk: nothing said" "" "$(sf "$d/elsewhere" "$d/h8")"
+  check_eq "the desk HOME: OMABOX_DESK_HOME, but never a jailed caller's" "$d/desk $TMP/fh" \
+    "$(OMABOX_DESK_HOME=$d/desk lib desk_home) $(OMABOX_DESK_HOME=$d/desk OMABOX_JAIL='{"roots":[]}' HOME=$TMP/fh lib desk_home)"
+  check_eq "no_seed_spec takes fonts" "extensions,fonts" "$(lib no_seed_spec fonts,extensions,fonts extensions | tr ' ' ',')"
+}
+
 # #250: what `up` says when the box's bar is the desk's and not Omarchy's (bar_seed_note): its layout
 # when it differs once made fit for the box, its shell.toml's tables when that sets anything; names only.
 t_unit_bar_seed_note() {
@@ -4915,6 +4964,32 @@ t_no_seed() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# #261: the desk's fonts (a fake desk HOME, OMABOX_DESK_HOME; never the user's) in the box, read-only,
+# where fontconfig finds them; not with --no-seed fonts, nor in a --clean box.
+t_desk_fonts() {
+  local B=$P-df d=$TMP/$P-df out f font=/home/sbx/.local/share/fonts/fam/t.ttf
+  f=$(fc-list -f '%{file}\n' | awk '/\.ttf$/ && f == "" { f = $0 } END { print f }') || f=""
+  [ -n "$f" ] || { skip "the desk's fonts in a box" "no .ttf font on this system"; return; }
+  mkdir -p "$d/desk/.local/share/fonts/fam"; cp "$f" "$d/desk/.local/share/fonts/fam/t.ttf"
+  out=$(OMABOX_DESK_HOME=$d/desk ob up "$B" --no-shell --net isolated 2>&1) || { no "up on a fake desk with fonts" "$out"; return; }
+  check_match "up says the desk's fonts are in the box" \
+    "up: your desk's fonts are in the box, read-only: $d/desk/.local/share/fonts \(--no-seed fonts starts without them\)" "$out"
+  check_eq "...fontconfig in the box finds them" "$font" "$(ob run -b "$B" -- fc-list -f '%{file}\n' | grep -Fx "$font")"
+  check_fails "...read-only" ob run -b "$B" -- touch /home/sbx/.local/share/fonts/x
+  check_eq "...ls --json: desk_fonts" '["~/.local/share/fonts"]' "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | .desk_fonts')"
+  check_match "up --no-seed fonts on that box: refused (seeded only at start)" "already up, without what you asked for: --no-seed fonts" \
+    "$(OMABOX_DESK_HOME=$d/desk ob up "$B" --no-seed fonts 2>&1)"
+  ob down "$B" >/dev/null 2>&1
+  for f in "--no-seed fonts" "--clean"; do
+    # shellcheck disable=SC2086 # the option and its value
+    out=$(OMABOX_DESK_HOME=$d/desk ob up "$B" --no-shell --net isolated $f 2>&1) || { no "up $f" "$out"; continue; }
+    check_fails "up $f: nothing said of fonts" grep -q "fonts are in the box" <<<"$out"
+    check_eq "...none of the desk's in the box" "" "$(ob run -b "$B" -- sh -c 'ls -A /home/sbx/.local/share/fonts 2>/dev/null')"
+    check_eq "...ls --json: no desk_fonts" '[]' "$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n) | .desk_fonts')"
+    ob down "$B" >/dev/null 2>&1
+  done
+}
+
 # #246: the box HOME's ~/.config/hypr modules load as stock Omarchy loads them: an edit to looknfeel.lua
 # or bindings.lua takes effect on `hyprctl reload`; monitors.lua and autostart.lua are not loaded (the
 # box's screen stays as omabox made it); a module that fails is said, and the rest of the config loads.
@@ -5595,12 +5670,12 @@ t_unit_check() {
   check_match "...a theme's wallpaper since" "not the sentinel" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
   # --keep: a list of what the clean desktop keeps, once each.
   check_eq "--keep: comma-separated, once each" "clock,animations" "$(lib clean_keep clock,animations,clock 2>&1)"
-  check_match "--keep: anything else refused, naming what it takes" "takes animations, bar, clock, locale, pointer, wallpaper.*got blur" \
+  check_match "--keep: anything else refused, naming what it takes" "takes animations, bar, clock, fonts, locale, pointer, wallpaper.*got blur" \
     "$(lib clean_keep clock,blur 2>&1)"
-  check_eq "clean_text: all of it" "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, no pointer, no network, animations off" \
+  check_eq "clean_text: all of it" "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, none of your fonts, no pointer, no network, animations off" \
     "$(lib eval 'CLEAN_LANG=en_US.UTF-8 CLEAN_ZONE=UTC; clean_text tokyo-night isolated')"
   check_eq "...what --keep takes back, and a network" "your bar, theme nord, no pointer" \
-    "$(lib eval 'CLEAN_KEEP=bar,wallpaper,clock,animations,locale; clean_text nord connected')"
+    "$(lib eval 'CLEAN_KEEP=bar,wallpaper,clock,animations,locale,fonts; clean_text nord connected')"
   # The clean locale (finding 363): en_US.UTF-8 when the system has it, else C.UTF-8.
   if locale -a 2>/dev/null | grep -qix 'en_US.utf-\{0,1\}8'; then
     check_eq "clean_locale: en_US.UTF-8 (this system has it)" en_US.UTF-8 "$(lib clean_locale)"
@@ -12971,10 +13046,10 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

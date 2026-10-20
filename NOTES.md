@@ -7832,6 +7832,41 @@ from them.
     closed; without a toast, nothing said. t_click_layer (that; the `--no-raise` refusal fails on the
     old code), t_unit_window_select (the levels, the fullscreen rule, a maximized window, the topmost
     of two, the edges, `windows`' lines).
+380. **The desk's fonts are in every box, read-only** (2026-10-20, #261). `up` seeded the desk's
+    theme and `shell.toml` but not the faces in `~/.local/share/fonts`, so a theme whose labels use
+    its own faces drew them in a fallback (`fc-match` gave Liberation Sans), silently: shots looked
+    plausible but were wrong in widths, case and tracking. A project's box script worked round it
+    with `--seed ~/.local/share/fonts/DIR:.local/share/fonts/DIR` on every `up`. Decided (Diogo): the
+    desk's user fonts go into every box read-only, not into `up --clean` boxes, a flag to opt out.
+    Now `seed_fonts` mounts `~/.local/share/fonts` and `~/.fonts`, each where it is (resolved),
+    `--ro-bind` at the same place in the box HOME, before any `--ro-bind` of the caller's (which
+    wins). Mounted, not copied: nothing to copy each `up`, the box cannot change them, and a save
+    keeps only the empty mount point (it copies the HOME from the host side). They are there from
+    the box's first process, so the box's Hyprland and shell (which read their fonts once, at start)
+    have them; fontconfig caches them in the box HOME's `~/.cache/fontconfig` on that first read, as
+    it already did the system's fonts (a box has no `/var/cache/fontconfig`): no `fc-cache` step.
+    Opt out: `--no-seed fonts`, beside `--no-seed extensions` (the existing "what of the desk a box
+    starts without" vocabulary); `--clean` leaves them out and `--keep fonts` brings them back (both
+    lists existed; no `omabox config` key, as `--no-seed extensions` has none). Not mounted, and
+    said: a folder `refuse_src` refuses (a link to a secret store, to HOME), one that is not a
+    folder, and one the box HOME already has with something in it (a `--from` save's, a `--seed`
+    into it: the old workaround keeps working, the box keeps its own). A link in them that leads out
+    of them (not inside the folder, not into `/usr`) is not followed or mounted: it leads nowhere in
+    the box, and `up` says how many and the first. A jailed caller's box gets them too, as it gets
+    the desk's themes (fonts hold nothing of the user's); `OMABOX_DESK_HOME`, the suite's fake desk
+    HOME, is ignored in a jail, as `OMABOX_DESK_CONFIG` is. `up` says "your desk's fonts are in the
+    box, read-only: ~/.local/share/fonts (--no-seed fonts starts without them)"; box.json and `ls
+    --json` have `desk_fonts` (`[]` without). The issue's other half, a warning when a family the
+    seeded theme names in `shell.toml [font]` does not resolve: not done, since Omarchy 4.0.6's
+    `[font]` names no family (sizes only: `base-size` and per-token px; the family is fontconfig's
+    `monospace` alias, and a theme's own faces are named by plugins' QML), so there is nothing cheap
+    to check. Real box (Omarchy 4.0.6, Hyprland 0.56.2, the real desk): `fc-match "Chakra Petch"`
+    gave `/home/sbx/.local/share/fonts/baseline/ChakraPetch-Regular.ttf` (Liberation Sans before),
+    the fontconfig cache written at the second Hyprland and quickshell started. t_desk_fonts (a fake
+    desk HOME: fontconfig finds the font, read-only, `desk_fonts`; `--no-seed fonts` and `--clean`
+    without it), t_unit_desk_fonts (both folders, the link out, a broken link and one into /usr not
+    said, `--no-seed fonts`, `--clean`, `--keep fonts`, the box's own folder kept, a save's link
+    replaced, a refused folder, a file, the jail), t_unit_check (`--keep fonts`, `clean_text`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

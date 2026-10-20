@@ -437,8 +437,10 @@ blocks the network and every other socket, omabox's included), or see
   ai-jail, a worktree's when the jail has that `.git` as a folder of its own, as `ai-jail --worktree`
   maps it), plus the dirs
   in `~/.config/omabox/ro-bind` (one per line) or `--ro-bind`; mise's toolchains (so `omabox run`
-  finds node, python, uv as on the host), the `--plugin` and `--theme-dir` dirs, and your git
-  `user.name` and `user.email`. Nothing else of your HOME. Refused whatever you pass: anything that
+  finds node, python, uv as on the host), the `--plugin` and `--theme-dir` dirs, your fonts
+  (`~/.local/share/fonts`, `~/.fonts`, at the same place in the box HOME; not in a `--clean` box,
+  `--no-seed fonts` leaves them out) and your git `user.name` and `user.email`. Nothing else of your
+  HOME. Refused whatever you pass: anything that
   is or contains HOME, `~/.config/omarchy` or `/tmp`, anything inside `~/.config/omarchy` but
   `plugins/` and `themes/` (`api-keys.env`, your hooks), the secret stores (`~/.ssh`, `~/.gnupg`, keyrings,
   `~/.password-store`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.netrc`, `~/.git-credentials`, gh's,
@@ -512,6 +514,8 @@ blocks the network and every other socket, omabox's included), or see
 - `--seed SRC:DEST` copies a file or folder into the box HOME before the session
   starts (`--seed ./fixture.json:.config/myplugin/config.json`), for a plugin that reads its config
   once at start; the same sources are refused as for `--ro-bind`.
+- `--no-seed fonts` starts the box without your fonts, which are otherwise mounted read-only so a
+  theme's or a plugin's own faces draw as on your desktop.
 - `--no-seed extensions` starts the box without your `~/.config/omarchy/extensions` (plugins'
   settings files). Without it `up` copies them, and names each file a `--plugin`'s code reads there:
   a plugin under test starts on your desktop's settings, an on/off switch in them too.

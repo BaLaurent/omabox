@@ -79,7 +79,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
             [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...]
             [--env KEY=VAL]...
-            [--no-seed extensions]                       your plugins' settings files left on the desk
+            [--no-seed extensions,fonts]                 your plugins' settings files, your fonts left on the desk
             [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/
             [--theme NAME]                               start on that theme, not your desktop's current one
             [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
@@ -87,7 +87,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
             [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
-            [--clean [--keep animations,bar,clock,locale,pointer,wallpaper]]   a desktop where only what is tested moves
+            [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   only what is tested moves
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
@@ -237,7 +237,12 @@ write the file in that folder instead.
 files, the menu's extension), with a new Omarchy user's (/etc/skel's; a --from save's own stay).
 Otherwise \`up\` copies it, and says each file a --plugin's code names there ("seeded
 extensions/NAME.json from your desk"): that plugin starts on your desk's settings, an on/off switch
-in them too. Comma-separated, repeatable; only extensions so far.
+in them too.
+--no-seed fonts: the box starts without your fonts. Otherwise ~/.local/share/fonts and ~/.fonts are
+mounted read-only at the same place in the box HOME (\`ls --json\`: desk_fonts), so a theme's or a
+plugin's own faces draw as on your desk (not in a --clean box unless --keep fonts; nor when the box
+HOME has its own folder there, a --from save's or a --seed's: it keeps that one). A link in them that
+leads out of them is not in the box (said). Comma-separated, repeatable.
 @ up run
 --theme-dir DIR: a theme you are editing, live: the box HOME's ~/.config/omarchy/themes/NAME (DIR's
 name) is a link to DIR at its own path, in place of the copy \`up\` makes of each of your themes. The
@@ -261,9 +266,9 @@ shell.toml [bar]"). Plugins are placed as without it.
 Omarchy's bar (--stock-bar) on tokyo-night (or --theme), a #ff00ff wallpaper (no theme has it: any of
 it inside a window or the bar is a hole), the bar's clock frozen at "Friday 12:00" (in its place, at
 its width), English (en_US.UTF-8, else C.UTF-8) in UTC for the whole session, no pointer, no network
-(--net connected gives it back), animations off (over reloads too). --keep LIST takes any of
-animations, bar (yours), clock, locale (yours and your timezone), pointer, wallpaper back. A theme
-set later in the box brings that theme's wallpaper.
+(--net connected gives it back), animations off (over reloads too), none of your fonts (--no-seed
+fonts). --keep LIST takes any of animations, bar (yours), clock, fonts (yours), locale (yours and
+your timezone), pointer, wallpaper back. A theme set later in the box brings that theme's wallpaper.
 @ up run audio record
 --audio: the box's own PipeWire, WirePlumber and pipewire-pulse (PipeWire and Pulse apps both play),
 its only devices a speaker nobody hears (omabox-speaker, a null sink: the default output) and a
@@ -2666,16 +2671,17 @@ desk_dir() {
 }
 
 # up --no-seed WHAT (#231): what of the desk a box starts without, comma-separated, repeatable; HAVE
-# is what earlier ones gave. Only `extensions` so far (the desk's ~/.config/omarchy/extensions: the
-# box has /etc/skel's, a new Omarchy user's, or a --from save's). Prints the list, comma-separated.
+# is what earlier ones gave. `extensions` (the desk's ~/.config/omarchy/extensions: the box has
+# /etc/skel's, a new Omarchy user's, or a --from save's) and `fonts` (the desk's user fonts, which
+# seed_fonts mounts: #261). Prints the list, comma-separated.
 # no_seed_spec LIST [HAVE]
 no_seed_spec() {
   local w out=() IFS=,
   for w in ${2:-} $1; do
     [ -n "$w" ] || continue
     case $w in
-      extensions) ;;
-      *) say "--no-seed: what a box starts without of your desk, comma-separated: extensions (~/.config/omarchy/extensions, your plugins' settings), got '$w'"; return 1 ;;
+      extensions|fonts) ;;
+      *) say "--no-seed: what a box starts without of your desk, comma-separated: extensions (~/.config/omarchy/extensions, your plugins' settings), fonts (~/.local/share/fonts and ~/.fonts), got '$w'"; return 1 ;;
     esac
     [[ ",${out[*]}," == *",$w,"* ]] || out+=("$w")
   done
@@ -2711,6 +2717,58 @@ seed_extensions() {
     line="plugin ${ids[0]} reads it"; [ ${#ids[@]} = 1 ] || line="plugins ${ids[*]} read it"
     say "up: seeded extensions/$n from $shown: $line (--no-seed extensions starts without it)"
   done
+}
+
+# The desk's HOME whose font folders seed_fonts mounts (#261): OMABOX_DESK_HOME, the suite's fake desk
+# (as OMABOX_DESK_CONFIG is desk_dir's), never a jailed caller's; else HOME.
+desk_home() {
+  if [ -n "${OMABOX_DESK_HOME:-}" ] && ! in_jail; then echo "$OMABOX_DESK_HOME"; else echo "$HOME"; fi
+}
+
+# The desk's user fonts (#261, finding 380): ~/.local/share/fonts and ~/.fonts, each mounted read-only at
+# the same place in the box HOME HOME, so a theme's or a plugin's own faces draw in the box as on the
+# desk. Without them fontconfig gave another family, silently: shots plausible but wrong (widths,
+# case, tracking). Not with --no-seed fonts, nor in a --clean box (Omarchy's look) unless --keep fonts.
+# Mounted, not copied: nothing to copy each `up`, and the box cannot change them. They are there from
+# the box's first process, before its Hyprland and shell read their fonts (once, at start); fontconfig
+# caches them in the box HOME's ~/.cache on that first read, as it does the system's (a box has no
+# /var/cache/fontconfig). A jailed caller's box gets them too, as it gets the desk's themes: fonts
+# hold nothing of the user's. Said: what went in, what did not and why (refuse_src; the box HOME has
+# its own folder there, a save's or a --seed's, which it keeps), and the links in them that lead out
+# of them, which are not in the box (the box sees only its own mounts: such a link leads nowhere
+# there; one into /usr works, the box has the host's). Sets DESK_FONTS ("SRC<TAB>REL" each: the
+# folder, resolved, and its place in the box HOME). seed_fonts HOME
+DESK_FONTS=()
+seed_fonts() {
+  local h=$1 dh rel src r why shown own n first l t mounted=()
+  DESK_FONTS=()
+  [[ ",${NO_SEED:-}," != *,fonts,* ]] || return 0
+  [ "${CLEAN:-0}" = 0 ] || clean_has fonts || return 0
+  dh=$(desk_home)
+  for rel in .local/share/fonts .fonts; do
+    src=$dh/$rel
+    # shellcheck disable=SC2088 # a path as the user knows it, shown, not expanded
+    shown="~/$rel"; [ "$dh" = "$HOME" ] || shown=$src
+    [ -e "$src" ] || [ -L "$src" ] || continue
+    { r=$(readlink -e -- "$src") && [ -d "$r" ]; } || { say "up: not mounting $shown: not a folder (or a link to none)"; continue; }
+    if why=$(refuse_src "$src"); then say "up: not mounting $shown: $why"; continue; fi
+    home_unlink "$h" "$rel"
+    own=$(find "$h/$rel" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null) || own=""
+    if [ -n "$own" ]; then
+      say "up: not mounting $shown: the box HOME has a $rel of its own (the save's or a --seed's), which it keeps"; continue
+    fi
+    mkdir -p -- "$h/$rel"
+    DESK_FONTS+=("$r"$'\t'"$rel"); mounted+=("$shown")
+    n=0 first=""
+    while IFS= read -r -d '' l; do
+      t=$(readlink -e -- "$l") || continue   # (a link broken on the desk too)
+      case $t/ in "$r"/*|/usr/*) continue ;; esac
+      n=$((n + 1)); [ -n "$first" ] || first="${l#"$r"/} -> $t"
+    done < <(find "$r" -type l -print0 2>/dev/null)
+    [ "$n" = 1 ] || first+=", ..."
+    [ "$n" = 0 ] || say "up: $n link(s) in $shown lead out of it, so they lead nowhere in the box ($first)"
+  done
+  [ ${#mounted[@]} = 0 ] || say "up: your desk's fonts are in the box, read-only: ${mounted[*]} (--no-seed fonts starts without them)"
 }
 
 # What `up` says when the box's bar is the desk's and not what --stock-bar gives (#250): its layout,
@@ -3281,7 +3339,7 @@ CLEAN_CLOCK_VERTICAL="'12'"$'\n'"'—'"$'\n'"'00'"
 # The locale and timezone (finding 363): English in UTF-8 and UTC for the whole session, not the host's
 # (its LC_TIME made an app's dates Portuguese, "Há 9 meses"); --keep locale gives both back.
 CLEAN_TZ=UTC
-CLEAN_KEEPS="animations bar clock locale pointer wallpaper"
+CLEAN_KEEPS="animations bar clock fonts locale pointer wallpaper"
 CLEAN=0 CLEAN_KEEP="" CLEAN_LANG="" CLEAN_ZONE=""   # up sets them
 # en_US.UTF-8 when the system has it (locale -a), else C.UTF-8 (glibc's own, always there).
 clean_locale() {
@@ -3324,6 +3382,7 @@ clean_text() {
   clean_has wallpaper || parts+=("wallpaper $CLEAN_WALLPAPER (any of it inside a window or the bar is a hole)")
   clean_has clock || parts+=("the clock at ${CLEAN_CLOCK//\'/}")
   clean_has locale || parts+=("locale ${CLEAN_LANG:-$(clean_locale)} in ${CLEAN_ZONE:-$CLEAN_TZ}")
+  clean_has fonts || parts+=("none of your fonts")
   clean_has pointer || parts+=("no pointer")
   [ "$2" != isolated ] || parts+=("no network")
   clean_has animations || parts+=("animations off")
@@ -3833,6 +3892,7 @@ cmd_up() {
   sweep_homes
   seed_home
   for p in "${seeds[@]}"; do seed_copy_in "${p%%$'\t'*}" "${p#*$'\t'}"; done
+  seed_fonts "$D/home"   # (after the seeds: one into its folder keeps the box's own)
   SHELL_BEFORE=$(shell_crash_dirs)   # (none in a fresh HOME, nor in a save: it keeps no .cache)
   # Read again as late as possible: a change made while this box was being set up (the widget's
   # switch during "New interactive box") would otherwise be lost for it; once box.json exists,
@@ -3898,6 +3958,7 @@ cmd_up() {
     --argjson themes "$(printf '%s\n' ${theme_dirs[@]+"${theme_dirs[@]}"} | jq -R 'select(. != "")' | jq -s .)" --arg theme "$THEME" \
     --arg desk "$DESK" --arg desk_ids "$DESK_IDS" --arg desk_files "$DESK_FILES" \
     --argjson render "$render_json" --argjson mspecs "$(printf '%s\n' "${monitors[@]}" | jq -R 'select(. != "")' | jq -s .)" --argjson seeds "$(printf '%s\n' "${seeds[@]}" | jq -R 'select(. != "")' | jq -s .)" --arg no_seed "$NO_SEED" \
+    --argjson desk_fonts "$(printf '%s\n' ${DESK_FONTS[@]+"${DESK_FONTS[@]}"} | cut -f2 | jq -R 'select(. != "") | "~/" + .' | jq -sc .)" \
     '{name: $name, mode: $mode, size: $size, scale: $scale, created: $created, plugins: $plugins, plugin_dirs: $plugin_dirs,
       plugin_via: (reduce $plugins[] as $i ({}; .[$i] = (if $linked | index($i) then "linked" else "mounted" end))), net: $net, allow: $allow,
       idle: $idle, bar: $bar, systemd: $systemd, audio: $audio, overlays: $overlays, wayland_screen: ($wayland_screen == 1),
@@ -3906,6 +3967,7 @@ cmd_up() {
       + (if $render != null then {render: $render} else {} end)
       + (if ($seeds | length) > 0 then {seeds: $seeds} else {} end)
       + (if $no_seed != "" then {no_seed: ($no_seed | split(","))} else {} end)
+      + (if ($desk_fonts | length) > 0 then {desk_fonts: $desk_fonts} else {} end)
       + (if $bar == "desk" then {desk_shell: {config: $desk, plugins: ($desk_ids | split(" ") | map(select(. != ""))),
           copied: [$desk_files | splits("\n") | select(startswith("copied ")) | .[7:]],
           skipped: [$desk_files | splits("\n") | select(startswith("skipped ")) | .[8:] | split("\t") | {path: .[0], why: .[1]}]}} else {} end)
@@ -3996,6 +4058,8 @@ cmd_up() {
     : > "$D/card-placeholder"
     for n in "${nvidia_cards[@]}"; do [ -z "$n" ] || args+=(--ro-bind "$D/card-placeholder" "/dev/dri/$n"); done
   fi
+  # The desk's fonts (#261), read-only at their place in the box HOME; before --ro-bind's, which win.
+  for p in ${DESK_FONTS[@]+"${DESK_FONTS[@]}"}; do args+=(--ro-bind "${p%%$'\t'*}" "/home/sbx/${p#*$'\t'}"); done
   args+=("${ro_args[@]}")
   # A real user manager (finding 61): the box's own cgroup (the delegated scope it is launched in,
   # below) writable as its whole /sys/fs/cgroup under a cgroup namespace, and the marker systemd
@@ -12966,7 +13030,7 @@ box_json() {
       client_render: (.client_render // null),
       monitors: (.monitors // null),
       omarchy_version: (.omarchy_version // null), theme: (if $theme != "" then $theme else null end),
-      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + (if .no_seed then {no_seed} else {} end) + {clean: (.clean // null)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}' "$D/box.json" 2>/dev/null ||
+      starter: (.starter // null)} + (if .desk_shell then {desk_shell} else {} end) + (if .no_seed then {no_seed} else {} end) + {desk_fonts: (.desk_fonts // [])} + {clean: (.clean // null)} + {state: $state, hung: $hung, peeking: $peeking, keys_to_box: $keys, shell_state: $sh, shell_crashes: $crashes, orphan: $orphan}' "$D/box.json" 2>/dev/null ||
     jq -nc --arg name "$NAME" --arg state "$state" '{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false, orphan: false}'
 }
 

@@ -147,7 +147,7 @@ checkout; never `omarchy dev link` on the host: ref: Reviewing an Omarchy change
 ## What is and is not in a box
 
 Read-only in it: the repo (same path), `--ro-bind`, `--plugin` and `--theme-dir` dirs, mise's
-toolchains; nothing else of the user's HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret
+toolchains, fonts; nothing else of their HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret
 stores or the runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`;
 `omabox path` → `<dir>/home` on the host). The box's /run/user/$UID is `omabox path --run` on the host; the
 host's own is the real session's: never read app state there. Private session bus and keyring; no system bus or devices; audio: `up --audio`; `/sys`: the host's.

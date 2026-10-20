@@ -38,9 +38,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   at "Friday 12:00" by its format (in its place, at its width; nothing is preloaded into the box's
   processes, which keep the real clock: seed an app's dates relative to now, `--ignore` a time it
   shows), English (en_US.UTF-8, or C.UTF-8) in UTC for the whole session whatever your locale and
-  timezone (a Portuguese LC_TIME made an app's dates "Há 9 meses"), no pointer, no network and no
-  animations (over reloads too). `--keep animations,bar,clock,locale,pointer,wallpaper` takes any of
-  them back, for a test of Hyprland or the shell that needs them; `--theme` and `--net connected`
+  timezone (a Portuguese LC_TIME made an app's dates "Há 9 meses"), no pointer, no network, none of
+  your fonts and no animations (over reloads too). `--keep
+  animations,bar,clock,fonts,locale,pointer,wallpaper` takes any of them back, for a test of Hyprland or the shell that needs them; `--theme` and `--net connected`
   choose their own. `run` takes it for a throwaway box too.
 - **`up --quickshell PATH`: the box's shell on a Quickshell build of yours** (and `run --quickshell
   PATH` for a throwaway), for a Quickshell fix your installed package does not have yet, such as
@@ -50,6 +50,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   both versions), as is one needing a library the box lacks. `ls`, `ls --json`, `windows` and
   `save` name it. Every box's `ls --json` now has `quickshell_version`; it is the last release's
   number even for a build of a newer commit, so it is no proof that a fix is in.
+- **Your fonts are in every box.** `~/.local/share/fonts` and `~/.fonts` are mounted read-only at
+  the same place in the box HOME, so a theme's or a plugin's own faces draw as on your desktop:
+  without them the box drew them in a fallback family, silently, and shots looked plausible but
+  wrong. `up` says it; `ls --json` has `desk_fonts`. `--no-seed fonts` leaves them out; an `up
+  --clean` box has none (Omarchy's look), `--keep fonts` brings them. A box HOME with its own folder
+  there (a `--from` save's, a `--seed` into it) keeps it, said, and a link in them that leads out of
+  them is said too: it leads nowhere in the box.
 
 ### Fixed
 
