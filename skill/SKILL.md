@@ -43,6 +43,9 @@ inside a box.**
 | A theme in the works; a result that depends on the theme or bar | `omabox up --theme-dir PATH`; `--theme NAME --stock-bar` |
 | Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
 
+In a box your checkout is read-only (a throwaway `run`'s writes are discarded): build on the host,
+run in the box (`omabox run -- ctest …`); ref: Tests that touch the desktop.
+
 A step that needs real hardware: the user's. ref: Project instructions, in detail.
 
 Your box is named after the repo (or worktree) and your session, and goes down when your agent exits.
@@ -75,8 +78,9 @@ omabox down                               # when done
    sent, not landed. A label, a checked box, a field's text: `tree --find TEXT` (~60 tokens), not a
    shot (~1.2k); the bar, panels, menus: `tree --layer NS --find TEXT`. Else `--wait`'s line,
    `windows`, `wait`, `events`, `log --grep`; a shot for pixels.
-2. **Never resend input you have not seen land**: it types twice or toggles back. 124 after `--wait`
-   means it WAS sent and the screen did not settle as expected: shot first.
+2. **Never resend input you have not seen land**: it types twice or toggles back. A 124 after
+   `--wait`: it WAS sent, and the line says where it went: read it, look (`tree`, a shot) before
+   sending again.
 3. **Type only into a field you have seen focused**, or `keys --window SEL`.
 4. **Set state directly** (`omabox run -- omarchy-shell shell summon ID`, files in the box HOME,
    `omabox hyprctl dispatch`), not by keys and clicks, unless the gesture is under test. **Stop when
@@ -96,7 +100,7 @@ most of a session's context**: the smallest that shows it (`--window`, `-g`, `--
 
 - A failure: ref: Symptoms. Exit codes: `omabox help exit-codes`. Colours, transitions: ref: Shots.
 - Baselines: ref: Visual checks. `drag`, `scroll`: ref: Pointer, in detail. Sizes, monitors,
-  `gpu`/`cpu`: ref: Screen size and rendering cost. Tests: ref: Tests that touch the desktop.
+  `gpu`/`cpu`: ref: Screen size and rendering cost.
 - Plugins: ref: Testing a shell plugin. `--hyprland`: ref: A Hyprland build of your own. `--omarchy`:
   ref: Reviewing an Omarchy change. Launcher: ref: Testing an app as a desktop app.
 - Mounts, HOME, `save`: ref: Mounts, HOME and the session. Ports: ref: Network. Idling: ref: Box

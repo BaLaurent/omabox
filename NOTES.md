@@ -8220,40 +8220,6 @@ from them.
     t_unit_brief (no box: the rules, ≤ 20 lines, `-b NAME`, stderr note, `-b` before the command,
     `--json` and a word refused), t_brief (none yet; one foot by its app id, size and scale, HOME's
     host path; two of one class by address).
-396. **SKILL.md: the core every task needs, the rest one line away** (2026-10-20, #270). The skill
-    was 29% of what omabox cost an agent session in the 10-09..10-17 data (106 loads at ~5.3k tokens
-    each as the usage analyser measures a load, 55.5M carried), and held at its 14 000-byte cap, so
-    each load paid for the guard, ai-jail, hardware, plugins, showing the user and reporting whatever
-    the task. SKILL.md is now the core: the opening rule, "Never" (the guard, the user's files,
-    servers and secrets, refusals, what is theirs, "tested" for what a box lacks), the
-    project-instructions table, whose box is yours and `omabox brief` for a subagent, the loop,
-    driving (look/act once/look again, never resend unseen input, focus, set state directly),
-    waiting, coordinates and shots' cost, and "Where to look next": one line each naming every
-    reference.md section by `ref:`. Moved to reference.md: the guard's detail (its variables, never
-    set back, `host` and `! CMD`) into "The guard, in detail"; ai-jail into a new "Inside ai-jail";
-    "What is and is not in a box" as the first bullet of "Mounts, HOME and the session"; the box
-    naming/`--new`/`-b` detail into "Box lifetime"; the hardware section's summary, split the work,
-    ask once and host `pgrep` into "When a box cannot test it, in detail"; the peek/interactive/
-    config/clip rules into "Showing the user"; reporting into a new "Reporting what a box showed";
-    the two symptom rows reference.md lacked (the guard, `pkill -f` killing your own shell) into
-    "Symptoms"; the theme rows, `lua EXPR` prints the value and "nothing to put back" into "Project
-    instructions, in detail"; `keys --pass` vs `-t` into "Pointer, in detail"; window coordinates'
-    0,0 into "Shots"; "do not mount plugins you were not asked to test" into "Testing a shell
-    plugin"; "never on the host" into "A Hyprland build of your own". The tests, plugin, Hyprland,
-    Omarchy-checkout, gpu/cpu, waiting and shots detail the old page repeated was already there. A
-    check of 154 key phrases of the old page, each found in the file it was moved to, ran clean. One
-    sharper line: "a label, a checked box, a field's text: `tree --find TEXT` (~60 tokens), not a
-    shot (~1.2k)", with `tree --layer NS` for the shell's bar and panels (the data had 42 tree calls
-    against 1 055 shots). Size: 13 997 → 7 797 bytes (body without the frontmatter 12 959 → 6 759;
-    the description is unchanged), ~3 500 → ~1 950 tokens at 4 chars a token; scaled to the
-    analyser's 5.3k a load, ~2.95k. Expected saving: ~1.5-2.3k tokens a load, ~165-250k added over
-    the 106 loads of 10-09..10-17, and the share each load carries for the rest of its thread down
-    44% (~24M of the 55.5M carried); less what agents now read of reference.md (a section, not the
-    file: its sections are 0.3-13 kB). reference.md grew by what moved (91 326 → 97 141 bytes) and
-    both together are 385 bytes smaller (duplicates dropped). The unit check's cap is now 8 000
-    bytes, so the core stays small; another check keeps the `tree --find` line. *Decided*: the
-    issue's list is the core; what stays is Diogo's review (branch `skill-core`).
-
 396. **An action's `--wait` says what changed on the desktop, and a 124 where the input went**
     (2026-10-20, #274, part A). `keys`, `click`, `scroll`, `drag` and `run -d` with `--wait` read the
     box's desktop twice: one `hyprctl --batch "j/clients; j/layers; j/activewindow; j/activeworkspace;
@@ -8291,6 +8257,45 @@ from them.
     t_unit_wait_facts (the diff on canned snapshots, the cap, cuts and addresses, targets for each
     kind, settle_end's line, stderr and JSON keys), t_wait_facts (run -d and a key opening windows,
     a click opening a layer, 124s naming the focused window and the layer under the click), t_jail.
+
+397. **SKILL.md: the core every task needs, the rest one line away** (2026-10-20, #270). The skill
+    was 29% of what omabox cost an agent session in the 10-09..10-17 data (106 loads at ~5.3k tokens
+    each as the usage analyser measures a load, 55.5M carried), and held at its 14 000-byte cap, so
+    each load paid for the guard, ai-jail, hardware, plugins, showing the user and reporting whatever
+    the task. SKILL.md is now the core: the opening rule, "Never" (the guard, the user's files,
+    servers and secrets, refusals, what is theirs, "tested" for what a box lacks), the
+    project-instructions table, whose box is yours and `omabox brief` for a subagent, the loop,
+    driving (look/act once/look again, never resend unseen input, focus, set state directly),
+    waiting, coordinates and shots' cost, and "Where to look next": one line each naming every
+    reference.md section by `ref:`. Moved to reference.md: the guard's detail (its variables, never
+    set back, `host` and `! CMD`) into "The guard, in detail"; ai-jail into a new "Inside ai-jail";
+    "What is and is not in a box" as the first bullet of "Mounts, HOME and the session"; the box
+    naming/`--new`/`-b` detail into "Box lifetime"; the hardware section's summary, split the work,
+    ask once and host `pgrep` into "When a box cannot test it, in detail"; the peek/interactive/
+    config/clip rules into "Showing the user"; reporting into a new "Reporting what a box showed";
+    the two symptom rows reference.md lacked (the guard, `pkill -f` killing your own shell) into
+    "Symptoms"; the theme rows, `lua EXPR` prints the value and "nothing to put back" into "Project
+    instructions, in detail"; `keys --pass` vs `-t` into "Pointer, in detail"; window coordinates'
+    0,0 into "Shots"; "do not mount plugins you were not asked to test" into "Testing a shell
+    plugin"; "never on the host" into "A Hyprland build of your own". The tests, plugin, Hyprland,
+    Omarchy-checkout, gpu/cpu, waiting and shots detail the old page repeated was already there. A
+    check of 154 key phrases of the old page, each found in the file it was moved to, ran clean. One
+    sharper line: "a label, a checked box, a field's text: `tree --find TEXT` (~60 tokens), not a
+    shot (~1.2k)", with `tree --layer NS` for the shell's bar and panels (the data had 42 tree calls
+    against 1 055 shots). Size: 13 997 → 7 797 bytes (body without the frontmatter 12 959 → 6 759;
+    the description is unchanged), ~3 500 → ~1 950 tokens at 4 chars a token; scaled to the
+    analyser's 5.3k a load, ~2.95k. Expected saving: ~1.5-2.3k tokens a load, ~165-250k added over
+    the 106 loads of 10-09..10-17, and the share each load carries for the rest of its thread down
+    44% (~24M of the 55.5M carried); less what agents now read of reference.md (a section, not the
+    file: its sections are 0.3-13 kB). reference.md grew by what moved (91 326 → 97 141 bytes) and
+    both together are 385 bytes smaller (duplicates dropped). The unit check's cap is now 8 000
+    bytes, so the core stays small; another check keeps the `tree --find` line. *Decided*: the
+    issue's list is the core; what stays is Diogo's review (branch `skill-core`). His review added
+    two lines: after the table, that a box sees the checkout read-only (a throwaway `run`'s overlay
+    writes are discarded), so build on the host and run in the box; and rule 2's 124 reads the line's
+    "where the input went" (finding 396) and looks before sending again, in place of "shot first".
+    The "Tests:" pointer under "Where to look next" went (the new line names that section): 7 966
+    bytes.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
