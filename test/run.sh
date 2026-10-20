@@ -137,6 +137,9 @@ trap 'exit 143' TERM
 descendants() { local c; for c in $(pgrep -P "$1"); do descendants "$c"; echo "$c"; done; }
 
 ob() { "$CLI" "$@"; }
+# up_ok ARGS: `ob up ARGS`, its output kept in UP_OUT for the no() of a failed start, which prints its end
+# (#289: a bare "failed" under load named no cause).
+up_ok() { UP_OUT=$(ob up "$@" 2>&1); }
 # Notes from inside checks (a slow wait), whose output is captured: shown before the next result.
 # (NOTES and UNTIL are per test when tests run in parallel.)
 NOTES=$TMP/notes UNTIL=$TMP/until.last
@@ -2736,6 +2739,9 @@ EOF
   check_match "a long one: its first 100 characters, what is cut, and its last 200 (#285)" \
     "^box upn{94} \[\.\.\. 116 characters \.\.\.\] n{190}the reason$" "$(clip_out "$long")"
   check_match "...as no() prints it" "nthe reason$" "$(evidence() { :; }; HELD="" no "a check" "$long" 2>&1 | tail -1)"
+  # #289: a box test's failed `up` prints up's own output, not a bare "failed".
+  check_eq "no box test throws away a failed up's output (#289)" "" \
+    "$(grep -nE ' up [^|]*>/dev/null 2>&1 \|\| \{ no |"failed"; return; \}' "$ROOT/test/run.sh" | grep -v ' record ')"
   # Pruning: runs past the newest 5 passing and 10 failing go, a live one stays (pids past pid_max are
   # dead; this shell's own is live).
   local pr=$r/runs i n kept
@@ -2948,7 +2954,7 @@ print(a.getsockname()[1], b.getsockname()[1])')
 # host log means something only then: when this test fails, so does the host's verdict.
 t_leak_control() {
   local S=$P-ctl f0=$fail log
-  ob up "$S" --no-shell --net isolated >/dev/null 2>&1 || { no "up the stand-in" "failed"; return; }
+  up_ok "$S" --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
   log=$(ob path -b "$S")/run/events.log
   ob run -b "$S" -d -- sh -c 'exec python3 -c "$1" "$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket2.sock" >> "$XDG_RUNTIME_DIR/events.log" 2>&1' sh "$WATCHER" >/dev/null 2>&1
   check "the watcher listens to the stand-in's events" until_ok 10 grep -q ' == watching$' "$log"
@@ -2977,8 +2983,8 @@ t_leak_control() {
   local in=("$CLI" run -b "$S" --) C=$P-cin wd
   ob run -b "$S" -- pkill -x foot   # (focus coming back to it would be a leak of its own)
   # (Started with a file open as fd 7, which no process of the nested box may hold: #112.)
-  "${in[@]}" bash -c 'echo x > /tmp/omabox-t112; exec 7</tmp/omabox-t112; exec "$@"' _ "$CLI" up "$C" --no-shell --idle 0 >/dev/null 2>&1 ||
-    no "up a box in the stand-in" "failed"
+  UP_OUT="$("${in[@]}" bash -c 'echo x > /tmp/omabox-t112; exec 7</tmp/omabox-t112; exec "$@"' _ "$CLI" up "$C" --no-shell --idle 0 2>&1)" ||
+    no "up a box in the stand-in" "$UP_OUT"
   check_box_safety "$C" "${in[@]}" "$CLI"   # a nested box (#111)
   check_eq "a nested box (no pasta) holds none of its caller's fds (#112)" 0 \
     "$("${in[@]}" "$CLI" run -b "$C" -- sh -c 'for p in /proc/[0-9]*; do ls -l "$p/fd" 2>/dev/null; done | grep -c omabox-t112')"
@@ -3332,7 +3338,7 @@ t_unit_jail_covers() {
 t_run_stdio() {
   local d=$TMP/$P-stdio B=$P-stdio out rc=0
   mkdir -p "$d"
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up for run's stdio" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up for run's stdio" "$UP_OUT"; return; }
   echo hello > "$d/in"
   ob run -b "$B" -- sh -c 'readlink /proc/self/fd/0 /proc/self/fd/1 /proc/self/fd/2 | cut -d: -f1 | paste -sd " "' < "$d/in" > "$d/out" 2> "$d/err"
   check_eq "a command's stdin, stdout and stderr from files: pipes in the box (finding 325)" "pipe pipe pipe" "$(cat "$d/out")"
@@ -3467,7 +3473,7 @@ t_jail_record() {
   J=$(jq -nc --arg p "$p" --argjson j "$jpid" --arg ns "$(readlink "/proc/$jpid/ns/mnt")" \
     '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: false}], masks: [], mntpid: $j, mntns: $ns}')
   jo() { (cd "$p" && OMABOX_JAIL=$J "$CLI" "$@"); }
-  jo up "$N" --no-shell --net isolated >/dev/null 2>&1 || { no "record for a jailed agent: up in the stand-in jail" "failed"; kill "$jb"; return; }
+  UP_OUT=$(jo up "$N" --no-shell --net isolated 2>&1) || { no "record for a jailed agent: up in the stand-in jail" "$UP_OUT"; kill "$jb"; return; }
   local as=$p/new/demo.mp4
   check "a jailed agent's record start --as NAME" jo record -b "$N" start --as "$as"
   check_fails "...the name's folder is not made" test -e "$p/new"
@@ -5278,8 +5284,8 @@ t_connected() {
 # for every port, pasta gave up on the ports after one it could not bind.
 t_ports() {
   local A=$P-pa B=$P-pb own shared local6 hostp out later b two at started
-  if ! ob up "$A" --no-shell >/dev/null 2>&1 || ! ob up "$B" --no-shell >/dev/null 2>&1; then
-    no "ports: up two boxes" "failed"; ob down "$A" >/dev/null 2>&1; ob down "$B" >/dev/null 2>&1; return
+  if ! up_ok "$A" --no-shell || ! up_ok "$B" --no-shell; then
+    no "ports: up two boxes" "$UP_OUT"; ob down "$A" >/dev/null 2>&1; ob down "$B" >/dev/null 2>&1; return
   fi
   # The shared port low, so the ones checked after it are above it.
   while shared=$((20000 + RANDOM % 1000)); ss -Htuln "sport = :$shared" | grep -q .; do :; done
@@ -5362,7 +5368,7 @@ t_idle() {
 # for interactive boxes: a headless one that writes it and dies stays dead, logs kept (finding 71).
 t_reap_race() {
   local B=$P-rr lock
-  ob up "$B" --idle 10s --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --idle 10s --no-shell || { no "up" "$UP_OUT"; return; }
   exec {lock}>"$XDG_RUNTIME_DIR/omabox/.lock-$B"; flock "$lock"   # what an `up` of the name holds
   # This box's reaper's flock (cmd_down runs in the reaper's own process), not any box's up or down.
   held "$B" check "the idle reaper decides and waits for the lock" until_ok 30 bash -c 'r=$(pgrep -f "omabox _reap $1 ") && pgrep -P "$r" -f "^flock -w 60 [0-9]+$"' _ "$B"
@@ -5373,7 +5379,7 @@ t_reap_race() {
   check_eq "...and leaves the new box alone" up "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
   ob down "$B" >/dev/null 2>&1
   B=$P-rc
-  ob up "$B" --idle 20s --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --idle 20s --no-shell || { no "up" "$UP_OUT"; return; }
   ob run -b "$B" -- sh -c 'echo 1 > "$XDG_RUNTIME_DIR/omabox.closed"; hyprctl dispatch "hl.dsp.exit()"' >/dev/null 2>&1
   until_ok 20 reaper_gone "$B"   # its first poll after the box died decides, then it goes
   check_eq "a headless box that wrote the closed file and died stays dead" dead "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
@@ -5420,7 +5426,7 @@ t_plugin_hosted() {
     printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$1" > "$F/$1/W.qml"
   }
   hfix a "$P.ha"; hfix b "$P.hb"; hfix c "$P.hc"
-  ob up "$B" --net isolated --plugin "$F/a" --plugin "$F/b" --plugin "$F/c" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated --plugin "$F/a" --plugin "$F/b" --plugin "$F/c" || { no "up" "$UP_OUT"; return; }
   H=$(ob path "$B")/home
   # A out of the bar into B's own entry; C out of the bar, in nothing's.
   jq --arg a "$P.ha" --arg b "$P.hb" --arg c "$P.hc" \
@@ -6608,7 +6614,7 @@ t_unit_tree_layer() {
 # full-screen, one pid) by the keyboard; two layers of one size that cannot be told apart.
 t_tree_layer() {
   local B=$P-tl D out rc v x y mid
-  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   out=$(ob tree -b "$B" 2>&1); rc=$?
   check_eq "tree with no window at all: exit 2" 2 "$rc"
@@ -6903,11 +6909,11 @@ t_hyprland_crash() {
   # for the host, finding 26).
   check "up (the stand-in host)" ob up "$B" --no-shell --net isolated
   local in=("$CLI" run -b "$B" -- "$CLI")
-  if "${in[@]}" up hc --interactive --no-shell >/dev/null 2>&1; then
+  if UP_OUT=$("${in[@]}" up hc --interactive --no-shell 2>&1); then
     rc=0; out=$(timeout 30 "${in[@]}" lua -b hc "$crash" 2>&1) || rc=$?
     check_match "an interactive box's crash: said with its signal" "^omabox: box 'hc' went down: its Hyprland crashed \\(SIGSEGV\\)" "$out"
     "${in[@]}" down hc >/dev/null 2>&1
-  else no "up --interactive in the stand-in" "failed"; fi
+  else no "up --interactive in the stand-in" "$UP_OUT"; fi
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -7788,7 +7794,7 @@ t_up_killed() {
   # While its up still runs (here: this shell, as up writes itself in `starting`), idle time is not
   # counted; once that process is gone, it is.
   B=$P-uk2
-  ob up "$B" --idle 20s --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --idle 20s --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   local D; D=$(ob path "$B")
   sleep 30 & local starter=$!
   echo "$starter $(lib proc_start "$starter")" > "$D/starting"; touch -d '-1 hour' "$D/used"
@@ -7880,7 +7886,7 @@ t_unit_up_owner_gone() {
 # of it is sent, spare keycodes X11 apps can see, and a lost box is a failure.
 t_keys() {
   local B=$P-keys
-  ob up "$B" --no-shell --net isolated --xwayland >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated --xwayland || { no "up" "$UP_OUT"; return; }
   check_box_safety "$B"
   # #211: labwc holds no X display now, so Hyprland's Xwayland is :0 (it was :1, behind labwc's lazy one).
   check_eq "--xwayland: run's DISPLAY is Hyprland's Xwayland on :0" ":0" "$(ob run -b "$B" -- printenv DISPLAY 2>&1)"
@@ -7961,7 +7967,7 @@ t_keys() {
 # as an on-demand layer clicked does: keys --window focuses the active window again, the pointer kept.
 t_keys_layer() {
   local B=$P-kl D out rc pos l
-  ob up "$B" --net isolated --monitor 1080x1920 >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated --monitor 1080x1920 || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   ob click -b "$B" 2400 900 >/dev/null   # the second monitor: the terminal opens there
   ob run -b "$B" -d -q -- foot -T K sh -c 'cat > /tmp/typed'
@@ -8012,7 +8018,7 @@ QML
 # key opens, a layer a click opens; a 124 says where the keys and the click went and that nothing moved.
 t_wait_facts() {
   local B=$P-wf D out rc l
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   out=$(ob run -b "$B" -d -q --wait -- foot -T F sh -c 'read x; exec foot -T G sleep 600' 2>&1); rc=$?
   check_eq "run -d --wait: settled" 0 "$rc"
@@ -8077,7 +8083,7 @@ QML
 # for certain, even under the full-screen one: refused under --no-raise. Without one, nothing is said.
 t_click_layer() {
   local B=$P-cl D out rc w at x y px py
-  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   ob run -b "$B" -d -q -- foot -T L sh -c 'cat > /dev/null'
   ob wait -b "$B" window 'title:^L$' >/dev/null 2>&1
@@ -8151,7 +8157,7 @@ QML
 # answers again.
 t_hung() {
   local B=$P-hung out rc t0 took
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   ob run -b "$B" -d -q -- foot -T F sleep 600
   ob wait -b "$B" window 'title:^F$' >/dev/null
   ob run -b "$B" -- pkill -STOP -x Hyprland
@@ -8302,7 +8308,7 @@ os.kill(pid, signal.SIGSEGV)' "${2:-}"
 # Hyprland does it), the report kept. Also past 10 s, when Quickshell restarts the shell itself.
 t_shell_crash() {
   local B=$P-crash D H out rc old p i rs rep
-  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   D=$XDG_RUNTIME_DIR/omabox/$B H=$(ob path "$B")/home
   old=$(cat "$D/run/omabox-shell.pid")
   ob restart-shell -b "$B" > "$TMP/crash.out" 2>&1 & rs=$!
@@ -8367,7 +8373,7 @@ t_shell_hung() {
   local B=$P-shhung D p p2 out rc t0 seen
   # shellcheck disable=SC2329 # called through until_ok
   shell_is() { [ "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .shell_state')" = "$1" ]; }
-  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   D=$XDG_RUNTIME_DIR/omabox/$B
   check "just up: running, not hung" shell_is running
   # A shell starting: never read as hung while restart-shell brings it up (polled all along).
@@ -8407,7 +8413,7 @@ t_shell_restart_race() {
   jq -n --arg id "$P.rr" '{schemaVersion: 1, id: $id, name: $id, version: "0.1.0", kinds: ["bar-widget"],
     entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$F/w/manifest.json"
   printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "rr" }\n}\n' > "$F/w/W.qml"
-  ob up "$B" --net isolated --plugin "$F/w" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated --plugin "$F/w" || { no "up" "$UP_OUT"; return; }
   D=$XDG_RUNTIME_DIR/omabox/$B H=$(ob path "$B")/home; S=$H/.config/omarchy/shell.json
   for d in 0 0.3 0.6 0.9 1.0 1.1 1.3 - - -; do   # (-: no kill)
     side=$([ "$side" = left ] && echo right || echo left)
@@ -8441,7 +8447,7 @@ t_shell_restart_dup() {
   # shellcheck disable=SC2016 # the launcher's
   printf '#!/bin/bash\n[ ! -e "$HOME/rd-late" ] || sleep 1\nexec /usr/bin/omarchy-launch-shell "$@"\n' > "$T/bin/omarchy-launch-shell"
   chmod +x "$T/bin/omarchy-launch-shell"
-  ob up "$B" --net isolated --omarchy "$T" >/dev/null 2>&1 || { no "up --omarchy" "failed"; return; }
+  up_ok "$B" --net isolated --omarchy "$T" || { no "up --omarchy" "$UP_OUT"; return; }
   D=$XDG_RUNTIME_DIR/omabox/$B H=$(ob path "$B")/home
   # (shell.sh removes the old pid once that shell is stopped, before it starts the launcher.)
   # shellcheck disable=SC2016 # the box's
@@ -8497,7 +8503,7 @@ no_accent() { local a; read -ra a <<< "$(accent "$@")"; echo "${a[*]}"; [ "${a[0
 # only for a host peek of the box, so a stand-in named like one relays them to the peek in the box.
 t_peek() {
   local B=$P-peek
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   local D; D=$(ob path "$B")
   local wd; wd=$(ob run -b "$B" -- sh -c 'echo $WAYLAND_DISPLAY')
   ob run -b "$B" -d -- "$ROOT/tools/peek/omabox-peek" --box "/run/user/$UID/$wd" --fps 30 --marks "/run/user/$UID/marks-in" >/dev/null 2>&1
@@ -8566,7 +8572,7 @@ t_peek_monitors() {
   local n S=$P-pkm C=$P-pkmc
   n=$(gpu_node other)
   [ -n "$n" ] || { skip "peek with monitors" "no render node here but NVIDIA's (a stand-in there is not tried; finding 234)"; return; }
-  env OMABOX_RENDER_NODE="$n" "$CLI" up "$S" --no-shell --net isolated >/dev/null 2>&1 || { no "up the stand-in" "failed"; return; }
+  OMABOX_RENDER_NODE="$n" up_ok "$S" --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
   # (The stand-in renders on that node, and so does a box in it.) The second monitor is 1280x720
   # logical, 1600x900 pixels, at 1920,0.
@@ -8792,7 +8798,7 @@ t_unit_install() {
 # (finding 64).
 t_uwsm_app() {
   local B=$P-uw
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   check_eq "session TERMINAL is Omarchy's" xdg-terminal-exec "$(ob run -b "$B" -- sh -c 'echo $TERMINAL')"
   check_eq "session EDITOR is Omarchy's" "omarchy-launch-editor --inline" "$(ob run -b "$B" -- sh -c 'echo $EDITOR')"
   # Whether the terminal applies it is xdg-terminal-exec's business (foot's entry has no
@@ -8838,7 +8844,7 @@ t_uwsm_app() {
 # running box. `omabox reload` is the way to a newer one.
 t_config_kept() {
   local B=$P-cfg E n0 out want
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   want=$(md5sum < "$ROOT/share/hyprland.lua")
   # shellcheck disable=SC2016 # the box's XDG_RUNTIME_DIR
   local copy=(ob run -b "$B" -- sh -c 'md5sum < "$XDG_RUNTIME_DIR/omabox-hyprland.lua"')
@@ -8867,7 +8873,7 @@ t_config_kept() {
 # can see what a file change does (a helper that rewrites a file the config loads reloads for ever).
 t_autoreload() {
   local B=$P-are E n0 n1
-  ob up "$B" --no-shell --net isolated --autoreload >/dev/null 2>&1 || { no "up --autoreload" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated --autoreload || { no "up --autoreload" "$UP_OUT"; return; }
   check_eq "up --autoreload: its Hyprland's autoreload is on (finding 207)" false \
     "$(ob hyprctl -b "$B" -j getoption misc:disable_autoreload | jq .bool)"
   check_eq "...ls --json says so" true "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .autoreload')"
@@ -8894,7 +8900,7 @@ t_autoreload() {
 # #128: the box's own compositor is not a test's to end by name, and a box ended from inside is said so.
 t_own_processes() {
   local B=$P-own out rc
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   check_eq "the box's labwc is named omabox-labwc (#128)" 1 "$(ob run -b "$B" -- pgrep -cx omabox-labwc)"
   check_fails "...so nothing in it is named labwc" ob run -b "$B" -- pgrep -x labwc
   check_eq "a --no-shell box: its shell none in ls --json, - in ls (#147)" "none -" \
@@ -8916,7 +8922,7 @@ t_own_processes() {
 # every process of its session and `which` tell them apart.
 t_which() {
   local B=$P-which out rc sp="" p ns
-  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
   for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
   [ -n "$sp" ] || { no "the box's shell on the host" "no quickshell in $ns"; ob down "$B" >/dev/null 2>&1; return; }
@@ -8938,7 +8944,7 @@ t_which() {
 # alone), the box HOME's host path, and the rules.
 t_brief() {
   local B=$P-brief out
-  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   out=$(ob brief -b "$B" 2>&1)
   check_match "brief: no windows yet" "none yet \\(omabox -b $B run -d --wait -- APP" "$out"
   ob run -b "$B" -d --wait -- foot --app-id t271 -T brief-one sleep 600 >/dev/null 2>&1
@@ -8960,7 +8966,7 @@ t_brief() {
 # one shell each time.
 t_omarchy_restart() {
   local B=$P-or
-  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   # shellcheck disable=SC2329 # called through check
   one_shell() { [ "$(ob run -b "$B" -- pgrep -cx quickshell)" = 1 ] && ob run -b "$B" -- omarchy-shell shell ping >/dev/null 2>&1; }
   check_eq "up runs the shell under omarchy-launch-shell, as Omarchy does (#151)" "1 1" \
@@ -9007,7 +9013,7 @@ t_widget() {
   local B=$P-wg
   # Omarchy's stock bar, not the user's (finding 151): the crops below look for the widget at the top
   # right, and a user's own layout may have the bar on a side, or the widget in a plugin of theirs.
-  ob up "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" || { no "up" "$UP_OUT"; return; }
   local H; H=$(ob path "$B")/home
   printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; n=$(cat "$HOME/hang" 2>/dev/null || echo 0); if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$HOME/hang"; [ ! -e "$HOME/hang-deaf" ] || trap "" TERM; x=$(sleep 600 | cat); fi; cat "$HOME/list.json" ;;\n  shot) echo "$*" >> "$HOME/actions"; echo "$HOME/x.png" ;;\n  config) echo "$*" >> "$HOME/actions"; cat "$HOME/config.json" 2>/dev/null || echo "{}" ;;\n  up) echo "$*" >> "$HOME/actions"; echo box-9 ;;\n  clip) echo "$*" >> "$HOME/actions"; echo "omabox: handed text (text/plain;charset=utf-8, 3 bytes) from your clipboard to box ia" >&2 ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
   printf '#!/bin/sh\necho "xdg-open $*" >> "$HOME/actions"; exec sleep 300\n' > "$H/.local/bin/xdg-open"
@@ -9198,7 +9204,7 @@ t_widget_mark() {
   [ -z "$o" ] || om=(--omarchy "$o")
   [ ! -f "${o:-/usr/share/omarchy}/shell/Ui/BarIconContent.qml" ] || fitted=yes
   note "Omarchy at ${o:-/usr/share/omarchy}, fitted bar icons: $fitted"
-  ob up "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" "${om[@]}" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" "${om[@]}" || { no "up" "$UP_OUT"; return; }
   local H; H=$(ob path "$B")/home
   printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  config) echo "{}" ;;\nesac\n' > "$H/.local/bin/omabox"
   chmod +x "$H/.local/bin/omabox"
@@ -9254,7 +9260,7 @@ t_widget_mark() {
 # give), read through the panel's inspect IPC: its rows, where each is on screen, their action slots.
 t_widget_list() {
   local B=$P-wl
-  ob up "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" || { no "up" "$UP_OUT"; return; }
   local H; H=$(ob path "$B")/home
   printf '#!/bin/sh\ncase "$1" in\n  ls) echo ls >> "$HOME/polls"; cat "$HOME/list.json" ;;\n  config) if [ "$2" = --json ]; then cat "$HOME/config.json" 2>/dev/null || echo "{}"; else echo "$*" >> "$HOME/actions"; fi ;;\n  *) echo "$*" >> "$HOME/actions" ;;\nesac\n' > "$H/.local/bin/omabox"
   chmod +x "$H/.local/bin/omabox"
@@ -9695,8 +9701,8 @@ t_record_layout_nvidia() {
 record_layout_on() {
   local n=$1 B=$2 m0=$3 m1=$4 m2=$5
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --monitor all" "no wf-recorder or ffmpeg here"; return; fi
-  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --size 1280x720 --monitor 1280x720 \
-    --monitor 1280x720,scale=2,0,720 >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
+  OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --size 1280x720 --monitor 1280x720 \
+    --monitor 1280x720,scale=2,0,720 || { no "up with two more monitors" "$UP_OUT"; return; }
   ob lua -b "$B" "hl.monitor({ output = \"$m1\", mode = \"1280x720@60\", position = \"1280x0\", scale = 1, transform = 1 })" >/dev/null 2>&1
   check "$m1 turned (transform 1)" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j monitors | jq -e 'any(.[]; .name == \"$m1\" and .transform == 1)' >/dev/null"
   local spec x y c i
@@ -9778,7 +9784,7 @@ t_record_hold() {
   [ -n "$n" ] || { skip "record --for and record hold" "no render node here but NVIDIA's"; return; }
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --for and record hold" "no wf-recorder or ffmpeg here"; return; fi
   local B=$P-rh v=$TMP/$P-rh-for.mp4 w=$TMP/$P-rh-take.mp4 out rc=0 t0 t1 a b c h e d
-  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up for record hold" "failed"; return; }
+  OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated || { no "up for record hold" "$UP_OUT"; return; }
   out=$(ob record -b "$B" hold 1s 2>&1) || rc=$?
   check_match "record hold with nothing recording: exit 2, naming record start" "^2 omabox: record hold: box '$B' is not recording \(omabox record start" "$rc $out"
   check_eq "record --for 2s prints the file" "$v" "$(ob record -b "$B" -o "$v" --for 2s 2>/dev/null)"
@@ -9810,7 +9816,7 @@ t_record_hold() {
 record_input_on() {
   local n=$1 B=$2 D v1=$TMP/$2-input.mp4 v2=$TMP/$2-glide.mp4 v3=$TMP/$2-cut.mp4 out m1 m2 c
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --show-input" "no wf-recorder or ffmpeg here"; return; fi
-  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --size 2560x1440,scale=2 >/dev/null 2>&1 || { no "up for record --show-input" "failed"; return; }
+  OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --size 2560x1440,scale=2 || { no "up for record --show-input" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   # A terminal of one colour all over (no caret, no echo), turning red on a trigger.
   ob run -b "$B" -d --wait -- foot --app-id t319 bash -c 'stty -echo; printf "\033]11;#203040\007\033[?25l\033[2J"
@@ -10032,8 +10038,8 @@ t_monitors_turned_nvidia() {
 # A terminal of its own colour on the main and third, two on the second (green above, yellow below).
 monitors_turned_on() {
   local n=$1 B=$2 m0=$3 m1=$4 m2=$5
-  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --size 1280x720 --monitor 1280x720 \
-    --monitor 1280x720,scale=2 >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
+  OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --size 1280x720 --monitor 1280x720 \
+    --monitor 1280x720,scale=2 || { no "up with two more monitors" "$UP_OUT"; return; }
   ob lua -b "$B" "hl.monitor({ output = \"$m1\", mode = \"1280x720@60\", position = \"1280x0\", scale = 1, transform = 1 })" >/dev/null 2>&1
   ob lua -b "$B" "hl.monitor({ output = \"$m2\", mode = \"1280x720@60\", position = \"2000x0\", scale = 2, transform = 3 })" >/dev/null 2>&1
   check "$m1 turned by transform 1, $m2 by 3, side by side" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j monitors |
@@ -10191,8 +10197,8 @@ t_monitors_wait_nvidia() {
 }
 monitors_wait_on() {
   local n=$1 B=$2 out rc g w when c gx gy gw gh i
-  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
-    --monitor 1080x1920,below >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
+  OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
+    --monitor 1080x1920,below || { no "up with two more monitors" "$UP_OUT"; return; }
   ob pointer -b "$B" -- move 2300 200 >/dev/null
   ob run -b "$B" -d -q -- foot -T N sh -c 'i=0; while :; do printf "\r%s" $((i++ % 10)); sleep 0.05; done'
   ob wait -b "$B" window 'title:^N$' >/dev/null
@@ -10251,7 +10257,7 @@ cell_in() {
 t_monitors_window() {
   # The stand-in at the size of the screen #174 was found on (3440x1440, scale 1).
   local S=$P-monh
-  ob up "$S" --size 3440x1440 --no-shell --net isolated >/dev/null 2>&1 || { no "up the stand-in" "failed"; return; }
+  up_ok "$S" --size 3440x1440 --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
   if aq_unfixed "${in[@]}"; then skip "monitors as windows" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
   ob run -b "$S" -d -- foot >/dev/null 2>&1
@@ -10772,7 +10778,7 @@ EOF
 # --size host still find the session. Never on the real desktop.
 t_guard() {
   local B=$P-gd
-  "${GUARDED[@]}" "$CLI" up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up under the guard" "failed"; return; }
+  UP_OUT=$("${GUARDED[@]}" "$CLI" up "$B" --no-shell --net isolated 2>&1) || { no "up under the guard" "$UP_OUT"; return; }
   check_match "run under the guard gets the box's display" '^wayland-' "$("${GUARDED[@]}" "$CLI" run -b "$B" -- sh -c 'echo $WAYLAND_DISPLAY')"
   check "hyprctl under the guard" "${GUARDED[@]}" "$CLI" hyprctl -b "$B" -j version
   check "shot under the guard" "${GUARDED[@]}" "$CLI" shot -b "$B" -o "$TMP/guard.png"
@@ -10930,9 +10936,9 @@ t_guard() {
 # what clip refuses there is what it refuses, not the suite's own caller.
 t_clip() {
   local B=$P-cl
-  ob up "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  up_ok "$B" --net isolated --stock-bar --plugin "$ROOT/plugin" || { no "up (the stand-in host)" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$B" --) H; H=$(ob path "$B")/home
-  "${in[@]}" "$CLI" up ib --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
+  UP_OUT=$("${in[@]}" "$CLI" up ib --interactive --no-shell 2>&1) || { no "up --interactive in the stand-in" "$UP_OUT"; ob down "$B" >/dev/null; return; }
   local inb=("${in[@]}" "$CLI" run -b ib --) out rc
   local wins0 aw0; wins0=$(ob hyprctl -b "$B" -j clients | jq length); aw0=$(ob hyprctl -b "$B" -j activewindow | jq -r '.address // ""')
   "${in[@]}" sh -c 'printf "p4ss w\303\266rd\n" | wl-copy'
@@ -11040,11 +11046,11 @@ t_clip() {
 # the stand-in's own keyboard presses the keys. Nothing reaches the real desktop.
 t_keys_to_box() {
   local B=$P-kb
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$B" -- "$CLI")
   check_match "keys-to-box refuses a headless box" "is headless" "$(ob keys-to-box -b "$B" on 2>&1)"
-  if ! "${in[@]}" up ka --interactive --no-shell >/dev/null 2>&1 || ! "${in[@]}" up kb --interactive --no-shell >/dev/null 2>&1; then
-    no "up --interactive twice in the stand-in" "failed"; ob down "$B" >/dev/null; return
+  if ! UP_OUT=$("${in[@]}" up ka --interactive --no-shell 2>&1) || ! UP_OUT=$("${in[@]}" up kb --interactive --no-shell 2>&1); then
+    no "up --interactive twice in the stand-in" "$UP_OUT"; ob down "$B" >/dev/null; return
   fi
   ob run -b "$B" -d -q -- foot
   # shellcheck disable=SC2329 # called through until_ok
@@ -11203,7 +11209,7 @@ t_keys_to_box() {
 # goes with the box.
 t_keys_down_up() {
   local B=$P-kdu
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   check_box_safety "$B"
   ob lua -b "$B" 'hl.bind("XF86Tools", hl.dsp.event("tools-press"))
     hl.bind("XF86Tools", hl.dsp.event("tools-release"), { release = true })
@@ -11275,21 +11281,21 @@ t_keys_down_up() {
   check "a key held at down: its holder seen" test -n "$hp"
   ob down "$B" >/dev/null
   check_fails "...gone with the box" test -e "/proc/${hp:-0}"
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up again" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up again" "$UP_OUT"; return; }
   check_match "...the next box of that name holds nothing" "up:XF86Tools: no key is held" "$(ob keys -b "$B" up:XF86Tools 2>&1)"
   ob down "$B" >/dev/null
 }
 
 t_held_keys() {
   local B=$P-hk
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$B" -- "$CLI")
   # (Asked of this omabox: the stand-in's own sees the build it binds at /opt/omabox/lib, not its name.)
   if ! ob --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+keys'; then
     skip "a key held when focus leaves an interactive box is released there" "not omabox's aquamarine build (omabox setup --aquamarine)"
     ob down "$B" >/dev/null; return
   fi
-  "${in[@]}" up hk --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
+  UP_OUT=$("${in[@]}" up hk --interactive --no-shell 2>&1) || { no "up --interactive in the stand-in" "$UP_OUT"; ob down "$B" >/dev/null; return; }
   ob run -b "$B" -d -q -- foot
   # What the box's foot is given, byte by byte, in its /tmp.
   "${in[@]}" run -b hk -d -q -- foot --app-id=omabox.typed sh -c 'stty raw -echo; dd bs=1 of=/tmp/typed 2>/dev/null'
@@ -11322,7 +11328,7 @@ t_held_keys() {
 # a bare up, or one with what it has, is fine. --json prints it as ls --json lists it.
 t_up_again() {
   local B=$P-ua out
-  ob up "$B" --net isolated --no-shell >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated --no-shell || { no "up" "$UP_OUT"; return; }
   check "up again, no options: fine" ob up "$B"
   check "...with the options it has" ob up "$B" --net isolated --no-shell
   out=$(ob up "$B" --size 1280x720 --systemd 2>&1); local rc=$?
@@ -11349,7 +11355,7 @@ t_theme_dir() {
   r=$(tmp_repo td-repo); mkdir -p "$r/themes/td-a" "$o"
   cp "$HOME/.local/state/omarchy/current/theme/colors.toml" "$r/themes/td-a/colors.toml"
   echo one > "$o/marker"
-  (cd "$r" && ob up "$B" --no-shell --theme-dir themes/td-a --theme-dir "$o") >/dev/null 2>&1 || { no "up --theme-dir" "failed"; return; }
+  (cd "$r" && up_ok "$B" --no-shell --theme-dir themes/td-a --theme-dir "$o") || { no "up --theme-dir" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   check_eq "box.json has the theme dirs, resolved" "[\"$r/themes/td-a\",\"$o\"]" "$(jq -c .theme_dirs "$D/box.json")"
   check_eq "the box HOME's themes/ links to the one in the repo" "$r/themes/td-a" "$(ob run -b "$B" -- readlink /home/sbx/.config/omarchy/themes/td-a)"
@@ -11387,7 +11393,7 @@ t_desk_backgrounds() {
   # shellcheck disable=SC2329 # called below
   fake() { env HOME="$fh" XDG_CONFIG_HOME="$fh/.config" XDG_DATA_HOME="$fh/.local/share" XDG_CACHE_HOME="$fh/.cache" \
     XDG_STATE_HOME="$fh/.local/state" "$CLI" "$@"; }
-  fake up "$B" --net isolated --stock-bar >/dev/null 2>&1 || { no "up on a fake desk" "failed"; return; }
+  UP_OUT=$(fake up "$B" --net isolated --stock-bar 2>&1) || { no "up on a fake desk" "$UP_OUT"; return; }
   check_eq "the desk's background one of the user's: the box's link leads to its copy" \
     "/home/sbx/.config/omarchy/backgrounds/tokyo-night/zz-mine.png" "$(ob run -b "$B" -- readlink -e "$cur/background")"
   check "...which is the user's image" cmp "$u/tokyo-night/zz-mine.png" "$(ob path -b "$B")/home/.config/omarchy/backgrounds/tokyo-night/zz-mine.png"
@@ -11405,7 +11411,7 @@ t_desk_backgrounds() {
   ob run -b "$B" -- omarchy-theme-set mine >/dev/null 2>&1
   check "...the user's own theme's Lua taken" ob run -b "$B" -- grep -q gaps_out "$cur/theme/hyprland.lua"
   fake down "$B" >/dev/null 2>&1
-  fake up "$B" --net isolated --stock-bar --theme nord >/dev/null 2>&1 || { no "up --theme nord on a fake desk" "failed"; return; }
+  UP_OUT=$(fake up "$B" --net isolated --stock-bar --theme nord 2>&1) || { no "up --theme nord on a fake desk" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   check_eq "up --theme nord: the user's own for nord, first of what omarchy-theme-set finds" \
     "/home/sbx/.config/omarchy/backgrounds/nord/zz-mine.png" "$(ob run -b "$B" -- readlink -e "$cur/background")"
@@ -11434,7 +11440,7 @@ t_theme() {
   }
   check_match "an unknown theme: refused" "--theme: no theme $P-nope in " "$(ob up "$B" --theme "$P-nope" 2>&1)"
   check_fails "...before the box dir is made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
-  ob up "$B" --net isolated --stock-bar --theme "$t" >/dev/null 2>&1 || { no "up --theme $t" "failed"; return; }
+  up_ok "$B" --net isolated --stock-bar --theme "$t" || { no "up --theme $t" "$UP_OUT"; return; }
   check_box_safety "$B"
   D=$(ob path -b "$B"); H=$D/home
   check_eq "box.json has the theme" "$t" "$(jq -r .theme "$D/box.json")"
@@ -11451,14 +11457,14 @@ t_theme() {
   # --from SAVE: the flag wins over the save's look.
   check "a save of it" sv save "$S" -b "$B"
   ob down "$B" >/dev/null 2>&1
-  sv up "$B2" --from "$S" --net isolated --no-shell --theme "$o" >/dev/null 2>&1 || { no "up --from with --theme" "failed"; sv saves rm "$S" >/dev/null 2>&1; return; }
+  UP_OUT=$(sv up "$B2" --from "$S" --net isolated --no-shell --theme "$o" 2>&1) || { no "up --from with --theme" "$UP_OUT"; sv saves rm "$S" >/dev/null 2>&1; return; }
   H=$(ob path -b "$B2")/home
   check_eq "up --from a save on $t with --theme $o: on $o" "$o" "$(cat "$H/.local/state/omarchy/current/theme.name")"
   check "...its colors.toml $o's" cmp "$H/.local/state/omarchy/current/theme/colors.toml" "/usr/share/omarchy/themes/$o/colors.toml"
   check_eq "...its background $o's first" "$(first_bg "$o")" "$(readlink "$H/.local/state/omarchy/current/background")"
   ob down "$B2" >/dev/null 2>&1
   # Without the flag nothing changes: the desk's theme, from a save too.
-  sv up "$B2" --from "$S" --net isolated --no-shell >/dev/null 2>&1 || { no "up --from without --theme" "failed"; sv saves rm "$S" >/dev/null 2>&1; return; }
+  UP_OUT=$(sv up "$B2" --from "$S" --net isolated --no-shell 2>&1) || { no "up --from without --theme" "$UP_OUT"; sv saves rm "$S" >/dev/null 2>&1; return; }
   D=$(ob path -b "$B2")
   check_eq "up --from without --theme: the desk's theme, as before" "$desk" "$(cat "$D/home/.local/state/omarchy/current/theme.name")"
   check "...its colors.toml the desk's" cmp "$D/home/.local/state/omarchy/current/theme/colors.toml" "$HOME/.local/state/omarchy/current/theme/colors.toml"
@@ -11479,11 +11485,11 @@ t_theme() {
 # would stay dead.
 t_submap_release() {
   local B=$P-sr
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up (the stand-in host)" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$B" -- "$CLI")
   # Another tool's host rule (finding 136): every aquamarine window floating, on a workspace of its own.
   ob hyprctl -b "$B" eval 'hl.window_rule({ name = "nested-float", match = { class = "aquamarine" }, float = true, workspace = "name:nested silent" })' >/dev/null
-  "${in[@]}" up sa --interactive --no-shell >/dev/null 2>&1 || { no "up --interactive in the stand-in" "failed"; ob down "$B" >/dev/null; return; }
+  UP_OUT=$("${in[@]}" up sa --interactive --no-shell 2>&1) || { no "up --interactive in the stand-in" "$UP_OUT"; ob down "$B" >/dev/null; return; }
   check_eq "under a host rule for every aquamarine window, the box's is still tiled on workspace 9" "9 false" \
     "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | "\(.workspace.name) \(.floating)"')"
   local pa
@@ -11509,7 +11515,7 @@ t_submap_release() {
 # left from a checkout offered to go.
 t_setup_prompts() {
   local B=$P-sp
-  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   local H; H=$(ob path "$B")/home
   # shellcheck disable=SC2329
   in_tty() { printf '%s' "$1" | ob run -b "$B" -- script -qec "$CLI setup" /dev/null 2>&1; }
@@ -11556,7 +11562,7 @@ t_omarchy_tree() {
   rm -f "$T/bin/omarchy-version"; printf '#!/bin/sh\necho omabox-tree\n' > "$T/bin/omarchy-version"; chmod +x "$T/bin/omarchy-version"
   printf '\nomabox_tree_marker = "tree"\n' >> "$T/default/hypr/bootstrap.lua"
   check_match "--omarchy refuses a folder that is not an Omarchy tree" "not an Omarchy tree \(no bin\)" "$(ob up "$B" --omarchy "$TMP" 2>&1)"
-  ob up "$B" --net isolated --omarchy "$T" >/dev/null 2>&1 || { no "up --omarchy" "failed"; return; }
+  up_ok "$B" --net isolated --omarchy "$T" || { no "up --omarchy" "$UP_OUT"; return; }
   check_box_safety "$B"
   check_eq "the box's Hyprland loaded the tree's config" tree "$(ob lua -b "$B" 'return omabox_tree_marker')"
   check_eq "...run has it as OMARCHY_PATH" "$T" "$(ob run -b "$B" -- sh -c 'echo "$OMARCHY_PATH"')"
@@ -11575,12 +11581,12 @@ t_omarchy_tree() {
   check_match "up again with another tree: refused" "--omarchy /usr/share/omarchy" "$(ob up "$B" --omarchy /usr/share/omarchy 2>&1)"
   # A box in that box, on the installed Omarchy: the outer /etc/omarchy.conf names the tree.
   local in=("$CLI" run -b "$B" -- "$CLI")
-  if "${in[@]}" up oi --no-shell >/dev/null 2>&1; then
+  if UP_OUT=$("${in[@]}" up oi --no-shell 2>&1); then
     check_eq "a box started where /etc/omarchy.conf names another tree runs the installed Omarchy" "/usr/share/omarchy" \
       "$("${in[@]}" run -b oi -- bash -ic 'echo "$OMARCHY_PATH"' 2>/dev/null)"
     "${in[@]}" down oi >/dev/null 2>&1
   else
-    no "up inside the --omarchy box" "failed"
+    no "up inside the --omarchy box" "$UP_OUT"
   fi
   ob down "$B" >/dev/null
 }
@@ -11603,7 +11609,7 @@ t_lock() {
   chmod +x "$K/check"
   printf 'auth required pam_exec.so expose_authtok quiet /opt/omabox-lockpam/check\naccount required pam_permit.so\n' \
     > "$K/omarchy-lock-password"
-  ob up "$B" --net isolated --omarchy "$T" --ro-bind "$K:/opt/omabox-lockpam" >/dev/null 2>&1 || { no "up with the lock's test PAM" "failed"; return; }
+  up_ok "$B" --net isolated --omarchy "$T" --ro-bind "$K:/opt/omabox-lockpam" || { no "up with the lock's test PAM" "$UP_OUT"; return; }
   check_box_safety "$B"
   # A terminal whose input goes to a file: anything typed into it while locked would land there.
   ob run -b "$B" -d -q --wait -- foot sh -c 'cat > "$HOME/typed"' >/dev/null 2>&1
@@ -11787,7 +11793,7 @@ t_unit_window_select() {
 # tiled terminals, a float over one, others on hidden workspaces.
 t_window() {
   local B=$P-win
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   term() { ob run -b "$B" -d -- foot -T "$1" sh -c "$2" >/dev/null; until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.title == \"$1\")'"; }
   win() { ob windows -b "$B" --json | jq -c --arg t "$1" '.[] | select(.title == $t)'; }
   addr() { win "$1" | jq -r .address; }
@@ -12024,7 +12030,7 @@ t_unit_pixel() {
 # first frame and what it changed, and click --in a frame.
 t_burst() {
   local B=$P-burst o=$TMP/burst out err rc
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   ob run -b "$B" -d -q --wait -- foot -T A cat >/dev/null 2>&1
   out=$(ob shot -b "$B" --burst 5 --every 100ms -g "0,0 200x200" -o "$o/a" 2>"$TMP/burst.err"); rc=$?; err=$(cat "$TMP/burst.err")
   check_eq "shot --burst 5 --every 100ms: exit 0, a line a frame" "0 5" "$rc $(grep -c "^$o/a/frame-00[1-5]\.png [0-9.]*s$" <<<"$out")"
@@ -12155,7 +12161,7 @@ QML
 # not scaled, and says why it has nothing to compare with.
 t_shot_fit() {
   local B=$P-sfit o=$TMP/sfit err
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   mkdir -p "$o/home/.config/omabox"; echo shot-fit=1000 > "$o/home/.config/omabox/config"
   pos() { ob hyprctl -b "$B" cursorpos; }
   err=$(OMABOX_SHOT_FIT='' HOME=$o/home "$CLI" shot -b "$B" -o "$o/set.png" 2>&1 >/dev/null)
@@ -12190,7 +12196,7 @@ t_shot_fit() {
 
 t_changed() {
   local B=$P-chg o=$TMP/chg out err rc W='title:^C$'
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   mkdir -p "$o"
   ob run -b "$B" -d -q --wait -- foot -T C -o cursor.blink=no cat >/dev/null 2>&1
   local wx wy ww wh
@@ -12266,7 +12272,7 @@ t_changed() {
 # pixel and shot --zoom (#133, finding 209) in a box: a known background, a terminal of a known colour.
 t_pixel() {
   local B=$P-pix o=$TMP/pix out
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   mkdir -p "$o"
   ob lua -b "$B" 'hl.config({ misc = { background_color = 0xff345678 } })' >/dev/null
   check_eq "pixel X Y: the screen's colour there" "#345678" "$(ob pixel -b "$B" 3 3)"
@@ -12297,7 +12303,7 @@ t_pixel() {
 t_json() {
   local B=$P-json o=$TMP/json j
   mkdir -p "$o"
-  ob up "$B" --no-shell --net isolated --allow 8093 >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated --allow 8093 || { no "up" "$UP_OUT"; return; }
   local W H; read -r W H < <(ob mode -b "$B" --json | jq -r '.mode | sub("@.*"; "") | split("x") | "\(.[0]) \(.[1])"')
   check_eq "mode --json: {name, mode, scale}" "HEADLESS-2 true 1" \
     "$(ob mode -b "$B" --json | jq -r '"\(.name | sub("WAYLAND-1"; "HEADLESS-2")) \(.mode | test("^[0-9]+x[0-9]+@")) \(.scale)"')"
@@ -12464,7 +12470,7 @@ output_on() {
 # host's) and --app; an idle box is near 0; --json has gpu's shape plus processes and a total.
 t_cpu() {
   local B=$P-cpu out j bp hp t0 t1 w0 w1 own got
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   j=$(ob cpu -b "$B" 2 --json)
   check "cpu --json parses, with gpu's fields and its own" jq -e '.box and .output and .mode and (.seconds == 2) and (.percent | type == "object")
     and (.processes | length > 0) and (.total | has("cpu") and has("rss_kb") and has("pss_kb")) and (.cores > 0) and has("render")' <<<"$j"
@@ -12542,7 +12548,7 @@ t_gdb() {
   check_match "gdb: --pid junk refused" "--pid takes a pid" "$(ob gdb -b "$P-x" --pid x 2>&1)"
   check_match "gdb: gdb's options after --" "after --" "$(ob gdb -b "$P-x" -ex bt 2>&1)"
   check "gdb is a jailed agent's" lib broker_check gdb
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   D=$(ob path "$B")
   out=$(ob gdb -b "$B" 2>&1); rc=$?
   check_eq "gdb: exit 0" 0 "$rc"
@@ -13146,7 +13152,7 @@ no_pointer_on() {
 # shift is foot's own, never reported).
 t_pointer() {
   local B=$P-ptr
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   term() { ob run -b "$B" -d -- foot -T "$1" sh -c "$2" >/dev/null; until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.title == \"$1\")'" >/dev/null; }
   addr() { ob hyprctl -b "$B" -j clients | jq -r --arg t "$1" '.[] | select(.title == $t) | .address'; }
   place() {   # place TITLE X Y: floating, 500x400 at X,Y
@@ -13598,7 +13604,7 @@ thin_check() {
 }
 t_wait() {
   local B=$P-wait out rc
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   local D; D=$(ob path "$B")
   out=$(ob wait -b "$B" still); rc=$?
   check_eq "an idle screen is still: exit 0" 0 "$rc"
@@ -13736,7 +13742,7 @@ t_wait() {
 # run -d -q / --print-log (issue #42, finding 109) and run -d --replace (issue #29, finding 110).
 t_replace() {
   local B=$P-rep out err rc D old new
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   D=$(ob path "$B")
   out=$(ob run -b "$B" -d -q --print-log --wait -- foot -T R sh -c 'sleep 600' 2>"$TMP/rep.err"); rc=$?
   check_eq "run -d -q --print-log --wait: settled" 0 "$rc"
@@ -13882,7 +13888,7 @@ t_unit_inspect() {
 # lua, log and events (issues #40, #41, #39) in a box of their own.
 t_inspect() {
   local B=$P-insp out rc
-  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   # lua (finding 106): the value, not hyprctl's "ok".
   check_eq "lua: an expression's value" 2 "$(ob lua -b "$B" '1 + 1')"
   check_eq "lua: statements, what they return, one line each" $'3\nb' "$(ob lua -b "$B" 'local a = 3; return a, "b"')"
