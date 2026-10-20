@@ -3,7 +3,15 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.8.0 — 2026-10-20
+
+Visual checks: `omabox check` compares an app's or a plugin's look with a baseline, in an `up
+--clean` box where only what is tested moves. `up --quickshell PATH` runs the box's shell on a
+Quickshell build of yours, your fonts are in every box, and `click --window` says when a toast or
+another layer covers the point it aims at. A config error no longer hangs a box, `reload` says when
+Hyprland stopped answering, `record stop` no longer waits forever on a stuck ffmpeg, `tree` puts
+what is inside a Qt Quick dialog where it is drawn, and `down` names your session's box when the
+directory's name has none.
 
 ### Added
 
