@@ -7695,6 +7695,16 @@ from them.
     (`busctl --user status org.a11y.Bus`) and reads only its own result line. Seen in a box: the
     started launcher gone, the activated one's dbus-broker-launch and dbus-broker serving the bus.
     Tests: t_dbus_user_app.
+371. **Qt 6.12 gives a wheel's notch a pixelDelta of 15** (2026-10-20, corrects finding 287's "no
+    pixelDelta"). After qt6-base and qt6-wayland 6.11.2 → 6.12.0, t_pointer's Qt Quick window got
+    `angleDelta 120, pixelDelta 15` for each `--source wheel` notch, where it had 0. The compositor
+    sends the same as before (Qt's WAYLAND_DEBUG in a box: `axis(…, 0, -15)`, `axis_source(0)`
+    (wheel), `axis_value120(0, -120)`, `frame`): Qt now passes the axis value on as pixels for a
+    wheel too, so a real mouse's wheel on the desktop gets them as well (assumed: not measured on
+    real hardware), and an app that prefers pixelDelta when it is not zero scrolls 15 px a notch
+    instead of its line step. QTBUG-112432 still holds: the device is still the seat's touchpad and
+    a WheelHandler at its default acceptedDevices still takes nothing. `help scroll` says it; the
+    checks take 0 or 15. Tests: t_pointer.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

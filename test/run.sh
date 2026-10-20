@@ -12097,8 +12097,9 @@ t_pointer() {
     local qx; qx=$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.title == "qtwheel") | .size[0] * 3 / 4 | floor')
     ob scroll -b "$B" --window qtwheel "$qx" 100 -30 --source wheel >/dev/null
     check "Qt: --source wheel, two notches" until_ok 5 bash -c "grep -ac '^qml: t214 ' '$qlog' | grep -qx 2"
-    check_eq "...each a wheel's (angle 120, no pixels, no phase), from Qt's one pointing device, its touchpad (QTBUG-112432: if Mouse, help scroll's Qt note is stale)" \
-      "120 0 0 touchpad,120 0 0 touchpad" "$(qw)"
+    # Pixels: none before Qt 6.12, the notch's 15 from it (finding 371).
+    check_match "...each a wheel's (angle 120, pixels 0 or 15, no phase), from Qt's one pointing device, its touchpad (QTBUG-112432: if Mouse, help scroll's Qt note is stale)" \
+      '^120 (0|15) 0 touchpad,120 (0|15) 0 touchpad$' "$(qw)"
     q0=$(grep -ac '^qml: t214' "$qlog"); ob scroll -b "$B" --window qtwheel "$qx" 100 30 --source finger >/dev/null
     until_ok 5 grep -aq ' 3 touchpad$' "$qlog" >/dev/null
     check_match "Qt: --source finger is a touchpad's: pixel deltas in a scroll's updates (phase 2), then its end (3); it came as a wheel's notches before #214" \
@@ -12107,7 +12108,7 @@ t_pointer() {
     q0=$(grep -ac '^qml: t214' "$qlog"); ob scroll -b "$B" --window qtwheel 100 100 -30 --source wheel >/dev/null
     ob scroll -b "$B" --window qtwheel "$qx" 100 -15 --source wheel >/dev/null
     until_ok 5 bash -c "[ \$(grep -ac '^qml: t214' '$qlog') -gt $q0 ]" >/dev/null
-    check_eq "...a WheelHandler as Qt makes it takes none of it, a wheel's included (QTBUG-112432)" "120 0 0 touchpad" "$(qw)"
+    check_match "...a WheelHandler as Qt makes it takes none of it, a wheel's included (QTBUG-112432)" '^120 (0|15) 0 touchpad$' "$(qw)"
   else skip "Qt: what a Qt Quick app gets from scroll (#214)" "no /usr/lib/qt6/bin/qml"; fi
   ob down "$B" >/dev/null
 }
