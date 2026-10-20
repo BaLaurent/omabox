@@ -3,7 +3,12 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.9.2 — 2026-10-20
+
+A fix to the agent guard for hosts on Omarchy 4.5 (its release candidates and the edge channel):
+without it, a guarded agent could reach your desktop's shell through `omarchy-shell`. Run `omabox
+guard on` once after updating. Also: a box's shell is no longer killed now and then as it starts
+under load.
 
 ### Fixed
 
