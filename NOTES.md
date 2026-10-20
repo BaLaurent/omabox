@@ -8411,6 +8411,25 @@ from them.
     module-rt has no `module.rt` condition) would still get 0/0. Tests: t_omarchy_restart (the
     shell's RLIMIT_RTTIME holds unlimited once its PipeWire service has tried to connect; it read
     0/0 before).
+407. **A box's Xwayland kept no 1-byte core limit: its `-core` raised it** (2026-10-20, #294). A box
+    going down (its Hyprland killed after a hang) showed on the desktop as "Process crashed:
+    Xwayland": the journal's entry had `COREDUMP_RLIMIT=18446744073709551615`, SIGABRT, the command
+    line `Xwayland :0 -rootless -core -listenfd …`. Everything in a box runs under `prlimit
+    --core=1:` (finding 67), which lowers only the soft limit; Hyprland starts Xwayland as `/bin/sh -c
+    "exec Xwayland {} -rootless -core …"` (its format string, read from the binary: by name, through
+    Hyprland's PATH), and xserver's `-core` sets the soft limit to the hard one (os/utils.c). When the
+    compositor goes, Xwayland's fatal error ("Couldn't add screen") aborts, and with no limit left
+    systemd-coredump records it. **Fix**: `share/bin/Xwayland`, first on every box PATH (session.sh,
+    and hyprland.lua puts the stand-ins first again after Omarchy's envs), execs the next Xwayland on
+    PATH under `prlimit --core=1:1`: the hard limit 1 byte too, so `-core` raises the soft one to 1.
+    A soft limit other than 1 byte is not omabox's (a Hyprland given `ulimit -c unlimited` on
+    purpose, the core a #135 debugging session wants): passed on as it is. Lowering the hard limit
+    for the whole box would have done it too, but takes away `ulimit -c unlimited` inside (the
+    skill's way to get a core). Checked in a real box (`up --xwayland`): Xwayland's
+    `/proc/PID/limits` 1 1 (Hyprland's 1 unlimited); its Hyprland SIGKILLed from inside, Xwayland
+    aborted and the kernel logged `106(Xwayland): RLIMIT_CORE is set to 1, aborting core`, no new
+    entry in `coredumpctl list`. Tests: t_unit_xwayland (a fake Xwayland next on PATH gets 1/1, and
+    unlimited/unlimited passed on), t_keys (the running Xwayland's limits).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

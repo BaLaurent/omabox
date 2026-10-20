@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# omabox stand-in for Xwayland, first on the box's PATH (#294, NOTES finding 407). Everything in a box
+# runs with a core limit of 1 byte, so a crash there never reaches the user's desktop as a "Process
+# crashed" notification (nocore, finding 67), but Hyprland starts Xwayland by name with `-core`
+# (`/bin/sh -c "exec Xwayland ... -core ..."`), and xserver's -core raises the soft limit to the hard
+# one (unlimited): a box going down made its Xwayland abort with a core dump the desktop announced.
+# Here the hard limit goes to 1 byte too, so -core cannot raise it. A soft limit other than 1 byte is
+# not omabox's: cores asked for on purpose (the box's Hyprland given `ulimit -c unlimited`, a gdb
+# session's; finding 211), passed on as it is.
+set -uo pipefail
+self=$(readlink -f -- "${BASH_SOURCE[0]}")
+# The real one: the next Xwayland on PATH (a build of the user's), else the system's.
+real=/usr/bin/Xwayland
+IFS=: read -ra dirs <<< "${PATH:-}"
+for d in "${dirs[@]}"; do
+  case $d in /*) ;; *) continue ;; esac
+  [ -f "$d/Xwayland" ] && [ -x "$d/Xwayland" ] || continue
+  [ "$(readlink -f -- "$d/Xwayland")" != "$self" ] || continue
+  real=$d/Xwayland; break
+done
+soft=""
+while read -r l; do
+  [[ $l == "Max core file size "* ]] || continue
+  read -r -a f <<< "${l#Max core file size }"; soft=${f[0]}; break
+done < /proc/self/limits
+[ "$soft" != 1 ] || exec prlimit --core=1:1 -- "$real" "$@"
+exec "$real" "$@"

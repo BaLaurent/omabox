@@ -13,6 +13,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   kernel kills such a process the moment a thread of it is boosted to a realtime priority, which
   happens under load. PipeWire's clients in a box no longer load that module, so the limit stays
   unlimited.
+- **A box going down could show on your desktop as "Process crashed: Xwayland"** (`up --xwayland`).
+  Hyprland starts Xwayland with `-core`, which raised its core limit back past the 1 byte everything
+  in a box gets, so its abort when the box's compositor went was recorded as a crash. A box's Xwayland
+  now keeps the 1-byte limit (unless you raised it yourself).
 
 ## 0.9.1 — 2026-10-20
 
