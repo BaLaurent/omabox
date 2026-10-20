@@ -62,7 +62,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 
 | Command | Shape |
 |---|---|
-| `up --json`, `ls --json` | a box (an array of them for `ls`): `name, state, mode, size, scale, created, dir, net, allowed, addrs, idle, plugins, plugin_status, bar, theme, render, monitors, hyprland_version, quickshell_version, omarchy_version, aquamarine, clean, starter, hung, peeking, keys_to_box, shell_state, shell_crashes, orphan` and more; `allow` (a comma string) goes in 1.0 for `allowed` |
+| `up --json`, `ls --json` | a box (an array of them for `ls`): `name, state, mode, size, scale, created, dir, net, allowed, addrs, idle, plugins, plugin_status, bar, theme, render, monitors, hyprland_version, quickshell_version, omarchy_version, aquamarine, clean, starter, hung, peeking, keys_to_box, shell_state, shell_crashes, orphan` and more |
 | `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, certain` (false: a full-screen layer, which takes input only where its items are, so it may not cover the window at all) |
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
@@ -78,10 +78,10 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `gpu --json` | `box, seconds, source, render, percent, engines` and more |
 | `cpu --json` | `box, seconds, settle, cores, percent, processes, total` and more |
 | `audio --json` | `box, seconds, sound, sound_s, peak_db, rms_db, spans, levels` and more |
-| `ports --json` | an array: `box, port, addresses, process, host`; `address` (the same list) goes in 1.0 |
+| `ports --json` | an array: `box, port, addresses, process, host` |
 | `path --logs --json` | `{NAME: PATH}`, each log there is |
 | `saves --json` | an array: `name, box, saved, size, size_kb, keyring` |
-| `config --json` | `workspace, confirm_close, bar_icon, gpu, shot_fit, confirm_close_available, version, gpus, gpu_auto, gpu_now`; the kebab-case copies (`bar-icon`, `gpu-now`...) go in 1.0 |
+| `config --json` | `workspace, confirm_close, bar_icon, gpu, shot_fit, confirm_close_available, version, gpus, gpu_auto, gpu_now` |
 | `calibrate --answer --json` | `result` (one, fit, up, none), `card, marks, scale, fit, fit_size, error_px, worst, off, shot_fit` |
 | `which --json` | `pid, box, by` (pidns or env; `box` null: not in one) |
 | `--version --json` | `version, aquamarine` (`kind, version, fixed, message`) |
@@ -458,9 +458,9 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
 - `omabox drag [--window SEL | --in SHOT] X1 Y1 X2 Y2 [BTN] [--steps 10] [--hold DURATION]
   [--mod MODS] [--shot FILE | --wait]`: press at the first point, move to the second in steps, hold
   there `--hold` (a drop target reacting to the hover), release. `--hold` is a duration, `300ms` or
-  `2s` (a bare number is seconds, up to 60s), as every duration is: `300ms`, `1.5s`, `2m`, `1h`. Two
-  exceptions until 1.0 refuses them, each warned: `keys -s 300` and `pointer sleep 300` are still
-  milliseconds (write `-s 300ms`, `sleep 300ms`), and `up --idle 45` minutes (write `45m`).
+  `2s` (a bare number is seconds, up to 60s), as every duration is: `300ms`, `1.5s`, `2m`, `1h`.
+  `keys -s 300`, `pointer sleep 300` and `up --idle 45` are refused (milliseconds and minutes up to
+  0.9): write the unit.
   `--shot FILE` takes a shot while the button is still down (a drag's own feedback); `--wait`
   ignores the cursor along the path, so a change wholly under it may not count. Both points are
   mapped as for `click`. It jumps to the first point: to get there on foot, `pointer --steps N --

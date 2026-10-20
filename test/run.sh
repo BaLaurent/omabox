@@ -745,7 +745,7 @@ t_unit_record() {
 }
 
 # One duration grammar (#273, finding 385): ms, s, m, h, decimals, a bare number seconds; the bare
-# numbers that meant minutes or milliseconds up to 0.8.0 still do, each with a warning naming the unit.
+# numbers that meant minutes or milliseconds up to 0.8.0 are refused since 1.0 (#287), naming the unit.
 t_unit_duration() {
   check_eq "ms_duration: 300ms 2 1.5s 2m 1h 1.5h" "300 2000 1500 120000 3600000 5400000" \
     "$(for v in 300ms 2 1.5s 2m 1h 1.5h; do lib ms_duration "$v"; done | paste -sd ' ')"
@@ -756,47 +756,50 @@ t_unit_duration() {
     "$(for v in 5 1.5s 500ms 2m; do lib s_duration "$v"; done | paste -sd ' ')"
   check_eq "...0 in any unit when let in" "0 0" "$(lib s_duration 0 zero) $(lib s_duration 0s zero)"
   check_fails "...not otherwise" lib s_duration 0
-  # up --idle: units; a bare number other than 0 is minutes, warned.
+  # up --idle: units; a bare number other than 0 (minutes up to 0.8.0) is refused, naming the unit.
   check_eq "idle 90s 30m 2h 1.5h 0 0s" "90 1800 7200 5400 0 0" \
     "$(for v in 90s 30m 2h 1.5h 0 0s; do lib idle_duration "$v" "--idle "; done 2>/dev/null | paste -sd ' ')"
   check_eq "...500ms rounds up to a second" 1 "$(lib idle_duration 500ms "--idle ")"
-  check_eq "...a bare 45 is still minutes" 2700 "$(lib idle_duration 45 "--idle " 2>/dev/null)"
-  check_eq "...warned, naming what to write" \
-    "omabox: warning: --idle 45 is minutes, where a bare number is seconds everywhere else; write --idle 45m (refused in 1.0)" \
-    "$(lib idle_duration 45 "--idle " 2>&1 >/dev/null)"
-  check_match "...OMABOX_IDLE's in its own words" "warning: OMABOX_IDLE=010 is minutes.*write OMABOX_IDLE=10m \(refused in 1.0\)" \
+  local out rc
+  out=$(lib idle_duration 45 "--idle " 2>&1); rc=$?
+  check_eq "...a bare 45: refused (2), one line naming what to write, nothing read" \
+    "2|omabox: --idle 45 is refused since 1.0 (a bare number was minutes there, and is seconds everywhere else): write --idle 45m" "$rc|$out"
+  check_match "...OMABOX_IDLE's in its own words, leading zero decimal" "OMABOX_IDLE=010 is refused since 1\.0 .*: write OMABOX_IDLE=10m$" \
     "$(lib idle_duration 010 OMABOX_IDLE= 2>&1 >/dev/null)"
-  check_eq "...leading zero is decimal (010 = 10 min)" 600 "$(lib idle_duration 010 OMABOX_IDLE= 2>/dev/null)"
-  check_eq "...0 and a unit: no warning" "" "$(lib idle_duration 0 "--idle " 2>&1 >/dev/null; lib idle_duration 2h "--idle " 2>&1 >/dev/null)"
+  check_eq "...0 and a unit: nothing said" "" "$(lib idle_duration 0 "--idle " 2>&1 >/dev/null; lib idle_duration 2h "--idle " 2>&1 >/dev/null)"
   check_fails "...a bare 1.5 (never an --idle: not read as seconds either)" lib idle_duration 1.5 "--idle "
   check_fails "...2d refused" lib idle_duration 2d "--idle "
   check_match "up --idle junk: refused, naming the forms" "up: --idle takes a duration like 30m, 2h or 90s, or 0 \(never\), got soon" \
     "$(ob up "$P-d1" --idle soon --confirm-close 2>&1)"
   check_match "...OMABOX_IDLE junk: named as such" "up: OMABOX_IDLE= takes a duration.*got soon" \
     "$(OMABOX_IDLE=soon ob up "$P-d1" --confirm-close 2>&1)"
-  check_match "...a bare --idle warned by up itself (then --confirm-close without --interactive stops it)" \
-    "warning: --idle 45 is minutes.*45m \(refused in 1.0\)" "$(ob up "$P-d1" --idle 45 --confirm-close 2>&1)"
-  check_match "check run --idle: warned there (its box's up writes to a log)" "warning: --idle 5 is minutes" \
-    "$(ob check run --idle 5 --bogus 2>&1)"
+  out=$(ob up "$P-d1" --idle 45 --confirm-close 2>&1); rc=$?
+  check_eq "...a bare --idle refused by up itself, exit 2, one line" \
+    "2|omabox: --idle 45 is refused since 1.0 (a bare number was minutes there, and is seconds everywhere else): write --idle 45m" "$rc|$out"
+  check_eq "...OMABOX_IDLE=45 too" "2" "$(OMABOX_IDLE=45 ob up "$P-d1" --confirm-close >/dev/null 2>&1; echo $?)"
+  check_eq "...run --idle 45: run's own failure, 125" "125" "$(ob run --idle 45 -- true >/dev/null 2>&1; echo $?)"
+  out=$(ob check run --idle 5 --bogus 2>&1); rc=$?
+  check_match "check run --idle 5: refused there, exit 2, before the options after it" "^2\|omabox: --idle 5 is refused since 1\.0 .*write --idle 5m$" "$rc|$out"
   check_match "OMABOX_READY_TIMEOUT junk: refused before a box starts" "OMABOX_READY_TIMEOUT takes a duration, like 30s or 2m.*got soon" \
     "$(OMABOX_READY_TIMEOUT=soon ob up "$P-d1" --confirm-close 2>&1)"
   check_eq "...30s and 1.5m are whole seconds" "30 90" \
     "$(lib eval 'READY_TIMEOUT=30s; ready_timeout; a=$READY_TIMEOUT; READY_TIMEOUT=1.5m; ready_timeout; echo "$a $READY_TIMEOUT"')"
-  # keys -s and pointer sleep: units; a bare whole number is still ms, warned; usage errors exit 2.
+  # keys -s and pointer sleep: units; a bare whole number (ms up to 0.8.0) is refused; usage errors exit 2.
   check_eq "pause_ms: 300ms 1.5s 0 2m" "300 1500 0 120000" \
     "$(for v in 300ms 1.5s 0 2m; do lib pause_ms "keys -s" "$v"; done 2>/dev/null | paste -sd ' ')"
-  check_eq "...a bare 300 is still ms" 300 "$(lib pause_ms "keys -s" 300 2>/dev/null)"
-  check_eq "...warned, naming what to write" \
-    "omabox: warning: keys -s 300: a bare number is milliseconds here, seconds everywhere else; write keys -s 300ms (refused in 1.0)" \
-    "$(lib pause_ms "keys -s" 300 2>&1 >/dev/null)"
-  check_match "...pointer sleep's in its words" "warning: pointer sleep 50: .*write pointer sleep 50ms \(refused in 1.0\)" \
+  check_match "...a bare 300: refused (2), naming what to write, nothing read" \
+    "^2 omabox: keys -s 300 is refused since 1\.0 \(a bare number was milliseconds there, and is seconds everywhere else\): write keys -s 300ms" \
+    "$(out=$(lib pause_ms "keys -s" 300 2>&1); echo "$? $out")"
+  check_match "...pointer sleep's in its words" "pointer sleep 50 is refused since 1\.0 .*write pointer sleep 50ms" \
     "$(lib pause_ms "pointer sleep" 50 2>&1 >/dev/null)"
-  local v out; for v in 1.5 -1 11m 600001 x; do
+  local v; for v in 1.5 -1 11m x; do
     check_match "...$v refused, exit 2" "^2 omabox: keys -s takes a duration up to 10m, like 300ms or 1.5s, got $v$" \
       "$(out=$(lib pause_ms "keys -s" "$v" 2>&1); echo "$? $out")"
   done
   check_match "keys -s 1.5: refused before any box is asked" "keys -s takes a duration.*got 1.5" "$(ob keys -b "$P-nope" -s 1.5 a 2>&1)"
-  check_match "keys -s 300: warned before any box is asked" "warning: keys -s 300: .*300ms" "$(ob keys -b "$P-nope" -s 300 a 2>&1)"
+  check_match "keys -s 300: refused before any box is asked" "^omabox: keys -s 300 is refused since 1\.0 .*300ms" "$(ob keys -b "$P-nope" -s 300 a 2>&1)"
+  check_match "pointer -- sleep 300: refused before any box is asked" "^omabox: pointer sleep 300 is refused since 1\.0 .*300ms" \
+    "$(ob pointer -b "$P-nope" -- sleep 300 2>&1)"
   check_match "keys -t -s still types -s (a value is -t's, whatever it looks like)" "no box .$P-nope. is up" \
     "$(ob keys -b "$P-nope" -t -s 2>&1)"
   check_match "pointer -- sleep 2x: refused" "pointer sleep takes a duration.*got 2x" "$(ob pointer -b "$P-nope" -- sleep 2x 2>&1)"
@@ -808,13 +811,15 @@ t_unit_duration() {
 # stopped before any box is asked.
 t_unit_flag_forms() {
   local out
-  out=$(ob up "$P-f1" -i --bogus 2>&1)
-  check_match "up -i: warned, naming --interactive" "warning: up -i: -i is ignore-case elsewhere \(log, events\); write up --interactive \(refused in 1.0\)" "$out"
-  check_match "...and still read (then the unknown option stops it)" "up: unknown option --bogus" "$out"
-  check_eq "...--interactive: no warning" "" "$(ob up "$P-f1" --interactive --bogus 2>&1 | grep warning)"
-  check_match "save -f: warned, naming --force" "warning: save -f: -f is follow elsewhere \(log, events\); write save --force \(refused in 1.0\)" \
-    "$(ob save -f --bogus 2>&1)"
-  check_eq "...--force: no warning" "" "$(ob save --force --bogus 2>&1 | grep warning)"
+  local rc
+  out=$(ob up "$P-f1" -i --bogus 2>&1); rc=$?
+  check_eq "up -i: refused (2), one line naming --interactive (#287)" \
+    "2|omabox: up -i is refused since 1.0: write up --interactive (-i is ignore-case in log and events) (omabox help up)" "$rc|$out"
+  check_match "...--interactive: read (then the unknown option stops it)" "up: unknown option --bogus" "$(ob up "$P-f1" --interactive --bogus 2>&1)"
+  out=$(ob save -f --bogus 2>&1); rc=$?
+  check_eq "save -f: refused (2), one line naming --force" \
+    "2|omabox: save -f is refused since 1.0: write save --force (-f is follow in log and events) (omabox help save)" "$rc|$out"
+  check_match "...--force: read" "save: unknown option --bogus" "$(ob save --force --bogus 2>&1)"
   local c a; for c in "click 1 2" "scroll 1 2 3" "pointer move 1 2" "drag 1 2 3 4"; do
     read -ra a <<<"$c"
     check_match "${a[0]} --active is --window active" "${a[0]}: --in or --window, not both" "$(ob "${a[0]}" -b "$P-nope" --active --in x.png "${a[@]:1}" 2>&1)"
@@ -828,10 +833,10 @@ t_unit_flag_forms() {
     "$(ob check point id1 -o "$TMP/cp" --timeout soon 2>&1; echo "$?")"
   check_match "...11m too" "check point: --timeout takes a duration up to 10m" "$(ob check point id1 -o "$TMP/cp" --timeout 11m 2>&1)"
   check_match "events --grep -i RE, as log takes it" "no box .$P-nope. is up" "$(ob events -b "$P-nope" --grep -i x 2>&1)"
-  check_match "shot with two files: warned, the last taken" "warning: shot: two files, a.png and b.png: the last is taken; name one \(refused in 1.0\)" \
-    "$(ob shot -b "$P-nope" a.png -o b.png 2>&1)"
-  check_eq "...one: no warning" "" "$(ob shot -b "$P-nope" -o b.png 2>&1 | grep warning)"
-  check_match "calibrate with two cards: warned" "warning: calibrate: two files, a.png and b.png" "$(ob calibrate a.png -o b.png --bogus 2>&1)"
+  out=$(ob shot -b "$P-nope" a.png -o b.png 2>&1); rc=$?
+  check_match "shot with two files: refused (2), before any box is asked" "^2\|omabox: shot: two files, a.png and b.png: name one \(refused since 1\.0, where the last was taken\)" "$rc|$out"
+  check_match "...one: the box is asked" "no box .$P-nope. is up" "$(ob shot -b "$P-nope" -o b.png 2>&1)"
+  check_match "calibrate with two cards: refused" "^omabox: calibrate: two files, a.png and b.png: name one" "$(ob calibrate a.png -o b.png --bogus 2>&1)"
 }
 
 # #273 part B: one meaning per exit code. A usage error (an unknown option or word, a value missing
@@ -909,7 +914,7 @@ t_unit_exit_codes() {
   check_match "--opt=value reaches the parser: shot --fit=abc" "shot: --fit takes the longest side.*got abc" "$(ob shot --fit=abc 2>&1)"
   check_match "...--box=NAME, after the command and before it" "no box .$P-nope. is up.*no box .$P-nope. is up" \
     "$(ob windows --box="$P-nope" 2>&1; ob --box="$P-nope" windows 2>&1)"
-  check_match "...up --idle=45 is up --idle 45 (warned)" "warning: --idle 45 is minutes" "$(ob up "$P-x1" --idle=45 --confirm-close 2>&1)"
+  check_match "...up --idle=45 is up --idle 45 (refused since 1.0)" "--idle 45 is refused since 1\.0" "$(ob up "$P-x1" --idle=45 --confirm-close 2>&1)"
   # run (audit X3): its own failures 125, whatever they are, so the command's codes are its own.
   for args in "run --bogus -- true" "run" "run --wait -- true" "run -b $P-nope -- true" "run -d -b $P-nope -- true" "run --env=BAD -- true" \
       "run -b -bad -- true"; do
@@ -923,7 +928,10 @@ t_unit_exit_codes() {
   # The refusals that did not name the fix (audit E3-E22).
   check_match "a bad box name: what one is (E3), exit 2" "windows: bad box name -bad: a box name starts with a letter or digit, then letters, digits, \. _ - \(40 at most\).*"$'\n'"2$" \
     "$(ob windows -b -bad 2>&1; echo $?)"
-  check_match "...a name given with other characters: warned, written to fit" "warning: box name 'a b' is written 'a-b': .*\(refused in 1\.0\)" "$(ob windows -b "a b" 2>&1)"
+  check_match "...a name given with other characters: refused (2), naming the one that fits (#287)" \
+    "^omabox: windows: box name 'a b': a box name is letters, digits, \. _ - \(40 at most\): write a-b \(omabox help windows\)"$'\n'"2$" \
+    "$(ob windows -b "a b" 2>&1; echo $?)"
+  check_match "...one past 40 characters too" "write $(printf 'a%.0s' {1..40})" "$(ob windows -b "$(printf 'a%.0s' {1..41})" 2>&1)"
   check_match "a box's name where no word goes: -b named (E4)" "windows: unexpected e4box \(box 'e4box'\? a box goes with -b: -b e4box\)" \
     "$(mkdir -p "$TMP/bx/e4box"; lib eval "BOXES=$TMP/bx; PARSING=1; MAIN_CMD=windows; unexpected windows e4box" 2>&1)"
   check_match "keys with nothing to send: by example (E8)" "keys: nothing to send: a combo \(keys super\+space\), text \(keys -t hello\)" "$(ob keys 2>&1)"
@@ -956,8 +964,7 @@ t_unit_cli_contract() {
   done
   check_eq "every option in a command's help lines is in its CMD_OPTS" "" "$bad"
   # The other way (#273, part C): every option a command takes is in its help (its lines or its
-  # paragraphs: an alias, -o or --output, said once there), but the deprecated forms 0.9 warns (up -i,
-  # save -f, keys --delay), which help never shows; check's UP OPTIONS are up's, documented there.
+  # paragraphs: an alias, -o or --output, said once there); check's UP OPTIONS are up's, documented there.
   # Both forms (#269): the short one, which agents read, and --long.
   local o h up f; bad=""
   up=$(lib eval 'echo $UP_BOX_OPTS' | tr ' ' '\n' | sed 's/=$//')
@@ -965,7 +972,6 @@ t_unit_cli_contract() {
     for f in "" --long; do
       h=$(ob help "$c" ${f:+"$f"})
       for o in $(lib cmd_opts "$c" | sed 's/[=?]$//'); do
-        case "$c $o" in "up -i"|"save -f"|"keys --delay") continue ;; esac
         [[ $h != *"UP OPTIONS"* ]] || ! grep -qx -- "$o" <<<"$up" || continue
         grep -qE -- "(^|[^a-zA-Z0-9-])$o([^a-zA-Z0-9-]|\$)" <<<"$h" || bad+=" $c${f:+ $f} $o;"
       done
@@ -1072,7 +1078,8 @@ t_unit_json() {
     "$("$CLI" click --window foo --wait -g "0,0 9x9" --ignore "1,1 2x2" 1 1 -b "$P-nobox" 2>&1)"
   check_fails "...wait still --ignore without --window: no warning" grep -q warning <<<"$("$CLI" wait still --ignore "1,1 2x2" -b "$P-nobox" 2>&1)"
   check_fails "...click --window --wait with no region: none" grep -q warning <<<"$("$CLI" click --window foo --wait 1 1 -b "$P-nobox" 2>&1)"
-  check_match "keys --delay: warned, refused in 1.0" "warning: keys --delay: .*-s DURATION \(refused in 1.0\)" "$("$CLI" keys --delay 5 a -b "$P-nobox" 2>&1)"
+  local out; out=$("$CLI" keys --delay 5 a -b "$P-nobox" 2>&1); rc=$?
+  check_match "keys --delay: refused (2), naming -s DURATION (#287)" "^2\|omabox: keys --delay is refused since 1\.0: for a pause between keys, -s DURATION" "$rc|$out"
   # The promise written down: each command that takes --json has its row in the reference's JSON table.
   local tab c bad=""
   tab=$(awk '/^## JSON$/ {on = 1; next} on && /^## / {exit} on && /^\| `/' "$ROOT/skill/reference.md")
@@ -1333,7 +1340,7 @@ t_unit_refusals() {
   done
   check_match "--addr outside the documentation ranges refused" "documentation range.*got 10.1.2.3" "$(ob up "$P-r28" --net isolated --addr 10.1.2.3 2>&1)"
   check_match "--addr needs --net isolated" "--addr needs --net isolated" "$(ob up "$P-r29" --addr 203.0.113.10 2>&1)"
-  check_match "a box name with characters it cannot have: said as written (#107)" "warning: box name '$P-r27 x!' is written '$P-r27-x-': .*\(refused in 1\.0\)" \
+  check_match "a box name with characters it cannot have: refused, naming the one that fits (#107, #287)" "up: box name '$P-r27 x!': .*: write $P-r27-x-" \
     "$(ob up "$P-r27 x!" --net isolated --allow 0 2>&1)"
   local r; for r in 21 22 23 24 25 26 27-x- 28 29; do check_fails "...no box dir or lock for $P-r$r" test -e "$XDG_RUNTIME_DIR/omabox/$P-r$r" -o -e "$XDG_RUNTIME_DIR/omabox/.lock-$P-r$r"; done
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-r" || true)
@@ -1677,9 +1684,7 @@ t_unit_config() {
   check_eq "--json for the widget: snake_case keys (#273, audit N1)" '{"workspace":"special:omabox","confirm_close":"on","bar_icon":"auto","gpu":"auto","shot_fit":"off"}' \
     "$(jq -c '{workspace, confirm_close, bar_icon, gpu, shot_fit}' <<<"$cj")"
   check_eq "...the read-only ones too" "boolean string" "$(jq -r '"\(.confirm_close_available | type) \(.version | type)"' <<<"$cj")"
-  check_eq "...0.8's kebab-case keys beside them, the same values, until 1.0" "true" \
-    "$(jq '.["confirm-close"] == .confirm_close and .["bar-icon"] == .bar_icon and .["shot-fit"] == .shot_fit
-      and .["confirm-close-available"] == .confirm_close_available and .["gpu-auto"] == .gpu_auto and .["gpu-now"] == .gpu_now' <<<"$cj")"
+  check_eq "...0.8's kebab-case keys gone since 1.0 (#287)" "[]" "$(jq -c '[keys[] | select(test("-"))]' <<<"$cj")"
   local bad; for bad in 0 100 "3 silent" "special:a'b" "special:" "1;x" "special:$(printf 'x%.0s' {1..33})"; do
     check_fails "workspace '$bad' refused" env HOME="$h" "$CLI" config workspace "$bad"
   done
@@ -5310,8 +5315,8 @@ t_ports() {
   check_eq "...a box's server reaches the host as its own" "this $A" "$(q "$A" "$own")"
   check_eq "...a port two boxes serve on names both, for each" "shared $A,$B|shared $A,$B" "$(q "$A" "$shared")|$(q "$B" "$shared")"
   check_eq "...a server on ::1 only: this box holds the port, and resets" "this-resets $A" "$(q "$A" "$local6")"
-  check_eq "...addresses, a list, beside address, the same (#273: address goes in 1.0)" "true" \
-    "$(jq 'length > 0 and all(.[]; (.addresses | type == "array") and .addresses == .address)' <<<"$out")"
+  check_eq "...addresses, a list; address (0.9's copy) gone since 1.0 (#287)" "true" \
+    "$(jq 'length > 0 and all(.[]; (.addresses | type == "array") and (has("address") | not))' <<<"$out")"
   check_eq "...the host's server mirrored into a box is not the box's" "" "$(q "$B" "$hostp")"
   out=$(ob ports -b "$B")
   check_match "ports -b lists that box only" "^BOX .*"$'\n'"$B +$shared +0\.0\.0\.0 +python3? +one of $A, $B" "$out"
@@ -7172,12 +7177,12 @@ t_unit_aquamarine() {
   # The widget's confirm-close switch reads this (greyed while false).
   if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
     check_eq "config --json: confirm-close unavailable without the fix" false \
-      "$(HOME=$d/home OMABOX_AQUAMARINE=system "$CLI" config --json | jq '."confirm-close-available"')"
+      "$(HOME=$d/home OMABOX_AQUAMARINE=system "$CLI" config --json | jq .confirm_close_available)"
   fi
   if aq_unfixed "$CLI"; then
     skip "config --json: confirm-close available with the fix" "boxes use an aquamarine without it"
   else
-    check_eq "config --json: confirm-close available with the fix" true "$(HOME=$d/home "$CLI" config --json | jq '."confirm-close-available"')"
+    check_eq "config --json: confirm-close available with the fix" true "$(HOME=$d/home "$CLI" config --json | jq .confirm_close_available)"
   fi
   check_match "setup: an unknown option, refused before anything is done" "unknown option --nope" "$("$CLI" setup --aquamarine --nope 2>&1)"
 }
@@ -7310,7 +7315,7 @@ aq_symbol_checks() {
     [ -e "$d/$dir/$so" ] || continue
     if [ "$(sys "$d/$dir" | cut -d'|' -f3)" = 1 ]; then avail=true refused=0; else avail=false refused=1; fi
     check_eq "the $dir system's: config --json confirm-close-available $avail" "$avail" \
-      "$(gate "$d/$dir" 'cmd_config --json 2>/dev/null' | jq '."confirm-close-available"')"
+      "$(gate "$d/$dir" 'cmd_config --json 2>/dev/null' | jq .confirm_close_available)"
     out=$(gate "$d/$dir" "lock_file() { echo 'at the lock'; exit 0; }; cmd_up '$P-aqs'")
     if [ "$refused" = 1 ]; then
       check_match "...up of a headless box on NVIDIA refused" "a headless box on NVIDIA \($d/dri/renderD129\) needs aquamarine's fix" "$out"
@@ -12299,7 +12304,7 @@ t_json() {
   check_eq "mode --json: {name, mode, scale}" "HEADLESS-2 true 1" \
     "$(ob mode -b "$B" --json | jq -r '"\(.name | sub("WAYLAND-1"; "HEADLESS-2")) \(.mode | test("^[0-9]+x[0-9]+@")) \(.scale)"')"
   j=$(ob ls --json | jq -c --arg b "$B" '.[] | select(.name == $b)')
-  check_eq "ls --json: scale, allowed (numbers) beside allow, dir" "1 [8093] 8093 $PWD" "$(jq -r '"\(.scale) \(.allowed | tojson) \(.allow) \(.dir)"' <<<"$j")"
+  check_eq "ls --json: scale, allowed (numbers), dir; allow (0.9's string) gone since 1.0" "1 [8093] false $PWD" "$(jq -r '"\(.scale) \(.allowed | tojson) \(has("allow")) \(.dir)"' <<<"$j")"
   j=$(ob shot -b "$B" --json -o "$o/s.png")
   check_eq "shot --json: path, kind screen, region the layout, image, scale 1" "$o/s.png screen 0 0 $W $H $W $H 1 null null" \
     "$(jq -r '"\(.path) \(.kind) \(.region.x) \(.region.y) \(.region.w) \(.region.h) \(.image.w) \(.image.h) \(.scale) \(.window) \(.changed)"' <<<"$j")"
@@ -12809,7 +12814,7 @@ t_unit_gpu() {
     "$(jq -r '.gpus[] | select(.pci == "0000:02:00.0") | "\(.node) \(.available) \(.why | tojson)"' <<<"$gj")"
   check_eq "...each one's kind: by its driver, or its vendor when bound to vfio-pci (finding 237)" "nvidia intel amd" "$(jq -r '[.gpus[].kind] | join(" ")' <<<"$gj")"
   check_eq "...a usable one: its node" "$f/dri/renderD129 true" "$(jq -r '.gpus[] | select(.pci == "0000:01:00.0") | "\(.node) \(.available)"' <<<"$gj")"
-  check_eq "...gpu-auto, and gpu-now (the vfio one asked for: the fallback)" "0000:0a:00.0 0000:0a:00.0" "$(jq -r '"\(.["gpu-auto"]) \(.["gpu-now"])"' <<<"$gj")"
+  check_eq "...gpu_auto, and gpu_now (the vfio one asked for: the fallback)" "0000:0a:00.0 0000:0a:00.0" "$(jq -r '"\(.gpu_auto) \(.gpu_now)"' <<<"$gj")"
   fb() { HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
     printf 'gpu=%s\n' '$1' > \$CONFIG; render_fallback '$f/dri/$2' && echo yes || echo no"; }
   check_eq "render_fallback: auto never, the GPU asked for no, another yes" "no no yes" "$(fb auto renderD128) $(fb nvidia renderD129) $(fb 0000:02:00.0 renderD128)"
@@ -13210,7 +13215,7 @@ t_pointer() {
   ob click -b "$B" --window R 50 50 >/dev/null
   check_match "...after it, a click has no modifier" " 0 $" "$(presses)"
   tree() { local c; for c in $(pgrep -P "$1"); do echo "$c"; tree "$c"; done; }
-  ob pointer -b "$B" --window R --mod ctrl -- move 50 50 sleep 3000 click >/dev/null 2>"$TMP/ptr.err" & local cp=$! kp="" i
+  ob pointer -b "$B" --window R --mod ctrl -- move 50 50 sleep 3s click >/dev/null 2>"$TMP/ptr.err" & local cp=$! kp="" i
   for i in $(seq 50); do
     for kp in $(tree "$cp"); do [ "$(cat "/proc/$kp/comm" 2>/dev/null)" = omabox-keyboard ] && break; kp=""; done
     [ -z "$kp" ] || break; sleep 0.2
@@ -13367,15 +13372,15 @@ t_unit_wait() {
   check_match "an unknown condition refused" "unknown condition" "$(ob wait -b "$P-x" soon 2>&1)"
   check_match "--gone is for window and layer" "go with window or layer" "$(ob wait -b "$P-x" still --gone 2>&1)"
   check_match "until needs a command" "nothing to run" "$(ob wait -b "$P-x" until -- 2>&1)"
-  # #272: `wait until` is the name; `wait cmd` (refused by Claude Code's worktree check) is read the
-  # same, warned, until 1.0.
+  # #272: `wait until` is the name; `wait cmd` (refused by Claude Code's worktree check) was warned in
+  # 0.9 and is refused since 1.0 (#287), whatever follows it.
   check_match "-- goes with until" "-- goes with until" "$(ob wait -b "$P-x" still -- true 2>&1)"
-  check_match "...wait cmd -- CMD: warned, naming wait until" "^omabox: warning: wait cmd is now wait until .*refused in 1\.0" \
-    "$(ob wait -b "$P-x" cmd -- true 2>&1 | head -n 1)"
-  check_match "...and then read as until (no box here)" "no box '$P-x'" "$(ob wait -b "$P-x" cmd -- true 2>&1)"
-  check_eq "...wait until is not warned" "" "$(ob wait -b "$P-x" until -- true 2>&1 | grep warning)"
-  check_eq "...the same refusals: cmd" "omabox: wait cmd: --ignore goes with still and change (omabox help wait)" \
-    "$(ob wait -b "$P-x" cmd --ignore "1,1 5x5" -- true 2>&1 | grep -v warning)"
+  local w out rc; for w in "cmd -- true" "cmd" "cmd --ignore 1,1,5,5 -- true"; do
+    out=$(eval "ob wait -b $P-x $w" 2>&1); rc=$?
+    check_eq "...wait $w: refused (2), one line naming wait until" \
+      "2|omabox: wait cmd is refused since 1.0: write wait until -- CMD (the same flags) (omabox help wait)" "$rc|$out"
+  done
+  check_match "...wait until: read (no box here)" "no box '$P-x'" "$(ob wait -b "$P-x" until -- true 2>&1)"
   check_eq "...until" "omabox: wait until: --ignore goes with still and change (omabox help wait)" \
     "$(ob wait -b "$P-x" until --ignore "1,1 5x5" -- true 2>&1)"
   check_match "...help says until" "until -- CMD \[ARG\.\.\.\]" "$(ob help wait 2>&1)"
@@ -13673,7 +13678,7 @@ t_wait() {
   check_match "...named, with how many match" 'foot "[AR]" .*, focused \(1 of 2 matching\)$' "$(jq -r .detail <<<"$out")"
   check_eq "...--gone: 124 while they are there" 124 "$(ob wait -b "$B" --timeout 500ms window foot --gone >/dev/null; echo $?)"
   check_eq "...an action on one window still refuses several: exit 2" 2 "$(ob shot -b "$B" -w foot >/dev/null 2>&1; echo $?)"
-  # until (#272; cmd up to 0.8.0): a condition inside the box, here one that becomes true a second later
+  # until (#272; cmd up to 0.8.0, refused since 1.0): a condition inside the box, here one that becomes true a second later
   ob run -b "$B" -d -- sh -c 'sleep 1; touch /tmp/late' >/dev/null 2>&1
   out=$(ob wait -b "$B" until -- test -e /tmp/late); rc=$?
   check_eq "wait until: 0 once it succeeds" 0 "$rc"
@@ -13681,9 +13686,6 @@ t_wait() {
   check_eq "wait until that keeps failing: 124" 124 "$(ob wait -b "$B" --timeout 500ms until -- false >/dev/null; echo $?)"
   out=$(ob wait -b "$B" --timeout 500ms --json until -- false); rc=$?
   check_eq "...--json: condition until, exit 124" "unsatisfied until exit 1 124" "$(jq -r '"\(.result) \(.condition) \(.detail)"' <<<"$out") $rc"
-  out=$(ob wait -b "$B" --json cmd -- test -e /tmp/late 2>"$TMP/wait-cmd.err"); rc=$?
-  check_eq "wait cmd, its old name: the same, its --json condition still cmd" "0 satisfied cmd" "$rc $(jq -r '"\(.result) \(.condition)"' <<<"$out")"
-  check_match "...warned on stderr" "^omabox: warning: wait cmd is now wait until" "$(cat "$TMP/wait-cmd.err")"
   # A steady animation (#131, finding 208): one cell that never stops changing. The 124 names it as an
   # --ignore; --ignore'd, wait still and keys --wait are satisfied; -g watches elsewhere.
   ob run -b "$B" -- pkill -x foot >/dev/null

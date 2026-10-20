@@ -404,7 +404,7 @@ the box goes down (with your agent, for a box named after your session); a holde
 by the next keys (said). Not with --pass.
 @ keys pointer
 \`keys -s DURATION\` and \`pointer -- sleep DURATION\` pause there (300ms, 1.5s; up to 10m). A bare
-number there is still milliseconds, with a warning, until 1.0 refuses it: write the unit.
+number there is refused (milliseconds up to 0.9, seconds everywhere else): write the unit.
 @ shot click drag pointer pixel
 --fit N scales a shot's image down to N pixels on its longest side (a scaled screen's image is its
 layout times the scale: 2560 px for a 1280 px layout at 2). --zoom N (2-16, with -g) shows each pixel of
@@ -626,7 +626,6 @@ Durations, here as everywhere: 300ms, 2s, 1.5m, 1h (a bare number is seconds); -
 @ wait
 \`wait until -- CMD\`: until CMD, run in the box, exits 0 (tried every 100 ms): a server answering
 (\`curl -fsS http://127.0.0.1:PORT/\`), a file written, a process gone (\`sh -c '! pgrep -x NAME'\`).
-\`wait cmd\`, its name up to 0.8.0, still works with a warning; 1.0 refuses it.
 @ up run
 \$OMABOX_READY_TIMEOUT: how long \`up\` waits for Hyprland and the shell (default 30s).
 @ reload
@@ -710,7 +709,7 @@ watching either clipboard. Bind it to a key in your Hyprland config to paste int
 @ up run
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
-Write the unit: a bare --idle 45 is still minutes, with a warning, until 1.0 refuses it.
+Write the unit: a bare --idle 45 is refused (minutes up to 0.9, seconds everywhere else).
 @ run
 \`run -d\` (or --detach) says where the command's output goes (its log) on stderr: -q says nothing (errors still),
 --print-log prints the log's path on stdout (first, before --wait's line). \`run -d --replace\`
@@ -1116,11 +1115,11 @@ select_box() {
     local m="${MAIN_CMD:+$MAIN_CMD: }bad box name ${1:-$NAME}: a box name starts with a letter or digit, then letters, digits, . _ - (40 at most)"
     if [ -n "${1:-}" ]; then usage_die "$m"; else die "$m"; fi
   fi
-  # A name given with other characters, or longer, was written to fit without a word (finding 176
-  # said it for up only): warned in 0.9, refused in 1.0 (#273, audit E3). A derived one (the repo's)
-  # is made to fit, as ever.
+  # A name given with other characters, or longer, was written to fit without a word up to 0.8.0
+  # (finding 176 said it for up only), warned in 0.9, refused since 1.0 (#273 audit E3, #287): never
+  # read as another box's name. A derived one (the repo's) is made to fit, as ever.
   [ -z "${1:-}" ] || [ "$NAME" = "$1" ] ||
-    say "warning: box name '$1' is written '$NAME': a box name is letters, digits, . _ - (40 at most); write that (refused in 1.0)"
+    usage_die "${MAIN_CMD:+$MAIN_CMD: }box name '$1': a box name is letters, digits, . _ - (40 at most): write $NAME"
   parsed   # (the command's words are read by the time it picks its box)
   D=$BOXES/$NAME
   NAME_DERIVED=0; [ -n "${1:-}" ] || NAME_DERIVED=1
@@ -3678,8 +3677,8 @@ cmd_up() {
   FROM=""
   while [ $# -gt 0 ]; do
     case $1 in
-      --size|--interactive|-i|--plugin|--net|--allow|--addr|--from|--hyprland|--quickshell|--omarchy|--stock-bar|--desk-shell|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--no-seed|--monitor|--theme-dir|--theme|--clean)
-        given+=" $(case $1 in -i) echo interactive ;; *) echo "${1#--}" ;; esac)" ;;&
+      --size|--interactive|--plugin|--net|--allow|--addr|--from|--hyprland|--quickshell|--omarchy|--stock-bar|--desk-shell|--systemd|--audio|--xwayland|--autoreload|--no-shell|--no-pointer|--seed|--no-seed|--monitor|--theme-dir|--theme|--clean)
+        given+=" ${1#--}" ;;&
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
       --size) optarg "$@"; size=$2; shift ;;
@@ -3688,8 +3687,8 @@ cmd_up() {
       --confirm-close) confirm=on ;;
       --no-confirm-close) confirm=off ;;
       --interactive) interactive=1 ;;
-      # (#273) -i is ignore-case in log and events: up's is warned in 0.9, refused in 1.0.
-      -i) interactive=1; say "warning: up -i: -i is ignore-case elsewhere (log, events); write up --interactive (refused in 1.0)" ;;
+      # (#273, #287) -i is ignore-case in log and events: up's was warned in 0.9, refused since 1.0.
+      -i) usage_die "up -i is refused since 1.0: write up --interactive (-i is ignore-case in log and events)" ;;
       --plugin) optarg "$@"; g=$2
         if in_jail; then g=$(jail_path "$2") || jail_refuse --plugin "$2" "$W_PLUGIN"; fi
         plugin_args+=("$g"); plugin_given+=("$2"); shift ;;
@@ -3889,7 +3888,8 @@ cmd_up() {
   local scale; read -r size scale < <(split_scale --size "$size")
   [ $interactive = 0 ] || [ "$scale" = 1 ] || die "up: an interactive box's screen is its window, at your desktop's scale: --size takes no scale there"
   size=$(parse_mode "$size")
-  local idle_s; idle_s=$(idle_duration "$idle" "$idle_how") || die "up: ${idle_how% } takes a duration like 30m, 2h or 90s, or 0 (never), got $idle"
+  local idle_s; idle_s=$(idle_duration "$idle" "$idle_how") ||
+    { [ $? != 2 ] || exit "${DIE_RC:-2}"; die "up: ${idle_how% } takes a duration like 30m, 2h or 90s, or 0 (never), got $idle"; }
   [ $interactive = 0 ] || idle_s=0
   ready_timeout   # a bad $OMABOX_READY_TIMEOUT is said now, before any box starts
   [ $interactive = 1 ] || [ -z "$ws$confirm" ] || die "up: --workspace and --confirm-close are for --interactive (peek takes --workspace)"
@@ -5131,16 +5131,16 @@ kill_box() {
 }
 
 # up --idle and $OMABOX_IDLE → whole seconds (rounded up): a duration (30m, 2h, 90s, 1.5h), or 0
-# (never). A bare whole number other than 0 is minutes, as up to 0.8.0, with a warning naming the
-# unit (#273); 1.0 refuses it. A bare number with decimals never was a --idle: refused.
-# idle_duration VALUE HOW (HOW: "--idle " or "OMABOX_IDLE=", as the warning writes it)
+# (never). A bare whole number other than 0 was minutes up to 0.8.0, warned in 0.9 (#273), refused
+# since 1.0 (#287): said here, naming the unit, and 2 (the caller exits as a usage error); never read
+# as seconds. A bare number with decimals never was a --idle: 1, as any other bad value.
+# idle_duration VALUE HOW (HOW: "--idle " or "OMABOX_IDLE=", as the refusal writes it)
 idle_duration() {
   local ms
   if [[ $1 =~ ^0+(\.0+)?(ms|s|m|h)?$ ]]; then echo 0; return; fi
   if [[ $1 =~ ^[0-9]{1,6}$ ]]; then
-    local n=$((10#$1))   # decimal: 010 is ten, not octal eight
-    say "warning: $2$1 is minutes, where a bare number is seconds everywhere else; write $2${n}m (refused in 1.0)"
-    echo $((n * 60)); return
+    say "$2$1 is refused since 1.0 (a bare number was minutes there, and is seconds everywhere else): write $2$((10#$1))m"
+    return 2
   fi
   [[ ! $1 =~ ^[0-9.]+$ ]] && ms=$(ms_duration "$1") || return 1
   echo $(((ms + 999) / 1000))
@@ -6468,10 +6468,10 @@ calib_fit() {
   }'
 }
 
-# A second file named where a command takes one (shot FILE, calibrate CARD; -o or not): the last
-# is taken, as up to 0.8.0, with a warning (#273); 1.0 refuses it. two_files CMD SO_FAR NEW
+# A second file named where a command takes one (shot FILE, calibrate CARD; -o or not): the last was
+# taken up to 0.8.0, warned in 0.9 (#273), refused since 1.0 (#287). two_files CMD SO_FAR NEW
 two_files() {
-  [ -z "$2" ] || say "warning: $1: two files, $2 and $3: the last is taken; name one (refused in 1.0)"
+  [ -z "$2" ] || usage_die "$1: two files, $2 and $3: name one (refused since 1.0, where the last was taken)"
 }
 
 # calibrate [-b NAME] [--size WxH] [CARD | -o CARD]: a new card, its path on stdout.
@@ -9187,8 +9187,9 @@ check_run() {
       --) shift; scen=("$@"); break ;;
       -b|--box|--new|--interactive|-i) die "check run: the scenario gets a box of its own (no $1)" ;;
       --clean) ;;   # every check box is
-      # (--idle's warning said here: the box's up writes to a log)
-      --idle) optarg "$@"; idle_duration "$2" "--idle " >/dev/null || die "check run: --idle takes a duration like 30m or 2h, or 0 (never), got $2"
+      # (--idle read here: the box's up writes to a log)
+      --idle) optarg "$@"; idle_duration "$2" "--idle " >/dev/null ||
+          { [ $? != 2 ] || exit 2; die "check run: --idle takes a duration like 30m or 2h, or 0 (never), got $2"; }
         upopts+=("$1" "$2"); shift ;;
       --size|--plugin|--net|--allow|--addr|--from|--hyprland|--quickshell|--omarchy|--seed|--no-seed|--monitor|--theme-dir|--theme|--keep|--env|--overlay|--ro-bind)
         optarg "$@"; upopts+=("$1" "$2"); shift ;;
@@ -9596,10 +9597,10 @@ cmd_keys() {
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       --active) sels+=(active) ;;
       # A value is the tool's, whatever it looks like (-t --wait types "--wait", -t --pass "--pass").
-      -t|--delay) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift
-        # --delay MS (#273, audit F13): the keyboard tool's own time between keys, never documented,
-        # and read only as its first word; warned in 0.9, refused in 1.0.
-        [ "${toks[-2]}" != --delay ] || say "warning: keys --delay: the keyboard tool's own time between keys (ms), read only as the first word: for a pause, -s DURATION (refused in 1.0)" ;;
+      -t) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift ;;
+      # --delay MS (#273, audit F13): the keyboard tool's own time between keys, never documented, and
+      # read only as its first word; warned in 0.9, refused since 1.0 (#287).
+      --delay) usage_die "keys --delay is refused since 1.0: for a pause between keys, -s DURATION (keys a -s 50ms b)" ;;
       # -s DURATION: a pause, as the tool's milliseconds (#273: a bare number, ms, is warned).
       -s) [ $# -ge 2 ] || die "keys: -s needs a value"; t=$(pause_ms "keys -s" "$2") || exit $?; toks+=(-s "$t"); shift ;;
       -m|-p) die "keys: $1 is omabox's own (to hold a modifier across a click: click, drag or pointer --mod)" ;;
@@ -9643,7 +9644,7 @@ cmd_keys() {
   local lines=() i=0 t
   while [ $# -gt 0 ]; do
     case $1 in
-      -s|--delay) shift ;;
+      -s) shift ;;
       -t) t=${2//[[:cntrl:]]/ }; [ -z "$t" ] || lines+=("text ${t:0:200}"); shift ;;
       -T) t=$(caller_env "${pass[i]}"); [ -z "$t" ] || lines+=("secret ${#t}"); t=""; i=$((i + 1)) ;;
       *) lines+=("combo $1") ;;
@@ -10204,8 +10205,8 @@ WAIT_MAX_MS=600000   # --timeout: 10 min at most
 
 # The one duration grammar of the command line (#273): 300ms, 2s, 1.5s, 2m, 1h, or a bare number of
 # seconds → milliseconds (at least 1). Every duration flag reads it; the bare numbers that meant
-# something else up to 0.8.0 (up --idle's minutes, keys -s's and pointer sleep's milliseconds) are
-# still read that way with a warning, and 1.0 refuses them (never reads them another way).
+# something else up to 0.8.0 (up --idle's minutes, keys -s's and pointer sleep's milliseconds) were
+# warned in 0.9 and are refused since 1.0 (#287), never read another way.
 ms_duration() {
   [[ $1 =~ ^([0-9]{1,6}(\.[0-9]{1,6})?)(ms|s|m|h)?$ ]] || return 1
   awk -v n="${BASH_REMATCH[1]}" -v u="${BASH_REMATCH[3]:-s}" 'BEGIN {
@@ -10220,16 +10221,16 @@ s_duration() {
   awk -v m="$ms" 'BEGIN { s = sprintf("%.3f", m / 1000); sub(/\.?0+$/, "", s); print s }'
 }
 # keys -s and pointer sleep (#273): a duration as the tools' milliseconds, 0 to 10m. A bare whole
-# number is still milliseconds, as up to 0.8.0, with a warning; 1.0 refuses it. A bare number with
-# decimals never was one of theirs: refused. Usage errors: exit 2.
+# number was milliseconds up to 0.8.0, warned in 0.9, refused since 1.0 (#287), naming the unit. A
+# bare number with decimals never was one of theirs: refused. Usage errors: exit 2.
 # pause_ms "keys -s" VALUE
 pause_ms() {
   local ms
   if [[ $2 =~ ^0+(\.0+)?(ms|s|m|h)?$ ]]; then echo 0; return; fi
-  if [[ $2 =~ ^[0-9]{1,6}$ ]]; then ms=$((10#$2))
-  elif [[ $2 =~ ^[0-9.]+$ ]] || ! ms=$(ms_duration "$2"); then ms=""; fi
-  [ -n "$ms" ] && [ "$ms" -le 600000 ] || DIE_RC=2 die "$1 takes a duration up to 10m, like 300ms or 1.5s, got $2"
-  [[ ! $2 =~ ^[0-9]+$ ]] || say "warning: $1 $2: a bare number is milliseconds here, seconds everywhere else; write $1 ${ms}ms (refused in 1.0)"
+  [[ ! $2 =~ ^[0-9]{1,6}$ ]] ||
+    DIE_RC=2 usage_die "$1 $2 is refused since 1.0 (a bare number was milliseconds there, and is seconds everywhere else): write $1 $((10#$2))ms"
+  { [[ ! $2 =~ ^[0-9.]+$ ]] && ms=$(ms_duration "$2") && [ "$ms" -le 600000 ]; } ||
+    DIE_RC=2 die "$1 takes a duration up to 10m, like 300ms or 1.5s, got $2"
   echo "$ms"
 }
 # Milliseconds as seconds, 2 decimals: 430 → 0.43s.
@@ -10902,17 +10903,14 @@ layer_probe() {
   if [ "$want" = gone ]; then if [ -z "$l" ]; then echo yes; else echo no; fi
   elif [ -n "$l" ]; then echo "yes at $l"; else echo no; fi
 }
-# One try of `wait until` (and `wait cmd`, its old name): the command in the box, cut off at the time
-# left. Two names so --json's condition is the one the caller wrote.
+# One try of `wait until`: the command in the box, cut off at the time left.
 # shellcheck disable=SC2329 # called through poll_until
-cmd_probe() {
+until_probe() {
   local left=$((POLL_TMO - ($(date +%s%3N) - POLL_T0))) rc=0
   box_alive || return 1
   box_exec /usr/bin/timeout -k 1 "$(awk -v m="$left" 'BEGIN { printf "%.3f", (m < 100 ? 100 : m) / 1000 }')" "$@" >/dev/null 2>&1 || rc=$?
   if [ "$rc" = 0 ]; then echo yes; else echo "no exit $rc"; fi
 }
-# shellcheck disable=SC2329 # called through poll_until
-until_probe() { cmd_probe "$@"; }
 
 # Poll PROBE every 100 ms until it says yes NEED times in a row (2 for a window or layer: one caught
 # mid-map or mid-close is not an answer), or the deadline. YES and NO are the condition in words.
@@ -10964,19 +10962,20 @@ cmd_wait() {
       --active) sels+=(active) ;;
       --gone) want=gone ;;
       --focused) want=focused ;;
-      --) shift; [ "$cond" = until ] || [ "$cond" = cmd ] || die "wait: -- goes with until (omabox wait until -- CMD ...)"
+      --) shift; [ "$cond" = until ] || die "wait: -- goes with until (omabox wait until -- CMD ...)"
         run=("$@"); break ;;
       -*) unknown_opt wait "$1" ;;
-      *) if [ -z "$cond" ]; then cond=$1
+      # `wait cmd` was until's name up to 0.8.0 (#272): Claude Code refuses it in a worktree-isolated
+      # subagent (the word cmd reads as a shell). Warned in 0.9, refused since 1.0 (#287).
+      *) if [ -z "$cond" ]; then
+           [ "$1" != cmd ] || usage_die "wait cmd is refused since 1.0: write wait until -- CMD (the same flags)"
+           cond=$1
          elif [ "$cond" = window ]; then sels+=("$1")
          elif [ "$cond" = layer ] && [ -z "$ns" ]; then ns=$1
          else unexpected "wait $cond" "$1"; fi ;;
     esac
     shift
   done
-  # `wait cmd` was until's name up to 0.8.0 (#272): Claude Code refuses it in a worktree-isolated
-  # subagent (the word cmd reads as a shell). Accepted with a warning in 0.9, refused in 1.0.
-  [ "$cond" != cmd ] || say "warning: wait cmd is now wait until (the same flags); write wait until -- CMD (wait cmd will be refused in 1.0)"
   case $cond in
     still|change)
       [ -z "$want" ] || die "wait: --gone and --focused go with window or layer"
@@ -10986,7 +10985,7 @@ cmd_wait() {
     layer) [ -n "$ns" ] || die "wait layer: which layer? its namespace (omabox hyprctl layers): omarchy-menu, ..."
       [ "$want" != focused ] || die "wait layer: --gone or nothing"
       [ ${#sels[@]} = 0 ] && [ -z "$geom$quiet" ] && [ $strict = 0 ] && [ ${#masks[@]} = 0 ] || die "wait layer: only --gone" ;;
-    until|cmd) [ ${#run[@]} -gt 0 ] || die "wait $cond: nothing to run (omabox wait until -- CMD ...)"
+    until) [ ${#run[@]} -gt 0 ] || die "wait $cond: nothing to run (omabox wait until -- CMD ...)"
       [ ${#masks[@]} = 0 ] || die "wait $cond: --ignore goes with still and change" ;;
     "") die "wait: for what? still, change, window SEL, layer NAMESPACE or until -- CMD (omabox help)" ;;
     *) unknown_word wait condition "$cond" "(still, change, window SEL, layer NAMESPACE or until -- CMD)" still change window layer until ;;
@@ -11006,7 +11005,6 @@ cmd_wait() {
       if [ "$want" = gone ]; then poll_until "layer $ns gone" "layer $ns still there" 2 "$tmo" "$json" layer_probe gone "$ns"
       else poll_until "layer $ns" "no layer $ns" 2 "$tmo" "$json" layer_probe present "$ns"; fi ;;
     until) poll_until "command succeeded" "command still failing" 1 "$tmo" "$json" until_probe "${run[@]}" ;;
-    cmd) poll_until "cmd" "cmd still failing" 1 "$tmo" "$json" cmd_probe "${run[@]}" ;;
     still|change)
       local args=(--timeout "$tmo" "${masks[@]}") region="" p
       [ -z "$quiet" ] || args+=(--quiet "$quiet")
@@ -12999,14 +12997,15 @@ cmd_ports() {
   done
   [ -z "$name" ] || { local o kept=(); for o in "${out[@]}"; do [ "${o%%|*}" != "$name" ] || kept+=("$o"); done; out=("${kept[@]}"); }
   [ ${#out[@]} = 0 ] || mapfile -t out < <(printf '%s\n' "${out[@]}" | sort -t'|' -k1,1 -k2,2n)
-  # (addresses, plural as a list is named elsewhere, #273 audit N5; address, the same list, goes in 1.0)
+  # (addresses, plural as a list is named elsewhere, #273 audit N5; address, the same list, is gone
+  # since 1.0, #287)
   if [ $json = 1 ]; then
     local o f
     for o in "${out[@]}"; do
       IFS='|' read -r -a f <<<"$o|"
       jq -nc --arg box "${f[0]}" --argjson port "${f[1]}" --arg addr "${f[2]}" --arg proc "${f[3]}" --arg state "${f[4]}" \
         --arg who "${f[5]}" --arg boxes "${f[6]}" --arg resets "${f[7]}" --arg hcomm "$( [ "${f[4]}" != host ] || [ -z "${f[5]}" ] || cat "/proc/${f[5]}/comm" 2>/dev/null)" '
-        { box: $box, port: $port, addresses: ($addr | split(",")), address: ($addr | split(",")), process: $proc,
+        { box: $box, port: $port, addresses: ($addr | split(",")), process: $proc,
           host: ({ state: $state }
             + (if $state == "this" or $state == "this-resets" or $state == "shared" then { boxes: ($boxes | split(" ")) } else {} end)
             + (if $state == "shared" then { resets: ($resets | split(" ")) } else {} end)
@@ -13898,14 +13897,13 @@ cmd_config() {
         # headless box renders on now (the setting's, or its fallback), by slot.
         local now auto; now=$(OMABOX_RENDER_NODE="" render_node 2>/dev/null) || now=""
         auto=$(render_nodes | head -n 1)
-        # The keys snake_case, as every other --json (#273, audit N1); the kebab-case ones beside them
-        # are 0.8's, kept for 0.9 (a widget or a script from before) and gone in 1.0.
+        # The keys snake_case, as every other --json (#273, audit N1); 0.8's kebab-case ones, kept
+        # beside them in 0.9, are gone since 1.0 (#287).
         for k in "${CONF_KEYS[@]}"; do printf '%s\t%s\n' "$k" "$(conf_get "$k")"; done |
           jq -R 'split("\t") | {(.[0] | gsub("-"; "_")): .[1]}' | jq -s -c --argjson a "$avail" --arg v "$(cat "$ROOT/VERSION")" --argjson gpus "$(gpu_json)" \
             --arg now "${now:+$(render_slot "$now")}" --arg auto "${auto:+$(render_slot "$auto")}" \
             'add + {confirm_close_available: $a, version: $v, gpus: $gpus,
-              gpu_auto: (if $auto == "" then null else $auto end), gpu_now: (if $now == "" then null else $now end)}
-             | . + (with_entries(select(.key | test("_")) | .key |= gsub("_"; "-")))'
+              gpu_auto: (if $auto == "" then null else $auto end), gpu_now: (if $now == "" then null else $now end)}'
       else
         for k in "${CONF_KEYS[@]}"; do echo "$k=$(conf_get "$k")"; done
       fi ;;
@@ -14117,7 +14115,7 @@ box_json() {
   local orphan=false; [ "$state" != up ] || ! box_orphan || orphan=true
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" --argjson hung "$hung" \
     --arg sh "$sh" --argjson crashes "$crashes" --argjson orphan "$orphan" \
-    '{name: $name, mode, size, scale: (.scale // 1), created, plugins, net: (.net // "host"), allow: (.allow // ""),
+    '{name: $name, mode, size, scale: (.scale // 1), created, plugins, net: (.net // "host"),
       allowed: (.allow // "" | split(",") | map(select(. != "") | tonumber)), addrs: (.addrs // []), idle: (.idle // 0),
       dir: (.dir // null),
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
@@ -14143,7 +14141,7 @@ submap_release() {
 }
 
 # (ls --json, #273, audit N4: allowed, the ports as numbers, is allow's successor: allow, a comma
-# string, goes in 1.0; scale and dir, the main screen's scale and the directory up ran in, as box.json
+# string, is gone since 1.0, #287; scale and dir, the main screen's scale and the directory up ran in, as box.json
 # has them.)
 # --json is for the bar widget (plugin/): one array, a single pass, with peek state. Anything else is
 # refused (#236): a -b or an unknown flag dropped here gave a script the table where it asked for JSON.
@@ -15241,8 +15239,8 @@ cmd_save() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --force) force=1 ;;
-      # (#273) -f is follow in log and events: save's is warned in 0.9, refused in 1.0.
-      -f) force=1; say "warning: save -f: -f is follow elsewhere (log, events); write save --force (refused in 1.0)" ;;
+      # (#273, #287) -f is follow in log and events: save's was warned in 0.9, refused since 1.0.
+      -f) usage_die "save -f is refused since 1.0: write save --force (-f is follow in log and events)" ;;
       -h|--help) usage save; return ;;
       -*) unknown_opt save "$1" ;;
       *) [ -z "$save" ] || die "save: one save name, got $save and $1 (the box goes with -b)"; save=$1 ;;
@@ -15348,7 +15346,7 @@ UP_BOX_OPTS="--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monito
   --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --clean --desk-shell --systemd
   --audio --xwayland --autoreload --no-shell --no-pointer"
 declare -A CMD_OPTS=(
-  [up]="-b= --box= --json --workspace= --new --confirm-close --no-confirm-close --interactive -i $UP_BOX_OPTS"
+  [up]="-b= --box= --json --workspace= --new --confirm-close --no-confirm-close --interactive $UP_BOX_OPTS"
   [run]="-b= --box= -d --detach -q --print-log --replace --pass= --env-file= $SETTLE_OPTS $UP_BOX_OPTS"
   [shot]="-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every=
     --sheet --diff --changed --since= --ignore= --after --json"
@@ -15360,7 +15358,7 @@ declare -A CMD_OPTS=(
   [tree]="-b= --box= -w= --window= --active -l= --layer= --find= --json --all"
   [check]="-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= -w= --window= --active -g=
     --timeout= --json $UP_BOX_OPTS"
-  [keys]="-b= --box= -w= --window= --active -t= --delay= -s= --pass= $SETTLE_OPTS"
+  [keys]="-b= --box= -w= --window= --active -t= -s= --pass= $SETTLE_OPTS"
   [keys-to-box]="-b= --box="
   [click]="-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= $SETTLE_OPTS"
   [scroll]="-b= --box= -w= --window= --active --in= --no-raise --mod= --source= $SETTLE_OPTS"
@@ -15385,7 +15383,7 @@ declare -A CMD_OPTS=(
   [down]="-b= --box= --all --orphans"
   [ls]="--json" [saves]="--json" [config]="--json" [--version]="--json" [which]="--json"
   [brief]="-b= --box="
-  [save]="-b= --box= --force -f"
+  [save]="-b= --box= --force"
   [clip]="-b= --box= --from-box"
   [setup]="--aquamarine --force --remove --feedback-skill --no-feedback-skill"
 )
