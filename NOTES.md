@@ -7979,6 +7979,42 @@ from them.
     selection, the hint with the keyboard and box stubbed), t_tree_layer (all of the above, and
     the bar), t_tree unchanged.
 
+385. **One duration grammar; short flags with one meaning** (2026-10-20, #273, part A of the CLI
+    audit before 1.0). Five duration grammars became one, `ms_duration`: `ms`, `s`, `m`, `h` (new),
+    decimals up to 6 places, a bare number seconds; `s_duration` gives it as seconds for `gpu`,
+    `cpu`, `audio` and `cpu --settle`, which took plain numbers only (`gpu 5s` was refused;
+    `--settle 0` stays none), and `$OMABOX_READY_TIMEOUT` reads it too (`ready_timeout`, checked
+    before a box starts; `30s` was an arithmetic error). Diogo's rule for 1.0 (issue comment): the
+    new form canonical, the old one kept with a one-line stderr warning that names what to write
+    and says "(refused in 1.0)", for one release; a deprecated bare number is refused in 1.0, never
+    read another way (no silent x60 or x1000). **The forms deprecated here, for 1.0 to refuse:**
+    (1) `up --idle N` and `OMABOX_IDLE=N`, N a bare whole number other than 0: minutes (write
+    `Nm`); `idle_duration`, warned by `up` and, since its box's `up` writes to a log, by `check run`;
+    `run` passes `up`'s warnings on. A bare number with decimals never was an `--idle`: refused now.
+    (2) `keys -s N` and `pointer -- sleep N`, N a bare whole number other than 0: milliseconds
+    (write `Nms`); `pause_ms`, which hands the tools milliseconds as before and refuses (exit 2) a
+    bare decimal, a negative or more than 10m before any box is asked (pointer's are read in a
+    pass before `select_box` now). (3) `up -i`: write `--interactive` (`-i` is ignore-case in
+    `log` and `events`). (4) `save -f`: write `--force` (`-f` is follow in `log` and `events`).
+    (5) `shot` and `calibrate` given two files (positional and/or `-o`): the last was taken
+    silently; now warned (`two_files`), in the jailed caller's `relay_shot` too. Additive, no
+    warning: `--active` wherever `--window` goes (keys, click, scroll, pointer, drag, wait),
+    `--output` beside `-o` on `check run/point/diff`, `events --grep -i RE` as `log` takes it (it
+    was a regex `-i`), `check point --timeout` read when parsed (a typo was said only once the
+    scenario got there). Help's comment above `usage_text` lists the internal options and
+    variables (`up --owner`, `shot`/`record --to-fd --as ...`, `_reap`, OMABOX_CHECK_*...), which
+    help never shows and no promise covers. Left, each for a decision (audit F-numbers): F7 `up
+    --add-monitor` (Diogo's); F13 `keys --delay` (the keyboard tool's per-key delay, honoured
+    only first: document it as omabox's, or refuse it as `-m/-p/-T` are); F14's gating of the
+    internal options behind a marker (the broker's calls carry none today); F15 one range for
+    `--fit`/`--every` (`record`'s sheet starts at 100 px for its labels, and capping its `--every`
+    at 60s would refuse what works); F18 positional box names on `peek`, `reload`,
+    `restart-shell` (documenting them widens the promise; warning them is the other way). Tests:
+    t_unit_duration (the grammar, each warning's text, the refusals, `up`'s and `check run`'s
+    warnings, `$OMABOX_READY_TIMEOUT`), t_unit_flag_forms (`up -i`, `save -f`, `--active` on each
+    command, `--output`, `--grep -i`, two files, `check point --timeout`), t_unit_cli/t_unit_record
+    (gpu, cpu, audio take units), t_keys (its pauses in the new form, `keys --active`).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

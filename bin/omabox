@@ -72,6 +72,11 @@ usage() {
   printf '%s\n\n%s\n' "$out" "omabox help: every command."
 }
 
+# Not here, on purpose (#273): omabox's own plumbing, which no promise covers and help never lists.
+# up --owner PID (run's throwaway box); shot --to-fd N --as FILE and record --to-fd, --marks-fd,
+# --vtt-fd, --from-fd, --marks-from-fd, --as, --file (a jailed agent's omabox and the broker; a
+# jailed caller's own are refused: relay_record); the _reap command; OMABOX_CHECK_NAME,
+# OMABOX_CHECK_OUT, OMABOX_SHOT_NO_BASELINE, OMABOX_BROKER_PEER, OMABOX_JAIL.
 usage_text() {
   cat <<EOF
 omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
@@ -118,7 +123,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
                                                          a checkpoint, in a scenario: once still, a shot (and the tree)
   omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png]   what differs, as a check sees it
-  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s MS | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
+  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s DURATION | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
                [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
   omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [BTN]
@@ -126,7 +131,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
               [--shot-fit N | --shot-g "X,Y WxH" | --shot-monitor NAME]   (with --shot: as shot's --fit, -g, --monitor)
   omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N | --glide DURATION] [--mod MODS] -- ARGS...
                  raw: move X Y [--steps N], click/down/up [BTN], scroll DY, hscroll DX,
-                 source wheel|finger|continuous|tilt, sleep MS
+                 source wheel|finger|continuous|tilt, sleep DURATION
   omabox pointer [-b NAME] hide | show                   the pointer out of shots and recordings (it still moves), over reloads
   omabox scroll [-b NAME] [--window SEL | --in SHOT] [--wait] X Y DY [DX] [--source wheel|finger|continuous|tilt]
                 [--mod MODS]
@@ -143,10 +148,10 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox
   omabox mode [-b NAME] [WxH[@HZ][,scale=S]|host]        show or change a headless box's screen mode
   omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back
-  omabox gpu [-b NAME] [SECONDS] [--json]                GPU engine time of this box's processes (default 5s)
+  omabox gpu [-b NAME] [DURATION] [--json]               GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
-  omabox audio [-b NAME] [SECONDS] [--json]              an up --audio box's sound over SECONDS (3s): when, how loud
-  omabox cpu [-b NAME] [SECONDS] [--settle S] [--pid PID | --app NAME] [--threads] [--json]
+  omabox audio [-b NAME] [DURATION] [--json]             an up --audio box's sound for DURATION (3s): when, how loud
+  omabox cpu [-b NAME] [DURATION] [--settle DURATION] [--pid PID | --app NAME] [--threads] [--json]
                                                          CPU (% of one core) and memory of this box's processes (default 5s)
   omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors
   omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
@@ -317,7 +322,7 @@ initialTitle:RE (any case), or a word (its class or the class's last part, nauti
 org.gnome.Nautilus, or part of its title; failing those, a hyphen-separated part of the class,
 portal for xdg-desktop-portal-gtk); repeat to narrow. None or
 several is exit 2, with the candidates (\`wait window SEL\` asks for a window like it: any of several
-does, each named). \`shot --window\` (-w; --active is --window active) is the
+does, each named); -w is --window, and --active is --window active wherever it goes. \`shot --window\` is the
 window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
 a layer surface over that point (a notification toast, a panel) is said on stderr, the click sent
@@ -336,6 +341,9 @@ in the focused app, as a real key does, until another key is pressed. A key alre
 up:KEY not held, is exit 1, before any key of the call is sent. Anything still held is let go when
 the box goes down (with your agent, for a box named after your session); a holder killed outright,
 by the next keys (said). Not with --pass.
+@ keys pointer
+\`keys -s DURATION\` and \`pointer -- sleep DURATION\` pause there (300ms, 1.5s; up to 10m). A bare
+number there is still milliseconds, with a warning, until 1.0 refuses it: write the unit.
 @ shot click drag pointer pixel
 --fit N scales a shot's image down to N pixels on its longest side (a scaled screen's image is its
 layout times the scale: 2560 px for a 1280 px layout at 2). --zoom N (2-16, with -g) shows each pixel of
@@ -448,7 +456,7 @@ its marks, captions and sheet (and \`record sheet\`'s video) itself, and the bro
 reads them only through those, never at a path the jail names; one stopped outside the jail goes
 to ~/.cache/omabox/records.
 @ audio
-\`audio [SECONDS]\` listens to the box's speaker for SECONDS (3) from now, 100 ms at a time: "sound for
+\`audio [DURATION]\` listens to the box's speaker for DURATION (3s, up to 10m) from now, 100 ms at a time: "sound for
 1.1s of 3s: peak -21.1 dBFS, RMS -24.5 dBFS while it sounded; at 0.4-1.5s", or "silence for 3s".
 The speaker is a null sink, exact zeros while nothing plays: anything above -70 dBFS is a sound.
 --json: sound (true/false), sound_s, peak_db, rms_db, spans ([from, to] seconds), levels (each
@@ -526,7 +534,7 @@ and dates, specks, holes): the omabox skill's reference.md, "Visual checks". Not
 @ drag
 \`drag\` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
 reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
-number is seconds, as for --quiet and --timeout (\`keys -s\` and \`pointer sleep\` take milliseconds).
+number is seconds, as for every duration.
 --shot FILE takes a shot while the button is still down, as \`shot\` takes one: the whole layout
 (--shot-fit N, --shot-g "X,Y WxH" and --shot-monitor NAME are shot's --fit, -g and --monitor; a
 scaled or cropped one says so, for \`click --in\`). --wait ignores the cursor along the drag's path
@@ -544,13 +552,14 @@ one small region kept changing. -g watches only that part of the screen. The scr
 with --window too.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
-Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
+Durations, here as everywhere: 300ms, 2s, 1.5m, 1h (a bare number is seconds); --timeout at most
+10m. Waiting counts as using the box.
 @ wait
 \`wait until -- CMD\`: until CMD, run in the box, exits 0 (tried every 100 ms): a server answering
 (\`curl -fsS http://127.0.0.1:PORT/\`), a file written, a process gone (\`sh -c '! pgrep -x NAME'\`).
 \`wait cmd\`, its name up to 0.8.0, still works with a warning; 1.0 refuses it.
 @ up run
-\$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
+\$OMABOX_READY_TIMEOUT: how long \`up\` waits for Hyprland and the shell (default 30s).
 @ reload
 A box's Hyprland runs a copy of omabox's config made at \`up\`, with autoreload off (unless
 \`up --autoreload\`): updating omabox (a pull, an upgrade) leaves running boxes' config as it is (its
@@ -632,6 +641,7 @@ watching either clipboard. Bind it to a key in your Hyprland config to paste int
 @ up run
 A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command against it, no
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
+Write the unit: a bare --idle 45 is still minutes, with a warning, until 1.0 refuses it.
 @ run
 \`run -d\` says where the command's output goes (its log) on stderr: -q says nothing (errors still),
 --print-log prints the log's path on stdout (first, before --wait's line). \`run -d --replace\`
@@ -696,11 +706,11 @@ there it is the driver's own sampling through nvidia-smi pmon, whole seconds, ea
 the GPU as seen once a second (\`--json\` says which, as source).
 @ cpu
 \`cpu\` is \`gpu\`'s twin for CPU and memory: each process in the box's pid namespace (never the
-desktop's, which a host \`top\` or \`pgrep\` mixes in), its CPU over SECONDS as % of one core (100% is
+desktop's, which a host \`top\` or \`pgrep\` mixes in), its CPU over DURATION (5s) as % of one core (100% is
 one core busy; the rows add up to the total), its RSS and PSS (shared pages split among the processes
 sharing them: the total is what the box holds) as last seen. Sampled every second: a process that
 started in the window counts all its time, one that exited keeps what was seen up to its last sample
-(both said). --settle S waits S seconds before the window (an app's start-up left out). --pid PID: one
+(both said). --settle DURATION waits that long before the window (an app's start-up left out). --pid PID: one
 process, as the box numbers it (\`omabox run -- ps -e\`) or its host pid; --app NAME: the processes of
 that name (their /proc comm, the first 15 bytes). --threads, with --pid or --app: each of their
 threads too, under its process, by its name (comm: a Qt Quick app's GUI thread apart from its
@@ -1845,9 +1855,17 @@ died_starting() {
   die "box '$NAME' died while starting$why; logs: $D/home/*.log $D/box.log"
 }
 
+# $OMABOX_READY_TIMEOUT (#273): a duration (30s, 2m; a bare number is seconds), as whole seconds
+# (rounded up) in READY_TIMEOUT. Not in $(...): it sets it.
+ready_timeout() {
+  local ms; ms=$(ms_duration "$READY_TIMEOUT") ||
+    die "OMABOX_READY_TIMEOUT takes a duration, like 30s or 2m (a bare number is seconds), got $READY_TIMEOUT"
+  READY_TIMEOUT=$(((ms + 999) / 1000))
+}
+
 # Until the box's Hyprland is up (share/hyprland.lua writes omabox.env once it is).
 wait_hyprland() {
-  local deadline=$((SECONDS + READY_TIMEOUT))
+  local deadline; ready_timeout; deadline=$((SECONDS + READY_TIMEOUT))
   until [ -s "$D/run/omabox.env" ]; do
     starting_ok
     [ $SECONDS -lt $deadline ] || die "Hyprland not up after ${READY_TIMEOUT}s; logs: $D/home/*.log"
@@ -1984,7 +2002,7 @@ shell_watch() {
 }
 
 wait_ready() {
-  local want_shell=$1 deadline=$((SECONDS + READY_TIMEOUT))
+  local want_shell=$1 deadline; ready_timeout; deadline=$((SECONDS + READY_TIMEOUT))
   wait_hyprland
   if [ "$(meta wayland_screen)" = true ]; then
     # labwc's initial xdg configure can replace the requested mode with 1280x720. Reapply it
@@ -3474,7 +3492,7 @@ cmd_up() {
   CLEAN_LANG="" CLEAN_ZONE=""
   local t0; t0=$(proc_start $$)   # a down started after this asks for the box gone, even before it has a lock
   local systemd=0 audio=0 audio_missing="" owner=""
-  local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 nopointer=0 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h}
+  local size=1920x1080 interactive=0 xwayland=0 autoreload=0 shell=1 nopointer=0 name="" net=connected allow="" idle=${OMABOX_IDLE:-2h} idle_how=OMABOX_IDLE=
   local net_addrs=()      # --addr (#229): addresses on an isolated box's loopback, as box_addr has them
   local overlays=() robinds=() plugin_args=() envs=() seeds=() monitors=() theme_dirs=() spec why ws="" confirm="" new=0 net_set=0 hyprland="" hypr_bind=1
   local quickshell="" qs_bind=1   # --quickshell: a Quickshell build for the box's shell (finding 358)
@@ -3503,7 +3521,9 @@ cmd_up() {
       --new) new=1 ;;
       --confirm-close) confirm=on ;;
       --no-confirm-close) confirm=off ;;
-      --interactive|-i) interactive=1 ;;
+      --interactive) interactive=1 ;;
+      # (#273) -i is ignore-case in log and events: up's is warned in 0.9, refused in 1.0.
+      -i) interactive=1; say "warning: up -i: -i is ignore-case elsewhere (log, events); write up --interactive (refused in 1.0)" ;;
       --plugin) optarg "$@"; g=$2
         if in_jail; then g=$(jail_path "$2") || jail_refuse --plugin "$2" "$W_PLUGIN"; fi
         plugin_args+=("$g"); plugin_given+=("$2"); shift ;;
@@ -3531,7 +3551,7 @@ cmd_up() {
       --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "up: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=(--setenv "${2%%=*}" "${2#*=}"); shift ;;
-      --idle) optarg "$@"; idle=$2; shift ;;
+      --idle) optarg "$@"; idle=$2 idle_how="--idle "; shift ;;
       --from) optarg "$@"; FROM=$2; shift ;;
       --hyprland) optarg "$@"; hypr_given=$2
         if in_jail; then { g=$(jail_path "$2") && hyprland=$(hypr_bin "$g" 2>/dev/null); } || jail_refuse --hyprland "$2" "$W_HYPR"
@@ -3704,8 +3724,9 @@ cmd_up() {
   local scale; read -r size scale < <(split_scale --size "$size")
   [ $interactive = 0 ] || [ "$scale" = 1 ] || die "up: an interactive box's screen is its window, at your desktop's scale: --size takes no scale there"
   size=$(parse_mode "$size")
-  local idle_s; idle_s=$(duration "$idle") || die "--idle wants 30m, 2h, 90s or 0 (never), got $idle"
+  local idle_s; idle_s=$(idle_duration "$idle" "$idle_how") || die "up: ${idle_how% } takes a duration like 30m, 2h or 90s, or 0 (never), got $idle"
   [ $interactive = 0 ] || idle_s=0
+  ready_timeout   # a bad $OMABOX_READY_TIMEOUT is said now, before any box starts
   [ $interactive = 1 ] || [ -z "$ws$confirm" ] || die "up: --workspace and --confirm-close are for --interactive (peek takes --workspace)"
   # Settings (finding 70): the flags, else ~/.config/omabox/config. confirm_close_from says whether a
   # later `omabox config confirm-close` changes this box too.
@@ -4930,11 +4951,20 @@ kill_box() {
   true
 }
 
-# 30m, 2h, 90s, 45 (minutes), 0 → seconds.
-duration() {
-  [[ $1 =~ ^([0-9]{1,6})([smh]?)$ ]] || return 1
-  local n=$((10#${BASH_REMATCH[1]}))   # decimal: 010 is ten, not octal eight
-  case ${BASH_REMATCH[2]} in s) echo "$n" ;; h) echo $((n * 3600)) ;; *) echo $((n * 60)) ;; esac
+# up --idle and $OMABOX_IDLE → whole seconds (rounded up): a duration (30m, 2h, 90s, 1.5h), or 0
+# (never). A bare whole number other than 0 is minutes, as up to 0.8.0, with a warning naming the
+# unit (#273); 1.0 refuses it. A bare number with decimals never was a --idle: refused.
+# idle_duration VALUE HOW (HOW: "--idle " or "OMABOX_IDLE=", as the warning writes it)
+idle_duration() {
+  local ms
+  if [[ $1 =~ ^0+(\.0+)?(ms|s|m|h)?$ ]]; then echo 0; return; fi
+  if [[ $1 =~ ^[0-9]{1,6}$ ]]; then
+    local n=$((10#$1))   # decimal: 010 is ten, not octal eight
+    say "warning: $2$1 is minutes, where a bare number is seconds everywhere else; write $2${n}m (refused in 1.0)"
+    echo $((n * 60)); return
+  fi
+  [[ ! $1 =~ ^[0-9.]+$ ]] && ms=$(ms_duration "$1") || return 1
+  echo $(((ms + 999) / 1000))
 }
 
 # Seconds as the user would write them: 90s, 30m, 2h.
@@ -6125,6 +6155,12 @@ calib_fit() {
   }'
 }
 
+# A second file named where a command takes one (shot FILE, calibrate CARD; -o or not): the last
+# is taken, as up to 0.8.0, with a warning (#273); 1.0 refuses it. two_files CMD SO_FAR NEW
+two_files() {
+  [ -z "$2" ] || say "warning: $1: two files, $2 and $3: the last is taken; name one (refused in 1.0)"
+}
+
 # calibrate [-b NAME] [--size WxH] [CARD | -o CARD]: a new card, its path on stdout.
 # calibrate [CARD] --answer "A X,Y ...": what the readings say.
 cmd_calibrate() {
@@ -6132,11 +6168,11 @@ cmd_calibrate() {
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
-      -o|--output) optarg "$@"; card=$2; shift ;;
+      -o|--output) optarg "$@"; two_files calibrate "$card" "$2"; card=$2; shift ;;
       --size) optarg "$@"; size=$2; shift ;;
       --answer) optarg "$@"; answer=$2; given=1; shift ;;
       -*) die "calibrate: unknown option $1" ;;
-      *) card=$1 ;;
+      *) two_files calibrate "$card" "$1"; card=$1 ;;
     esac
     shift
   done
@@ -7473,7 +7509,7 @@ cmd_shot() {
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
-      -o|--output) optarg "$@"; out=$2; shift ;;
+      -o|--output) optarg "$@"; two_files shot "$out" "$2"; out=$2; shift ;;
       --no-pointer) nopointer=1 ;;
       # A jailed caller's omabox (relay_shot): the image goes to its file, opened in the jail and
       # passed as fd N, and is named AS in what shot says. The broker opens no path of the caller's.
@@ -7499,7 +7535,7 @@ cmd_shot() {
       --after) [ "${2:-}" = -- ] && [ $# -ge 3 ] || die "shot: --after -- ACTION... (an omabox command: keys super+space, click X Y, run -d -- CMD)"
         shift 2; after=("$@"); break ;;
       -*) die "shot: unknown option $1" ;;
-      *) out=$1 ;;
+      *) two_files shot "$out" "$1"; out=$1 ;;
     esac
     shift
   done
@@ -8429,7 +8465,7 @@ check_diff() {
     case $1 in
       --ignore) optarg "$@"; g=$(geom_parse "$2") || die "check diff: --ignore is \"X,Y WxH\", got $2"; masks+=("$g"); shift ;;
       --speck) optarg "$@"; [[ $2 =~ ^[0-9]{1,6}$ ]] || die "check diff: --speck is a number of pixels, got $2"; speck=$((10#$2)); shift ;;
-      -o) optarg "$@"; out=$2; shift ;;
+      -o|--output) optarg "$@"; out=$2; shift ;;
       --report) optarg "$@"; report=$2; shift ;;
       -h|--help) usage check; return ;;
       -*) die "check diff: unknown option $1" ;;
@@ -8521,8 +8557,10 @@ check_point() {
       --active) sels+=(active) ;;
       -g) optarg "$@"; geom_parse "$2" >/dev/null || die "check point: -g is \"X,Y WxH\", got $2"; geom=$2; shift ;;
       --ignore) optarg "$@"; g=$(geom_parse "$2") || die "check point: --ignore is \"X,Y WxH\" (with --window in its coordinates, else the screen's), got $2"; masks+=("$g"); shift ;;
-      --timeout) optarg "$@"; tmo=$2; shift ;;
-      -o) optarg "$@"; out=$2; shift ;;
+      # (read here, not by the wait it is handed to: a typo is said before the scenario got there)
+      --timeout) optarg "$@"; g=$(ms_duration "$2") && [ "$g" -le $WAIT_MAX_MS ] ||
+          die "check point: --timeout takes a duration up to 10m, like 15s (a bare number is seconds), got $2"; tmo=$2; shift ;;
+      -o|--output) optarg "$@"; out=$2; shift ;;
       -h|--help) usage check; return ;;
       -*) die "check point: unknown option $1" ;;
       *) [ -z "$id" ] || die "check point: one ID, got $id and $1"; id=$1 ;;
@@ -8729,13 +8767,16 @@ check_run() {
       --approve) approve=1 ;;
       --runs) optarg "$@"; [[ $2 =~ ^[2-9]$ ]] || die "check run: --runs is 2 to 9 (for --approve), got $2"; runs=$2; shift ;;
       --base) optarg "$@"; base=$2; shift ;;
-      -o) optarg "$@"; out=$2; shift ;;
+      -o|--output) optarg "$@"; out=$2; shift ;;
       --speck) optarg "$@"; [[ $2 =~ ^[0-9]{1,6}$ ]] || die "check run: --speck is a number of pixels, got $2"; speck=$((10#$2)); shift ;;
       -h|--help) usage check; return ;;
       --) shift; scen=("$@"); break ;;
       -b|--box|--new|--interactive|-i|--json) die "check run: the scenario gets a box of its own (no $1)" ;;
       --clean) ;;   # every check box is
-      --size|--plugin|--net|--allow|--addr|--from|--hyprland|--quickshell|--omarchy|--seed|--no-seed|--monitor|--theme-dir|--theme|--keep|--env|--overlay|--ro-bind|--idle)
+      # (--idle's warning said here: the box's up writes to a log)
+      --idle) optarg "$@"; idle_duration "$2" "--idle " >/dev/null || die "check run: --idle takes a duration like 30m or 2h, or 0 (never), got $2"
+        upopts+=("$1" "$2"); shift ;;
+      --size|--plugin|--net|--allow|--addr|--from|--hyprland|--quickshell|--omarchy|--seed|--no-seed|--monitor|--theme-dir|--theme|--keep|--env|--overlay|--ro-bind)
         optarg "$@"; upopts+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--systemd|--audio|--stock-bar|--no-pointer) upopts+=("$1") ;;
       --desk-shell) die "check run: a check's box is clean (--keep bar keeps your bar), not your desk's shell" ;;
@@ -9074,13 +9115,16 @@ check_compare() {
 }
 
 cmd_keys() {
-  local name="" toks=() sels=() pass=()
+  local name="" toks=() sels=() pass=() t
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --active) sels+=(active) ;;
       # A value is the tool's, whatever it looks like (-t --wait types "--wait", -t --pass "--pass").
-      -t|-s|--delay) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift ;;
+      -t|--delay) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift ;;
+      # -s DURATION: a pause, as the tool's milliseconds (#273: a bare number, ms, is warned).
+      -s) [ $# -ge 2 ] || die "keys: -s needs a value"; t=$(pause_ms "keys -s" "$2") || exit $?; toks+=(-s "$t"); shift ;;
       -m|-p) die "keys: $1 is omabox's own (to hold a modifier across a click: click, drag or pointer --mod)" ;;
       -T) die "keys: -T is omabox's own (--pass VAR types one of your variables)" ;;
       --pass) optarg "$@"
@@ -9279,6 +9323,7 @@ cmd_click() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --active) sels+=(active) ;;
       --in) optarg "$@"; in=$2; shift ;;
       --no-raise) raise=0 ;;
       --double) double=1 ;;
@@ -9353,6 +9398,7 @@ cmd_scroll() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --active) sels+=(active) ;;
       --in) optarg "$@"; in=$2; shift ;;
       --no-raise) raise=0 ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
@@ -9468,6 +9514,7 @@ cmd_pointer() {
       -b|--box) optarg "$@"; name=$2; shift 2 ;;
       --in) optarg "$@"; in=$2; shift 2 ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift 2 ;;
+      --active) sels+=(active); shift ;;
       --steps) optarg "$@"; steps=$(steps_arg pointer "$2"); shift 2 ;;
       --glide) optarg "$@"; glide=$(glide_arg pointer "$2"); shift 2 ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift 2 ;;
@@ -9477,6 +9524,14 @@ cmd_pointer() {
   done
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "pointer: --in or --window, not both"
   local a; for a; do [ "$a" != --hold ] || die "pointer: --hold is omabox's own (it never returns); to keep a button down: down, move ..., up (or omabox drag)"; done
+  # sleep DURATION (#273): as the tool's milliseconds, read before any box is asked; a bare number
+  # (milliseconds up to 0.8.0) is warned.
+  local raw=() ms
+  while [ $# -gt 0 ]; do
+    if [ "$1" = sleep ] && [ $# -ge 2 ]; then ms=$(pause_ms "pointer sleep" "$2") || exit $?; raw+=(sleep "$ms"); shift 2
+    else raw+=("$1"); shift; fi
+  done
+  set -- ${raw[@]+"${raw[@]}"}
   if [ "${1:-}" = hide ] || [ "${1:-}" = show ]; then
     [ $# = 1 ] && [ -z "$in$mods$glide" ] && [ ${#sels[@]} = 0 ] && [ "${steps:-1}" = 1 ] || die "pointer $1: nothing else with it"
     select_box "$name"; need_box
@@ -9546,6 +9601,7 @@ cmd_drag() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --active) sels+=(active) ;;
       --in) optarg "$@"; in=$2; shift ;;
       --no-raise) raise=0 ;;
       --steps) optarg "$@"; steps=$(steps_arg drag "$2"); shift ;;
@@ -9656,11 +9712,35 @@ drag_shot() {
 
 WAIT_MAX_MS=600000   # --timeout: 10 min at most
 
-# 300ms, 2s, 1.5s, 2m, or a bare number of seconds → milliseconds (at least 1).
+# The one duration grammar of the command line (#273): 300ms, 2s, 1.5s, 2m, 1h, or a bare number of
+# seconds → milliseconds (at least 1). Every duration flag reads it; the bare numbers that meant
+# something else up to 0.8.0 (up --idle's minutes, keys -s's and pointer sleep's milliseconds) are
+# still read that way with a warning, and 1.0 refuses them (never reads them another way).
 ms_duration() {
-  [[ $1 =~ ^([0-9]{1,6}(\.[0-9]{1,3})?)(ms|s|m)?$ ]] || return 1
+  [[ $1 =~ ^([0-9]{1,6}(\.[0-9]{1,6})?)(ms|s|m|h)?$ ]] || return 1
   awk -v n="${BASH_REMATCH[1]}" -v u="${BASH_REMATCH[3]:-s}" 'BEGIN {
-    ms = n * (u == "ms" ? 1 : u == "m" ? 60000 : 1000); ms = int(ms + 0.5); if (ms < 1) exit 1; print ms }'
+    ms = n * (u == "ms" ? 1 : u == "h" ? 3600000 : u == "m" ? 60000 : 1000); ms = int(ms + 0.5); if (ms < 1) exit 1; print ms }'
+}
+# A duration (ms_duration's) as seconds, decimals only where it has them: 1.5s, 1500ms → 1.5; 5 → 5.
+# zero (2nd argument) lets 0 in, in any unit.
+s_duration() {
+  local ms
+  if [ "${2:-}" = zero ] && [[ $1 =~ ^0+(\.0+)?(ms|s|m|h)?$ ]]; then echo 0; return; fi
+  ms=$(ms_duration "$1") || return 1
+  awk -v m="$ms" 'BEGIN { s = sprintf("%.3f", m / 1000); sub(/\.?0+$/, "", s); print s }'
+}
+# keys -s and pointer sleep (#273): a duration as the tools' milliseconds, 0 to 10m. A bare whole
+# number is still milliseconds, as up to 0.8.0, with a warning; 1.0 refuses it. A bare number with
+# decimals never was one of theirs: refused. Usage errors: exit 2.
+# pause_ms "keys -s" VALUE
+pause_ms() {
+  local ms
+  if [[ $2 =~ ^0+(\.0+)?(ms|s|m|h)?$ ]]; then echo 0; return; fi
+  if [[ $2 =~ ^[0-9]{1,6}$ ]]; then ms=$((10#$2))
+  elif [[ $2 =~ ^[0-9.]+$ ]] || ! ms=$(ms_duration "$2"); then ms=""; fi
+  [ -n "$ms" ] && [ "$ms" -le 600000 ] || DIE_RC=2 die "$1 takes a duration up to 10m, like 300ms or 1.5s, got $2"
+  [[ ! $2 =~ ^[0-9]+$ ]] || say "warning: $1 $2: a bare number is milliseconds here, seconds everywhere else; write $1 ${ms}ms (refused in 1.0)"
+  echo "$ms"
 }
 # Milliseconds as seconds, 2 decimals: 430 → 0.43s.
 ms_s() { awk -v m="$1" 'BEGIN { printf "%.2fs", m / 1000 }'; }
@@ -10154,6 +10234,7 @@ cmd_wait() {
       --strict) strict=1 ;;
       -g) optarg "$@"; geom=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
+      --active) sels+=(active) ;;
       --gone) want=gone ;;
       --focused) want=focused ;;
       --) shift; [ "$cond" = until ] || [ "$cond" = cmd ] || die "wait: -- goes with until (omabox wait until -- CMD ...)"
@@ -10568,7 +10649,7 @@ cmd_events() {
           [[ $2 =~ ^[A-Za-z][A-Za-z0-9_.-]{0,39}$ ]] || die "events: a mark's name starts with a letter (letters, digits, . _ -; 40 at most), got $2"
           mark=$2; shift
         fi ;;
-      --grep) optarg "$@"; EV_RE=$2; shift ;;
+      --grep) optarg "$@"; if [ "$2" = -i ]; then EV_I=1; shift; optarg "$@"; fi; EV_RE=$2; shift ;;   # (--grep -i RE, as log takes it)
       -i) EV_I=1 ;;
       --json) EV_JSON=1 ;;
       -f|--follow) follow=1 ;;
@@ -11686,8 +11767,8 @@ cmd_audio() {
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
       -*) die "audio: unknown option $1" ;;
-      *) { [[ $1 =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v s="$1" 'BEGIN { exit !(s >= 0.1 && s <= 600) }'; } ||
-          die "audio: SECONDS is 0.1 to 600, got $1"; secs=$1 ;;
+      *) { secs=$(s_duration "$1") && awk -v s="$secs" 'BEGIN { exit !(s >= 0.1 && s <= 600) }'; } ||
+          die "audio: how long to listen, 100ms to 10m, like 3s (a bare number is seconds), got $1" ;;
     esac
     shift
   done
@@ -11744,7 +11825,7 @@ cmd_gpu() {
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
       -*) die "gpu: unknown option $1" ;;
-      *) { [[ $1 =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v s="$1" 'BEGIN { exit !(s > 0) }'; } || die "gpu: SECONDS is a number above 0, got $1"; secs=$1 ;;
+      *) secs=$(s_duration "$1") || die "gpu: how long to measure, like 5s or 500ms (a bare number is seconds), got $1" ;;
     esac
     shift
   done
@@ -11833,14 +11914,14 @@ cmd_cpu() {
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
-      --settle) optarg "$@"; [[ $2 =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "cpu: --settle takes seconds (a number), got $2"; settle=$2; shift ;;
+      --settle) optarg "$@"; settle=$(s_duration "$2" zero) || die "cpu: --settle takes a duration, like 2s or 500ms (a bare number is seconds), got $2"; shift ;;
       --pid) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{0,6}$ ]] || die "cpu: --pid takes a pid in the box (omabox run -- ps -e) or its host pid, got $2"; pid=$2; shift ;;
       --app) optarg "$@"; app=$2; shift ;;
       --threads) threads=1 ;;
       --json) json=1 ;;
       -h|--help) usage cpu; return ;;
       -*) die "cpu: unknown option $1" ;;
-      *) { [[ $1 =~ ^[0-9]+(\.[0-9]+)?$ ]] && awk -v s="$1" 'BEGIN { exit !(s > 0) }'; } || die "cpu: SECONDS is a number above 0, got $1"; secs=$1 ;;
+      *) secs=$(s_duration "$1") || die "cpu: how long to measure, like 5s or 500ms (a bare number is seconds), got $1" ;;
     esac
     shift
   done
@@ -14040,12 +14121,12 @@ relay_shot() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; args+=("$1" "$2"); shift ;;
       -g|-w|--window|--fit|--zoom|--burst|--every|--ignore) optarg "$@"; args+=("$1" "$2"); shift ;;
-      -o|--output) optarg "$@"; out=$2; shift ;;
+      -o|--output) optarg "$@"; two_files shot "$out" "$2"; out=$2; shift ;;
       # A path of the jail's, which the broker never opens (finding 243): --changed compares with the
       # last shot of the same window or screen instead.
       --since) die "shot --since: not for a jailed agent (--changed compares with the last shot of it)" ;;
       -*) args+=("$1") ;;
-      *) out=$1 ;;
+      *) two_files shot "$out" "$1"; out=$1 ;;
     esac
     shift
   done
@@ -14285,7 +14366,9 @@ cmd_save() {
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
-      -f|--force) force=1 ;;
+      --force) force=1 ;;
+      # (#273) -f is follow in log and events: save's is warned in 0.9, refused in 1.0.
+      -f) force=1; say "warning: save -f: -f is follow elsewhere (log, events); write save --force (refused in 1.0)" ;;
       -h|--help) usage save; return ;;
       -*) die "save: unknown option $1" ;;
       *) [ -z "$save" ] || die "save: one save name, got $save and $1 (the box goes with -b)"; save=$1 ;;

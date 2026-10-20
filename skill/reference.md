@@ -360,13 +360,15 @@ with `--keep wallpaper` or after a theme set in the box.
 - `omabox drag [--window SEL | --in SHOT] X1 Y1 X2 Y2 [BTN] [--steps 10] [--hold DURATION]
   [--mod MODS] [--shot FILE | --wait]`: press at the first point, move to the second in steps, hold
   there `--hold` (a drop target reacting to the hover), release. `--hold` is a duration, `300ms` or
-  `2s` (a bare number is seconds, up to 60s), unlike `keys -s` and `pointer sleep`, which take ms.
+  `2s` (a bare number is seconds, up to 60s), as every duration is: `300ms`, `1.5s`, `2m`, `1h`. Two
+  exceptions until 1.0 refuses them, each warned: `keys -s 300` and `pointer sleep 300` are still
+  milliseconds (write `-s 300ms`, `sleep 300ms`), and `up --idle 45` minutes (write `45m`).
   `--shot FILE` takes a shot while the button is still down (a drag's own feedback); `--wait`
   ignores the cursor along the path, so a change wholly under it may not count. Both points are
   mapped as for `click`. It jumps to the first point: to get there on foot, `pointer --steps N --
   move X1 Y1` first.
 - `omabox pointer [--window SEL | --in SHOT] [--steps N] [--mod MODS] -- move X Y [--steps N], click
-  [BTN], down [BTN], up [BTN], scroll DY, hscroll DX, source wheel|finger|continuous|tilt, sleep MS` in
+  [BTN], down [BTN], up [BTN], scroll DY, hscroll DX, source wheel|finger|continuous|tilt, sleep DURATION` in
   one run: raw, it raises nothing (a `--window` must be on screen and uncovered). BTN is left (the default), right, middle, back or forward (a mouse's thumb buttons, also `side` and `extra`; `click X Y back` too). A button pressed with `down` stays
   down after the call, until an `up` (in a later call too): end every `down` with an `up`, or the
   box's next clicks are drags.

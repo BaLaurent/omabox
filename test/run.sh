@@ -591,7 +591,9 @@ t_unit_record() {
   check_match "...stop --no-pointer (#228)" "record stop: --no-pointer goes with start, -- ACTION or --for" "$(ob record stop --no-pointer 2>&1)"
   check_match "...status --no-pointer" "record status: --no-pointer goes with start" "$(ob record status --no-pointer 2>&1)"
   check_match "...mark --audio (#226)" "record mark: --audio goes with start, -- ACTION or --for" "$(ob record mark --audio x 2>&1)"
-  check_match "audio SECONDS 0 refused" "audio: SECONDS is 0.1 to 600, got 0" "$(ob audio 0 2>&1)"
+  check_match "audio 0 refused" "audio: how long to listen, 100ms to 10m, like 3s \(a bare number is seconds\), got 0" "$(ob audio 0 2>&1)"
+  check_match "...11m too" "audio: how long to listen, 100ms to 10m.*got 11m" "$(ob audio 11m 2>&1)"
+  check_match "...2s read (#273), so the box is asked" "no box .nope-$P. is up" "$(ob audio -b "nope-$P" 2s 2>&1)"
   # Marks and contact sheets (#176, finding 306).
   check_match "record mark without its text" "record mark: the mark's text" "$(ob record mark 2>&1)"
   check_match "...mark --no-pointer" "record mark: --no-pointer goes with start" "$(ob record mark --no-pointer x 2>&1)"
@@ -723,16 +725,94 @@ t_unit_record() {
     "$(lib eval 'jq -r "$JQ_MON"'\''map("\(lw)x\(lh)") | join(" ")'\''' <<<"[$mj]")"
 }
 
+# One duration grammar (#273, finding 385): ms, s, m, h, decimals, a bare number seconds; the bare
+# numbers that meant minutes or milliseconds up to 0.8.0 still do, each with a warning naming the unit.
 t_unit_duration() {
-  check_eq "90s" 90 "$(lib duration 90s)"
-  check_eq "30m" 1800 "$(lib duration 30m)"
-  check_eq "2h" 7200 "$(lib duration 2h)"
-  check_eq "bare minutes" 2700 "$(lib duration 45)"
-  check_eq "0 = never" 0 "$(lib duration 0)"
-  check_fails "junk refused" lib duration 2d
-  check_eq "leading zero is decimal (010 = 10 min)" 600 "$(lib duration 010)"
-  check_eq "90s reads 90s" 90s "$(lib human_duration 90)"
-  check_eq "7200 reads 2h" 2h "$(lib human_duration 7200)"
+  check_eq "ms_duration: 300ms 2 1.5s 2m 1h 1.5h" "300 2000 1500 120000 3600000 5400000" \
+    "$(for v in 300ms 2 1.5s 2m 1h 1.5h; do lib ms_duration "$v"; done | paste -sd ' ')"
+  check_fails "...0 is no duration (at least 1 ms)" lib ms_duration 0
+  check_fails "...a unit it does not know (2d)" lib ms_duration 2d
+  check_fails "...nor a negative one" lib ms_duration -1
+  check_eq "s_duration: seconds, decimals only where they are: 5 1.5s 500ms 2m" "5 1.5 0.5 120" \
+    "$(for v in 5 1.5s 500ms 2m; do lib s_duration "$v"; done | paste -sd ' ')"
+  check_eq "...0 in any unit when let in" "0 0" "$(lib s_duration 0 zero) $(lib s_duration 0s zero)"
+  check_fails "...not otherwise" lib s_duration 0
+  # up --idle: units; a bare number other than 0 is minutes, warned.
+  check_eq "idle 90s 30m 2h 1.5h 0 0s" "90 1800 7200 5400 0 0" \
+    "$(for v in 90s 30m 2h 1.5h 0 0s; do lib idle_duration "$v" "--idle "; done 2>/dev/null | paste -sd ' ')"
+  check_eq "...500ms rounds up to a second" 1 "$(lib idle_duration 500ms "--idle ")"
+  check_eq "...a bare 45 is still minutes" 2700 "$(lib idle_duration 45 "--idle " 2>/dev/null)"
+  check_eq "...warned, naming what to write" \
+    "omabox: warning: --idle 45 is minutes, where a bare number is seconds everywhere else; write --idle 45m (refused in 1.0)" \
+    "$(lib idle_duration 45 "--idle " 2>&1 >/dev/null)"
+  check_match "...OMABOX_IDLE's in its own words" "warning: OMABOX_IDLE=010 is minutes.*write OMABOX_IDLE=10m \(refused in 1.0\)" \
+    "$(lib idle_duration 010 OMABOX_IDLE= 2>&1 >/dev/null)"
+  check_eq "...leading zero is decimal (010 = 10 min)" 600 "$(lib idle_duration 010 OMABOX_IDLE= 2>/dev/null)"
+  check_eq "...0 and a unit: no warning" "" "$(lib idle_duration 0 "--idle " 2>&1 >/dev/null; lib idle_duration 2h "--idle " 2>&1 >/dev/null)"
+  check_fails "...a bare 1.5 (never an --idle: not read as seconds either)" lib idle_duration 1.5 "--idle "
+  check_fails "...2d refused" lib idle_duration 2d "--idle "
+  check_match "up --idle junk: refused, naming the forms" "up: --idle takes a duration like 30m, 2h or 90s, or 0 \(never\), got soon" \
+    "$(ob up "$P-d1" --idle soon --confirm-close 2>&1)"
+  check_match "...OMABOX_IDLE junk: named as such" "up: OMABOX_IDLE= takes a duration.*got soon" \
+    "$(OMABOX_IDLE=soon ob up "$P-d1" --confirm-close 2>&1)"
+  check_match "...a bare --idle warned by up itself (then --confirm-close without --interactive stops it)" \
+    "warning: --idle 45 is minutes.*45m \(refused in 1.0\)" "$(ob up "$P-d1" --idle 45 --confirm-close 2>&1)"
+  check_match "check run --idle: warned there (its box's up writes to a log)" "warning: --idle 5 is minutes" \
+    "$(ob check run --idle 5 --bogus 2>&1)"
+  check_match "OMABOX_READY_TIMEOUT junk: refused before a box starts" "OMABOX_READY_TIMEOUT takes a duration, like 30s or 2m.*got soon" \
+    "$(OMABOX_READY_TIMEOUT=soon ob up "$P-d1" --confirm-close 2>&1)"
+  check_eq "...30s and 1.5m are whole seconds" "30 90" \
+    "$(lib eval 'READY_TIMEOUT=30s; ready_timeout; a=$READY_TIMEOUT; READY_TIMEOUT=1.5m; ready_timeout; echo "$a $READY_TIMEOUT"')"
+  # keys -s and pointer sleep: units; a bare whole number is still ms, warned; usage errors exit 2.
+  check_eq "pause_ms: 300ms 1.5s 0 2m" "300 1500 0 120000" \
+    "$(for v in 300ms 1.5s 0 2m; do lib pause_ms "keys -s" "$v"; done 2>/dev/null | paste -sd ' ')"
+  check_eq "...a bare 300 is still ms" 300 "$(lib pause_ms "keys -s" 300 2>/dev/null)"
+  check_eq "...warned, naming what to write" \
+    "omabox: warning: keys -s 300: a bare number is milliseconds here, seconds everywhere else; write keys -s 300ms (refused in 1.0)" \
+    "$(lib pause_ms "keys -s" 300 2>&1 >/dev/null)"
+  check_match "...pointer sleep's in its words" "warning: pointer sleep 50: .*write pointer sleep 50ms \(refused in 1.0\)" \
+    "$(lib pause_ms "pointer sleep" 50 2>&1 >/dev/null)"
+  local v out; for v in 1.5 -1 11m 600001 x; do
+    check_match "...$v refused, exit 2" "^2 omabox: keys -s takes a duration up to 10m, like 300ms or 1.5s, got $v$" \
+      "$(out=$(lib pause_ms "keys -s" "$v" 2>&1); echo "$? $out")"
+  done
+  check_match "keys -s 1.5: refused before any box is asked" "keys -s takes a duration.*got 1.5" "$(ob keys -b "$P-nope" -s 1.5 a 2>&1)"
+  check_match "keys -s 300: warned before any box is asked" "warning: keys -s 300: .*300ms" "$(ob keys -b "$P-nope" -s 300 a 2>&1)"
+  check_match "keys -t -s still types -s (a value is -t's, whatever it looks like)" "no box .$P-nope. is up" \
+    "$(ob keys -b "$P-nope" -t -s 2>&1)"
+  check_match "pointer -- sleep 2x: refused" "pointer sleep takes a duration.*got 2x" "$(ob pointer -b "$P-nope" -- sleep 2x 2>&1)"
+  check_eq "human_duration: 90 reads 90s, 7200 2h" "90s 2h" "$(lib human_duration 90) $(lib human_duration 7200)"
+}
+
+# #273 (finding 385): short flags with one meaning, --active and --output wherever their long forms
+# go, events --grep -i, a second FILE warned, check point's --timeout read up front. All refused or
+# stopped before any box is asked.
+t_unit_flag_forms() {
+  local out
+  out=$(ob up "$P-f1" -i --bogus 2>&1)
+  check_match "up -i: warned, naming --interactive" "warning: up -i: -i is ignore-case elsewhere \(log, events\); write up --interactive \(refused in 1.0\)" "$out"
+  check_match "...and still read (then the unknown option stops it)" "up: unknown option --bogus" "$out"
+  check_eq "...--interactive: no warning" "" "$(ob up "$P-f1" --interactive --bogus 2>&1 | grep warning)"
+  check_match "save -f: warned, naming --force" "warning: save -f: -f is follow elsewhere \(log, events\); write save --force \(refused in 1.0\)" \
+    "$(ob save -f --bogus 2>&1)"
+  check_eq "...--force: no warning" "" "$(ob save --force --bogus 2>&1 | grep warning)"
+  local c a; for c in "click 1 2" "scroll 1 2 3" "pointer move 1 2" "drag 1 2 3 4"; do
+    read -ra a <<<"$c"
+    check_match "${a[0]} --active is --window active" "${a[0]}: --in or --window, not both" "$(ob "${a[0]}" -b "$P-nope" --active --in x.png "${a[@]:1}" 2>&1)"
+  done
+  check_match "wait --active is --window active" "wait: -g or --window, not both" "$(ob wait -b "$P-nope" still --active -g "0,0 9x9" 2>&1)"
+  check_match "keys --active is not a key: the box is asked" "no box .$P-nope. is up" "$(ob keys -b "$P-nope" --active a 2>&1)"
+  check_match "check run --output is -o" "check run: unknown option --bogus" "$(ob check run --output "$TMP/cr" --bogus 2>&1)"
+  check_match "check point --output is -o" "no box .$P-nope. is up" "$(ob check point -b "$P-nope" id1 --output "$TMP/cp" 2>&1)"
+  check_match "check diff --output is -o" "check diff: no such file" "$(ob check diff "$TMP/none1.png" "$TMP/none2.png" --output "$TMP/cd.png" 2>&1)"
+  check_match "check point --timeout soon: refused up front, exit 2" "^omabox: check point: --timeout takes a duration up to 10m, like 15s.*got soon"$'\n'"2$" \
+    "$(ob check point id1 -o "$TMP/cp" --timeout soon 2>&1; echo "$?")"
+  check_match "...11m too" "check point: --timeout takes a duration up to 10m" "$(ob check point id1 -o "$TMP/cp" --timeout 11m 2>&1)"
+  check_match "events --grep -i RE, as log takes it" "no box .$P-nope. is up" "$(ob events -b "$P-nope" --grep -i x 2>&1)"
+  check_match "shot with two files: warned, the last taken" "warning: shot: two files, a.png and b.png: the last is taken; name one \(refused in 1.0\)" \
+    "$(ob shot -b "$P-nope" a.png -o b.png 2>&1)"
+  check_eq "...one: no warning" "" "$(ob shot -b "$P-nope" -o b.png 2>&1 | grep warning)"
+  check_match "calibrate with two cards: warned" "warning: calibrate: two files, a.png and b.png" "$(ob calibrate a.png -o b.png --bogus 2>&1)"
 }
 
 # finding 325: which of a caller's fds a box could reach again through /proc, and so are relayed.
@@ -7390,14 +7470,14 @@ t_keys() {
   check_match "...said, with where" "control character \(U\+0008\) at byte 2; only newline and tab are typed" "$(ob keys -b "$B" -t $'ab\x08c' 2>&1)"
   check_eq "...escape, delete and a carriage return too" "2 2 2" "$(for c in $'\x1b' $'\x7f' $'\r'; do ob keys -b "$B" -t "x${c}y" >/dev/null 2>&1; printf '%s ' $?; done | xargs)"
   check_eq "...in a --pass value too" 2 "$(T_BS=$'a\x08b' "$CLI" keys -b "$B" --pass T_BS >/dev/null 2>&1; echo $?)"
-  ob keys -b "$B" + - / shift+a -t $'\t1' Return ctrl+d >/dev/null
+  ob keys -b "$B" --active + - / shift+a -t $'\t1' Return ctrl+d >/dev/null
   until_ok 5 ob run -b "$B" -- test -s /tmp/typed
-  check_eq "+ - / and a tab typed, nothing from the refused runs" $'+-/A\t1' "$(ob run -b "$B" -- cat /tmp/typed)"
+  check_eq "+ - / and a tab typed (to --active, #273), nothing from the refused runs" $'+-/A\t1' "$(ob run -b "$B" -- cat /tmp/typed)"
   # keys --pass (finding 84): the caller's variable is typed, and no process's argv has it meanwhile.
   ob run -b "$B" -d -- foot sh -c 'cat > /tmp/secret' >/dev/null
   until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '[.[] | select(.class == \"foot\")] | length == 1'"
   local seen=""
-  T_PW="pw-$P x=y Ü" T_CR=$'cr\r' "$CLI" keys -b "$B" -t a --pass T_PW -s 1500 -t -T --pass T_PW --pass T_CR Return ctrl+d & local kp=$!
+  T_PW="pw-$P x=y Ü" T_CR=$'cr\r' "$CLI" keys -b "$B" -t a --pass T_PW -s 1500ms -t -T --pass T_PW --pass T_CR Return ctrl+d & local kp=$!
   if until_ok 10 pgrep -f 'omabox-keyboard .* -T -s 1500'; then
     seen=$(grep -l "pw-$P" /proc/[0-9]*/cmdline 2>/dev/null)
     check_eq "keys --pass: the value is in no /proc/*/cmdline while typing" "" "$seen"
@@ -7412,7 +7492,7 @@ t_keys() {
     until_ok 15 bash -c "'$CLI' hyprctl -b '$B' -j activewindow | jq -e '.class == \"zenity\" and .xwayland'"
     sleep 1   # mapped is not yet taking keys
     # € too (#85: it did not arrive here in 2026-09, with Ü and α on the same kind of spare keycode).
-    ob keys -b "$B" -t 'aÜb€α😀' -s 300 Return >/dev/null
+    ob keys -b "$B" -t 'aÜb€α😀' -s 300ms Return >/dev/null
     until_ok 5 ob run -b "$B" -- test -s /tmp/x11
     check_eq "an X11 app gets characters outside the layout" 'aÜb€α😀' "$(ob run -b "$B" -- cat /tmp/x11)"
   else skip "an X11 app gets characters outside the layout" "no zenity"; fi
@@ -7421,8 +7501,8 @@ t_keys() {
   # A compositor alive but stopped (#108, finding 177): each tool gives up after 10 s with exit 3
   # instead of waiting forever (timeout 40: on the old tools, 124). Stopped once they are past the
   # CLI's own hyprctl calls, in their -s / sleep.
-  timeout 40 "$CLI" keys -b "$B" -s 3003 a >/dev/null 2>"$TMP/stop.k" & local k=$!
-  timeout 40 "$CLI" pointer -b "$B" -- sleep 3004 move 10 10 >/dev/null 2>"$TMP/stop.p" & local p=$!
+  timeout 40 "$CLI" keys -b "$B" -s 3003ms a >/dev/null 2>"$TMP/stop.k" & local k=$!
+  timeout 40 "$CLI" pointer -b "$B" -- sleep 3004ms move 10 10 >/dev/null 2>"$TMP/stop.p" & local p=$!
   until_ok 10 pgrep -f 'omabox-keyboard .* -s 3003 a$' >/dev/null; until_ok 10 pgrep -f 'omabox-pointer .* sleep 3004 ' >/dev/null
   ob run -b "$B" -- sh -c 'kill -STOP $(pidof Hyprland)'
   local t0=$SECONDS rk=0 rp=0
@@ -7433,8 +7513,8 @@ t_keys() {
   check_match "...said" "keyboard: .*no answer in 10 s.*pointer: .*no answer in 10 s" "$(cat "$TMP/stop.k" "$TMP/stop.p" | tr '\n' ' ')"
   check "...in about 10 s ($took s after the stop)" test "$took" -le 16
   check "...and the box answers again once it goes on" until_ok 10 ob keys -b "$B" shift
-  ob keys -b "$B" -s 3001 a >/dev/null 2>&1 & k=$!
-  ob pointer -b "$B" -- sleep 3002 move 10 10 >/dev/null 2>&1 & p=$!
+  ob keys -b "$B" -s 3001ms a >/dev/null 2>&1 & k=$!
+  ob pointer -b "$B" -- sleep 3002ms move 10 10 >/dev/null 2>&1 & p=$!
   # (#110) Once each tool runs in the box: before that, "not up" is exit 1 too.
   until_ok 10 pgrep -f 'omabox-keyboard .* -s 3001 a$' >/dev/null; until_ok 10 pgrep -f 'omabox-pointer .* sleep 3002 ' >/dev/null
   ob down "$B" >/dev/null
@@ -11781,8 +11861,9 @@ t_cpu() {
   check "...at its own share of a core (its ticks over the window: ${own}%, cpu: ${got:-none}%), more than a fifth" \
     awk -v g="${got:-0}" -v e="$own" 'BEGIN { exit !(g > 20 && g >= e - 20 && g <= e + 20) }'
   check_eq "...that process alone, and the total" 2 "$(grep -cE '^  (sh|total) ' <<<"$out")"
-  j=$(ob cpu -b "$B" 1 --settle 0.5 --app sh --json)
+  j=$(ob cpu -b "$B" 1s --settle 500ms --app sh --json)
   hp=$(jq -r '.processes[0].host_pid' <<<"$j")
+  check_eq "cpu 1s --settle 500ms: units read (#273), seconds in --json" "1 0.5" "$(jq -r '"\(.seconds) \(.settle)"' <<<"$j")"
   check_eq "cpu --app sh: the processes named sh only" "sh" "$(jq -r '[.processes[].name] | unique | join(" ")' <<<"$j")"
   check "...the busy one busy (more than a fifth of a core)" jq -e --argjson p "$bp" '.processes[] | select(.pid == $p) | .cpu > 20' <<<"$j"
   check "...its host pid is the box's (omabox which)" test "$(ob which "$hp" 2>/dev/null)" = "$B"
@@ -12207,10 +12288,14 @@ t_unit_cpu() {
     $'\n  a +7 +50.0% +2.0M +1.0M\n    R +9 +30.0%\n    R +11 +10.0%  \\(started in the window\\)\n    a +7 +5.0%\n    R +10 +0.0%  \\(exited in the window\\)\n  b +11 ' "$out"
   check_match "cpu --threads alone: refused, with what to name" "--threads is for one app's threads: name it with --pid PID or --app NAME" \
     "$(ob cpu -b "$P-x" --threads 2>&1)"
-  check_match "cpu: SECONDS above 0" "SECONDS is a number above 0" "$(ob cpu -b "$P-x" 0 2>&1)"
+  check_match "cpu: a duration above 0" "cpu: how long to measure, like 5s or 500ms \(a bare number is seconds\), got 0" "$(ob cpu -b "$P-x" 0 2>&1)"
+  check_match "...500ms and --settle 1.5s read (#273), so the box is asked" "no box .$P-x. is up" "$(ob cpu -b "$P-x" 500ms --settle 1.5s 2>&1)"
+  check_match "gpu: 2x refused" "gpu: how long to measure, like 5s or 500ms.*got 2x" "$(ob gpu -b "$P-x" 2x 2>&1)"
+  check_match "...1.5s read (#273)" "no box .$P-x. is up" "$(ob gpu -b "$P-x" 1.5s 2>&1)"
   check_match "cpu: --pid or --app" "--pid or --app, not both" "$(ob cpu -b "$P-x" --pid 1 --app x 2>&1)"
   check_match "cpu: --pid junk refused" "--pid takes a pid" "$(ob cpu -b "$P-x" --pid x 2>&1)"
-  check_match "cpu: --settle junk refused" "--settle takes seconds" "$(ob cpu -b "$P-x" --settle 1s 2>&1)"
+  check_match "cpu: --settle junk refused" "--settle takes a duration, like 2s or 500ms" "$(ob cpu -b "$P-x" --settle 1x 2>&1)"
+  check_match "...--settle 0 is none" "no box .$P-x. is up" "$(ob cpu -b "$P-x" --settle 0 2>&1)"
   check "cpu is a jailed agent's, as gpu" lib broker_check cpu
   check_match "cpu takes -b first (a box command)" "no box .nope-$P. is up" "$(ob -b "nope-$P" cpu 2>&1)"
 }
@@ -12635,7 +12720,8 @@ t_unit_wait() {
   check_eq "2m" 120000 "$(lib ms_duration 2m)"
   check_eq "a bare number is seconds" 10000 "$(lib ms_duration 10)"
   check_fails "0 refused" lib ms_duration 0
-  check_fails "junk refused" lib ms_duration 2h
+  check_eq "2h (#273: hours too)" 7200000 "$(lib ms_duration 2h)"
+  check_fails "junk refused" lib ms_duration 2d
   check_eq "the cursor's rectangle" "944,524,64,64" "$(lib cursor_rect "960 540")"
   # wait layer (finding 146): newer Omarchy keeps a hidden menu mapped at 1x1; that is not the menu.
   local lj='{"HEADLESS-1":{"levels":{"2":[{"namespace":"omarchy-bar","x":0,"y":0,"w":1920,"h":34}],
@@ -13284,7 +13370,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_flag_forms t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)

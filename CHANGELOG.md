@@ -37,6 +37,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
+- **One duration grammar for every option** ([#273](https://github.com/diogochaves/omabox/issues/273)):
+  `300ms`, `2s`, `1.5m` and now `1h`; a bare number is seconds. `gpu`, `cpu` and `audio` take
+  their length as one (`omabox gpu 500ms`, `cpu 1m --settle 2s`), where they took plain numbers
+  only, and so does `$OMABOX_READY_TIMEOUT`.
+- `--active` (`--window active`) goes with `keys`, `click`, `scroll`, `pointer`, `drag` and
+  `wait` too; `check run`, `check point` and `check diff` take `--output` beside `-o`;
+  `events --grep -i RE` ignores case, as `log --grep -i RE` does; `check point` refuses a bad
+  `--timeout` before the scenario gets there.
 - **`omabox log shell` lines carry their time**, to the millisecond (`2026-10-20 14:03:07.512
   WARN qml: ...`): the box's shell runs with Quickshell's `--log-times`, and the launcher's
   `logger -t omarchy-shell` lines have the same stamp. Timing what a shell plugin does (a retry's
@@ -53,6 +61,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 ### Deprecated
 
 - `omabox wait cmd` still works, with a warning naming `wait until`; 1.0 refuses it.
+- Each of these still works, with a warning naming what to write instead, and 1.0 refuses it
+  ([#273](https://github.com/diogochaves/omabox/issues/273)):
+  - `up --idle 45` and `OMABOX_IDLE=45`, a bare number read as minutes: write `45m`.
+  - `keys -s 300` and `pointer -- sleep 300`, a bare number read as milliseconds: write `300ms`.
+  - `up -i`: write `--interactive` (`-i` is ignore-case in `log` and `events`).
+  - `save -f`: write `--force` (`-f` is follow in `log` and `events`).
+  - `shot` and `calibrate` given two files: the last was taken without a word; name one.
 
 ## 0.8.0 — 2026-10-20
 
