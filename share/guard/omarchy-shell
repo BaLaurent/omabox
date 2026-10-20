@@ -1,0 +1,26 @@
+#!/bin/sh
+# The agent guard's omarchy-shell (#290): first on a guarded agent's PATH, as quickshell is. Omarchy 4.5's
+# omarchy-shell takes the newest wayland-N in $XDG_RUNTIME_DIR when $WAYLAND_DISPLAY is empty or names
+# no socket (4.0.6 only when empty), which the guard's display never is, then answers over the shell's
+# own socket (omarchy-shell-<md5>.sock) with socat, never going near qs: the user's bar, menus and
+# panels. The guard's file $XDG_RUNTIME_DIR/omabox-guard keeps that from happening for any caller
+# (`omarchy shell`, which runs omarchy-shell by its path, too); this refuses with a reason for those that
+# call it by name, and holds should that file be gone. A display that is a socket goes on: the caller
+# named one on purpose (in a box, and for `omabox host`, the guard's directory is off PATH anyway).
+# -q (best effort) keeps its promise of success, as omarchy-shell's own failures do.
+r=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+d=${WAYLAND_DISPLAY:-}
+case $d in /*) ;; ?*) d=$r/$d ;; esac
+if [ -z "$d" ] || [ ! -S "$d" ]; then
+  echo "omabox guard: not running omarchy-shell here: from this shell it reaches the user's desktop shell (their bar, menus and panels). For a box's shell: omabox run -- omarchy-shell ..., or omabox restart-shell. Only when the user asked for their real desktop: omabox host -- CMD" >&2
+  [ "${1:-}" = -q ] && exit 0
+  exit 4
+fi
+# The next omarchy-shell on PATH that is not a guard's (any checkout's, as caller_path in bin/omabox).
+set -f; IFS=:
+for p in $PATH; do
+  case $p in */share/guard|*/share/guard/|"") continue ;; esac
+  [ -x "$p/omarchy-shell" ] && { unset IFS; exec "$p/omarchy-shell" "$@"; }
+done
+echo "omabox guard: no omarchy-shell on PATH" >&2
+exit 127

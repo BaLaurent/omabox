@@ -377,9 +377,9 @@ with `--keep wallpaper` or after a theme set in the box.
 - Before touching the real desktop for a check a box cannot make, ask once: "When a box cannot test
   it, in detail".
 - `QT_QPA_PLATFORM=offscreen` still works under the guard. To look at a web page yourself, open it in
-  your box (`omabox run -d -- xdg-open URL`, then `omabox shot`). `quickshell kill` and `qs ipc` are
-  refused ("not running quickshell kill"): they would reach the user's desktop shell; a box's shell is
-  `omabox run -- qs ipc …` or `omabox restart-shell`.
+  your box (`omabox run -d -- xdg-open URL`, then `omabox shot`). `quickshell kill`, `qs ipc` and
+  `omarchy-shell` are refused ("not running quickshell kill"): they would reach the user's desktop
+  shell; a box's shell is `omabox run -- qs ipc …` (or `omarchy-shell …`) or `omabox restart-shell`.
 - `omabox host -- CMD` examples, once the user asked for their real desktop: `omabox host -- hyprctl
   reload`, `omabox host -- omarchy-theme-set NAME`. Testing, screenshots and anything the user did not
   ask to see on their desktop stay in a box: `shot` works on a hidden interactive box.

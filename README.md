@@ -378,6 +378,10 @@ A browser already running on your desktop takes a URL over its own socket, not t
 own IPC needs no display either, so `quickshell kill` or `qs ipc` from a guarded shell would reach
 your desktop's shell (`omarchy restart shell` stopped it, and could not start it again): the same
 PATH puts `share/guard/quickshell` and `qs` first, which refuse `kill` and `ipc` and pass the rest on.
+Omarchy 4.5's `omarchy-shell` goes further: given a display that does not exist, it finds your
+session's and talks to the shell's own socket. The guard leaves an empty `omabox-guard` file in your
+runtime directory, so the guard's display exists and `omarchy-shell` stays with it, and its own
+`share/guard/omarchy-shell` refuses with a reason.
 
 - **Claude Code**: one `SessionStart` hook in `~/.claude/settings.json` (merged with yours). Every
   shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a

@@ -13268,7 +13268,13 @@ cmd_restart_shell() {
 #   as xdg-open (Codex only sets values, so it gets the variables);
 # - no stopping the desktop's shell (#141): Quickshell's IPC needs no display, so `quickshell kill` and
 #   `ipc` reached it, and `omarchy restart shell` stopped it with nothing to start it again. That PATH's
-#   share/guard/quickshell and qs refuse them (Codex, with no PATH of ours, does not get them).
+#   share/guard/quickshell and qs refuse them (Codex, with no PATH of ours, does not get them);
+# - no reaching it through omarchy-shell either (#290): Omarchy 4.5's takes the newest wayland-N when
+#   $WAYLAND_DISPLAY names no socket, then talks to the shell's own socket. An empty file named after the
+#   guard's display in $XDG_RUNTIME_DIR (GUARD_MARK, made by the hooks, `guard exec` and any omabox run
+#   under the guard) makes it a name that exists: omarchy-shell keeps it, finds no shell for it and goes
+#   to qs as 4.0.6 did, for every caller and every agent, Codex's too. A Wayland client still finds
+#   nothing to talk to there (connection refused). share/guard/omarchy-shell refuses with a reason.
 GUARD_PATH=$ROOT/share/guard
 GUARD_ENV=(WAYLAND_DISPLAY="$GUARD" HYPRLAND_INSTANCE_SIGNATURE="$GUARD" DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
   BROWSER="$GUARD_PATH/xdg-open" GH_BROWSER="$GUARD_PATH/xdg-open")
@@ -13289,6 +13295,7 @@ this task, run that command with: omabox host -- CMD"
 # SessionStart fires again on resume and compact: the line goes in once, an older omabox's in its place
 # (any line naming WAYLAND_DISPLAY=$GUARD), rewritten in the file Claude Code gave (#243).
 GUARD_HERE="{ [ -x '$ROOT/bin/omabox' ] || command -v omabox >/dev/null 2>&1; }"
+GUARD_MARK="{ [ -z \"\${XDG_RUNTIME_DIR:-}\" ] || : >> \"\$XDG_RUNTIME_DIR/$GUARD\"; } 2>/dev/null"
 GUARD_GONE="omabox guard: omabox is gone ($ROOT/bin/omabox)"
 # An upgrade that changes what `guard on` writes went unnoticed: the old hook keeps working, and only
 # `omabox guard` read it outdated (#243's change). share/guard/hook-version holds a stamp per agent
@@ -13304,7 +13311,7 @@ guard_stale() {
 echo 'omabox guard: this hook is outdated (omabox changed it): tell the user to run omabox guard on to renew it'"
 }
 GUARD_HOOK="if ! $GUARD_HERE; then echo '$GUARD_GONE, so the guard is not applied: shell commands here reach the real desktop. Its SessionStart hook (the one naming $GUARD) can go from settings.json'; \
-else if [ -n \"\$CLAUDE_ENV_FILE\" ] && l='case :\$PATH: in *:$GUARD_PATH:*) ;; *) PATH=\"$GUARD_PATH:\$PATH\" ;; esac; export ${GUARD_ENV[*]} PATH; prlimit --pid \$\$ --core=1: 2>/dev/null || true' && \
+else $GUARD_MARK; if [ -n \"\$CLAUDE_ENV_FILE\" ] && l='case :\$PATH: in *:$GUARD_PATH:*) ;; *) PATH=\"$GUARD_PATH:\$PATH\" ;; esac; export ${GUARD_ENV[*]} PATH; prlimit --pid \$\$ --core=1: 2>/dev/null || true' && \
 { grep -qxF \"\$l\" \"\$CLAUDE_ENV_FILE\" 2>/dev/null || { o=\$(grep -vF 'WAYLAND_DISPLAY=$GUARD ' \"\$CLAUDE_ENV_FILE\" 2>/dev/null); \
 { [ -z \"\$o\" ] || printf '%s\n' \"\$o\"; printf '%s\n' \"\$l\"; } > \"\$CLAUDE_ENV_FILE\"; }; }; then echo '$GUARD_NOTE'; \
 else echo 'omabox guard: NOT applied (no CLAUDE_ENV_FILE): shell commands here reach the real desktop; do GUI work in omabox anyway'; fi; \
@@ -13320,7 +13327,7 @@ GUARD_JQ='def ours: (.command? // "") | contains($g);
 # Codex sets variables, not limits. Those are fixed values, so they stay when omabox is gone: a
 # SessionStart hook in its hooks.json (issue #51; the same format as Claude Code's settings) gives the
 # note while omabox is there, and says how to take the guard out once it is not.
-GUARD_CODEX_HOOK="if $GUARD_HERE; then echo '$GUARD_NOTE'; $(guard_stale 2); \
+GUARD_CODEX_HOOK="if $GUARD_HERE; then $GUARD_MARK; echo '$GUARD_NOTE'; $(guard_stale 2); \
 else echo '$GUARD_GONE, but Codex still applies its guard: shell commands here have no display (WAYLAND_DISPLAY=$GUARD). To end it, delete the lines from # >>> omabox guard to # <<< omabox guard in Codex config.toml, and this hook from its hooks.json'; fi"
 GUARD_CODEX="# >>> omabox guard (\`omabox guard off\` removes this block)
 [shell_environment_policy.set]
@@ -13587,6 +13594,7 @@ cmd_guard() {
       [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
       parsed
       export "${GUARD_ENV[@]}" PATH="$GUARD_PATH:$PATH"; prlimit --pid $$ --core=1: 2>/dev/null || true
+      eval "$GUARD_MARK" || true
       # The pid the agent runs as (exec keeps it), so its box can go with it (finding 93). A session
       # it keeps keeps its agent too, while this runs under that one: a guard exec inside a guarded
       # agent shares the outer one's box, which must not go when the inner one exits.
@@ -15529,6 +15537,9 @@ main() {
   global_box "$@"; set -- "${ARGS[@]}"
   local cmd=${1:-help}; shift || true
   MAIN_CMD=$cmd   # the command asked for, whatever runs it (peek_marker)
+  # Under the guard, its file (GUARD_MARK, #290), should the session's hook be older than it.
+  [ "${WAYLAND_DISPLAY:-}" != "$GUARD" ] || [ -z "${XDG_RUNTIME_DIR:-}" ] || [ -e "$XDG_RUNTIME_DIR/$GUARD" ] ||
+    { : >> "$XDG_RUNTIME_DIR/$GUARD"; } 2>/dev/null || true
   # run's own failures are 125, never a code its command could have given (#273, audit X3).
   [ "$cmd" != run ] || DIE_RC=125
   # --opt=value as --opt value, before the relay or the broker takes the words.

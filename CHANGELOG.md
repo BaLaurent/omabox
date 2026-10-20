@@ -7,6 +7,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **The agent guard let Omarchy 4.5's `omarchy-shell` reach your desktop's shell** (#290). On
+  Omarchy 4.5 (its release candidates and the edge channel today), `omarchy-shell` finds your
+  session's display when the one it is given does not exist, which the guard's never does, and then
+  talks to your bar's shell directly, so a guarded agent's `omarchy shell …`, menus or theme hooks
+  could act on your real desktop. The guard now leaves a file in your runtime directory that keeps
+  `omarchy-shell` from looking further, and its own `omarchy-shell` refuses with a reason. Run
+  `omabox guard on` once to renew the hooks (sessions say theirs is outdated until you do).
 - **A box's shell was now and then killed as it started, under load** (`the shell exited after
   starting`; its log: `exited with status 137`). PipeWire, asking a box's portal for realtime limits
   it cannot give (a box has no RealtimeKit), set the shell's realtime time limit to zero, and the

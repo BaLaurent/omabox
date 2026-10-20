@@ -8412,6 +8412,25 @@ from them.
     shell's RLIMIT_RTTIME holds unlimited once its PipeWire service has tried to connect; it read
     0/0 before).
 
+403. **Omarchy 4.5's omarchy-shell reaches the desktop's shell past the guard** (2026-10-20, #290,
+    read from v4.5.0-rc1 and reproduced with its script). 4.0.6's took the newest `wayland-N` in
+    `$XDG_RUNTIME_DIR` only when `$WAYLAND_DISPLAY` was empty, then went through `qs ipc`, which
+    the guard's qs refuses (#141). 4.5's also does it when the display names no socket, which the
+    guard's `omabox-guard` never does, and then answers over the shell's own socket
+    (`omarchy-shell-<md5 of config and display>.sock`) with socat, never calling qs: menus, panels,
+    the bar. `omarchy shell ...` runs it by its path, so a PATH shim alone misses that caller, and
+    Codex gets no PATH of ours at all. **Fix**: an empty file `$XDG_RUNTIME_DIR/omabox-guard`
+    (GUARD_MARK), made by both agents' SessionStart hooks, by `guard exec`, and by any omabox
+    command run under the guard (a session whose hook predates this): the display then names
+    something that exists, so omarchy-shell keeps it, finds no shell socket for it and goes to qs as
+    4.0.6 did; a Wayland client connecting there gets "connection refused" instead of "no such
+    file", the same failure. Plus `share/guard/omarchy-shell`, first on the guarded PATH: it refuses
+    (exit 4; 0 under `-q`, which promises success) while the display is not a socket, and passes a
+    real one on. The hooks changed, so their stamps did (finding 346): guarded sessions say their
+    hook is outdated until `omabox guard on`. Tests: t_unit_guard_omarchy_shell (with
+    OMABOX_TEST_OMARCHY on a 4.5 tree, a control shows its omarchy-shell reaching a stand-in shell
+    socket without the file; under `guard exec` nothing reaches it, by path or by name).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

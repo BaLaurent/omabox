@@ -10773,6 +10773,70 @@ EOF
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host
 }
 
+# #290: Omarchy 4.5's omarchy-shell takes the newest wayland-N when $WAYLAND_DISPLAY names no socket, and
+# then talks to the desktop shell's own socket over socat, past the guard's qs. Here in a runtime dir of
+# its own, with a stand-in display wayland-1, a listener on the socket the shell would have for it, and
+# a stub qs after the guard's. The installed omarchy-shell (OMABOX_TEST_OMARCHY's, for a 4.5 tree) runs
+# by its path, as `omarchy shell` runs it: under guard exec, which makes the guard's file, the listener
+# hears nothing. Without the file a 4.5 one is heard (so the check can fail); 4.0.6's is not.
+t_unit_guard_omarchy_shell() {
+  if ! command -v python3 >/dev/null; then skip "the guard and omarchy-shell (#290)" "no python3"; return; fi
+  local d=$TMP/g290 o=${OMABOX_TEST_OMARCHY:-/usr/share/omarchy} os
+  mkdir -p "$d/rt" "$d/om/shell" "$d/stub"; chmod 700 "$d/rt"; : > "$d/om/shell/shell.qml"
+  printf '#!/bin/sh\necho "real $(basename "$0") reached: $*" >> %s/stub.log\n' "$d" > "$d/stub/qs"
+  chmod +x "$d/stub/qs"; cp "$d/stub/qs" "$d/stub/quickshell"; cp "$d/stub/qs" "$d/stub/omarchy-shell"
+  local id; id=$(printf '%s\n%s' "$d/om/shell" wayland-1 | md5sum)
+  # The display's socket, and the shell's for it: whatever connects is written down.
+  python3 - "$d/rt/wayland-1" "$d/rt/omarchy-shell-${id:0:16}.sock" "$d/heard" <<'PY' &
+import os, socket, sys
+w = socket.socket(socket.AF_UNIX); w.bind(sys.argv[1]); w.listen(4)
+s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[2]); s.listen(4)
+open(sys.argv[3] + ".ready", "w").close()
+while True:
+    c, _ = s.accept(); data = c.recv(4096)
+    with open(sys.argv[3], "ab") as f: f.write(data + b"\n")
+    c.close()
+PY
+  local L=$! i
+  for i in $(seq 50); do [ -e "$d/heard.ready" ] && break; sleep 0.1; done
+  local env=(env XDG_RUNTIME_DIR="$d/rt" OMARCHY_PATH="$d/om" PATH="$d/stub:$PATH")
+  local gx=("${env[@]}" "$CLI" guard exec --)
+  os=$o/bin/omarchy-shell
+  if [ -x "$os" ]; then
+    "${env[@]}" WAYLAND_DISPLAY=omabox-guard timeout 3 "$os" shell ping >/dev/null 2>&1 || true
+    if [ -s "$d/heard" ]; then
+      check_match "control: without the guard's file, $os reaches the shell's socket" ping "$(cat "$d/heard")"
+    else
+      skip "control: $os reaching the shell's socket without the guard's file" "it does not recover a display that names no socket (Omarchy before 4.5)"
+    fi
+    : > "$d/heard"
+    "${gx[@]}" timeout 3 "$os" shell ping >/dev/null 2>&1 || true
+    check "guard exec makes the guard's file" test -f "$d/rt/omabox-guard"
+    check_eq "...and omarchy-shell, run by its path, never reaches the shell's socket" "" "$(cat "$d/heard")"
+  else
+    skip "omarchy-shell under the guard (#290)" "no $os (OMABOX_TEST_OMARCHY names a tree)"
+  fi
+  # By name: the guard's, which refuses while the display names no socket, and passes a real one on.
+  rm -f "$d/rt/omabox-guard" "$d/stub.log"
+  check_eq "guard exec: omarchy-shell is the guard's" "$ROOT/share/guard/omarchy-shell" "$("${gx[@]}" sh -c 'command -v omarchy-shell')"
+  check_match "...which refuses" "omabox guard: not running omarchy-shell here" "$("${gx[@]}" omarchy-shell shell ping 2>&1)"
+  check_eq "...with exit 4" 4 "$("${gx[@]}" omarchy-shell shell ping >/dev/null 2>&1; echo $?)"
+  check_eq "...and 0 for -q (best effort), as omarchy-shell's own failures" 0 "$("${gx[@]}" omarchy-shell -q shell ping >/dev/null 2>&1; echo $?)"
+  check_match "...also with no guard's file and no display at all" "not running omarchy-shell here" \
+    "$("${env[@]}" WAYLAND_DISPLAY= "$ROOT/share/guard/omarchy-shell" shell ping 2>&1)"
+  check_eq "...nothing got past it" "" "$(cat "$d/stub.log" 2>/dev/null)"
+  check_eq "a display that is a socket goes on to the next omarchy-shell, its words whole" "real omarchy-shell reached: -q shell ping" \
+    "$("${env[@]}" WAYLAND_DISPLAY=wayland-1 "$ROOT/share/guard/omarchy-shell" -q shell ping >/dev/null 2>&1; cat "$d/stub.log")"
+  # Any omabox command run under the guard makes the file too (a session whose hook is older).
+  rm -f "$d/rt/omabox-guard"
+  "${env[@]}" WAYLAND_DISPLAY=omabox-guard "$CLI" --version >/dev/null 2>&1 || true
+  check "an omabox command under the guard makes the guard's file" test -f "$d/rt/omabox-guard"
+  rm -f "$d/rt/omabox-guard"
+  "${env[@]}" WAYLAND_DISPLAY=wayland-1 "$CLI" --version >/dev/null 2>&1 || true
+  check_fails "...not one outside it" test -e "$d/rt/omabox-guard"
+  kill "$L" 2>/dev/null; wait "$L" 2>/dev/null || true
+}
+
 # Under the guard, with a box standing in for the host (finding 26): box commands work, an app run
 # straight fails instead of opening a window, and omabox's own host windows (interactive, peek) and
 # --size host still find the session. Never on the real desktop.
@@ -14162,7 +14226,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_brief t_link_out t_run_cwd t_clean t_check)
