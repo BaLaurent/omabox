@@ -27,6 +27,24 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - `omabox help CMD` (or `omabox CMD --help`): one command's flags and notes; `omabox help`: every
   command (long: for an overview only).
 
+## Exit codes
+
+The same in every command (`omabox help exit-codes`):
+
+| Code | Means |
+|---|---|
+| 0 | Done, or the condition held (`wait`, `events --until`; `check run`: nothing changed). |
+| 1 | It ran and failed, or the answer is no: no such box up, a refusal, `wait`'s `unknown` (the box went down), `tree` finding nothing, `which`'s `not in a box`; `check`: a checkpoint changed. |
+| 2 | Called wrong: an unknown option or command (the nearest one is named: "did you mean --window?"), a value missing or not of its form, a word too many or too few. The message says which, and `omabox help CMD`: fix the call, do not retry it. Also `--window SEL` matching no window or several (they are listed), `which PID` for a process gone, every error of `check`'s. |
+| 3, 4 | `check run`: the scenario itself failed / no baseline to compare with. |
+| 124 | Not in time: `wait`, `--wait` (keys, click, scroll, drag, `run -d`), `events --until`. |
+| 125 | `run`: omabox's own failure (no box, a bad option, a throwaway that did not start, the box going down while the command ran), never the command's. |
+| 126, 127 | `run`: the command could not be run / was not found in the box. |
+| N | `run`, `hyprctl`: the command's own status, passed through; `run -d --wait`: the job's, when it ended before the screen settled. |
+| 128+N | Ended by signal N (130: Ctrl-C). |
+
+An option that takes a value takes it as `--opt VALUE` or `--opt=VALUE`, in every command.
+
 ## For subagents in an isolated worktree
 
 Claude Code checks each Bash call of a worktree-isolated subagent and refuses what it cannot follow:

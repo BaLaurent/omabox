@@ -570,7 +570,7 @@ t_unit_record() {
   check_match "...an action naming another box" "the action runs on the recorded box \(no -b\)" "$(ob record -- keys -b x Return 2>&1)"
   check_match "...an action with start" "records one action .*not with start" "$(ob record start -- keys Return 2>&1)"
   check_match "...--hold past 60s" "--hold takes a duration up to 60s" "$(ob record --hold 2m -- keys Return 2>&1)"
-  check_match "...an unknown word" "start, stop, status, mark, hold, sheet, -- ACTION \(an omabox command\) or --for DURATION, got go" "$(ob record go 2>&1)"
+  check_match "...an unknown word" "record: unknown subcommand go \(start, stop, status, mark, hold, sheet, -- ACTION: an omabox command, or --for DURATION\)" "$(ob record go 2>&1)"
   # Time in a recording (#259, #280): --for and hold, refused with exit 2 before any box is looked at.
   rx() { local o rc=0; o=$(ob record "$@" 2>&1) || rc=$?; echo "$rc $o"; }
   check_match "record --for 0: refused, exit 2" "^2 omabox: record: --for takes a duration up to 60m, like 5s or 1.5m \(a bare number is seconds\), got 0$" "$(rx --for 0)"
@@ -805,7 +805,7 @@ t_unit_flag_forms() {
   check_match "check run --output is -o" "check run: unknown option --bogus" "$(ob check run --output "$TMP/cr" --bogus 2>&1)"
   check_match "check point --output is -o" "no box .$P-nope. is up" "$(ob check point -b "$P-nope" id1 --output "$TMP/cp" 2>&1)"
   check_match "check diff --output is -o" "check diff: no such file" "$(ob check diff "$TMP/none1.png" "$TMP/none2.png" --output "$TMP/cd.png" 2>&1)"
-  check_match "check point --timeout soon: refused up front, exit 2" "^omabox: check point: --timeout takes a duration up to 10m, like 15s.*got soon"$'\n'"2$" \
+  check_match "check point --timeout soon: refused up front, exit 2" "^omabox: check point: --timeout takes a duration up to 10m, like 15s.*got soon .*"$'\n'"2$" \
     "$(ob check point id1 -o "$TMP/cp" --timeout soon 2>&1; echo "$?")"
   check_match "...11m too" "check point: --timeout takes a duration up to 10m" "$(ob check point id1 -o "$TMP/cp" --timeout 11m 2>&1)"
   check_match "events --grep -i RE, as log takes it" "no box .$P-nope. is up" "$(ob events -b "$P-nope" --grep -i x 2>&1)"
@@ -813,6 +813,133 @@ t_unit_flag_forms() {
     "$(ob shot -b "$P-nope" a.png -o b.png 2>&1)"
   check_eq "...one: no warning" "" "$(ob shot -b "$P-nope" -o b.png 2>&1 | grep warning)"
   check_match "calibrate with two cards: warned" "warning: calibrate: two files, a.png and b.png" "$(ob calibrate a.png -o b.png --bogus 2>&1)"
+}
+
+# #273 part B: one meaning per exit code. A usage error (an unknown option or word, a value missing
+# or not of its form, a word too many) exits 2 in every command, naming the nearest option and omabox
+# help CMD; run's own failures exit 125; --opt=value everywhere. All before any box is asked.
+t_unit_exit_codes() {
+  local c out rc bad="" a
+  # (not: hyprctl and pointer, whose other words are the tools'; clip, which refuses agents first;
+  # check, whose first word is its subcommand)
+  for c in $(lib eval 'printf "%s\n" "${!CMD_OPTS[@]}"' | sort); do
+    case $c in hyprctl|pointer|clip|check) continue ;; esac
+    out=$(ob "$c" --bogus-opt 2>&1); rc=$?
+    if [ "$c" = run ]; then [ "$rc" = 125 ] || bad+=" $c($rc)"; continue; fi
+    [[ $rc = 2 && $out == *"$c: unknown option --bogus-opt"*"(omabox help $c)" ]] || bad+=" $c($rc: $out)"
+  done
+  check_eq "every command: an unknown option exits 2, naming omabox help CMD (run: 125)" "" "$bad"
+  bad=""
+  for c in "check run" "check point" "check diff"; do
+    read -ra a <<<"$c"; out=$(ob "${a[@]}" --bogus-opt 2>&1); rc=$?
+    [[ $rc = 2 && $out == *"$c: unknown option --bogus-opt"* ]] || bad+=" $c($rc)"
+  done
+  check_eq "...check's subcommands too" "" "$bad"
+  bad=""
+  check_eq "the nearest option: --widnow is --window" "omabox: shot: unknown option --widnow (did you mean --window?) (omabox help shot)" \
+    "$(ob shot --widnow x 2>&1)"
+  check_match "...a start of one only: --win" "unknown option --win \(did you mean --window\?\)" "$(ob shot --win x 2>&1)"
+  check_match "...given with =VALUE: the option's name compared" "unknown option --jsno=1 \(did you mean --json\?\)" "$(ob windows --jsno=1 2>&1)"
+  check_eq "...none when none is near, or several are" "omabox: shot: unknown option -x (omabox help shot)" "$(ob shot -x 2>&1)"
+  check_match "...a command's: shoot is shot, exit 2" "^omabox: unknown command: shoot \(did you mean shot\?\).*"$'\n'"2$" "$(ob shoot 2>&1; echo $?)"
+  check_match "...and after -b NAME" "unknown command: windwos \(did you mean windows\?\)" "$(ob -b "$P-x" windwos 2>&1)"
+  check_match "...a subcommand's: record strat" "record: unknown subcommand strat \(did you mean start\?\)" "$(ob record strat 2>&1)"
+  check_match "...wait's condition" "wait: unknown condition stil \(did you mean still\?\)" "$(ob wait stil 2>&1)"
+  check_match "...check's" "check: unknown subcommand rnu \(did you mean run\?\)" "$(ob check rnu 2>&1)"
+  check_match "...monitor's" "monitor: unknown subcommand ad \(did you mean add\?\)" "$(ob monitor ad 2>&1)"
+  check_match "...config's keys" "config: unknown key gpuu \(did you mean gpu\?\)" "$(ob config gpuu 2>&1)"
+  check_match "...log's names" "log: unknown log hyprlnad \(did you mean hyprland\?\)" "$(ob log hyprlnad 2>&1)"
+  check_eq "did_you_mean: a swap is one typo" " (did you mean --window?)" "$(lib did_you_mean --windwo --window --wait)"
+  check_eq "...far is nothing" "" "$(lib did_you_mean --zzzz --window --wait)"
+  check_eq "...a tie is nothing" "" "$(lib did_you_mean -x -b -g -o)"
+  # A value missing: the form help gives it.
+  check_eq "a value missing: exit 2, with its form from help" \
+    "omabox: shot: -g needs a value: -g \"X,Y WxH\" (omabox help shot) 2" "$(o=$(ob shot -g 2>&1); echo "$o $?")"
+  check_match "...up --monitor" "up: --monitor needs a value: --monitor WxH\[@HZ\]\[,scale=S\]\[,right\|below\|X,Y\] " "$(ob up --monitor 2>&1)"
+  # A value not of its form, a word too many or too few, two that do not go together: 2.
+  local args
+  for args in "shot --fit abc" "wait --timeout soon still" "click 1" "click 1 2 thumb" "scroll 1 2" "keys" "tree --window a --layer b" \
+      "record --fps 0 start" "events foo" "config a b c" "config workspace 0" "mode 5x" "monitor list x" "output" "guard on claude x" \
+      "which" "ls x" "saves x" "down --all x" "cpu --pid 1 --app x" "audio 0" "gpu soon" "peek --fps 0" "save" "check diff a" "lua"; do
+    read -ra a <<<"$args"
+    out=$(ob "${a[@]}" 2>&1); rc=$?
+    [ "$rc" = 2 ] || bad+=" [$args: $rc $out]"
+  done
+  check_eq "usage errors exit 2: bad values, words too many or too few, two that do not go together" "" "$bad"
+  bad=""
+  check_match "...said with omabox help CMD" "omabox: click: need X Y, got 1 number \(omabox help click\)" "$(ob click 1 2>&1)"
+  # Not a usage error: a failure is 1 (no such box), a refusal of a jail's or a policy's too.
+  check_eq "a box that is not up: 1, not 2" "1 1 1" \
+    "$(for c in windows shot "keys a"; do read -ra a <<<"$c"; ob "${a[@]}" -b "$P-nope" >/dev/null 2>&1; echo $?; done | paste -sd ' ')"
+  bad=""
+  # --opt=value (audit F9): split where an option goes, never in a value nor after --.
+  check_eq "eq_split: --opt=value, a value with =, a value that looks like one, after --" \
+    "[--fit][300][--window][title:a=b][-g][--x=y][--after][--][--fit=3]" \
+    "$(lib eval 'eq_split shot --fit=300 --window=title:a=b -g --x=y --after -- --fit=3; printf "[%s]" "${ARGS[@]}"')"
+  check_eq "...a value starting with -- stays a value (log --grep --x=y)" "[--grep][--x=y][-n][5]" \
+    "$(lib eval 'eq_split log --grep --x=y -n 5; printf "[%s]" "${ARGS[@]}"')"
+  check_eq "...run: only up to the command (its words are its own)" "[--size][800x600][echo][--size=1]" \
+    "$(lib eval 'eq_split run --size=800x600 echo --size=1; printf "[%s]" "${ARGS[@]}"')"
+  check_eq "...keys: -t's text is the text" "[-t][--pass=x][--pass][V]" \
+    "$(lib eval 'eq_split keys -t --pass=x --pass=V; printf "[%s]" "${ARGS[@]}"')"
+  check_eq "...an optional value (events --mark=M, record --cut-idle then an option)" "[--mark][m1] [--cut-idle][--fps][30]" \
+    "$(lib eval 'eq_split events --mark=m1; printf "[%s]" "${ARGS[@]}"; echo -n " "; eq_split record --cut-idle --fps=30; printf "[%s]" "${ARGS[@]}"')"
+  check_eq "...an unknown --x=y left to the parser" "[--zz=1]" "$(lib eval 'eq_split shot --zz=1; printf "[%s]" "${ARGS[@]}"')"
+  check_eq "an option that takes no value refuses one, exit 2" "omabox: windows: --json takes no value, got --json=1 (omabox help windows) 2" \
+    "$(o=$(ob windows --json=1 2>&1); echo "$o $?")"
+  check_match "--opt=value reaches the parser: shot --fit=abc" "shot: --fit takes the longest side.*got abc" "$(ob shot --fit=abc 2>&1)"
+  check_match "...--box=NAME, after the command and before it" "no box .$P-nope. is up.*no box .$P-nope. is up" \
+    "$(ob windows --box="$P-nope" 2>&1; ob --box="$P-nope" windows 2>&1)"
+  check_match "...up --idle=45 is up --idle 45 (warned)" "warning: --idle 45 is minutes" "$(ob up "$P-x1" --idle=45 --confirm-close 2>&1)"
+  # run (audit X3): its own failures 125, whatever they are, so the command's codes are its own.
+  for args in "run --bogus -- true" "run" "run --wait -- true" "run -b $P-nope -- true" "run -d -b $P-nope -- true" "run --env=BAD -- true" \
+      "run -b -bad -- true"; do
+    read -ra a <<<"$args"
+    out=$(ob "${a[@]}" 2>&1); rc=$?
+    [ "$rc" = 125 ] || bad+=" [$args: $rc $out]"
+  done
+  check_eq "run's own failures exit 125: a bad option, nothing to run, no box, a bad name" "" "$bad"
+  check_match "...said with omabox help run" "run: unknown option --bogus .*\(omabox help run\)" "$(ob run --bogus -- true 2>&1)"
+  bad=""
+  # The refusals that did not name the fix (audit E3-E22).
+  check_match "a bad box name: what one is (E3), exit 2" "windows: bad box name -bad: a box name starts with a letter or digit, then letters, digits, \. _ - \(40 at most\).*"$'\n'"2$" \
+    "$(ob windows -b -bad 2>&1; echo $?)"
+  check_match "...a name given with other characters: warned, written to fit" "warning: box name 'a b' is written 'a-b': .*\(refused in 1\.0\)" "$(ob windows -b "a b" 2>&1)"
+  check_match "a box's name where no word goes: -b named (E4)" "windows: unexpected e4box \(box 'e4box'\? a box goes with -b: -b e4box\)" \
+    "$(mkdir -p "$TMP/bx/e4box"; lib eval "BOXES=$TMP/bx; PARSING=1; MAIN_CMD=windows; unexpected windows e4box" 2>&1)"
+  check_match "keys with nothing to send: by example (E8)" "keys: nothing to send: a combo \(keys super\+space\), text \(keys -t hello\)" "$(ob keys 2>&1)"
+  check_match "--mod with no modifier: the command, and the list (E15, E17)" "^omabox: click: --mod: '' is not a modifier \(super, ctrl, shift, alt, altgr\)" "$(ob click --mod + 1 1 2>&1)"
+  check_match "config with three words: what goes there (E6)" "config: one KEY and a VALUE at most, got 3 words \(keys: workspace" "$(ob config a b c 2>&1)"
+  check_match "monitor remove alone: which, and where to see them (E7)" "monitor remove: which\? one monitor's name.*omabox monitor list" "$(ob monitor remove 2>&1)"
+  check_match "guard with a word too many: its usage (E14)" "guard: too many arguments, got on claude x: omabox guard \[on\|off\] \[claude\|codex\]" "$(ob guard on claude x 2>&1)"
+  check_match "events with a word: where a mark goes (E20)" "events: unexpected foo \(events takes no word of its own: a mark's name goes after --mark or --since\)" "$(ob events foo 2>&1)"
+  # The table, in help and in the skill's reference (X7).
+  out=$(ob help exit-codes)
+  for c in "  0  " "  1  " "  2  " "  3, 4  " "  124  " "  125  " "  126, 127  " "128+N"; do [[ $out == *"$c"* ]] || bad+=" [$c]"; done
+  check_eq "help exit-codes: one table, every code" "" "$bad"
+  check_match "...and help help shows it" "Exit codes, the same in every command" "$(ob help help)"
+  check_match "...the skill's reference has it" "## Exit codes" "$(cat "$ROOT/skill/reference.md")"
+}
+
+# #273 part B: every option help shows a command taking is in CMD_OPTS, the table --opt=value and
+# the nearest-option hint read: help and the parsers cannot drift apart unseen.
+t_unit_cli_contract() {
+  local c tab syn miss bad=""
+  for c in $(lib eval 'printf "%s\n" "${!CMD_OPTS[@]}"' | sort); do
+    tab=$(lib cmd_opts "$c" | sed 's/[=?]$//'; printf '%s\n' -h --help)
+    syn=$(ob help "$c" | awk '$0 == "" { exit } { sub(/^ +/, ""); sub(/   .*/, ""); if ($0 != "") print }' |
+      grep -oE '(^|[[ (|])-{1,2}[a-zA-Z][a-zA-Z0-9-]*' | sed 's/^[[ (|]//' | sort -u)
+    # (run's help has up's lines: these are up's own, refused by run)
+    [ "$c" != run ] || syn=$(grep -vxE -- '--(confirm-close|no-confirm-close|interactive|new|workspace)' <<<"$syn")
+    miss=$(comm -23 <(printf '%s\n' "$syn") <(sort -u <<<"$tab") | xargs)
+    [ -z "$miss" ] || bad+=" $c: $miss;"
+  done
+  check_eq "every option in a command's help lines is in its CMD_OPTS" "" "$bad"
+  check_eq "...and every command with options has a CMD_OPTS line" "" \
+    "$(for c in $(ob help | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u); do
+         case $c in help|--version|which|guard|host|broker|check) continue ;; esac
+         lib cmd_opts "$c" >/dev/null || echo -n " $c"
+       done)"
 }
 
 # finding 325: which of a caller's fds a box could reach again through /proc, and so are relayed.
@@ -1065,7 +1192,7 @@ t_unit_refusals() {
   done
   check_match "--addr outside the documentation ranges refused" "documentation range.*got 10.1.2.3" "$(ob up "$P-r28" --net isolated --addr 10.1.2.3 2>&1)"
   check_match "--addr needs --net isolated" "--addr needs --net isolated" "$(ob up "$P-r29" --addr 203.0.113.10 2>&1)"
-  check_match "a box name with characters it cannot have: said as written (#107)" "note: box name '$P-r27 x!' written as '$P-r27-x-'" \
+  check_match "a box name with characters it cannot have: said as written (#107)" "warning: box name '$P-r27 x!' is written '$P-r27-x-': .*\(refused in 1\.0\)" \
     "$(ob up "$P-r27 x!" --net isolated --allow 0 2>&1)"
   local r; for r in 21 22 23 24 25 26 27-x- 28 29; do check_fails "...no box dir or lock for $P-r$r" test -e "$XDG_RUNTIME_DIR/omabox/$P-r$r" -o -e "$XDG_RUNTIME_DIR/omabox/.lock-$P-r$r"; done
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-r" || true)
@@ -3526,6 +3653,9 @@ r pwd \$O run -- sh -c 'pwd; cat README'
 r shot \$O shot
 r shotfile sh -c 'f=\$(ls /tmp/omabox-*.png); head -c 8 "\$f" | od -An -c | tr -d " \n"'
 r shot-o \$O shot -o ./out.png
+r usage \$O windows --jsno
+r run-rc \$O run -- sh -c 'exit 3'
+r run-own \$O run -b $P-none -- true
 r changed \$O shot --changed -o ./changed.png
 r since \$O shot --since ./out.png
 r travel-mod \$O click --steps 3 --mod ctrl 960 600
@@ -3566,6 +3696,10 @@ EOF
   check_match "a shot is written into the jail" "211PNG" "$(sect shotfile)"
   check_match "shot -o into the jail's project" "out.png rc=0" "$(sect shot-o)"
   check "...there, on the host too" test -s "$repo/out.png"
+  # #273: exit codes pass through the relay: a usage error 2, run's command's own, run's own 125.
+  check_match "a usage error from the jail: 2, with the nearest option" "did you mean --json.* rc=2 $" "$(sect usage)"
+  check_eq "run's command's status through the broker" "rc=3 " "$(sect run-rc)"
+  check_match "run's own failure through the broker: 125" "rc=125 $" "$(sect run-own)"
   # #145, finding 243: the broker keeps the last frame; nothing changed is no file in the jail.
   check_match "shot --changed through the broker, nothing changed since: said, rc 0" "nothing changed in the screen since $repo/out\.png .*rc=0" "$(sect changed)"
   check_fails "...no image written" test -e "$repo/changed.png"
@@ -3770,9 +3904,9 @@ t_unit_cli() {
   check_eq "help CMD starts with CMD's line, for each command" "" "$bad"
   bad=""
   for c in $(lib usage_text | awk '/^@/ {for (i = 2; i <= NF; i++) print $i}' | sort -u); do
-    grep -qx -- "$c" <<<"$cmds" || bad+=" $c"
+    grep -qx -- "$c" <<<"$cmds" || [ "$c" = exit-codes ] || bad+=" $c"
   done
-  check_eq "...every paragraph's @ names a command" "" "$bad"
+  check_eq "...every paragraph's @ names a command (or the exit-codes topic)" "" "$bad"
   check_match "...the first paragraph has one (so every line has one)" "^@ " "$(lib usage_text | awk 'NR > 2 && p {print; exit} NR > 2 && $0 == "" {p = 1}')"
   check_fails "...the @ lines never in the full help" grep -q '^@' <<<"$full"
   check_eq "shot --help is help shot" "$(ob help shot)" "$(ob shot --help)"
@@ -3811,7 +3945,7 @@ t_unit_cli() {
   # After ls (#236): the same line and exit, not the table with -b and --json dropped.
   check_eq "...after ls too, --json or not" "omabox: ls takes no -b: it is not about one box 2" "$(o=$(ob ls -b "$P-x" --json 2>&1); echo "$o $?")"
   check_eq "...and list, as list" "omabox: list takes no -b: it is not about one box 2" "$(o=$(ob list --box "$P-x" 2>&1); echo "$o $?")"
-  check_eq "ls: an unknown argument refused, exit 2 (#236)" "omabox: ls: unknown argument --bogus (omabox ls [--json]) 2" "$(o=$(ob ls --json --bogus 2>&1); echo "$o $?")"
+  check_eq "ls: an unknown argument refused, exit 2 (#236)" "omabox: ls: unknown option --bogus (omabox ls [--json]) (omabox help ls) 2" "$(o=$(ob ls --json --bogus 2>&1); echo "$o $?")"
   check_eq "...an unknown one: one line" 1 "$(ob -b "$P-x" shoot 2>&1 | wc -l)"
   check_match "...no command: said" "goes with a command" "$(ob -b "$P-x" 2>&1)"
   check_match "...help still helps" "omabox up" "$(ob -b "$P-x" help 2>&1)"
@@ -5310,7 +5444,7 @@ t_unit_saves() {
   check_match "saves rm of none says so" "no save" "$(sv saves rm "$P-none" 2>&1)"
   check_match "saves: an unknown word refused" "rm SAVE" "$(sv saves junk 2>&1)"
   # As ls's (finding 327): --json with anything else after it printed the JSON and exited 0.
-  check_eq "...after --json too, exit 2, no JSON" "omabox: saves: unknown argument --bogus (omabox saves [--json] | saves rm SAVE...) 2" \
+  check_eq "...after --json too, exit 2, no JSON" "omabox: saves: unknown option --bogus (omabox saves [--json] | saves rm SAVE...) (omabox help saves) 2" \
     "$(o=$(sv saves --json --bogus 2>&1); echo "$o $?")"
   check_eq "...-b after saves: the line -b before it gives" "omabox: saves takes no -b: it is not about one box 2" "$(o=$(sv saves -b "$P-x" 2>&1); echo "$o $?")"
   check_eq "...--json twice is --json" "[]" "$(sv saves --json --json)"
@@ -8372,7 +8506,7 @@ t_own_processes() {
   check "...its Hyprland answering" ob hyprctl -b "$B" version
   out=$(ob run -b "$B" -- sh -c 'pkill -x Hyprland; sleep 10' 2>&1); rc=$?
   check_match "a box ended from inside: said in words" "box '$B' went down while this command ran" "$out"
-  check "...not exit 0" test "$rc" != 0
+  check_eq "...exit 125, run's own: the command's status was the box's end (#273)" 125 "$rc"
   # #166: instead of nsenter's line or bash's "Killed" one for it, not after them.
   check_eq "...in those words alone" 1 "$(grep -c . <<<"$out")"
   ob down "$B" >/dev/null 2>&1
@@ -12340,7 +12474,7 @@ t_unit_pointer() {
     check_match "click X Y $b taken (to the box lookup)" "no box '$P-x'" "$(ob click -b "$P-x" 1 1 "$b" 2>&1)"
   done
   check_match "...drag X1 Y1 X2 Y2 back too" "no box '$P-x'" "$(ob drag -b "$P-x" 1 1 2 2 back 2>&1)"
-  check_match "...click thumb refused" "click: bad argument thumb" "$(ob click -b "$P-x" 1 1 thumb 2>&1)"
+  check_match "...click thumb refused" "click: unexpected thumb \(X Y in whole pixels, then a button: left, right" "$(ob click -b "$P-x" 1 1 thumb 2>&1)"
   # The input tools refuse outside a box before they connect (SECURITY.md): run from a host shell they
   # would drive the real desktop. Checked in a sandbox with no /opt/omabox, no runtime dir, no display.
   local t out rc
@@ -12747,9 +12881,9 @@ t_unit_wait() {
     "$(ob wait -b "$P-x" cmd -- true 2>&1 | head -n 1)"
   check_match "...and then read as until (no box here)" "no box '$P-x'" "$(ob wait -b "$P-x" cmd -- true 2>&1)"
   check_eq "...wait until is not warned" "" "$(ob wait -b "$P-x" until -- true 2>&1 | grep warning)"
-  check_eq "...the same refusals: cmd" "omabox: wait cmd: --ignore goes with still and change" \
+  check_eq "...the same refusals: cmd" "omabox: wait cmd: --ignore goes with still and change (omabox help wait)" \
     "$(ob wait -b "$P-x" cmd --ignore "1,1 5x5" -- true 2>&1 | grep -v warning)"
-  check_eq "...until" "omabox: wait until: --ignore goes with still and change" \
+  check_eq "...until" "omabox: wait until: --ignore goes with still and change (omabox help wait)" \
     "$(ob wait -b "$P-x" until --ignore "1,1 5x5" -- true 2>&1)"
   check_match "...help says until" "until -- CMD \[ARG\.\.\.\]" "$(ob help wait 2>&1)"
   check_match "path: one of --home, --run, --logs" "one of --home, --run and --logs" "$(ob path -b "$P-x" --home --logs 2>&1)"
@@ -13066,7 +13200,7 @@ t_unit_inspect() {
   exec {in}<&-; kill "$sl" 2>/dev/null
   check_match "lua: a source starting with - goes after --" "goes after --" "$(ob lua -b "$P-x" -1 2>&1)"
   check "lua is a jailed agent's, as hyprctl is" lib broker_check lua
-  check_match "log: an unknown log named, with the ones there are" "no log called nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"
+  check_match "log: an unknown log named, with the ones there are" "unknown log nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"
   check_match "log -n takes a number or all" "-n takes a number" "$(ob log -b "$P-x" -n 5x 2>&1)"
   check_match "log --grep: a bad expression said" "takes a regular expression" "$(ob log -b "$P-x" --grep '(' 2>&1)"
   # #130: `--grep -i RE` took -i as the expression, and RE as a log's name.
@@ -13370,7 +13504,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_flag_forms t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)

@@ -56,7 +56,7 @@ usage() {
   if [ $# = 0 ]; then usage_text | grep -v '^@'; return; fi
   local c=$1 out
   case $c in
-    help|-h|--help) usage; return ;;
+    -h|--help) usage; return ;;
     screenshot) c="shot" ;; logs) c="log" ;; list) c="ls" ;; version|-V) c="--version" ;;
   esac
   # run takes up's options (a throwaway box): its help has up's lines too, after its own.
@@ -68,7 +68,7 @@ usage() {
     /^@/ { on = 0; for (i = 2; i <= NF; i++) if ($i == c) on = 1
            if (on && !gap++) print ""; next }
     on')
-  [ -n "$out" ] || { say "unknown command: $1 (omabox help lists the commands and their options)"; exit 2; }
+  [ -n "$out" ] || unknown_command "$1"
   printf '%s\n\n%s\n' "$out" "omabox help: every command."
 }
 
@@ -76,7 +76,7 @@ usage() {
 # up --owner PID (run's throwaway box); shot --to-fd N --as FILE and record --to-fd, --marks-fd,
 # --vtt-fd, --from-fd, --marks-from-fd, --as, --file (a jailed agent's omabox and the broker; a
 # jailed caller's own are refused: relay_record); the _reap command; OMABOX_CHECK_NAME,
-# OMABOX_CHECK_OUT, OMABOX_SHOT_NO_BASELINE, OMABOX_BROKER_PEER, OMABOX_JAIL.
+# OMABOX_CHECK_OUT, OMABOX_SHOT_NO_BASELINE, OMABOX_BROKER_PEER, OMABOX_JAIL, OMABOX_RELAY_FAIL.
 usage_text() {
   cat <<EOF
 omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
@@ -182,6 +182,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox setup --feedback-skill|--no-feedback-skill      opt in to the omabox-feedback skill, or out again
   omabox setup --aquamarine [--force]                    build omabox's aquamarine: the fix, and its own patches
   omabox --version                                       and which aquamarine new boxes use
+  omabox help [COMMAND | exit-codes]                     one command's options and notes; what each exit code means
 
 @ up run ls down path
 NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
@@ -207,6 +208,9 @@ Outside any repo a throwaway mounts nothing of the current dir: the command runs
 (/home/sbx), said when a word of it is a path there; \`run --overlay DIR\` (or --ro-bind DIR)
 brings it in.
 --net isolated --allow PORTS on a throwaway \`run\` keeps tests off your real local services.
+\`run\` exits with the command's status; 125 is run's own failure (no box, a bad option, a throwaway
+that did not start, the box going down while the command ran), never a code of the command's
+(omabox help exit-codes).
 @ up run ports
 Every box has its own network (pasta): by default the internet, the LAN and your servers. Across
 the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
@@ -750,13 +754,95 @@ A save keeps what a box's apps set up (signed in, a PIN, a library): the box HOM
 its logs, keyring included, paused for the copy. \`up --from\` starts with it, then seeds your Omarchy
 look on top as for any box (theme, bar, terminals: today's, or --theme's, not the save's). Close an
 app first for a clean save. Saves live in ~/.local/share/omabox/saves until \`saves rm\`.
+@ exit-codes help
+Exit codes, the same in every command:
+  0         done, or the condition held (wait, events --until; check run: nothing changed)
+  1         it ran and failed, or the answer is no: no such box up, a refusal, wait's "unknown" (the
+            box went down), tree finding nothing, which's "not in a box"; check: a checkpoint changed
+  2         called wrong: an unknown option or command (the nearest one named), a value missing or
+            not of its form, a word too many or too few; said with omabox help COMMAND. Also: --window
+            SEL matching no window or several (listed), which PID for a process gone, check's errors
+  3, 4      check run: the scenario itself failed / no baseline to compare with
+  124       not in time: wait, --wait (keys, click, scroll, drag, run -d), events --until
+  125       run: omabox's own failure (no box, a bad option, a throwaway that did not start, the box
+            going down while the command ran), never the command's
+  126, 127  run: the command could not be run / was not found in the box
+  N         run, hyprctl: the command's own status, passed through; run -d --wait: the job's, when it
+            ended before the screen settled
+  128+N     ended by signal N (130: Ctrl-C)
+An option that takes a value takes it as --opt VALUE or --opt=VALUE, in every command.
 EOF
 }
 
-# DIE_RC: the exit code of a refusal; 1 by default, 2 under `check` (its 1 is "changed", #281).
-die() { echo "omabox: $*" >&2; exit "${DIE_RC:-1}"; }
-optarg() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"; }   # optarg "$@" before reading $2
+# Exit codes, one meaning in every command (#273; the table is `omabox help exit-codes`): 1 a command
+# that ran and failed, 2 one called wrong (a usage error), 124 not in time, 125 run's own failure.
+# DIE_RC: the exit code of every refusal when set: 2 under `check` (its 1 is "changed", #281), 125
+# under `run` (its other codes are the command's). PARSING: 1 while the command line is read (main
+# sets it, `parsed` and select_box end it), when a refusal is a usage error: exit 2, and where the
+# command's options are. Both start empty whatever the environment has.
+DIE_RC="" PARSING=0
+die() { [ "$PARSING" != 1 ] || usage_die "$@"; echo "omabox: $*" >&2; exit "${DIE_RC:-1}"; }
+# A usage error: exit 2 (run's 125), the message followed by where the command's options are.
+usage_die() {
+  local m="$*"
+  [[ $m == *"omabox help"* || $m == *--help* ]] || m+=" (omabox help${MAIN_CMD:+ $MAIN_CMD})"
+  echo "omabox: $m" >&2; exit "${DIE_RC:-2}"
+}
+# The command line read: refusals from here are failures (1), not usage errors.
+parsed() { PARSING=0; }
+# A failure while the command line is still read (a tool missing, a lock held): 1, never a usage error.
+fail() { PARSING=0 die "$@"; }
+# Exit as die would, for a refusal a helper has said already (say, then return 1): `x=$(f) || refused`.
+refused() { [ -z "$DIE_RC" ] || exit "$DIE_RC"; [ "$PARSING" != 1 ] || exit 2; exit 1; }
+# optarg "$@" before reading $2: an option with no value is a usage error naming the form help gives it.
+optarg() { [ $# -ge 2 ] && [ -n "$2" ] || usage_die "${MAIN_CMD:+$MAIN_CMD: }$1 needs a value$(opt_form "$1")"; }
 say() { echo "omabox: $*" >&2; }
+# The form help gives OPT's value in, as ": OPT VALUE" (": -g "X,Y WxH""), from the command's lines
+# in `omabox help CMD`; nothing when help shows none. opt_form OPT
+opt_form() {
+  [ -n "${MAIN_CMD:-}" ] || return 0
+  usage "$MAIN_CMD" 2>/dev/null | awk -v o="$1" '
+    function n(s, c,   t) { t = s; return gsub(c, "", t) }
+    $0 == "" { exit }
+    { for (i = 1; i < NF; i++) {
+        t = $i; sub(/^[[(]+/, "", t); if (t != o) continue
+        v = $(i + 1); if (v ~ /^[-[|(]/) continue
+        if (v ~ /^"/) while (v !~ /^".*"/ && i + 2 <= NF) { i++; v = v " " $(i + 1) }
+        sub(/\.\.\.$/, "", v)
+        while (v ~ /[])|]$/) {
+          if (v ~ /]$/ && n(v, "\\[") >= n(v, "]")) break
+          if (v ~ /\)$/ && n(v, "\\(") >= n(v, "\\)")) break
+          v = substr(v, 1, length(v) - 1)
+        }
+        printf ": %s %s", o, v; exit } }'
+}
+# " (did you mean X?)" for the CANDIDATE nearest WORD: the only one it is the start of, or the only
+# one nearest and a typo away (a letter wrong, missing or extra, or two swapped; two typos past 4
+# letters, three past 10). Nothing otherwise. did_you_mean WORD CANDIDATE...
+did_you_mean() {
+  local w=$1; shift
+  [ -n "$w" ] && [ $# -gt 0 ] || return 0
+  printf '%s\n' "$@" | awk -v w="$w" '
+    function dist(a, b,   la, lb, i, j, x, y, d) {
+      la = length(a); lb = length(b)
+      for (i = 0; i <= la; i++) d[i, 0] = i
+      for (j = 0; j <= lb; j++) d[0, j] = j
+      for (i = 1; i <= la; i++) for (j = 1; j <= lb; j++) {
+        x = d[i - 1, j] + 1; y = d[i, j - 1] + 1; if (y < x) x = y
+        y = d[i - 1, j - 1] + (substr(a, i, 1) != substr(b, j, 1)); if (y < x) x = y
+        if (i > 1 && j > 1 && substr(a, i, 1) == substr(b, j - 1, 1) && substr(a, i - 1, 1) == substr(b, j, 1)) {
+          y = d[i - 2, j - 2] + 1; if (y < x) x = y }
+        d[i, j] = x }
+      return d[la, lb] }
+    $0 != "" && !seen[$0]++ { c[++n] = $0 }
+    END {
+      lw = tolower(w); core = lw; sub(/^-+/, "", core)
+      if (length(core) >= 2) for (k = 1; k <= n; k++) if (index(c[k], lw) == 1 && c[k] != lw) { p++; pk = c[k] }
+      if (p == 1) { printf " (did you mean %s?)", pk; exit }
+      t = length(lw) <= 4 ? 1 : length(lw) <= 10 ? 2 : 3; best = t + 1
+      for (k = 1; k <= n; k++) { d = dist(lw, c[k]); if (d < best) { best = d; bk = c[k]; ties = 0 } else if (d == best) ties++ }
+      if (best <= t && best > 0 && !ties) printf " (did you mean %s?)", bk }'
+}
 # GNU find goes back to the dir it started in when it ends, and exits 1 when that is one the user
 # cannot read (an su or runuser that kept root's): with set -e, `up` and `shot` ended there with only
 # its "Failed to restore initial working directory". From such a dir every find here runs from /
@@ -956,7 +1042,16 @@ lock_file() {
 select_box() {
   NAME=${1:-$(default_name)}
   NAME=$(printf '%s' "$NAME" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-40)
-  [[ $NAME =~ ^[A-Za-z0-9] ]] || die "bad box name: $NAME"
+  if ! [[ $NAME =~ ^[A-Za-z0-9] ]]; then
+    local m="${MAIN_CMD:+$MAIN_CMD: }bad box name ${1:-$NAME}: a box name starts with a letter or digit, then letters, digits, . _ - (40 at most)"
+    if [ -n "${1:-}" ]; then usage_die "$m"; else die "$m"; fi
+  fi
+  # A name given with other characters, or longer, was written to fit without a word (finding 176
+  # said it for up only): warned in 0.9, refused in 1.0 (#273, audit E3). A derived one (the repo's)
+  # is made to fit, as ever.
+  [ -z "${1:-}" ] || [ "$NAME" = "$1" ] ||
+    say "warning: box name '$1' is written '$NAME': a box name is letters, digits, . _ - (40 at most); write that (refused in 1.0)"
+  parsed   # (the command's words are read by the time it picks its box)
   D=$BOXES/$NAME
   NAME_DERIVED=0; [ -n "${1:-}" ] || NAME_DERIVED=1
   [ "$NAME_DERIVED" = 0 ] || [ -n "${SELECT_PLAIN:-}" ] || session_fallback
@@ -3175,7 +3270,8 @@ run_cwd_note() {
 # up --seed SRC:DEST (#80): a file or folder of the host's, copied into the box HOME at DEST before the
 # session starts (a plugin that reads its config once at start finds it there). DEST is in the box HOME:
 # `.config/x`, `~/.config/x` or `/home/sbx/.config/x`, never above it. Prints "src<TAB>dest" (SRC
-# resolved, DEST relative to the HOME), or says why not and fails. The refusals are --ro-bind's (up).
+# resolved, DEST relative to the HOME), or says why not and fails: 3 for a jail's refusal (not a usage
+# error, #273), 1 otherwise. The refusals are --ro-bind's (up).
 seed_spec() {
   local src=${1%%:*} dest=${1#*:} r
   [[ $1 == *:* ]] && [ -n "$src" ] && [ -n "$dest" ] || { say "--seed: SRC:DEST (a file or folder, and where in the box HOME), got $1"; return 1; }
@@ -3188,7 +3284,7 @@ seed_spec() {
   # there (jail_sees: a link swapped in since is caught); refused as written, one way for all.
   if in_jail; then
     { src=$(jail_path "$src") && [ -e "$src" ] && src=$(jail_sees "$src") && ! jail_masked "$src" && ! jail_deep "$src"; } ||
-      { say "up: --seed ${1%%:*} is not a file or folder in a folder this jail sees, so it does not go into the box"; return 1; }
+      { say "up: --seed ${1%%:*} is not a file or folder in a folder this jail sees, so it does not go into the box"; return 3; }
   else
     [ -e "$src" ] || { say "--seed: no such path: $src"; return 1; }
     src=$(readlink -f -- "$src")
@@ -3533,9 +3629,9 @@ cmd_up() {
         overlays+=("$g"); named+=("overlay $2 in"); shift ;;
       --ro-bind) optarg "$@"; spec=$(robind_spec "$2") || { ! in_jail || jail_refuse --ro-bind "${2%%:/*}" "$W_WHOLE"; die "--ro-bind: no such path: ${2%%:/*}"; }
         robinds+=("$spec"); g=${2%%:/*}; named+=("mount ${g/#\~/$HOME} into"); shift ;;
-      --seed) optarg "$@"; spec=$(seed_spec "$2") || exit 1; seeds+=("$spec"); g=${2%%:*}; named+=("seed ${g/#\~/$HOME} into"); shift ;;
-      --no-seed) optarg "$@"; NO_SEED=$(no_seed_spec "$2" "$NO_SEED") || exit 1; shift ;;
-      --monitor) optarg "$@"; monitor_spec "$2" >/dev/null || exit 1; monitors+=("$2"); shift ;;
+      --seed) optarg "$@"; spec=$(seed_spec "$2") || { [ $? != 3 ] || parsed; refused; }; seeds+=("$spec"); g=${2%%:*}; named+=("seed ${g/#\~/$HOME} into"); shift ;;
+      --no-seed) optarg "$@"; NO_SEED=$(no_seed_spec "$2" "$NO_SEED") || refused; shift ;;
+      --monitor) optarg "$@"; monitor_spec "$2" >/dev/null || refused; monitors+=("$2"); shift ;;
       --theme-dir) optarg "$@"
         if in_jail; then { g=$(jail_path "$2") && [ -d "$g" ] && g=$(jail_sees "$g"); } || jail_refuse --theme-dir "$2" "$W_THEME"
         else [ -d "$2" ] || die "--theme-dir: no such directory: $2"; g=$(readlink -f -- "$2"); fi
@@ -3548,29 +3644,29 @@ cmd_up() {
       --addr) optarg "$@"; g=$(box_addr "$2") || die "up: --addr takes an address in a documentation range, which no real host has" \
           "(192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 or 2001:db8::/32; one address, no /prefix), got $2"
         net_addrs+=("$g"); shift ;;
-      --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "--env wants KEY=VAL, got $2"
+      --env) optarg "$@"; [[ $2 =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || die "up: --env wants KEY=VAL, got $2"
         ! env_reserved "${2%%=*}" || die "up: --env cannot set ${2%%=*}: it is the box session's own"
         envs+=(--setenv "${2%%=*}" "${2#*=}"); shift ;;
       --idle) optarg "$@"; idle=$2 idle_how="--idle "; shift ;;
       --from) optarg "$@"; FROM=$2; shift ;;
       --hyprland) optarg "$@"; hypr_given=$2
         if in_jail; then { g=$(jail_path "$2") && hyprland=$(hypr_bin "$g" 2>/dev/null); } || jail_refuse --hyprland "$2" "$W_HYPR"
-        else hyprland=$(hypr_bin "$2") || exit 1; fi
+        else hyprland=$(hypr_bin "$2") || refused; fi
         shift ;;
       --quickshell) optarg "$@"; qs_given=$2
         if in_jail; then { g=$(jail_path "$2") && quickshell=$(qs_bin "$g" 2>/dev/null); } || jail_refuse --quickshell "$2" "$W_QS"
-        else quickshell=$(qs_bin "$2") || exit 1; fi
+        else quickshell=$(qs_bin "$2") || refused; fi
         shift ;;
       --omarchy) optarg "$@"; omarchy_given=$2
         if in_jail; then { g=$(jail_path "$2") && omarchy=$(omarchy_tree "$g" 2>/dev/null); } || jail_refuse --omarchy "$2" "$W_OMARCHY"
-        else omarchy=$(omarchy_tree "$2") || exit 1; fi
+        else omarchy=$(omarchy_tree "$2") || refused; fi
         shift ;;
       --owner) optarg "$@"; [[ $2 =~ ^[1-9][0-9]*$ ]] || die "up: --owner is a pid, got $2"; owner=$2; shift ;;   # internal: `run`'s throwaway box goes when this pid does
       --stock-bar) STOCK_BAR=1 ;;
       --clean) CLEAN=1 ;;
-      --keep) optarg "$@"; CLEAN_KEEP=$(clean_keep "$2") || exit 1; shift ;;
+      --keep) optarg "$@"; CLEAN_KEEP=$(clean_keep "$2") || refused; shift ;;
       # The desk's config is outside any jail, and its files are the user's (#206).
-      --desk-shell) ! in_jail || die "up: --desk-shell mirrors your desktop's shell config, not for an agent inside ai-jail"; DESK_SHELL=1 ;;
+      --desk-shell) ! in_jail || fail "up: --desk-shell mirrors your desktop's shell config, not for an agent inside ai-jail"; DESK_SHELL=1 ;;
       --systemd) systemd=1 ;;
       --audio) audio=1 ;;
       --xwayland) xwayland=1 ;;
@@ -3578,7 +3674,7 @@ cmd_up() {
       --no-shell) shell=0 ;;
       --no-pointer) nopointer=1 ;;
       -h|--help) usage up; return ;;
-      -*) die "up: unknown option $1" ;;
+      -*) unknown_opt up "$1" ;;
       *) [ -z "$name" ] || die "up: one box name, got $name and $1"; name=$1 ;;
     esac
     shift
@@ -3609,17 +3705,18 @@ cmd_up() {
       { m=$(jail_path "$p/manifest.json") && [ -f "$m" ] && { jail_root "$p" >/dev/null || own_path_visible "$p"; } &&
         PLUGINS+=("$(resolve_plugin "$p" 2>/dev/null)"); } || jail_refuse --plugin "${plugin_given[i]}" "$W_PLUGIN"
     else
-      PLUGINS+=("$(resolve_plugin "$p")") || exit 1
+      PLUGINS+=("$(resolve_plugin "$p")") || refused
     fi
   done
   # --desk-shell (#206): every plugin of the desk's too, after the --plugin ones (which win for an id
   # both have); its shell.json and other files go in with seed_home.
   if [ "$DESK_SHELL" = 1 ]; then
     [ "$STOCK_BAR" = 0 ] || die "up: --desk-shell or --stock-bar, not both"
-    DESK=$(desk_config) || exit 1
+    # (the desk's config: not the command line's)
+    DESK=$(PARSING=0 desk_config) || exit
     DESK_SHOWN=$DESK
     if [ -z "${OMABOX_DESK_CONFIG:-}" ]; then DESK_SHOWN=\~/.config/omarchy; fi
-    local desk_list; desk_list=$(desk_plugins "$DESK") || exit 1
+    local desk_list; desk_list=$(PARSING=0 desk_plugins "$DESK") || exit
     while IFS= read -r p; do [ -z "$p" ] || { PLUGINS+=("$p"); DESK_IDS+="${p%%$'\t'*} "; }; done <<<"$desk_list"
   fi
   # A jailed caller's --hyprland and --omarchy, checked before anything reads in them (theme_named lists
@@ -3651,19 +3748,17 @@ cmd_up() {
   fi
   # --theme NAME (finding 245): a theme there is (Omarchy's, the user's, a --theme-dir's), named as
   # omarchy-theme-set names it, which the box's session runs with it; refused here, as a plugin is.
-  [ -z "$THEME" ] || THEME=$(theme_named "$THEME" "${omarchy:-/usr/share/omarchy}" ${theme_dirs[@]+"${theme_dirs[@]}"}) || exit 1
+  [ -z "$THEME" ] || THEME=$(theme_named "$THEME" "${omarchy:-/usr/share/omarchy}" ${theme_dirs[@]+"${theme_dirs[@]}"}) || refused
   if [ $new = 1 ]; then
     # A name no box has (finding 73): box-1, box-2, ... The choice holds a lock until the box's dir
     # exists, so two at once (a double click in the widget) never pick the same one. Printed on stdout.
     [ -z "$name" ] || die "up: --new picks the name itself, got $name too"
     mkdir -p "$BOXES"
-    lock_file NEWLOCK "$BOXES/.lock-new" -w 60 || die "another up --new is still choosing a name; try again"
+    lock_file NEWLOCK "$BOXES/.lock-new" -w 60 || fail "another up --new is still choosing a name; try again"
     local n=1; while [ -e "$BOXES/box-$n" ]; do n=$((n + 1)); done
     name=box-$n
   fi
   select_box "$name"
-  # A name with characters a box name cannot have is written with - (finding 176): said, once, here.
-  [ -z "$name" ] || [ "$NAME" = "$name" ] || say "note: box name '$name' written as '$NAME'"
   [ -n "$name" ] || up_session_note
   # The box an agent session gets by default goes when the agent does (finding 93), or when idle; so
   # does that name given with -b (it is the same box). Not an interactive box (the user's window), a
@@ -3675,13 +3770,13 @@ cmd_up() {
   # A jailed agent's box goes with its jail (the jail's bwrap), and sees no more than the jail does
   # (finding 99): driving a box is running code in it, so the box must not be a way out of the jail.
   if in_jail; then
-    [ $interactive = 0 ] || die "up: a window on the user's desktop is not for an agent inside ai-jail (headless boxes only)"
+    [ $interactive = 0 ] || fail "up: a window on the user's desktop is not for an agent inside ai-jail (headless boxes only)"
     [ -n "$owner" ] || agent=$(jail_get .id)
     # Saves are the user's (finding 100): a keyring with their secrets, an app signed in as them.
-    [ -z "$FROM" ] || die "up: saves are the user's (keyring secrets, apps signed in), not for an agent inside ai-jail"
+    [ -z "$FROM" ] || fail "up: saves are the user's (keyring secrets, apps signed in), not for an agent inside ai-jail"
     if [ "$(jail_get .net)" != true ]; then
-      [ $net_set = 0 ] || [ "$net" = isolated ] || die "up: this jail has no network, so its boxes have none either (--net isolated, the default here)"
-      [ -z "$allow" ] || die "up: this jail has no network, so its boxes reach no host port (no --allow)"
+      [ $net_set = 0 ] || [ "$net" = isolated ] || fail "up: this jail has no network, so its boxes have none either (--net isolated, the default here)"
+      [ -z "$allow" ] || fail "up: this jail has no network, so its boxes reach no host port (no --allow)"
       net=isolated
     fi
     # --overlay, --ro-bind and --seed were checked as they were read (#198): one of the jail's folders,
@@ -3708,15 +3803,15 @@ cmd_up() {
   # --hyprland (finding 116): the build's folder, read-only at its own path, refused as --ro-bind's are
   # (a binary right in HOME or /tmp would take all of it along). Not one under /usr: the box has it.
   if [ -n "$hyprland" ] && [ "$hypr_bind" = 1 ] && [[ $hyprland != /usr/* ]]; then
-    why=$(refuse_src "${hyprland%/*}") && die "--hyprland: refusing to mount ${hyprland%/*} (the binary's folder) into a box: $why; put the build in a folder of its own"
-    why=$(refuse_dest "${hyprland%/*}") && die "--hyprland: refusing to mount ${hyprland%/*} (the binary's folder) at its own path in a box: $why"
+    why=$(refuse_src "${hyprland%/*}") && die "up: --hyprland: refusing to mount ${hyprland%/*} (the binary's folder) into a box: $why; put the build in a folder of its own"
+    why=$(refuse_dest "${hyprland%/*}") && die "up: --hyprland: refusing to mount ${hyprland%/*} (the binary's folder) at its own path in a box: $why"
     robinds+=("${hyprland%/*}"$'\t'"${hyprland%/*}")
   fi
   # --quickshell (finding 358) likewise: the box's shell runs it, so a box without one has no use for it.
-  [ -z "$quickshell" ] || [ "$shell" = 1 ] || die "up: --quickshell runs the box's shell, and --no-shell starts none"
+  [ -z "$quickshell" ] || [ "$shell" = 1 ] || usage_die "up: --quickshell runs the box's shell, and --no-shell starts none"
   if [ -n "$quickshell" ] && [ "$qs_bind" = 1 ] && [[ $quickshell != /usr/* ]]; then
-    why=$(refuse_src "${quickshell%/*}") && die "--quickshell: refusing to mount ${quickshell%/*} (the binary's folder) into a box: $why; put the build in a folder of its own"
-    why=$(refuse_dest "${quickshell%/*}") && die "--quickshell: refusing to mount ${quickshell%/*} (the binary's folder) at its own path in a box: $why"
+    why=$(refuse_src "${quickshell%/*}") && die "up: --quickshell: refusing to mount ${quickshell%/*} (the binary's folder) into a box: $why; put the build in a folder of its own"
+    why=$(refuse_dest "${quickshell%/*}") && die "up: --quickshell: refusing to mount ${quickshell%/*} (the binary's folder) at its own path in a box: $why"
     robinds+=("${quickshell%/*}"$'\t'"${quickshell%/*}")
   fi
   # --omarchy (finding 135): the tree, read-only at its own path, refused as --ro-bind's are.
@@ -3826,7 +3921,7 @@ cmd_up() {
     die "--systemd needs your systemd user manager (systemctl --user) to delegate the box a cgroup"
   [ $audio = 0 ] || audio_missing=$(audio_packages) || die "up --audio needs $audio_missing (sudo pacman -S pipewire wireplumber pipewire-pulse libpulse)"
   for p in "${PLUGINS[@]}"; do
-    why=$(refuse_src "${p#*$'\t'}") && die "refusing to mount plugin ${p#*$'\t'} into a box: $why"
+    why=$(refuse_src "${p#*$'\t'}") && die "${MAIN_CMD:+$MAIN_CMD: }refusing to mount plugin ${p#*$'\t'} into a box: $why"
   done
 
   # Host code, read-only (at the same path unless DIR:DEST): the repo `up` runs from, mise's
@@ -3884,14 +3979,14 @@ cmd_up() {
   local src dest ro_args=() covers=() cover_srcs=()
   for p in "${robinds[@]}"; do
     src=${p%%$'\t'*} dest=${p#*$'\t'}
-    why=$(refuse_src "$src") && die "refusing to mount $src into a box: $why"
-    why=$(refuse_dest "$dest") && die "refusing to mount $src at $dest in a box: $why"
+    why=$(refuse_src "$src") && die "${MAIN_CMD:+$MAIN_CMD: }refusing to mount $src into a box: $why"
+    why=$(refuse_dest "$dest") && die "${MAIN_CMD:+$MAIN_CMD: }refusing to mount $src at $dest in a box: $why"
     if in_jail && ! jail_cover "$src" "$dest"; then
       why="this jail hides paths in it, and the box hides them too only with /usr/bin/python3 (package python) to check it does"
       # What up mounts by itself (the repo, its git dir) is left out, said; what the caller named is refused.
       local a isauto=0; for a in ${auto[@]+"${auto[@]}"}; do [ "$a" != "$src" ] || isauto=1; done
       [ $isauto = 0 ] || { say "not mounting $src: $why"; continue; }
-      die "refusing to mount $src into a box: $why"
+      die "${MAIN_CMD:+$MAIN_CMD: }refusing to mount $src into a box: $why"
     fi
     ro_args+=(--ro-bind "$src" "$dest")
   done
@@ -4162,7 +4257,7 @@ cmd_up() {
   local launch=(bwrap)
   if [ $interactive = 1 ]; then
     host_session
-    [ -x "$WLFD" ] || die "missing $WLFD: run install.sh"
+    [ -x "$WLFD" ] || die "${MAIN_CMD:+$MAIN_CMD: }missing $WLFD: run install.sh"
     launch=("$WLFD" "$HOST_WL" bwrap)
   fi
   # Every box has its own network namespace (finding 89): in the host's, labwc's lazy Xwayland could
@@ -4287,7 +4382,7 @@ cmd_up() {
     if [ $SECONDS -ge $deadline ]; then
       # bwrap writes info.json as it starts: with it there, the box started and was already gone
       # (finding 95: Hyprland aborted in it; "bwrap did not start" sent everyone looking elsewhere).
-      [ -s "$D/info.json" ] || die "bwrap did not start; see $D/box.log"
+      [ -s "$D/info.json" ] || die "${MAIN_CMD:+$MAIN_CMD: }the box's bwrap did not start; see $D/box.log"
       died_starting
     fi
     sleep 0.05
@@ -4384,10 +4479,10 @@ check_install() {
   # would point your omabox, skill and widget at the worktree (issue #182).
   local how="run install.sh"
   [ ! -f "$ROOT/.git" ] || how="in a git worktree, build them: for m in $ROOT/tools/*/Makefile; do make -C \"\${m%/*}\"; done (test/run.sh builds them itself)"
-  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] && [ -x "$EVENTS" ] || die "missing $KEYBOARD, $POINTER, $STILL or $EVENTS: $how"
+  [ -x "$KEYBOARD" ] && [ -x "$POINTER" ] && [ -x "$STILL" ] && [ -x "$EVENTS" ] || die "${MAIN_CMD:+$MAIN_CMD: }missing $KEYBOARD, $POINTER, $STILL or $EVENTS: $how"
   # Only an NVIDIA box sizes its screen with wlr-randr (finding 78); AMD and Intel boxes do without.
   [ -x /usr/bin/wlr-randr ] || [ "$(render_driver "$1")" != nvidia ] ||
-    die "missing /usr/bin/wlr-randr, which NVIDIA boxes need: run install.sh"
+    die "${MAIN_CMD:+$MAIN_CMD: }missing /usr/bin/wlr-randr, which NVIDIA boxes need: run install.sh"
   shift
   if [ -z "${1:-}" ]; then
     aq_resolve "$(hypr_aq_soname)" || exit 1
@@ -4529,13 +4624,14 @@ cmd_setup() {
       --feedback-skill) fb=on ;;
       --no-feedback-skill) fb=off ;;
       -h|--help) usage setup; return ;;
-      *) die "setup: unknown option $1" ;;
+      *) unknown_opt setup "$1" ;;
     esac
     shift
   done
   local n=$((aq + remove)); [ -z "$fb" ] || n=$((n + 1))
   [ $n -le 1 ] || die "setup: one of --aquamarine, --remove, --feedback-skill or --no-feedback-skill"
   [ $force = 0 ] || [ $aq = 1 ] || die "setup: --force is for --aquamarine"
+  parsed
   if [ $aq = 1 ]; then setup_aquamarine "$force"
   elif [ $remove = 1 ]; then setup_remove
   elif [ -n "$fb" ]; then setup_feedback "$fb"
@@ -5480,7 +5576,7 @@ cmd_run() {
         caller_env "$2" >/dev/null || die "run: --pass $2: not in this command's environment (export it first)"
         PASS+=("$2"); shift ;;
       --env-file) optarg "$@"
-        in_jail && die "run: --env-file is read by a jailed agent's own omabox, never at a path here"
+        in_jail && fail "run: --env-file is read by a jailed agent's own omabox, never at a path here"
         envfile_read "$2" >/dev/null   # a bad line stops here, said
         local kvs; mapfile -d '' kvs < <(envfile_read "$2"); ENVKV+=("${kvs[@]}"); shift ;;
       # The command's on a box that is up (#130: it was dropped there), a throwaway box's otherwise.
@@ -5491,7 +5587,7 @@ cmd_run() {
       --xwayland|--autoreload|--no-shell|--no-pointer|--stock-bar|--desk-shell|--systemd|--audio|--clean) up_args+=("$1") ;;
       -h|--help) usage run; return ;;
       --) shift; break ;;
-      -*) die "run: unknown option $1 (the command goes after --; --interactive is up's only)" ;;
+      -*) unknown_opt run "$1" "(the command goes after --; --interactive is up's only)" ;;
       *) break ;;
     esac
     shift
@@ -5535,7 +5631,7 @@ cmd_run() {
       jpid=$(BOX_KEEP=3 settle_act box_exec /usr/bin/bash -c '/usr/bin/rm -f -- "$1" && set -C && exec >"$1" 2>&1 || exit 125; set +C; ex=$2; shift 2
         [ ! -x /opt/omabox/share/run-job.sh ] || exec /usr/bin/setsid -f /opt/omabox/share/run-job.sh "$ex" 4< <(printf "%s\0" "$@")
         (trap - INT QUIT; exec 3>&-; exec /usr/bin/setsid -- "$@") & echo "$!" >&3' omabox-run "/home/sbx/$log" "$ex" "$@" 3>&1 </dev/null >&2 | head -c 64) ||
-        die "run -d: could not start the command"
+        die "run -d: could not start the command in box '$NAME'$(box_alive || echo ": the box went down") (what the box said, if anything, is above; omabox log -b $NAME all)"
       local lname=$log; log=$D/home/$log
       [[ $jpid =~ ^[0-9]+$ ]] && job_record "$jpid" "$log" "$@"
       [ $print_log = 0 ] || echo "$log"
@@ -5550,7 +5646,7 @@ cmd_run() {
     local rc=0
     box_exec "$@" || rc=$?
     touch "$D/used" 2>/dev/null || true
-    run_gone $rc
+    run_gone $rc || rc=125
     return $rc
   fi
   [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"
@@ -5592,17 +5688,19 @@ cmd_run() {
   run_cwd_note run "$@"       # outside a repo: nothing of this dir in the box (#251)
   local rc=0
   box_exec "$@" || rc=$?
-  run_gone $rc
+  run_gone $rc || rc=125
   return $rc
 }
 # A box ended from inside (#128: a test's pkill of the box's own compositor or shell) left only
 # nsenter's raw line, or the command's own kill, to go by; box_exec holds those back on a box that
 # went down (#166), and this says it. A command the box's end killed (137) can return a moment before
-# its PID 1 is gone: waited for then only, so a failing test is not slowed. run_gone RC
+# its PID 1 is gone: waited for then only, so a failing test is not slowed. A failure when it said so:
+# `run` exits 125 then (#273), its command's status being the box's end, not the command's. run_gone RC
 run_gone() {
   if [ "$1" = 137 ]; then local _; for _ in 1 2 3 4 5 6 7 8 9 10; do box_alive || break; sleep 0.2; done; fi
-  [ "$1" = 0 ] || box_alive ||
-    say "box '$NAME' went down while this command ran (its Hyprland, omabox-labwc and quickshell are the box's own: stop your own process by its PID; why: omabox log -b $NAME all)"
+  [ "$1" = 0 ] || box_alive || {
+    say "box '$NAME' went down while this command ran, exit 125 (its Hyprland, omabox-labwc and quickshell are the box's own: stop your own process by its PID; why: omabox log -b $NAME all)"
+    return 1; }
 }
 
 # --- windows -------------------------------------------------------------------------------------
@@ -5699,7 +5797,7 @@ WIN_SEL_JQ='
 # win_select WINDOWS SEL...: the one window (win_annotate's object), or exit 2.
 win_select() {
   local wins=$1 hits; shift
-  [ $# -gt 0 ] || die "no window selector"
+  [ $# -gt 0 ] || die "${MAIN_CMD:-omabox}: --window SEL: no selector given"
   # No list at all (not an empty one): the box did not answer (finding 176).
   [ -n "$wins" ] || die "box '$NAME' did not list its windows (is it going down?)"
   hits=$(jq -c "$WIN_SEL_JQ" --args "$@" <<<"$wins" 2>&1) || { say "bad window selector ($*): ${hits#jq: error*: }"; exit 2; }
@@ -5740,14 +5838,16 @@ win_raise() {
   local addr out; addr=$(jq -r .address <<<"$1")
   [[ $addr =~ ^0x[0-9a-f]+$ ]] || die "bad window address: $addr"
   out=$(on_box hyprctl dispatch "hl.dsp.focus({ window = 'address:$addr' })" 2>&1) || true
-  [ "$out" = ok ] || die "could not focus window $addr: $out"
+  # (audit E12: which window, and the way round: --no-raise acts on it where it is)
+  local way="--no-raise acts on it where it is, if uncovered; shot --window takes it covered"
+  [ "$out" = ok ] || die "${MAIN_CMD:+$MAIN_CMD: }could not focus window $(win_desc "$1"): $out ($way)"
   if [ "$(jq -r .floating <<<"$1")" = true ]; then
     out=$(on_box hyprctl dispatch "hl.dsp.window.alter_zorder({ mode = 'top', window = 'address:$addr' })" 2>&1) || true
-    [ "$out" = ok ] || die "could not raise window $addr: $out"
+    [ "$out" = ok ] || die "${MAIN_CMD:+$MAIN_CMD: }could not raise window $(win_desc "$1"): $out ($way)"
   fi
   local deadline=$((SECONDS + 3)) a
   until a=$(hypr_json activewindow) || exit $?; [ "$(jq -r '.address // empty' <<<"$a")" = "$addr" ]; do
-    [ $SECONDS -lt $deadline ] || die "window $addr did not take focus"
+    [ $SECONDS -lt $deadline ] || die "${MAIN_CMD:+$MAIN_CMD: }window $(win_desc "$1") did not take focus in 3 s: something holds it (a layer, a fullscreen window: omabox windows; $way)"
     sleep 0.05
   done
 }
@@ -5763,7 +5863,7 @@ hl.config({ cursor = { no_warps = true } })
 local ok, err = pcall(hl.dispatch, hl.dsp.focus({ window = 'address:$addr' }))
 hl.config({ cursor = { no_warps = nw } })
 if not ok then error(err, 0) end" 2>&1) || true
-  [ "$out" = ok ] || die "could not focus window $addr: $out"
+  [ "$out" = ok ] || die "${MAIN_CMD:+$MAIN_CMD: }could not focus window $(win_desc "$1") again: $out (omabox windows; keys without --window types into what has the keyboard)"
 }
 
 # The screen point for window coordinates X,Y of the window SEL picks, raised first when it is not on
@@ -5809,8 +5909,8 @@ cmd_windows() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
-      -*) die "windows: unknown option $1" ;;
-      *) die "windows: unexpected $1" ;;
+      -*) unknown_opt windows "$1" ;;
+      *) unexpected windows "$1" ;;
     esac
     shift
   done
@@ -5954,7 +6054,7 @@ shot_point() {
     # A jailed caller's omabox opened the shot in the jail and passed it as /dev/fd/N, with its name
     # there (relay_in): the broker opens no path of the caller's.
     [[ $1 =~ ^/dev/fd/[3-9]$ ]] && [ -f "$1" ] && [ -n "${OMABOX_RELAY_IN_AS:-}" ] ||
-      die "--in: a jailed agent's shot is read by its own omabox, never at a path here"
+      fail "--in: a jailed agent's shot is read by its own omabox, never at a path here"
     f=$1 key=$OMABOX_RELAY_IN_AS
   else
     f=$(readlink -f -- "$1" 2>/dev/null) && [ -f "$f" ] || die "--in: no such file: $1"
@@ -6171,19 +6271,19 @@ cmd_calibrate() {
       -o|--output) optarg "$@"; two_files calibrate "$card" "$2"; card=$2; shift ;;
       --size) optarg "$@"; size=$2; shift ;;
       --answer) optarg "$@"; answer=$2; given=1; shift ;;
-      -*) die "calibrate: unknown option $1" ;;
+      -*) unknown_opt calibrate "$1" ;;
       *) two_files calibrate "$card" "$1"; card=$1 ;;
     esac
     shift
   done
-  command -v magick >/dev/null || die "calibrate needs ImageMagick's magick (package imagemagick, part of Omarchy)"
+  command -v magick >/dev/null || fail "calibrate needs ImageMagick's magick (package imagemagick, part of Omarchy)"
   # One card a session (or repo), where --answer looks for it without being told.
   local dflt; dflt=$(default_name) || dflt=default
   dflt=${TMPDIR:-/tmp}/omabox-calibrate-$(printf '%s' "$dflt" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-40).png
   [ -n "$card" ] || card=$dflt
   if [ $given = 1 ]; then
     [ -z "$size" ] || die "calibrate --answer: about a card already drawn: no --size"
-    calib_verdict "$card" "$answer"; return
+    parsed; calib_verdict "$card" "$answer"; return
   fi
   if [ -n "$size" ]; then
     [[ $size =~ ^([0-9]{2,5})x([0-9]{2,5})$ ]] && [ "${BASH_REMATCH[1]}" -ge 64 ] && [ "${BASH_REMATCH[2]}" -ge 64 ] &&
@@ -6202,6 +6302,7 @@ cmd_calibrate() {
     fi
     w=${size%x*} h=${size#*x}
   fi
+  parsed
   mkdir -p -- "$(dirname -- "$card")" || die "calibrate: cannot make the directory $(dirname -- "$card")"
   card=$(readlink -f -- "$card")
   if ! calib_card "$card.part" "$w" "$h" "$(calib_marks "$w" "$h")" || ! mv -f -- "$card.part" "$card"; then
@@ -6329,7 +6430,7 @@ cmd_record() {
         fit=$2 sheet=1; shift ;;
       # A mark's text may start with a dash after --.
       --) shift; if [ "$sub" = mark ]; then text+=("$@"); else ract=("$@"); fi; break ;;
-      -*) die "record: unknown option $1" ;;
+      -*) unknown_opt record "$1" ;;
       *)
         if [ "$sub" = mark ]; then text+=("$1")
         elif [ "$sub" = sheet ] && [ -z "$video" ]; then video=$1
@@ -6337,8 +6438,9 @@ cmd_record() {
           hdur=$(ms_duration "$1") && [ "$hdur" -le 3600000 ] ||
             { say "record hold: a duration up to 60m, like 2s or 500ms (a bare number is seconds), got $1"; exit 2; }
         elif [ -z "$sub" ]; then
-          case $1 in start|stop|status|mark|sheet|hold) sub=$1 ;; *) die "record: start, stop, status, mark, hold, sheet, -- ACTION (an omabox command) or --for DURATION, got $1" ;; esac
-        else die "record $sub: unexpected $1"; fi ;;
+          case $1 in start|stop|status|mark|sheet|hold) sub=$1 ;;
+            *) unknown_word record subcommand "$1" "(start, stop, status, mark, hold, sheet, -- ACTION: an omabox command, or --for DURATION)" start stop status mark hold sheet ;; esac
+        else unexpected "record $sub" "$1"; fi ;;
     esac
     shift
   done
@@ -6372,7 +6474,7 @@ cmd_record() {
       [ -z "$video" ] || [ -z "$fromfd" ] || die "record sheet: VIDEO or --from-fd, not both"
       # (A jailed agent's path is never looked at here, not even whether it is there.)
       if [ -z "$fromfd" ]; then
-        ! in_jail || die "record sheet: a jailed agent's video and sheet are opened by its own omabox (--from-fd, --to-fd), never at a path here"
+        ! in_jail || fail "record sheet: a jailed agent's video and sheet are opened by its own omabox (--from-fd, --to-fd), never at a path here"
         [ -f "$video" ] || die "record sheet: no video $video"
       fi
       [ -z "$monitor" ] || die "record sheet: --monitor goes with start" ;;
@@ -6404,18 +6506,19 @@ cmd_record() {
   # A jailed agent (#224): its omabox resolves -o, opens the files and runs an action itself (as
   # start, the action, stop, so the action goes through the broker as any command does).
   if in_jail; then
-    [ ${#ract[@]} = 0 ] || die "record -- ACTION: a jailed agent's own omabox runs it (start, the action, stop), never the broker"
-    [ -z "$forms" ] || die "record --for: a jailed agent's own omabox runs it (start, a hold, stop), never the broker"
-    [ -z "$out" ] || die "record: a jailed agent's -o is resolved by its own omabox, never at a path here"
+    [ ${#ract[@]} = 0 ] || fail "record -- ACTION: a jailed agent's own omabox runs it (start, the action, stop), never the broker"
+    [ -z "$forms" ] || fail "record --for: a jailed agent's own omabox runs it (start, a hold, stop), never the broker"
+    [ -z "$out" ] || fail "record: a jailed agent's -o is resolved by its own omabox, never at a path here"
     case $sub in
-      start) [ -n "$as" ] || die "record start: a jailed agent's video is named by its own omabox (--as), never opened here" ;;
-      stop) [ -n "$tofd" ] || die "record stop: a jailed agent's video is written by its own omabox (--to-fd), never at a path here" ;;
-      sheet) [ -n "$fromfd" ] || die "record sheet: a jailed agent's video and sheet are opened by its own omabox (--from-fd, --to-fd), never at a path here" ;;
+      start) [ -n "$as" ] || fail "record start: a jailed agent's video is named by its own omabox (--as), never opened here" ;;
+      stop) [ -n "$tofd" ] || fail "record stop: a jailed agent's video is written by its own omabox (--to-fd), never at a path here" ;;
+      sheet) [ -n "$fromfd" ] || fail "record sheet: a jailed agent's video and sheet are opened by its own omabox (--from-fd, --to-fd), never at a path here" ;;
     esac
   fi
+  parsed
   if [ $sheet = 1 ] || [ "$sub" = sheet ]; then
     command -v magick >/dev/null || die "record: a contact sheet needs ImageMagick's magick (package imagemagick, part of Omarchy)"
-    [ -n "$fit" ] || fit=$(shot_fit_default) || exit 1
+    [ -n "$fit" ] || fit=$(shot_fit_default) || refused
     [ "$fit" != 0 ] || fit=""
   fi
   select_box "$name"; need_box
@@ -7534,7 +7637,7 @@ cmd_shot() {
       --ignore) optarg "$@"; mask_arg "$2"; masks+=("$MASK"); shift ;;
       --after) [ "${2:-}" = -- ] && [ $# -ge 3 ] || die "shot: --after -- ACTION... (an omabox command: keys super+space, click X Y, run -d -- CMD)"
         shift 2; after=("$@"); break ;;
-      -*) die "shot: unknown option $1" ;;
+      -*) unknown_opt shot "$1" ;;
       *) two_files shot "$out" "$1"; out=$1 ;;
     esac
     shift
@@ -7542,7 +7645,7 @@ cmd_shot() {
   local g=""; [ -z "$geom" ] || g=$(geom_parse "$geom") || die "shot: -g is \"X,Y WxH\" (or X,Y,W,H), got $geom"
   # No --fit: the shot-fit setting's (or $OMABOX_SHOT_FIT's), wherever --fit could go (not --changed
   # or --zoom). --fit 0: full size, whatever the setting.
-  if [ -z "$fit" ] && [ $changed = 0 ] && [ -z "$zoom" ]; then fit=$(shot_fit_default) || exit 1; fi
+  if [ -z "$fit" ] && [ $changed = 0 ] && [ -z "$zoom" ]; then fit=$(shot_fit_default) || refused; fi
   [ "$fit" != 0 ] || fit=""
   if [ -n "$burst" ]; then
     [ -z "$zoom" ] || die "shot: --burst or --zoom, not both"
@@ -7559,7 +7662,7 @@ cmd_shot() {
   # --changed (#145, finding 243): the whole window or screen is compared, and the crop is its own.
   if [ $changed = 1 ]; then
     [ -z "$g$monitor$zoom$fit$burst" ] || die "shot: --changed crops by itself: not with -g, --monitor, --zoom, --fit or --burst"
-    command -v magick >/dev/null || die "shot: --changed needs ImageMagick's magick (package imagemagick, part of Omarchy)"
+    command -v magick >/dev/null || fail "shot: --changed needs ImageMagick's magick (package imagemagick, part of Omarchy)"
   else
     [ ${#masks[@]} = 0 ] || die "shot: --ignore goes with --changed (and wait still)"
   fi
@@ -7568,18 +7671,19 @@ cmd_shot() {
   if [ -n "$zoom" ]; then
     [ -z "$fit" ] || die "shot: --zoom or --fit, not both"
     [ -n "$g" ] || die "shot: --zoom goes with -g, a small crop (shot -g \"X,Y 40x30\" --zoom 8)"
-    command -v magick >/dev/null || die "shot: --zoom needs ImageMagick's magick (package imagemagick, part of Omarchy)"
+    command -v magick >/dev/null || fail "shot: --zoom needs ImageMagick's magick (package imagemagick, part of Omarchy)"
   fi
   # file: what is written and read back; out: its name, for the caller. A path that cannot be written
   # is said so before anything is captured (issue #63): a failed write read as a failed capture, and
   # an interactive box's "no frame" sent the agent to the user for it.
+  parsed
   local file
   if [ -n "$tofd" ]; then
     [ -n "$as" ] && [ -z "$out" ] || die "shot: --to-fd goes with --as NAME, without -o"
     fd_file "$tofd" w shot
     out=$as file=/dev/fd/$tofd
   else
-    in_jail && die "shot: a jailed agent's shot is written by its own omabox (--to-fd), never at a path here"
+    in_jail && fail "shot: a jailed agent's shot is written by its own omabox (--to-fd), never at a path here"
     [ -z "$out" ] || [ -n "$burst" ] || shot_path "$out"
   fi
   select_box "$name"; need_box; shell_note
@@ -7600,7 +7704,7 @@ cmd_shot() {
   local sref=()
   if [ -n "$since" ]; then
     local sf rec stamp smode skind sgeo sptr
-    ! in_jail || die "shot --since: a jailed agent's paths are never opened here"
+    ! in_jail || fail "shot --since: a jailed agent's paths are never opened here"
     sf=$(readlink -f -- "$since" 2>/dev/null) && [ -f "$sf" ] || die "shot --since: no such file: $since"
     rec=$(P=$sf awk -F'\t' '$1 == ENVIRON["P"]' "$D/shots.tsv" 2>/dev/null | tail -n 1)
     [ -n "$rec" ] || die "shot --since: $since is not a shot of box '$NAME' (take one with omabox shot)"
@@ -7929,7 +8033,7 @@ cmd_pixel() {
       --in) optarg "$@"; in=$2; shift ;;
       --json) json=1 ;;
       -h|--help) usage pixel; return ;;
-      -*) die "pixel: unknown option $1" ;;
+      -*) unknown_opt pixel "$1" ;;
       *) [[ $1 =~ ^[0-9]{1,5}$ ]] || die "pixel: bad argument $1 (X Y, in pixels)"; xy+=("$((10#$1))") ;;
     esac
     shift
@@ -8033,12 +8137,12 @@ cmd_tree() {
       --json) json=1 ;;
       --all) all=1 ;;
       -h|--help) usage tree; return ;;
-      -*) die "tree: unknown option $1" ;;
-      *) die "tree: unexpected $1 (the window is --window SEL, a layer --layer SEL; text to look for, --find TEXT)" ;;
+      -*) unknown_opt tree "$1" ;;
+      *) unexpected tree "$1" "(the window is --window SEL, a layer --layer SEL; text to look for, --find TEXT)" ;;
     esac
     shift
   done
-  [ -z "$layer" ] || [ ${#sels[@]} = 0 ] || { say "tree: --window or --layer, not both"; exit 2; }
+  [ -z "$layer" ] || [ ${#sels[@]} = 0 ] || usage_die "tree: --window or --layer, not both"
   select_box "$name"; need_box; shell_note
   on_box test -x "$BOX_TREE" 2>/dev/null ||
     die "box '$NAME' has no $BOX_TREE (started by an omabox without it): omabox down $NAME, then up again"
@@ -8179,7 +8283,7 @@ layer_qs_note() {
 # Uses cmd_shot's grim, win, where, lw, lh, out and tofd. shot_burst N EVERY_MS SHEET DIFF ACTION...
 shot_burst() {
   local n=$1 every=$2 sheet=$3 bd=$4 i; shift 4
-  [ -z "$tofd" ] || die "shot --burst: not for a jailed agent yet (its frames would each need a file of the jail's)"
+  [ -z "$tofd" ] || fail "shot --burst: not for a jailed agent yet (its frames would each need a file of the jail's)"
   [ "$sheet$bd" = 00 ] || command -v magick >/dev/null ||
     die "shot: --sheet and --diff need ImageMagick's magick (package imagemagick, part of Omarchy)"
   if [ -z "$out" ]; then
@@ -8454,7 +8558,7 @@ cmd_check() {
     diff) check_diff "$@" ;;
     -h|--help) usage check ;;
     "") usage check; exit 2 ;;
-    *) die "check: run, point or diff, got $sub (omabox help check)" ;;
+    *) unknown_word check subcommand "$sub" "(run, point or diff)" run point diff ;;
   esac
 }
 
@@ -8468,12 +8572,13 @@ check_diff() {
       -o|--output) optarg "$@"; out=$2; shift ;;
       --report) optarg "$@"; report=$2; shift ;;
       -h|--help) usage check; return ;;
-      -*) die "check diff: unknown option $1" ;;
+      -*) unknown_opt "check diff" "$1" ;;
       *) files+=("$1") ;;
     esac
     shift
   done
   [ ${#files[@]} = 2 ] || die "check diff: two shots, A.png B.png"
+  parsed
   command -v magick >/dev/null || die "check: needs ImageMagick's magick (package imagemagick, part of Omarchy)"
   local f sa sb
   for f in "${files[@]}"; do
@@ -8562,7 +8667,7 @@ check_point() {
           die "check point: --timeout takes a duration up to 10m, like 15s (a bare number is seconds), got $2"; tmo=$2; shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
       -h|--help) usage check; return ;;
-      -*) die "check point: unknown option $1" ;;
+      -*) unknown_opt "check point" "$1" ;;
       *) [ -z "$id" ] || die "check point: one ID, got $id and $1"; id=$1 ;;
     esac
     shift
@@ -8780,14 +8885,15 @@ check_run() {
         optarg "$@"; upopts+=("$1" "$2"); shift ;;
       --xwayland|--autoreload|--no-shell|--systemd|--audio|--stock-bar|--no-pointer) upopts+=("$1") ;;
       --desk-shell) die "check run: a check's box is clean (--keep bar keeps your bar), not your desk's shell" ;;
-      -*) die "check run: unknown option $1 (omabox help check)" ;;
+      -*) unknown_opt "check run" "$1" ;;
       *) die "check run: the scenario goes after -- (omabox check run [OPTIONS] -- SCENARIO...), got $1" ;;
     esac
     shift
   done
   [ ${#scen[@]} -gt 0 ] || die "check run: which scenario? omabox check run [OPTIONS] -- SCENARIO [ARG...]"
   [ -z "$runs" ] || [ $approve = 1 ] || die "check run: --runs goes with --approve (a check is one run)"
-  ! in_jail || die "check run: not inside ai-jail yet (it starts boxes of its own and reads their shots on the host)"
+  parsed
+  ! in_jail || fail "check run: not inside ai-jail yet (it starts boxes of its own and reads their shots on the host)"
   command -v magick >/dev/null || die "check: needs ImageMagick's magick (package imagemagick, part of Omarchy)"
   [ -x /usr/bin/python3 ] || die "check: needs /usr/bin/python3 (package python)"
   # No baseline: exit 4, its own (1 is "changed": a script must not read a missing baseline as that).
@@ -9132,11 +9238,16 @@ cmd_keys() {
         caller_env "$2" >/dev/null || die "keys: --pass $2: not in this command's environment (export it first)"
         pass+=("$2"); toks+=(-T); shift ;;
       *) settle_opt "$@"
-         if [ "$SETTLE_TOOK" = 0 ]; then toks+=("$1"); else shift $((SETTLE_TOOK - 1)); fi ;;
+         if [ "$SETTLE_TOOK" != 0 ]; then shift $((SETTLE_TOOK - 1))
+         # (an option the tool would take for one of its own: --hold never returns, #273)
+         elif [[ $1 == --?* ]]; then unknown_opt keys "$1"
+         else toks+=("$1"); fi ;;
     esac
     shift
   done
   settle_opts_check
+  # (audit E8: what to send, by example)
+  [ ${#toks[@]} -gt 0 ] || usage_die "keys: nothing to send: a combo (keys super+space), text (keys -t hello), a key (keys Return), or several (keys ctrl+a -t hi Tab)"
   set -- "${toks[@]}"
   # down:KEY / up:KEY (#230): a key held across later commands, by a holder the keyboard tool forks
   # off in the box (finding 343). That run goes in the box's pid namespace, so the holder ends with
@@ -9145,7 +9256,6 @@ cmd_keys() {
   for t; do case $t in down:*|up:*) held=1 ;; esac; done
   [ $held = 0 ] || [ ${#pass[@]} = 0 ] || die "keys: down:/up: and --pass in calls of their own"
   select_box "$name"; need_box; shell_note
-  [ $# -gt 0 ] || die "keys: nothing to send"
   # --window: that window focused first (finding 81), as a click on it would. A layer that holds the
   # keyboard against any window is refused before anything is sent or focused (#201, finding 276).
   # The active window is focused again: being active does not say it has the keyboard.
@@ -9231,11 +9341,11 @@ mods_add() {
       super|ctrl|shift|alt|altgr) ;;
       control) m=ctrl ;;
       logo|win|mod) m=super ;;
-      *) die "--mod: '$m' is not a modifier (super, ctrl, shift, alt, altgr)" ;;
+      *) die "${MAIN_CMD:+$MAIN_CMD: }--mod: '$m' is not a modifier (super, ctrl, shift, alt, altgr)" ;;
     esac
     [[ +$out+ == *"+$m+"* ]] || out=${out:+$out+}$m
   done
-  [ -n "$out" ] || die "--mod: no modifier given"
+  [ -n "$out" ] || die "${MAIN_CMD:+$MAIN_CMD: }--mod: no modifier given (super, ctrl, shift, alt or altgr; several as ctrl+shift)"
   echo "$out"
 }
 
@@ -9331,13 +9441,14 @@ cmd_click() {
       --glide) optarg "$@"; glide=$(glide_arg click "$2"); shift ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       left|right|middle|side|extra|back|forward) btn=$1 ;;
-      -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "click: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
-      *) [[ $1 =~ ^[0-9]+$ ]] || die "click: bad argument $1"; xy+=("$((10#$1))") ;;
+      -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || unknown_opt click "$1"; shift $((SETTLE_TOOK - 1)) ;;
+      *) [[ $1 =~ ^[0-9]+$ ]] || unexpected click "$1" "(X Y in whole pixels, then a button: left, right, middle, side, extra, back or forward)"
+         xy+=("$((10#$1))") ;;
     esac
     shift
   done
   settle_opts_check
-  [ ${#xy[@]} -eq 2 ] || die "click: need X Y"
+  [ ${#xy[@]} -eq 2 ] || die "click: need X Y, got ${#xy[@]} number$([ ${#xy[@]} = 1 ] || echo s)"
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "click: --in or --window, not both"
   [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "click: --no-raise goes with --window or --in"
   [ -z "$steps" ] || [ -z "$glide" ] || die "click: --steps or --glide, not both"
@@ -9404,8 +9515,9 @@ cmd_scroll() {
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       --source) optarg "$@"; [[ $2 =~ ^(wheel|finger|continuous|tilt)$ ]] || die "scroll: --source is wheel, finger, continuous or tilt, got $2"; source=$2; shift ;;
       -h|--help) usage scroll; return ;;
-      -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "scroll: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
-      *) [[ $1 =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || die "scroll: bad argument $1"; xy+=("$1") ;;
+      -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || unknown_opt scroll "$1"; shift $((SETTLE_TOOK - 1)) ;;
+      *) [[ $1 =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || unexpected scroll "$1" "(X Y DY [DX]: numbers; 15 is one wheel notch, positive down and right)"
+         xy+=("$1") ;;
     esac
     shift
   done
@@ -9529,6 +9641,8 @@ cmd_pointer() {
   local raw=() ms
   while [ $# -gt 0 ]; do
     if [ "$1" = sleep ] && [ $# -ge 2 ]; then ms=$(pause_ms "pointer sleep" "$2") || exit $?; raw+=(sleep "$ms"); shift 2
+    # (a move's own --steps=N, as every option takes its value: #273)
+    elif [[ $1 == --steps=* ]]; then raw+=(--steps "${1#--steps=}"); shift
     else raw+=("$1"); shift; fi
   done
   set -- ${raw[@]+"${raw[@]}"}
@@ -9614,8 +9728,9 @@ cmd_drag() {
       --shot-monitor) optarg "$@"; shot_args+=(--monitor "$2"); shift ;;
       --mod) optarg "$@"; mods=$(mods_add "$mods" "$2"); shift ;;
       left|right|middle|side|extra|back|forward) btn=$1 ;;
-      -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || die "drag: unknown option $1"; shift $((SETTLE_TOOK - 1)) ;;
-      *) [[ $1 =~ ^[0-9]+$ ]] || die "drag: bad argument $1"; xy+=("$((10#$1))") ;;
+      -g|--*) settle_opt "$@"; [ "$SETTLE_TOOK" != 0 ] || unknown_opt drag "$1"; shift $((SETTLE_TOOK - 1)) ;;
+      *) [[ $1 =~ ^[0-9]+$ ]] || unexpected drag "$1" "(X1 Y1 X2 Y2 in whole pixels, then a button: left, right, middle, side, extra, back or forward)"
+         xy+=("$((10#$1))") ;;
     esac
     shift
   done
@@ -9625,7 +9740,7 @@ cmd_drag() {
   [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "drag: --no-raise goes with --window or --in"
   [ -z "$shot" ] || [ "$SETTLE_WAIT" = 0 ] || die "drag: --shot or --wait, not both (the shot is the look)"
   [ ${#shot_args[@]} = 0 ] || [ -n "$shot" ] || die "drag: --shot-fit, --shot-g and --shot-monitor go with --shot FILE"
-  [ -z "$shot" ] || ! in_jail || die "drag: --shot is not for an agent inside ai-jail yet: omabox shot after the drag, or --hold and a shot of its own"
+  [ -z "$shot" ] || ! in_jail || fail "drag: --shot is not for an agent inside ai-jail yet: omabox shot after the drag, or --hold and a shot of its own"
   [ -z "$steps" ] || [ -z "$glide" ] || die "drag: --steps or --glide, not both"
   select_box "$name"; need_box
   # A recording's glide (record start --glide) unless --steps says how to get there.
@@ -10239,11 +10354,11 @@ cmd_wait() {
       --focused) want=focused ;;
       --) shift; [ "$cond" = until ] || [ "$cond" = cmd ] || die "wait: -- goes with until (omabox wait until -- CMD ...)"
         run=("$@"); break ;;
-      -*) die "wait: unknown option $1" ;;
+      -*) unknown_opt wait "$1" ;;
       *) if [ -z "$cond" ]; then cond=$1
          elif [ "$cond" = window ]; then sels+=("$1")
          elif [ "$cond" = layer ] && [ -z "$ns" ]; then ns=$1
-         else die "wait: unexpected $1"; fi ;;
+         else unexpected "wait $cond" "$1"; fi ;;
     esac
     shift
   done
@@ -10262,7 +10377,7 @@ cmd_wait() {
     until|cmd) [ ${#run[@]} -gt 0 ] || die "wait $cond: nothing to run (omabox wait until -- CMD ...)"
       [ ${#masks[@]} = 0 ] || die "wait $cond: --ignore goes with still and change" ;;
     "") die "wait: for what? still, change, window SEL, layer NAMESPACE or until -- CMD (omabox help)" ;;
-    *) die "wait: unknown condition $cond (still, change, window, layer, until)" ;;
+    *) unknown_word wait condition "$cond" "(still, change, window SEL, layer NAMESPACE or until -- CMD)" still change window layer until ;;
   esac
   [ "$cond" != change ] || [ -z "$quiet" ] || die "wait change: no --quiet (that is still's)"
   select_box "$name"; need_box; shell_note
@@ -10364,7 +10479,7 @@ cmd_lua() {
       --) shift; src+=("$@"); break ;;
       -) src+=("$1") ;;
       # After the source has begun, a word like -1 is part of it (`omabox lua return -1`, finding 176).
-      -*) [ ${#src[@]} -gt 0 ] || die "lua: unknown option $1 (a Lua source starting with - goes after --)"; src+=("$1") ;;
+      -*) [ ${#src[@]} -gt 0 ] || unknown_opt lua "$1" "(a Lua source starting with - goes after --)"; src+=("$1") ;;
       *) src+=("$1") ;;
     esac
     shift
@@ -10373,7 +10488,7 @@ cmd_lua() {
   # Stdin only when asked for with -: with no EXPR at all, an agent's `omabox lua` would otherwise wait
   # on an inherited stdin forever (a test did, finding 106).
   [ ${#src[@]} -gt 0 ] || die "lua: nothing to evaluate (omabox lua EXPR, or omabox lua - with the source on stdin)"
-  if [ "${src[*]}" = - ]; then code=$(cat) || die "lua: cannot read the source from stdin"
+  if [ "${src[*]}" = - ]; then code=$(cat) || fail "lua: cannot read the source from stdin"
   else code=${src[*]}; fi
   [ -n "${code//[[:space:]]/}" ] || die "lua: nothing to evaluate (omabox lua EXPR, or omabox lua - with the source on stdin)"
   select_box "$name"; need_box
@@ -10483,14 +10598,14 @@ cmd_log() {
       -i) LOG_I=(-i) ;;
       -n) optarg "$@"; [[ $2 =~ ^([0-9]{1,7}|all)$ ]] || die "log: -n takes a number of lines, or all"; n=$2; shift ;;
       -h|--help) usage log; return ;;
-      -*) die "log: unknown option $1" ;;
+      -*) unknown_opt log "$1" ;;
       *) srcs+=("$1") ;;
     esac
     shift
   done
   [ -z "$LOG_RE" ] || { grep -E "${LOG_I[@]}" -- "$LOG_RE" </dev/null; [ $? != 2 ]; } || die "log: --grep takes a regular expression (grep -E), got $LOG_RE"
   for s in "${srcs[@]}"; do
-    [ "$s" = all ] || [[ " ${LOG_NAMES[*]} " == *" $s "* ]] || die "log: no log called $s (${LOG_NAMES[*]}, all)"
+    [ "$s" = all ] || [[ " ${LOG_NAMES[*]} " == *" $s "* ]] || unknown_word log log "$s" "(${LOG_NAMES[*]}, all)" "${LOG_NAMES[@]}" all
   done
   [ ${#srcs[@]} -gt 0 ] || srcs=(hyprland)
   [[ " ${srcs[*]} " != *" all "* ]] || srcs=("${LOG_NAMES[@]}")
@@ -10658,7 +10773,8 @@ cmd_events() {
         [ "$tmo" -le $WAIT_MAX_MS ] || die "events: --timeout is at most 10m (got $2)"; shift ;;
       -n) optarg "$@"; [[ $2 =~ ^([0-9]{1,7}|all)$ ]] || die "events: -n takes a number of events, or all"; n=$2; shift ;;
       -h|--help) usage events; return ;;
-      *) die "events: unknown argument $1" ;;
+      -*) unknown_opt events "$1" ;;
+      *) unexpected events "$1" "(events takes no word of its own: a mark's name goes after --mark or --since)" ;;
     esac
     shift
   done
@@ -10851,11 +10967,17 @@ cmd_mode() {
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
-      -*) die "mode: unknown option $1" ;;
-      *) want=$1 ;;
+      -*) unknown_opt mode "$1" ;;
+      *) [ -z "$want" ] || usage_die "mode: one mode, got $want and $1"; want=$1 ;;
     esac
     shift
   done
+  # The mode's form, before any box is asked (host's size is read later).
+  if [ -n "$want" ]; then
+    local form; form=$(split_scale mode "$want") || refused
+    [[ ${form% *} == host || ${form% *} =~ ^[1-9][0-9]*x[1-9][0-9]*(@[0-9]+(\.[0-9]+)?)?$ ]] ||
+      die "mode: a mode is WxH, WxH@HZ or host, with ,scale=S or not, got $want"
+  fi
   select_box "$name"; need_box
   # Never another monitor's mode while the main screen is away (#163): HEADLESS-3's was printed, and set.
   local away; away=$(main_away)
@@ -10874,7 +10996,8 @@ cmd_mode() {
       die "mode: could not resize the private parent output to $want"
   fi
   local out; out=$(on_box hyprctl eval "hl.monitor({ output = '${screen%% *}', mode = '$want', position = '0x0', scale = $sc })" 2>&1) || true
-  [ "$out" = ok ] || die "mode: hyprctl eval failed: $out"
+  # (audit E13: whether the box answers at all, as hyprctl says)
+  [ "$out" = ok ] || { hypr_answers 1 || die "$(hung_text)"; die "mode: box '$NAME''s Hyprland refused $want: $out (omabox log -b $NAME hyprland)"; }
   local deadline=$((SECONDS + 5)) live=""
   until { screen=$(box_screen) || exit $?; } && [ "${screen#* }" = "$want" ] && { live=$(main_scale_live) || exit $?; } &&
     awk -v a="$live" -v b="$sc" 'BEGIN { d = a - b; exit !(d < 0.2 && d > -0.2) }'; do
@@ -11305,15 +11428,22 @@ cmd_monitor() {
       --name) optarg "$@"; mname=$2; shift ;;
       --json) json=1 ;;
       -h|--help) usage monitor; return ;;
-      -*) die "monitor: unknown option $1" ;;
+      -*) unknown_opt monitor "$1" ;;
       *) if [ -z "$act" ]; then act=$1; else args+=("$1"); fi ;;
     esac
     shift
   done
-  case $act in add|remove|list) ;; *) die "monitor: add SPEC, remove NAME or list (omabox help monitor)" ;; esac
+  case $act in
+    add) [ ${#args[@]} = 1 ] || usage_die "monitor add: one SPEC, WxH[@HZ][,scale=S][,right|below|X,Y]"
+      monitor_spec "${args[0]}" >/dev/null || refused ;;
+    remove) [ ${#args[@]} = 1 ] && [ -z "$mname" ] || usage_die "monitor remove: which? one monitor's name, no --name (omabox monitor list names them)"
+      [[ ${args[0]} =~ ^[A-Za-z0-9_-]{1,32}$ ]] || usage_die "monitor remove: not a monitor's name: ${args[0]} (omabox monitor list names them)" ;;
+    list) [ ${#args[@]} = 0 ] || usage_die "monitor list takes no arguments, got ${args[*]}" ;;
+    "") usage_die "monitor: add SPEC, remove NAME or list" ;;
+    *) unknown_word monitor subcommand "$act" "(add SPEC, remove NAME or list)" add remove list ;;
+  esac
   select_box "$name"; need_box
   if [ "$act" = list ]; then
-    [ ${#args[@]} = 0 ] || die "monitor list takes no arguments"
     local m ws dr; m=$(hypr_json monitors)
     # The ones `output drop` took away too, as they were, marked dropped (#163).
     dr=$(dropped_file | jq -Rn '[inputs | split(" ") | select(length == 4) | {name: .[0], mode: .[1],
@@ -11342,7 +11472,6 @@ cmd_monitor() {
     [ -z "$mname" ] || die "monitor add: an NVIDIA box's monitors are Wayland outputs, WAYLAND-N as its screen is: no --name"
   fi
   if [ "$act" = add ]; then
-    [ ${#args[@]} = 1 ] || die "monitor add SPEC (WxH[@HZ][,scale=S][,right|below|X,Y])"
     local line
     if [ "$(meta mode)" = interactive ]; then
       [ -z "$mname" ] || die "monitor add: an interactive box's monitors are named by its windows (WAYLAND-N): no --name"
@@ -11352,9 +11481,7 @@ cmd_monitor() {
     echo "${line%% *}"
     return
   fi
-  [ ${#args[@]} = 1 ] && [ -z "$mname" ] || die "monitor remove NAME"
   local out=${args[0]} res end m
-  [[ $out =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "monitor remove: not a monitor's name: $out"
   [ -z "$(dropped_rec "$out")" ] || die "monitor remove: $out is dropped (omabox output back $out -b $NAME, then remove it)"
   [ "$out" != "$(hypr_json monitors | jq -r "$(main_screen)"'.name')" ] || die "monitor remove: $out is the box's main screen (omabox output drop takes it away for a while)"
   m=$(hypr_json monitors)
@@ -11397,8 +11524,8 @@ cmd_output() {
       --cycles) optarg "$@"; [[ $2 =~ ^[1-9][0-9]{0,2}$ ]] || die "output: --cycles takes 1-999, got $2"; cycles=$2; shift ;;
       -h|--help) usage output; return ;;
       drop|back) [ -z "$act" ] || die "output: drop or back, not both"; act=$1 ;;
-      -*) die "output: unknown option $1" ;;
-      *) [ -n "$act" ] || die "output: drop or back, got $1"
+      -*) unknown_opt output "$1" ;;
+      *) [ -n "$act" ] || unknown_word output subcommand "$1" "(drop or back)" drop back
          [ -z "$out" ] || die "output: one output's name, got $out and $1"
          [[ $1 =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "output: not an output's name: $1 (omabox monitor list)"
          out=$1 ;;
@@ -11561,7 +11688,8 @@ cmd_gdb() {
       --watch) watch=1 ;;
       -h|--help) usage gdb; return ;;
       --) shift; extra=("$@"); break ;;
-      *) die "gdb: unknown option $1 (gdb's own go after --)" ;;
+      -*) unknown_opt gdb "$1" "(gdb's own go after --)" ;;
+      *) unexpected gdb "$1" "(gdb's own arguments go after --)" ;;
     esac
     shift
   done
@@ -11600,7 +11728,7 @@ cmd_gdb() {
     [ ${#extra[@]} -gt 0 ] || extra=(-ex 'thread apply all bt')
     local rc=0
     stdio_relay fds_only "" timeout 120 "${caps[@]}" "${gdb[@]}" -p "$pid" "${extra[@]}" || rc=$?
-    [ $rc != 124 ] || die "gdb: no answer in 120 s"
+    [ $rc != 124 ] || die "gdb: no answer in 120 s: the process may be hung in a way gdb cannot stop (omabox log -b $NAME hyprland; another process: --pid PID; omabox down $NAME ends it)"
     return $rc
   fi
   # Watched: started in a session of its own in the box (it ends with the box), into the gdb log. A
@@ -11636,9 +11764,10 @@ cmd_gdb() {
 # before box.json named its GPU (no .render) counts when a process of it has that GPU's node open.
 gpu_release() {
   [ $# = 1 ] || die "gpu release: GPU (a PCI slot, or nvidia, amd, intel; omabox config gpu lists them)"
-  in_jail && die "gpu release takes down every box on a GPU: the user's to run, not a jailed agent's"
+  in_jail && fail "gpu release takes down every box on a GPU: the user's to run, not a jailed agent's"
   local want n names=() on node
   want=$(conf_check gpu "$1") && [ "$want" != auto ] || die "gpu release: not a GPU: $1 (a PCI slot, or nvidia, amd, intel)"
+  parsed
   gpu_release_wait
   for n in $(list_names); do
     select_box "$n"
@@ -11766,7 +11895,7 @@ cmd_audio() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
-      -*) die "audio: unknown option $1" ;;
+      -*) unknown_opt audio "$1" ;;
       *) { secs=$(s_duration "$1") && awk -v s="$secs" 'BEGIN { exit !(s >= 0.1 && s <= 600) }'; } ||
           die "audio: how long to listen, 100ms to 10m, like 3s (a bare number is seconds), got $1" ;;
     esac
@@ -11824,7 +11953,7 @@ cmd_gpu() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
-      -*) die "gpu: unknown option $1" ;;
+      -*) unknown_opt gpu "$1" ;;
       *) secs=$(s_duration "$1") || die "gpu: how long to measure, like 5s or 500ms (a bare number is seconds), got $1" ;;
     esac
     shift
@@ -11920,7 +12049,7 @@ cmd_cpu() {
       --threads) threads=1 ;;
       --json) json=1 ;;
       -h|--help) usage cpu; return ;;
-      -*) die "cpu: unknown option $1" ;;
+      -*) unknown_opt cpu "$1" ;;
       *) secs=$(s_duration "$1") || die "cpu: how long to measure, like 5s or 500ms (a bare number is seconds), got $1" ;;
     esac
     shift
@@ -12146,10 +12275,12 @@ cmd_ports() {
       -b|--box) optarg "$@"; name=$2; shift ;;
       --json) json=1 ;;
       -h|--help) usage ports; return ;;
-      *) die "ports: unknown option $1" ;;
+      -*) unknown_opt ports "$1" ;;
+      *) unexpected ports "$1" ;;
     esac
     shift
   done
+  parsed
   if [ -n "$name" ]; then select_box "$name"; need_box; name=$NAME; fi
   # Every box up is read, -b NAME or not: whether its port reaches here depends on the others.
   local n pid net ino p port addr uid key pkeys=() me pids=(); me=$(id -u)
@@ -12288,7 +12419,9 @@ cmd_keys_to_box() {
       -b|--box) optarg "$@"; name=$2; shift ;;
       on|off) [ -z "$want" ] || die "keys-to-box: on or off, once"; want=$1 ;;
       -h|--help) usage keys-to-box; return ;;
-      *) die "keys-to-box: on, off, or nothing to see which it is (a box is -b NAME), got $1" ;;
+      -*) unknown_opt keys-to-box "$1" ;;
+      *) [ ! -d "$BOXES/$1" ] || unexpected keys-to-box "$1"
+         unknown_word keys-to-box argument "$1" "(on, off, or nothing to see which it is; a box is -b NAME)" on off ;;
     esac
     shift
   done
@@ -12325,7 +12458,7 @@ cmd_peek() {
       --workspace) optarg "$@"; ws=$(ws_check "$2") || die "--workspace: 1-99, special (the scratchpad, SUPER+S) or special:NAME, got $2"; shift ;;
       --focus) focus=1 ;;
       --monitor) optarg "$@"; [[ $2 =~ ^[A-Za-z0-9_-]{1,32}$ ]] || die "peek: --monitor takes a monitor's name (omabox monitor list), got $2"; monitor=$2; shift ;;
-      -*) die "peek: unknown option $1" ;;
+      -*) unknown_opt peek "$1" ;;
       *) [ -z "$name" ] || die "peek: one box name, got $name and $1"; name=$1 ;;
     esac
     shift
@@ -12354,7 +12487,7 @@ cmd_peek() {
     say "box '$NAME' already has a peek window${monitor:+ of $monitor}"; return
   fi
   [ -n "$ws" ] || ws=$(conf_get workspace)
-  [ -x "$PEEK" ] || die "missing $PEEK: run install.sh"
+  [ -x "$PEEK" ] || die "peek: missing $PEEK: run install.sh"
   # peek itself runs on the host (it is a window there) and connects to the box's socket from the
   # host's side of its runtime dir, which the box can write: only a real socket, no symlink (finding
   # 63; tools/peek also checks every frame it is sent). Everything that goes into the host's Lua is
@@ -12374,7 +12507,7 @@ cmd_peek() {
   [ $focus = 1 ] || return 0
   local deadline=$((SECONDS + 5))
   until pid=$(peek_pid "$output") && host_hyprctl -j clients | jq -e --argjson p "$pid" 'any(.pid == $p)' >/dev/null; do
-    [ $SECONDS -lt $deadline ] || die "peek window did not appear"
+    [ $SECONDS -lt $deadline ] || die "peek: its window did not come up on your desktop in 5 s, so nothing was focused (omabox peek -b $NAME without --focus opens it on $(ws_text "$ws"); omabox ls: is the box up?)"
     sleep 0.05
   done
   focus_pid "$pid"
@@ -12395,7 +12528,7 @@ peek_marker() {
 
 # Focus a host window by its pid; Hyprland switches to its workspace.
 focus_pid() {
-  [[ $1 =~ ^[0-9]+$ ]] || die "no window to focus"
+  [[ $1 =~ ^[0-9]+$ ]] || die "${MAIN_CMD:+$MAIN_CMD: }no window to focus (the box's window is gone? omabox ls)"
   host_eval "hl.dispatch(hl.dsp.focus({ window = 'pid:$1' }))"
 }
 
@@ -12405,7 +12538,7 @@ name_arg() {
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
-      -*) die "$cmd: unknown option $1" ;;
+      -*) unknown_opt "$cmd" "$1" ;;
       *) [ -z "$name" ] || die "$cmd: one box name, got $name and $1"; name=$1 ;;
     esac
     shift
@@ -12417,7 +12550,7 @@ name_arg() {
 # in the box's mount namespace, as a new file renamed over the old: the runtime dir is the box's to
 # change, and a link it put there resolves inside the box.
 cmd_reload() {
-  local name; name=$(name_arg reload "$@") || exit 1
+  local name; name=$(name_arg reload "$@") || refused
   select_box "$name"; need_box
   # Written only when it differs: in an --autoreload box the write is a reload of its own.
   # shellcheck disable=SC2016 # the box's XDG_RUNTIME_DIR
@@ -12441,7 +12574,7 @@ cmd_reload() {
 # shell, finding 63). Not any new pid: while shell.sh stops the old shell, an old launcher's relaunch
 # writes one too, and that shell is stopped with the rest (finding 248).
 cmd_restart_shell() {
-  local name; name=$(name_arg restart-shell "$@") || exit 1
+  local name; name=$(name_arg restart-shell "$@") || refused
   select_box "$name"; need_box
   local old; old=$(run_read omabox-shell.pid) || old=""
   # A hung shell (#209) is killed here, as a dead one would be gone: shell.sh asks it to quit first and
@@ -12466,7 +12599,7 @@ cmd_restart_shell() {
   until if [ -n "$tok" ]; then got=$(run_read omabox-shell.start) && [ "$got" = "$tok" ] &&
           new=$(run_read omabox-shell.pid) && [ -n "$new" ]
         else new=$(run_read omabox-shell.pid) && [ -n "$new" ] && [ "$new" != "$old" ]; fi; do
-    [ $SECONDS -lt $deadline ] || die "shell did not restart; see $D/home/shell.log"
+    [ $SECONDS -lt $deadline ] || die "${MAIN_CMD:+$MAIN_CMD: }the shell did not restart in 15 s: why is in its log (omabox log -b $NAME shell)"
     sleep 0.1
   done
   wait_ready 1
@@ -12818,6 +12951,7 @@ cmd_guard() {
       # OMABOX_SESSION says otherwise.
       shift; [ "${1:-}" != -- ] || shift
       [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
+      parsed
       export "${GUARD_ENV[@]}" PATH="$GUARD_PATH:$PATH"; prlimit --pid $$ --core=1: 2>/dev/null || true
       # The pid the agent runs as (exec keeps it), so its box can go with it (finding 93). A session
       # it keeps keeps its agent too, while this runs under that one: a guard exec inside a guarded
@@ -12831,10 +12965,11 @@ cmd_guard() {
       export OMABOX_AGENT_PID
       exec "$@" ;;
     ""|on|off) ;;
-    *) die "guard: on or off [claude|codex], exec -- CMD, or nothing to show it" ;;
+    *) unknown_word guard subcommand "$act" "(on or off [claude|codex], exec -- CMD, or nothing to show it)" on off exec ;;
   esac
-  case $which in all|claude|codex) ;; *) die "guard: which agent? claude or codex, got $which" ;; esac
-  [ $# -le 2 ] || die "guard: too many arguments"
+  case $which in all|claude|codex) ;; *) unknown_word guard agent "$which" "(claude or codex)" claude codex ;; esac
+  [ $# -le 2 ] || usage_die "guard: too many arguments, got $*: omabox guard [on|off] [claude|codex]"
+  parsed
   # With no agent named: every one that is installed (its config dir exists); Claude Code always.
   local agents=()
   [ "$which" = codex ] || agents+=(claude)
@@ -12864,6 +12999,7 @@ cmd_guard() {
 cmd_host() {
   [ "${1:-}" != -- ] || shift
   [ $# -gt 0 ] || die "host: nothing to run (omabox host -- CMD ...)"
+  parsed
   host_session
   local sysenv v val; sysenv=$(systemctl --user show-environment 2>/dev/null) || sysenv=""
   for v in DISPLAY QT_QPA_PLATFORMTHEME; do
@@ -12904,7 +13040,7 @@ host_record() {
 }
 
 cmd_env() {
-  local name; name=$(name_arg env "$@") || exit 1
+  local name; name=$(name_arg env "$@") || refused
   select_box "$name"; need_box
   # The box bus is private and its Hyprland socket path too long to reach directly: for those use
   # `omabox run` and `omabox hyprctl`. Plain Wayland clients (wl-paste, wlr-randr, ...) work with this.
@@ -12917,7 +13053,7 @@ cmd_path() {
   local name="" logs=0 rundir=0 home=0 a args=()
   for a; do case $a in --logs) logs=1 ;; --run) rundir=1 ;; --home) home=1 ;; *) args+=("$a") ;; esac; done
   [ $((logs + rundir + home)) -le 1 ] || die "path: one of --home, --run and --logs"
-  name=$(name_arg path "${args[@]}") || exit 1
+  name=$(name_arg path "${args[@]}") || refused
   select_box "$name"
   # Seeding a box's HOME through its path is using it.
   if box_alive; then touch "$D/used" 2>/dev/null || true; take_over || need_box; fi
@@ -13028,17 +13164,19 @@ clip_select() {
 
 cmd_clip() {
   local why
-  why=$(agent_caller) && die "clip is not for agents ($why): the user hands their clipboard over themselves, from a terminal of theirs, a key binding or the bar widget"
+  why=$(agent_caller) && fail "clip is not for agents ($why): the user hands their clipboard over themselves, from a terminal of theirs, a key binding or the bar widget"
   local name="" from=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       --from-box) from=1 ;;
       -h|--help) usage clip; return ;;
-      *) die "clip: unknown argument $1 (omabox clip [--from-box] [-b NAME])" ;;
+      -*) unknown_opt clip "$1" ;;
+      *) unexpected clip "$1" "(omabox clip [--from-box] [-b NAME])" ;;
     esac
     shift
   done
+  parsed
   host_session
   clip_select "$name"
   [ "$(meta mode)" = interactive ] || die "clip: box '$NAME' is headless: clip is for interactive boxes only (headless ones are agents')"
@@ -13097,12 +13235,21 @@ cmd_config() {
     case $1 in
       --json) json=1 ;;
       -h|--help) usage config; return ;;
-      -*) die "config: unknown option $1" ;;
+      -*) unknown_opt config "$1" ;;
       *) args+=("$1") ;;
     esac
     shift
   done
   local k v
+  # (audit E6: what goes there, and which keys there are)
+  [ ${#args[@]} -le 2 ] || usage_die "config: one KEY and a VALUE at most, got ${#args[@]} words (keys: ${CONF_KEYS[*]})"
+  if [ ${#args[@]} -ge 1 ]; then
+    k=${args[0]}; [ -n "$(conf_default "$k")" ] || unknown_word config key "$k" "(keys: ${CONF_KEYS[*]})" "${CONF_KEYS[@]}"
+  fi
+  if [ ${#args[@]} = 2 ] && [ "${args[1]}" != default ]; then
+    v=$(conf_check "$k" "${args[1]}") || die "config: bad $k: ${args[1]} ($(conf_help "$k"))"
+  fi
+  parsed
   case ${#args[@]} in
     0)
       if [ $json = 1 ]; then
@@ -13123,14 +13270,12 @@ cmd_config() {
       else
         for k in "${CONF_KEYS[@]}"; do echo "$k=$(conf_get "$k")"; done
       fi ;;
-    1) k=${args[0]}; [ -n "$(conf_default "$k")" ] || die "config: unknown key $k (keys: ${CONF_KEYS[*]})"
-       conf_get "$k"
+    1) conf_get "$k"
        # The GPUs there are, on stderr: stdout stays the value, for scripts.
        [ "$k" != gpu ] || gpu_list >&2
        [ "$k" != shot-fit ] || [ -z "${OMABOX_SHOT_FIT:-}" ] || say "OMABOX_SHOT_FIT=$OMABOX_SHOT_FIT overrides it here" ;;
-    2) k=${args[0]}; [ -n "$(conf_default "$k")" ] || die "config: unknown key $k (keys: ${CONF_KEYS[*]})"
-       if [ "${args[1]}" = default ]; then conf_set "$k"; v=$(conf_default "$k")
-       else v=$(conf_check "$k" "${args[1]}") || die "config: bad $k: ${args[1]} ($(conf_help "$k"))"; conf_set "$k" "$v"; fi
+    2) if [ "${args[1]}" = default ]; then conf_set "$k"; v=$(conf_default "$k")
+       else conf_set "$k" "$v"; fi
        [ "$k" = confirm-close ] && confirm_live "$v"
        if [ "$k" = gpu ] && [ "$v" != auto ]; then
          local n m=""; for n in $(render_nodes); do gpu_is "$n" "$v" && { m=$n; break; }; done
@@ -13140,7 +13285,6 @@ cmd_config() {
          say "note: confirm-close needs $(aq_lacks): boxes leave it off until then. $AQ_HOWTO"
        fi
        echo "$k=$v" ;;
-    *) die "config: KEY [VALUE]" ;;
   esac
 }
 conf_help() {
@@ -13206,19 +13350,18 @@ cmd_down() {
       --all) all=1 ;;
       --orphans) orphans=1 ;;
       -b|--box) optarg "$@"; names+=("$2"); shift ;;
-      -*) die "down: unknown option $1" ;;
+      -*) unknown_opt down "$1" ;;
       *) names+=("$1") ;;
     esac
     shift
   done
   if [ $orphans = 1 ]; then
     [ $all = 0 ] && [ ${#names[@]} = 0 ] || die "down: --orphans takes no names, nor --all"
-    down_orphans; return
+    parsed; down_orphans; return
   fi
-  if [ $all = 1 ]; then
-    [ ${#names[@]} = 0 ] || die "down: --all or names, not both"
-    mapfile -t names < <(list_names)
-  fi
+  [ $all = 0 ] || [ ${#names[@]} = 0 ] || die "down: --all or names, not both"
+  parsed
+  [ $all = 0 ] || mapfile -t names < <(list_names)
   # No name: select_box derives it, and outside any repo falls back to the session's box (finding
   # 200); passed the derived name, it would take it as given and not (finding 259).
   [ $all = 1 ] || [ ${#names[@]} -gt 0 ] || names=("")
@@ -13366,10 +13509,12 @@ cmd_ls() {
     case $1 in
       --json) json=1 ;;
       -b|--box) not_one_box "$MAIN_CMD" ;;
-      *) say "$MAIN_CMD: unknown argument $1 (omabox $MAIN_CMD [--json])"; exit 2 ;;
+      -*) unknown_opt "$MAIN_CMD" "$1" "(omabox $MAIN_CMD [--json])" ;;
+      *) unexpected "$MAIN_CMD" "$1" "(omabox $MAIN_CMD [--json])" ;;
     esac
     shift
   done
+  parsed
   local n hung; hung=$(hung_boxes)
   if [ $json = 1 ]; then
     for n in $(list_names); do
@@ -13433,7 +13578,8 @@ cmd_ls() {
 # does not list: another state dir or user namespace), said as such. Exit 0 in a box, 1 not in one, 2
 # cannot tell.
 cmd_which() {
-  [ $# = 1 ] && [[ $1 =~ ^[0-9]+$ ]] || { say "which: one PID (omabox which PID)"; exit 2; }
+  [ $# = 1 ] && [[ $1 =~ ^[0-9]+$ ]] || usage_die "which: one PID (omabox which PID)"
+  parsed
   local pid=$1 uid n bpid self p ns names=() nss=() i
   uid=$(awk '/^Uid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null) && [ -n "$uid" ] ||
     { say "which: no process $pid (gone, or not in this pid namespace)"; exit 2; }
@@ -13819,7 +13965,7 @@ jail_read() {
 # leads, and the same words whether it is outside the jail's folders, leads out of them through a
 # link, or is not there (or not what OPT takes), so a refusal says nothing of the host.
 # jail_refuse OPT PATH WHAT
-jail_refuse() { die "up: $1 $2 is not $3, so it does not go into the box"; }
+jail_refuse() { fail "up: $1 $2 is not $3, so it does not go into the box"; }
 
 # The repo the caller works in (git's top level), or a failure. For a jailed caller not through git: its
 # .git/config is the jail's to write, and settings there (core.fsmonitor and others) run programs, here,
@@ -14076,7 +14222,7 @@ relay_wanted() {
 # not in this directory); files it writes or reads (shot, --in) are opened here and passed open.
 relay_call() {
   local cmd=$1 relay; shift
-  relay=$(relay_bin) || die "omabox-relay is not in reach: map it into the jail (omabox broker on prints how)"
+  relay=$(relay_bin) || fail "omabox-relay is not in reach: map it into the jail (omabox broker on prints how)"
   local env=(--env "DEFAULT=$(default_name)" --env "PATH=$(caller_path)") args=() a prev="" v kv kvs
   for a in "$@"; do
     # run --env-file: read here, in the jail, and sent as --pass entries (the broker reads no path of
@@ -14106,7 +14252,9 @@ relay_call() {
     shot|screenshot) relay_shot "$relay" "${env[@]}" -- "${args[@]}" ;;
     record) relay_record "$relay" "${env[@]}" -- "${args[@]}" ;;
     click|scroll|pointer|drag|pixel) relay_in "$relay" "$cmd" "${env[@]}" -- "${args[@]}" ;;
-    *) exec "$relay" call "$BROKER_SOCK" "${env[@]}" -- "$cmd" "${args[@]}" ;;
+    # (run's: the relay's own failure, the broker not reached, is 125 as run's own are; #273)
+    *) [ "$cmd" != run ] || export OMABOX_RELAY_FAIL=125
+       exec "$relay" call "$BROKER_SOCK" "${env[@]}" -- "$cmd" "${args[@]}" ;;
   esac
 }
 
@@ -14124,7 +14272,7 @@ relay_shot() {
       -o|--output) optarg "$@"; two_files shot "$out" "$2"; out=$2; shift ;;
       # A path of the jail's, which the broker never opens (finding 243): --changed compares with the
       # last shot of the same window or screen instead.
-      --since) die "shot --since: not for a jailed agent (--changed compares with the last shot of it)" ;;
+      --since) fail "shot --since: not for a jailed agent (--changed compares with the last shot of it)" ;;
       -*) args+=("$1") ;;
       *) two_files shot "$out" "$1"; out=$1 ;;
     esac
@@ -14177,7 +14325,7 @@ relay_record() {
       --sheet) sheet=1 ;;
       --frames|--every|--fit) optarg "$@"; sheet=1 sargs+=("$1" "$2"); shift ;;
       --monitor|--fps) optarg "$@"; rest+=("$1" "$2"); unpol+=("$1" "$2"); shift ;;
-      --to-fd|--marks-fd|--vtt-fd|--from-fd|--marks-from-fd|--as|--file) die "record: $1 is omabox's own, between a jailed agent's omabox and the broker" ;;
+      --to-fd|--marks-fd|--vtt-fd|--from-fd|--marks-from-fd|--as|--file) fail "record: $1 is omabox's own, between a jailed agent's omabox and the broker" ;;
       --) dash=1; shift; ract=("$@"); break ;;
       -*) rest+=("$1"); unpol+=("$1") ;;
       *) if [ -z "$sub" ]; then sub=$1; rest+=("$1"); unpol+=("$1")
@@ -14285,6 +14433,9 @@ relay_in() {
 BROKER_UNITS=$HOME/.config/systemd/user
 cmd_broker() {
   local sock=$BROKER_UNITS/omabox-broker.socket svc=$BROKER_UNITS/omabox-broker.service
+  case ${1:-} in on|off|"") ;; *) unknown_word broker subcommand "$1" "(on, off, or nothing to see it)" on off ;; esac
+  [ $# -le 1 ] || usage_die "broker: one of on or off, got $*"
+  parsed
   case ${1:-} in
     on)
       [ -x "$RELAY" ] || make -s -C "$ROOT/tools/relay" || die "building tools/relay failed"
@@ -14370,7 +14521,7 @@ cmd_save() {
       # (#273) -f is follow in log and events: save's is warned in 0.9, refused in 1.0.
       -f) force=1; say "warning: save -f: -f is follow elsewhere (log, events); write save --force (refused in 1.0)" ;;
       -h|--help) usage save; return ;;
-      -*) die "save: unknown option $1" ;;
+      -*) unknown_opt save "$1" ;;
       *) [ -z "$save" ] || die "save: one save name, got $save and $1 (the box goes with -b)"; save=$1 ;;
     esac
     shift
@@ -14430,14 +14581,18 @@ cmd_saves() {
         --json) json=--json ;;
         -h|--help) usage saves; return ;;
         -b|--box) not_one_box saves ;;
-        *) say "saves: unknown argument $n (omabox saves [--json] | saves rm SAVE...)"; exit 2 ;;
+        -*) unknown_opt saves "$n" "(omabox saves [--json] | saves rm SAVE...)" ;;
+        *) unexpected saves "$n" "(omabox saves [--json] | saves rm SAVE...)" ;;
       esac
     done
     set -- ${json:+"$json"}
+    parsed
   fi
   case ${1:-} in
     rm)
       shift; [ $# -gt 0 ] || die "saves rm: which? (omabox saves lists them)"
+      for n; do save_name "$n"; done
+      parsed
       for n; do d=$(save_dir "$n"); rm_save "$d"; say "save '$n' removed"; done ;;
     --json)
       for d in "$SAVES"/*/; do
@@ -14459,6 +14614,122 @@ cmd_saves() {
   esac
 }
 
+# Every command's options (#273), for --opt=value (eq_split) and an unknown option's nearest one
+# (unknown_opt): VALUE= takes a value, VALUE? may (one that does not start with -), the rest none.
+# Not the internal ones (help's comment above usage_text): omabox passes those itself. t_unit_cli_contract
+# checks these against help.
+SETTLE_OPTS="--wait --start= --quiet= --timeout= --strict --json --ignore= -g="
+UP_BOX_OPTS="--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= --theme= --net= --allow=
+  --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --clean --desk-shell --systemd
+  --audio --xwayland --autoreload --no-shell --no-pointer"
+declare -A CMD_OPTS=(
+  [up]="-b= --box= --json --workspace= --new --confirm-close --no-confirm-close --interactive -i $UP_BOX_OPTS"
+  [run]="-b= --box= -d --detach -q --print-log --replace --pass= --env-file= $SETTLE_OPTS $UP_BOX_OPTS"
+  [shot]="-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every=
+    --sheet --diff --changed --since= --ignore= --after"
+  [record]="-b= --box= -o= --output= --monitor= --no-pointer --audio --glide= --show-input --captions --cut-idle? --fps=
+    --hold= --for= --sheet --frames= --every= --fit="
+  [pixel]="-b= --box= -w= --window= --active --in= --json"
+  [calibrate]="-b= --box= -o= --output= --size= --answer="
+  [windows]="-b= --box= --json"
+  [tree]="-b= --box= -w= --window= --active -l= --layer= --find= --json --all"
+  [check]="-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= -w= --window= --active -g=
+    --timeout= $UP_BOX_OPTS"
+  [keys]="-b= --box= -w= --window= --active -t= --delay= -s= --pass= $SETTLE_OPTS"
+  [keys-to-box]="-b= --box="
+  [click]="-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= $SETTLE_OPTS"
+  [scroll]="-b= --box= -w= --window= --active --in= --no-raise --mod= --source= $SETTLE_OPTS"
+  [pointer]="-b= --box= -w= --window= --active --in= --steps= --glide= --mod="
+  [drag]="-b= --box= -w= --window= --active --in= --no-raise --steps= --glide= --hold= --shot= --shot-fit= --shot-g=
+    --shot-monitor= --mod= $SETTLE_OPTS"
+  [wait]="-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused"
+  [hyprctl]="-b= --box="
+  [lua]="-b= --box= --json"
+  [log]="-b= --box= -f --follow --crash --grep= -i -n="
+  [events]="-b= --box= --since= --mark? --grep= -i --json -f --follow --until= --timeout= -n="
+  [peek]="-b= --box= --fps= --workspace= --focus --monitor="
+  [restart-shell]="-b= --box=" [reload]="-b= --box=" [env]="-b= --box=" [mode]="-b= --box="
+  [output]="-b= --box= --for= --cycles="
+  [monitor]="-b= --box= --name= --json"
+  [gdb]="-b= --box= --shell --pid= --watch"
+  [gpu]="-b= --box= --json"
+  [cpu]="-b= --box= --settle= --pid= --app= --threads --json"
+  [audio]="-b= --box= --json"
+  [ports]="-b= --box= --json"
+  [path]="-b= --box= --logs --run --home"
+  [down]="-b= --box= --all --orphans"
+  [ls]="--json" [saves]="--json" [config]="--json"
+  [save]="-b= --box= --force -f"
+  [clip]="-b= --box= --from-box"
+  [setup]="--aquamarine --force --remove --feedback-skill --no-feedback-skill"
+)
+# The commands, for an unknown one's nearest (aliases: screenshot, logs, list, version).
+COMMANDS="up run shot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl
+  lua log events peek restart-shell reload mode output monitor gdb gpu cpu audio ports env path down ls which save saves
+  config guard host clip broker setup help version"
+# CMD's options, one a word (CMD as given: an alias is its command's); a failure when it takes none.
+cmd_opts() {
+  local c=$1
+  case $c in screenshot) c=shot ;; logs) c=log ;; list) c="ls" ;; esac
+  [ -n "${CMD_OPTS[$c]+x}" ] || return 1
+  local words=(); read -ra words <<<"${CMD_OPTS[$c]//$'\n'/ }"
+  printf '%s\n' "${words[@]}"
+}
+# An option the command does not take: a usage error, with the nearest one it does when one is close.
+# LABEL is what the message starts with (check point), its first word the command. unknown_opt LABEL OPT [HINT]
+unknown_opt() {
+  local known=()
+  mapfile -t known < <(cmd_opts "${1%% *}" | sed 's/[=?]$//'; printf '%s\n' -h --help)
+  usage_die "$1: unknown option $2$(did_you_mean "${2%%=*}" "${known[@]}")${3:+ $3}"
+}
+# A word that is not one of CHOICES where one of them goes (a subcommand, a condition): a usage error,
+# with the nearest. unknown_word LABEL WHAT WORD TEXT CHOICE... : "LABEL: unknown WHAT WORD (did you
+# mean X?) TEXT"
+unknown_word() {
+  local label=$1 what=$2 w=$3 choices=$4; shift 4
+  usage_die "$label: unknown $what $w$(did_you_mean "$w" "$@")${choices:+ $choices}"
+}
+# A word with no place in LABEL's command line: a usage error. One that names a box says the box goes
+# with -b (audit E4: `windows mybox` was "unexpected mybox"). unexpected LABEL WORD [HINT]
+unexpected() {
+  local why=${3:-}
+  if [[ $2 =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$ ]] && [ -d "$BOXES/$2" ]; then why="(box '$2'? a box goes with -b: -b $2)"; fi
+  usage_die "$1: unexpected $2${why:+ $why}"
+}
+# --opt=value (#273, audit F9): every option that takes a value takes it after = too, split here
+# before any parser, the jailed caller's relay or the broker sees the words. Only words in an option's
+# place: a value (log --grep --x=y) stays as given, so does everything after --, and, for a command
+# whose remaining words are another program's (run's command, hyprctl's, lua's source, pointer's
+# actions), everything from its first word that is not one of omabox's options. An option that takes
+# no value refuses one; an unknown --x=y is left for the parser, which names its nearest option.
+# Sets ARGS. eq_split CMD ARGS...
+eq_split() {
+  local cmd=$1 a o front=0 table; shift
+  ARGS=()
+  table=" $(cmd_opts "$cmd" | tr '\n' ' ')" || { ARGS=("$@"); return 0; }
+  case $cmd in run|pointer|hyprctl|lua) front=1 ;; esac
+  while [ $# -gt 0 ]; do
+    a=$1; shift
+    case $a in
+      --) ARGS+=("$a" "$@"); return 0 ;;
+      --?*=*)
+        o=${a%%=*}
+        case $table in
+          *" $o= "*|*" $o? "*) ARGS+=("$o" "${a#*=}"); continue ;;
+          *" $o "*) usage_die "$cmd: $o takes no value, got $a" ;;
+        esac ;;
+      -?*)
+        case $table in
+          *" $a= "*) ARGS+=("$a"); [ $# = 0 ] || { ARGS+=("$1"); shift; }; continue ;;
+          *" $a? "*) ARGS+=("$a"); if [ $# -gt 0 ] && [[ $1 != -* ]]; then ARGS+=("$1"); shift; fi; continue ;;
+          *" $a "*) ARGS+=("$a"); continue ;;
+        esac ;;
+    esac
+    if [ $front = 1 ]; then ARGS+=("$a" "$@"); return 0; fi
+    ARGS+=("$a")
+  done
+}
+
 # -b NAME before the command (issue #36): `omabox -b NAME windows` is `omabox windows -b NAME`, for
 # every command that takes -b; the rest (ls, config, ...) are not about one box, and say so in a line.
 # Done before anything reads the command, the broker's policy and the relay included: they see the
@@ -14467,9 +14738,15 @@ cmd_saves() {
 BOX_CMDS=" up run shot screenshot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip "
 global_box() {
   ARGS=("$@")
-  case ${1:-} in -b|--box) ;; *) return 0 ;; esac
+  case ${1:-} in -b|--box|--box=*) ;; *) return 0 ;; esac
   local name="" flag=$1
-  while [ "${1:-}" = -b ] || [ "${1:-}" = --box ]; do optarg "$@"; name=$2; flag=$1; shift 2; done
+  while :; do
+    case ${1:-} in
+      -b|--box) optarg "$@"; name=$2; flag=$1; shift 2 ;;
+      --box=*) name=${1#--box=} flag=--box; [ -n "$name" ] || optarg --box; shift ;;
+      *) break ;;
+    esac
+  done
   case ${1:-} in
     "") say "$flag NAME goes with a command: omabox $flag NAME COMMAND ... (omabox help)"; exit 2 ;;
     help|-h|--help|version|-V|--version) ARGS=("$@"); return 0 ;;
@@ -14477,14 +14754,18 @@ global_box() {
   if [[ $BOX_CMDS != *" $1 "* ]]; then
     case $1 in
       ls|list|which|saves|config|guard|host|broker) not_one_box "$1" ;;
-      *) say "unknown command: $1 (omabox help lists the commands and their options)" ;;
+      *) unknown_command "$1" ;;
     esac
-    exit 2
   fi
   ARGS=("$1" "$flag" "$name" "${@:2}")
 }
 # A command that is not about one box, given -b before it or (ls, #236) after it: one line, exit 2.
 not_one_box() { say "$1 takes no -b: it is not about one box"; exit 2; }
+# A command omabox does not have: exit 2, with the nearest one it has.
+unknown_command() {
+  local c=() ; read -ra c <<<"$COMMANDS"
+  say "unknown command: $1$(did_you_mean "$1" "${c[@]}") (omabox help lists the commands and their options)"; exit 2
+}
 
 # Everything runs from main, called on the file's last line: bash reads a script as it runs it, so
 # with ~/.local/bin/omabox linked to a working copy, an edit made while a command ran used to land in
@@ -14500,16 +14781,22 @@ cmd_version() {
 }
 
 main() {
+  PARSING=1   # (until the command has read its words: parsed, select_box)
   global_box "$@"; set -- "${ARGS[@]}"
   local cmd=${1:-help}; shift || true
   MAIN_CMD=$cmd   # the command asked for, whatever runs it (peek_marker)
+  # run's own failures are 125, never a code its command could have given (#273, audit X3).
+  [ "$cmd" != run ] || DIE_RC=125
+  # --opt=value as --opt value, before the relay or the broker takes the words.
+  eq_split "$cmd" "$@"; set -- ${ARGS[@]+"${ARGS[@]}"}
   # CMD --help (after any -b NAME): that command's help, here, before a broker or relay would take it.
   # Not hyprctl's: its arguments are hyprctl's own.
   local a=("$@")
   while [ "${a[0]:-}" = -b ] || [ "${a[0]:-}" = --box ]; do a=("${a[@]:2}"); done
   case ${a[0]:-} in -h|--help) [ "$cmd" = hyprctl ] || [ "$cmd" = _reap ] || { usage "$cmd"; exit; } ;; esac
   # calibrate draws and reads its card here, in a jail too: only the box's size goes by the broker.
-  if [ -n "${OMABOX_BROKER_PEER:-}" ]; then broker_init; broker_check "$cmd" "$@"
+  # (A caller the broker cannot place, or one it turns away, is a refusal, not a usage error.)
+  if [ -n "${OMABOX_BROKER_PEER:-}" ]; then PARSING=0; broker_init; broker_check "$cmd" "$@"; PARSING=1
   elif [ "$cmd" != calibrate ] && relay_wanted; then relay_call "$cmd" "$@"; fi
   case $cmd in
     up) cmd_up "$@" ;;
@@ -14559,7 +14846,7 @@ main() {
     _reap) cmd__reap "$@" ;;
     help|-h|--help) usage "$@" ;;
     version|-V|--version) cmd_version "$@" ;;
-    *) say "unknown command: $cmd (omabox help lists the commands and their options)"; exit 2 ;;
+    *) unknown_command "$cmd" ;;
   esac
 }
 

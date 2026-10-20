@@ -7,6 +7,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **`--opt=value`** wherever an option takes a value, in every command (`shot --window=firefox
+  --fit=1456`, `omabox --box=x windows`, `pointer move X Y --steps=5`): as `--opt value`. An option
+  that takes none refuses one (`--json=1`, exit 2); a value given as a separate word stays as it is
+  (`log --grep --x=y` looks for `--x=y`), and so does everything after `--`.
 - **`omabox wait until -- CMD`**: the new name of `wait cmd`, waiting until a command run in the
   box exits 0 (the same flags, exit codes and `--json`, whose `condition` is `until`). Claude Code
   refuses any call holding `wait cmd` from a subagent working in its own git worktree, since it
@@ -37,6 +41,26 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
+- **Exit codes mean one thing in every command**, in one table: `omabox help exit-codes` and the
+  skill's reference ([#273](https://github.com/diogochaves/omabox/issues/273)). Called wrong (an
+  unknown option or command, a value missing or not of its form, a word too many or too few) is
+  exit **2** everywhere, where most commands gave 1; 1 stays "it ran and failed", 124 "not in
+  time". Each such refusal names the nearest option, subcommand or command when one is close
+  (`shot: unknown option --widnow (did you mean --window?)`), the form a missing value takes
+  (`-g needs a value: -g "X,Y WxH"`), and `omabox help CMD`. A script that tested for 1 after a
+  bad call should test for non-zero, or 2.
+- **`omabox run` exits 125 for its own failures** (no box, a bad option, a throwaway that did not
+  start, the box going down while the command ran, the broker out of reach from ai-jail), so they
+  are never read as the command's status, which passes through as before (126 and 127: the command
+  could not run, or was not found, in the box).
+- Refusals that did not say what to do now do: a bad box name says what one is; a box's name where
+  `windows`, `wait`, `record` and others take no word says it goes with `-b`; `click`, `drag` and
+  `scroll` list what goes where a word was not understood; `keys` with nothing to send gives
+  examples; `config`, `monitor remove`, `guard` and `events` say what goes there; a window that
+  will not take focus is named, with the way round; `mode`, `gdb`, `peek --focus` and
+  `restart-shell` say what to look at next; messages that lacked their command's name have it.
+- `keys` refuses an unknown `--option` (exit 2) where it handed it to the keyboard tool (`--hold`
+  there never returned).
 - **One duration grammar for every option** ([#273](https://github.com/diogochaves/omabox/issues/273)):
   `300ms`, `2s`, `1.5m` and now `1h`; a bare number is seconds. `gpu`, `cpu` and `audio` take
   their length as one (`omabox gpu 500ms`, `cpu 1m --settle 2s`), where they took plain numbers
@@ -68,6 +92,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   - `up -i`: write `--interactive` (`-i` is ignore-case in `log` and `events`).
   - `save -f`: write `--force` (`-f` is follow in `log` and `events`).
   - `shot` and `calibrate` given two files: the last was taken without a word; name one.
+  - A box name given with characters a box name cannot have, or past 40 of them (`-b "my box"`):
+    it was written to fit without a word (`my-box`), `up` aside; write the name that fits.
 
 ## 0.8.0 — 2026-10-20
 

@@ -8015,6 +8015,58 @@ from them.
     command, `--output`, `--grep -i`, two files, `check point --timeout`), t_unit_cli/t_unit_record
     (gpu, cpu, audio take units), t_keys (its pauses in the new form, `keys --active`).
 
+386. **Usage errors exit 2 in every command, naming the nearest option and `omabox help CMD`**
+    (2026-10-20, #273, part B of the CLI audit; audit X2, X5-X7, E1-E22). Most commands exited 1
+    for an unknown option, a missing or bad value or a word too many, the same as a run that
+    failed; `ls`, `saves`, `which` and an unknown command gave 2. Now one rule: `die` exits 2 while
+    the command line is read (`PARSING`, set by `main`, ended by `parsed` or by `select_box`, which
+    every box command calls once its words are read), 1 afterwards; `DIE_RC` still overrides it
+    (`check`'s 2 throughout, `run`'s 125). A refusal then is said with " (omabox help CMD)"
+    (`usage_die`), and `fail` is a failure met while still reading the words (ImageMagick missing,
+    another `up --new`'s lock, a jail's or a policy's refusal: 1, never "called wrong"); `refused`
+    exits as die would for a helper that said why and returned 1 (`|| exit 1` there lost a
+    subshell's 2). `unknown_opt`, `unknown_word` and `unknown_command` name the nearest candidate
+    (`did_you_mean`: the only one the word starts, else the only nearest within one typo, two past 4
+    letters, three past 10, a swap counting one); `optarg` names the form help gives a value
+    (`opt_form`: `-g needs a value: -g "X,Y WxH"`); `unexpected` says a word that is a box's name
+    goes with `-b` (E4). Every command's options are in `CMD_OPTS`, which `t_unit_cli_contract`
+    checks against the options its help lines show. `keys` refuses an unknown `--option`, which it
+    passed to the keyboard tool (`--hold` there never returned). A given box name with characters a
+    box name cannot have is warned in 0.9 and refused in 1.0 (E3; finding 176's note was `up`'s
+    only); a derived one is still made to fit. The refusals that did not name the fix now do (E5-E15,
+    E17, E18, E20; E16, E19 were fine, E21 was part A's, E22 is an internal option). One table of
+    exit codes, `omabox help exit-codes` (also `omabox help help`) and the skill's reference "Exit
+    codes"; the code meanings left as they were and put in it: a `--window SEL` matching none or
+    several (2, X5), `which` for a pid gone (2, X6). Tests: t_unit_exit_codes (every command's
+    unknown option, each family's usage errors, the nearest-option hints, run's 125, the E fixes,
+    the table), t_unit_cli_contract.
+
+387. **`--opt=value` wherever an option takes a value** (2026-10-20, #273, audit F9). One place,
+    `eq_split` in `main`, before the jailed caller's relay or the broker sees the words: `--opt=V`
+    becomes `--opt V` when `CMD_OPTS` says the command's `--opt` takes a value (`V=`, or `V?` for
+    an optional one: `events --mark`, `record --cut-idle`); an option that takes none refuses a
+    value (exit 2); an unknown `--x=y` is left for the parser, whose hint compares `--x`. Only words
+    in an option's place: a value given as its own word stays as it is (`log --grep --x=y`, `keys -t
+    --a=b`), so does everything after `--`, and for `run`, `hyprctl`, `lua` and `pointer` everything
+    from the first word that is not an option of theirs (the command's, hyprctl's, the Lua source,
+    the pointer's actions; `pointer`'s own `move X Y --steps=N` is split there). `--box=NAME` before
+    the command too (`global_box`). Not done: short options with `=` (`-g=...`), which no tool
+    takes either.
+
+388. **`run` exits 125 for its own failures** (2026-10-20, #273, audit X3, X4). `run`'s 1 was both
+    "the command exited 1" and "no box", "bad option", "the throwaway did not start": now everything
+    omabox refuses or fails at under `run` exits 125 (`DIE_RC=125`, set in `main` for `run`, usage
+    errors included), as `docker run` and `timeout` do; the command's status passes through as
+    before, 126 and 127 being the box's exec's. A box that went down while the command ran
+    (`run_gone`) is 125 too: the status is the box's end's, not the command's (t_own_processes saw
+    137 or 143). From ai-jail, the relay's own failure (the broker out of reach, a call turned away)
+    is 125 for `run`: `relay call` exits `$OMABOX_RELAY_FAIL` (an internal variable, 1 by default)
+    for its own failures; an older relay ignores it. X4: the in-box steps' 125 (run-job's log,
+    record's mkdir) never reach a caller as such: each ends in a `die`. `run -d`'s "could not start
+    the command" says whether the box went down and which log to read (E9). Tests:
+    t_unit_exit_codes (run's refusals), t_own_processes (125), t_jail (125 and a command's 3 through
+    the broker, a usage error's 2).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

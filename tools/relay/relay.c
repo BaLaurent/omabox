@@ -61,9 +61,13 @@ struct header {
     uint32_t len;
 };
 
+// The exit status of call's own failures (the broker not reached, a call it turned away): 1, or
+// OMABOX_RELAY_FAIL's 1-255. bin/omabox sets 125 for `run`, whose other statuses are its command's.
+static int own_fail = 1;
+
 static void die(const char *what) {
     fprintf(stderr, "omabox-relay: %s: %s\n", what, strerror(errno));
-    exit(1);
+    exit(own_fail);
 }
 
 static int write_all(int fd, const void *buf, size_t n) {
@@ -102,6 +106,8 @@ static int good_name(const char *s, size_t n) {
 // --- call (inside the sandbox) -------------------------------------------------------------------
 
 static int cmd_call(int argc, char **argv) {
+    const char *f = getenv("OMABOX_RELAY_FAIL");
+    if (f) { char *e; long v = strtol(f, &e, 10); if (*f && !*e && v >= 1 && v <= 255) own_fail = (int)v; }
     if (argc < 2) { fprintf(stderr, "usage: omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... -- ARG...\n"); return 2; }
     const char *path = argv[1];
     // A broker at its cap closes the connection as soon as it accepts it (#197): a write after that
@@ -143,14 +149,14 @@ static int cmd_call(int argc, char **argv) {
     for (i++; i < argc; i++) PUT('A', argv[i]);
 
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
-    if (strlen(path) >= sizeof(addr.sun_path)) { fprintf(stderr, "omabox-relay: socket path too long\n"); return 1; }
+    if (strlen(path) >= sizeof(addr.sun_path)) { fprintf(stderr, "omabox-relay: socket path too long\n"); return own_fail; }
     strcpy(addr.sun_path, path);
     int s = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (s < 0) die("socket");
     if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         fprintf(stderr, "omabox: cannot reach the omabox broker at %s: %s (is it on? omabox broker on, outside the sandbox)\n",
                 path, strerror(errno));
-        return 1;
+        return own_fail;
     }
     struct header h = {.nfds = (uint16_t)nfds, .len = (uint32_t)len};
     memcpy(h.magic, MAGIC, 6);
@@ -170,14 +176,14 @@ static int cmd_call(int argc, char **argv) {
     if (w != (ssize_t)sizeof(h) || write_all(s, payload, len) < 0) {
         if (errno == EPIPE || errno == ECONNRESET) {
             fprintf(stderr, "omabox: the omabox broker turned the call away (too many callers at once); try again\n");
-            return 1;
+            return own_fail;
         }
         die("send");
     }
     int32_t status;
     if (read_all(s, &status, sizeof(status)) < 0) {
         fprintf(stderr, "omabox: the omabox broker ended the command without an exit status (or turned the call away: too many callers at once)\n");
-        return 1;
+        return own_fail;
     }
     return status;
 }
