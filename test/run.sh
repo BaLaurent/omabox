@@ -5023,6 +5023,24 @@ t_isolated() {
   check_eq "hostname is the host's (finding 54)" "$(uname -n)" "$(ob run -b "$B" -- uname -n)"
   check_eq "without --addr, only the loopback's own addresses (#229)" "127.0.0.1/8 ::1/128" \
     "$(ob run -b "$B" -- ip -o addr show | awk '{ print $4 }' | LC_ALL=C sort | paste -sd' ')"
+  # #286: the --allow port is pasta's in the box, so a server there fails at once; ports lists it, and
+  # run -d says a job that ended in its first moments (sh here: python's start is slow under load).
+  local err rc
+  check_eq "ports lists the --allow port: allowed, pasta's (#286)" "$allowed pasta allowed 127.0.0.1,::1" \
+    "$(ob ports -b "$B" --json | jq -r --argjson p "$allowed" '.[] | select(.port == $p) | "\(.port) \(.process) \(.host.state) \(.addresses | join(","))"')"
+  err=$(ob run -b "$B" -- python3 -m http.server "$allowed" --bind 127.0.0.1 2>&1); rc=$?
+  check_match "...a box server on it: address in use" "^1 .*Address already in use" "$rc $err"
+  err=$(ob run -b "$B" -d -- sh -c 'echo boom >&2; exit 3' 2>&1 >/dev/null); rc=$?
+  check_eq "run -d of a command that exits 3 at once: exit 3 (#286)" 3 "$rc"
+  check_match "...said, with its log's last lines" \
+    "the command exited with status 3 at once in box '$B', and left nothing running \(log: [^)]*\)"$'\n'"omabox: its log ends \(omabox log -b $B run\):"$'\n'"  boom" "$err"
+  check_fails "...not as started" grep -q "started in box" <<<"$err"
+  err=$(ob run -b "$B" -d -- true 2>&1); rc=$?
+  check_match "...one that exits 0 at once: 0, said" "^0 omabox: the command exited with status 0 at once" "$rc $err"
+  err=$(ob run -b "$B" -d -q -- true 2>&1); rc=$?
+  check_eq "...with -q: nothing said" "0 " "$rc $err"
+  err=$(ob run -b "$B" -d -- sh -c 'sleep 600 & exit 0' 2>&1); rc=$?
+  check_match "...a launcher that exits and leaves its child: started" "^0 omabox: started in box '$B'" "$rc $err"
   check "down" ob down "$B"
 }
 
@@ -13364,12 +13382,12 @@ t_replace() {
   # Nothing to replace: said; a job that ended: its record dropped
   err=$(ob run -b "$B" -d --replace -- env sleep 609 2>&1 >/dev/null)
   check_match "no earlier job: said" "no earlier job of this command" "$err"
-  ob run -b "$B" -d -q -- sh -c 'sleep 0.3'
-  until_ok 5 bash -c "! '$CLI' run -b '$B' -- pgrep -fx '(sh -c )?sleep 0.3'" >/dev/null
-  old=$(grep -l '"sleep 0.3"' "$D"/jobs/*)
-  err=$(ob run -b "$B" -d --replace -- sh -c 'sleep 0.3' 2>&1 >/dev/null)
+  ob run -b "$B" -d -q -- sh -c 'sleep 1.5'
+  until_ok 5 bash -c "! '$CLI' run -b '$B' -- pgrep -fx '(sh -c )?sleep 1.5'" >/dev/null
+  old=$(grep -l '"sleep 1.5"' "$D"/jobs/*)
+  err=$(ob run -b "$B" -d --replace -- sh -c 'sleep 1.5' 2>&1 >/dev/null)
   check_match "a job that exited: nothing to replace" "no earlier job" "$err"
-  check_fails "...nor named" grep -q 'sleep 0.3' <<<"$err"
+  check_fails "...nor named" grep -q 'sleep 1.5' <<<"$err"
   check "...its record dropped (${old##*/})" test -n "$old" -a ! -e "$old"
   # A job that ignores SIGTERM: killed after 5 s
   ob run -b "$B" -d -q -- sh -c 'trap "" TERM; sleep 603'

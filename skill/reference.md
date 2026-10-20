@@ -41,7 +41,7 @@ The same in every command (`omabox help exit-codes`):
 | 124 | Not in time: `wait`, `--wait` (keys, click, scroll, drag, `run -d`), `events --until`. |
 | 125 | `run`: omabox's own failure (no box, a bad option, a throwaway that did not start, the box going down while the command ran), never the command's. |
 | 126, 127 | `run`: the command could not be run / was not found in the box. |
-| N | `run`, `hyprctl`: the command's own status, passed through; `run -d --wait`: the job's, when it ended before the screen settled. |
+| N | `run`, `hyprctl`: the command's own status, passed through; `run -d`: the job's, when it ended at once (`--wait`: before the screen settled). |
 | 128+N | Ended by signal N (130: Ctrl-C). |
 
 An option that takes a value takes it as `--opt VALUE` or `--opt=VALUE`, in every command.
@@ -286,7 +286,7 @@ with `--keep wallpaper` or after a theme set in the box.
 |---|---|
 | After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
-| `run -d --wait`: "the command exited with status N … left nothing running" | It ended before drawing: read the log lines it printed (a file under `/tmp` or HOME the box does not have is named), fix that, run it again. No shot. |
+| `run -d` (`--wait` or not): "the command exited with status N … left nothing running" | It ended at once, or before drawing: read the log lines it printed (a file under `/tmp` or HOME the box does not have is named), fix that, run it again. No shot. |
 | `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
 | `unsatisfied: still changing` (124) | Something never stops moving (a spinner, a glow): the line names the region; `--ignore "X,Y WxH"` it, or `-g` the part under test. |
 | Context filling up with screenshots | Text checks first (`windows`, `wait`, `events`, `log --grep`); `shot --window`, `-g`, `--fit 1280`. |
@@ -681,7 +681,9 @@ with `--keep wallpaper` or after a theme set in the box.
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
 - Logs: `omabox log` prints them (below); `omabox path --logs` says where each file is.
 - `run -d` jobs: each is its own session, with a log (`run-*.log`) named on stderr; `-q` drops that
-  line, `--print-log` prints only the path on stdout (first, before a `--wait` line). `run -d
+  line, `--print-log` prints only the path on stdout (first, before a `--wait` line). A job that
+  ends in its first 0.3 s leaving nothing running is said instead (its status, its log's last lines),
+  and `run -d` exits with its status: a server whose port is taken shows here, not as "started". `run -d
   --replace -- CMD` stops the jobs `run -d` started in the box with the same command and arguments
   (SIGTERM to the session, what it forked included; SIGKILL after 5 s), waits until their windows are
   gone, then starts CMD (`--wait` as usual). Only those: an app started another way (a bind, `run --
@@ -695,6 +697,9 @@ with `--keep wallpaper` or after a theme set in the box.
 
 - Each box has its own network namespace. By default it reaches the internet, the LAN and the user's
   servers on the host's 127.0.0.1; `--net isolated --allow PORTS` reaches only those host ports.
+  An `--allow` port is taken inside the box too (pasta listens on it there, leading to the host's):
+  it is for reaching a host server from the box, and a box server on that port fails, "address in
+  use" (`omabox ports` lists it as `allowed`). Serve on another port.
 - Across the box boundary use `127.0.0.1`, not `localhost`, with a server listening on IPv4
   (`127.0.0.1`, `0.0.0.0` or `::`): from a box, `localhost` is reset on an IPv4-only server, and
   between boxes always. A box's server is reachable from the host (and other boxes) on

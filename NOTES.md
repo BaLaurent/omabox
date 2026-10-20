@@ -8168,6 +8168,32 @@ from them.
     no(); 20 runs pruned to 5 passing, the failed ones and a live one, then only the newest 10
     failed).
 
+394. **An `--allow` port is pasta's inside the box; `run -d` says a job that ended at once**
+    (2026-10-20, #286). A test's `python3 -m http.server PORT` in an `up --net isolated --allow
+    PORT` box never showed in `ports`: pasta's `-T PORT` listens on the box's loopback (`ss`:
+    `*%lo:PORT`, no process), leading to the host's PORT, so the server died at once with "Address
+    already in use", `run -d` had said "started", and `ports` skips sockets no box process holds.
+    The same as finding 89's mirror for a connected box. Now: help `up` and the reference's Network
+    say an --allow port is for reaching the host's, and taken in the box; `ports` lists each
+    --allow port of an isolated box as `allowed` (process pasta, addresses 127.0.0.1 and ::1, from
+    box.json, not read off the socket); and a plain `run -d` watches its job's first 0.3 s: the
+    waiter's status file (share/run-job.sh, #215) appearing in the box's run dir (read on the host
+    as `$D/run`, existence only; `job_ended` reads the status in the box) with nothing of the job's
+    session left means it ended. Then it says "the command exited with status N at once in box B,
+    and left nothing running (log: ...)", the log's last 5 lines, a host path the box lacks, and
+    exits N (0 too; under -q a 0 is not said). A launcher that exits and leaves its child (its
+    session) is "started", as is a job still running after 0.3 s. `--wait` skips this: it has its
+    own answer (#215). *Decided*: 0.3 s, polled every 50 ms: a plain `run -d` of a long-lived job
+    went from ~85 to ~385 ms here; one that fails is said in ~100 ms (Python's bind error included,
+    unloaded). Under load a slow starter (Python ~70 ms alone) can still outlast it and be
+    "started", as before. *Decided*: exit with the job's status, as run passes a command's, so a
+    script sees a server that never ran. Seen in a box: Python on the --allow port (exit 1, its
+    traceback's last lines), `sh -c 'exit 3'` (3), `true` (0, said), a missing command (127,
+    setsid's line), `sleep 300` and `sh -c 'sleep 300 & exit 0'` (started); `ports` and `ports
+    --json` with the allowed row. Tests: t_isolated (ports' allowed row; a box server on the port
+    fails; run -d of a fast failure, of `true` with and without -q, of a launcher); t_replace's
+    ended job now sleeps 1.5 s, past the 0.3 s (the check had dropped its record before --replace).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

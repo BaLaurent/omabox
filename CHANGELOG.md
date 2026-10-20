@@ -47,6 +47,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ports as numbers), `ports --json` `addresses`, `saves --json` `size_kb`, `windows --json`
   `x, y, w, h` beside Hyprland's `at` and `size`. The skill's reference lists each command's
   fields under "JSON": from 1.0 they only grow.
+- **`omabox ports` lists an isolated box's `--allow` ports** as `allowed` (pasta's, in the box):
+  pasta listens on each inside the box, leading to the host's, so a box server on one fails at
+  once with "address in use", and before, it just never appeared. `help up` and the skill's
+  reference say so: an `--allow` port is for reaching that host port from the box; serve on another
+  ([#286](https://github.com/diogochaves/omabox/issues/286)).
 
 ### Changed
 
@@ -104,6 +109,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   first 300 and lost the reason at the end, and keeps the newest 10 runs with a failure besides the
   newest 5 that passed: runs that pass no longer prune a failed run's evidence
   ([#285](https://github.com/diogochaves/omabox/issues/285)).
+- **`omabox run -d` says a command that ended at once** (in its first 0.3 s, leaving nothing
+  running) instead of "started": its exit status and its log's last lines, and it exits with that
+  status (0 stays 0, said; with `-q`, not said). A server on a port already taken was "started" and
+  never seen again. A job still running after 0.3 s is "started" as before; `--wait` keeps its own
+  answer ([#286](https://github.com/diogochaves/omabox/issues/286)).
 
 ### Fixed
 
