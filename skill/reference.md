@@ -52,6 +52,9 @@ The same in every command (`omabox help exit-codes`):
 | 128+N | Ended by signal N (130: Ctrl-C). |
 
 An option that takes a value takes it as `--opt VALUE` or `--opt=VALUE`, in every command.
+A form on its way out still works for one minor release, with a warning on stderr (`omabox:
+deprecated: OLD: write NEW`): write NEW from then on. It is refused (2) after that; `OMABOX_STRICT=1`
+refuses it at once (2), for CI.
 
 ## JSON
 

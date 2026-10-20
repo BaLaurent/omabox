@@ -840,6 +840,8 @@ Exit codes, the same in every command:
             at once (--wait: before the screen settled)
   128+N     ended by signal N (130: Ctrl-C)
 An option that takes a value takes it as --opt VALUE or --opt=VALUE, in every command.
+A form on its way out still works for one minor release, warned on stderr ("omabox: deprecated:
+OLD: write NEW"), then is refused (2). OMABOX_STRICT=1 refuses it at once (2), for CI.
 EOF
 }
 
@@ -866,6 +868,19 @@ refused() { [ -z "$DIE_RC" ] || exit "$DIE_RC"; [ "$PARSING" != 1 ] || exit 2; e
 # optarg "$@" before reading $2: an option with no value is a usage error naming the form help gives it.
 optarg() { [ $# -ge 2 ] && [ -n "$2" ] || usage_die "${MAIN_CMD:+$MAIN_CMD: }$1 needs a value$(opt_form "$1")"; }
 say() { echo "omabox: $*" >&2; }
+# A form on its way out (#287): every deprecation warning goes through here, one line on stderr,
+# "omabox: deprecated: OLD: write NEW (refused in X.Y)", X.Y the minor release after this one (the
+# old form keeps working for one minor release), with a CHANGELOG line under "Deprecated". A script
+# watches for "deprecated:"; with OMABOX_STRICT=1 (CI) the form is refused at once: exit 2 (run's
+# 125). Where the command's words are read, never inside $(...), whose exit would not end the
+# command. 1.0 has no live deprecation: the unit suite calls it. deprecated OLD NEW
+# shellcheck disable=SC2329 # no caller in 1.0 (t_unit_deprecated)
+deprecated() {
+  local v; v=$(cat "$ROOT/VERSION" 2>/dev/null) || v=""
+  [[ $v =~ ^([0-9]+)\.([0-9]+) ]] && v="${BASH_REMATCH[1]}.$((BASH_REMATCH[2] + 1))" || v="the next minor release"
+  [ "${OMABOX_STRICT:-}" != 1 ] || usage_die "deprecated: $1: write $2 (refused now: OMABOX_STRICT=1)"
+  say "deprecated: $1: write $2 (refused in $v)"
+}
 # The form help gives OPT's value in, as ": OPT VALUE" (": -g "X,Y WxH""), from the command's lines
 # in `omabox help CMD`; nothing when help shows none. opt_form OPT
 opt_form() {
