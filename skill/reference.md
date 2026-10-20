@@ -101,6 +101,12 @@ load the skill when the brief is not enough. Run it right before delegating (the
 they were then). With no box up it prints the same rules for a box the subagent starts itself (`up
 --new`, down when done), and says so on stderr; exit 0 either way.
 
+**Parallel subagents share your session's default box name** (it comes from the session's id, which
+they all have), so two that run `omabox up` get one box, and one's `down` ends the other's test. Give
+each its own: `omabox up --new` (then `-b box-N`, as printed) or `-b` a name of its task; it never
+takes down a box it did not start (a box with your session's suffix in `omabox ls` may be a
+sibling's).
+
 ## For subagents in an isolated worktree
 
 Claude Code checks each Bash call of a worktree-isolated subagent and refuses what it cannot follow:
@@ -313,7 +319,7 @@ with `--keep wallpaper` or after a theme set in the box.
 | After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
 | `run -d` (`--wait` or not): "the command exited with status N … left nothing running" | It ended at once, or before drawing: read the log lines it printed (a file under `/tmp` or HOME the box does not have is named), fix that, run it again. No shot. |
-| "warning: run -d job CMD (pid N) exited with status N after 2.1s, since the last command" | A `run -d` job ended within its first 30 s, after `run -d` had said "started" (a server dying a second in): read its log (`omabox log run`, or the path given), fix it, start it again. Said once, by whatever command came next. |
+| "warning: run -d job CMD (pid N) exited with status N after 2.1s, since the last command" | A `run -d` job ended within its first 30 s, after `run -d` had said "started" (a server dying a second in): read its log (`omabox log run`, or the path given), fix it, start it again. Said once, by whatever command came next; not for a job you killed with `omabox run -- pkill`/`kill`. |
 | `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
 | `unsatisfied: still changing` (124) | Something never stops moving (a spinner, a glow): the line names the region; `--ignore "X,Y WxH"` it, or `-g` the part under test. |
 | Context filling up with screenshots | Text checks first (`windows`, `wait`, `events`, `log --grep`); `shot --window`, `-g`, `--fit 1280`. |
@@ -328,7 +334,7 @@ with `--keep wallpaper` or after a theme set in the box.
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
 | Tray items that stay after their process exits; no tray at all | Quickshell bug: tray tests in a throwaway box (`omabox run`, no box up); `--stock-bar` if the user's bar has no tray. |
 | "went down while this command ran", or "box is dead" after `omabox run -- pkill -x Hyprland` (or quickshell, omabox-labwc) | Those are the box itself (`pkill -x labwc` no longer matches its own): kill your own process by PID; `omabox down` then `up` to recover. |
-| "box … has no shell", or `ls` says `gone` under SHELL (bar gone mid-test) | It crashed past what Omarchy's launcher restarts: `omabox log shell`, then `restart-shell`. "the shell crashed since the last command": it came back, but what you see changed (a shot may show it starting). |
+| "box … has no shell", or `ls` says `gone` under SHELL (bar gone mid-test) | It crashed past what Omarchy's launcher restarts: `omabox log shell`, then `restart-shell`. "the shell crashed since the last command" (or "was killed by SIGKILL"): it came back, but what you see changed (a shot may show it starting). A Quickshell of your own crashing is not the shell: omabox leaves its crash dialog to it. |
 | "the shell of box … does not answer (hung …)", or `ls` says `hung` under SHELL | Its pid lives but it answers nothing over its IPC: a frozen bar (a crash whose handler hung, or a stopped shell). `omabox restart-shell` kills it and starts a new one; `omabox gdb --shell` first for its stack. |
 | "the shell crashed … (report: PATH)" from `up` or `restart-shell` (exit 1) | Read PATH and `omabox log shell`. From `up` before the bar came, the box is gone: `up` again once fixed; after it (the box up), `restart-shell` once fixed. For its stack: `omabox gdb --shell --watch`, the crash again, `omabox log gdb --crash`. As on a desktop, Omarchy's launcher starts it again (up to 5 times a minute), so the bar may be back: the crash still happened. |
 | `omabox lua 'hl.dsp…'` printed `HL.Dispatcher` or `function: 0x…` | A dispatcher, returned and not run: `omabox lua 'hl.dispatch(EXPR)'` or `omabox hyprctl dispatch 'EXPR'`. |
@@ -380,9 +386,9 @@ with `--keep wallpaper` or after a theme set in the box.
 - Before touching the real desktop for a check a box cannot make, ask once: "When a box cannot test
   it, in detail".
 - `QT_QPA_PLATFORM=offscreen` still works under the guard. To look at a web page yourself, open it in
-  your box (`omabox run -d -- xdg-open URL`, then `omabox shot`). `quickshell kill` and `qs ipc` are
-  refused ("not running quickshell kill"): they would reach the user's desktop shell; a box's shell is
-  `omabox run -- qs ipc …` or `omabox restart-shell`.
+  your box (`omabox run -d -- xdg-open URL`, then `omabox shot`). `quickshell kill`, `qs ipc` and
+  `omarchy-shell` are refused ("not running quickshell kill"): they would reach the user's desktop
+  shell; a box's shell is `omabox run -- qs ipc …` (or `omarchy-shell …`) or `omabox restart-shell`.
 - `omabox host -- CMD` examples, once the user asked for their real desktop: `omabox host -- hyprctl
   reload`, `omabox host -- omarchy-theme-set NAME`. Testing, screenshots and anything the user did not
   ask to see on their desktop stay in a box: `shot` works on a hidden interactive box.
@@ -428,6 +434,11 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   pmon`, `source` in `--json`): whole seconds, % of the GPU each process was seen using once a second;
   a light process can read 0, and one saturating the GPU leaves the others at 0. Compare runs, not
   absolute figures, there.
+- **wgpu apps (eframe's default renderer, iced, Bevy) do not start in a box on NVIDIA**:
+  `RequestAdapterError(NotFound { active_backends: VULKAN | GL })`; wgpu does not fall back to GL
+  there. Build the app with a GL renderer (eframe's `glow`), or run it in a box on the AMD/Mesa render
+  node, whose Vulkan (RADV) a box has: `OMABOX_RENDER_NODE=/dev/dri/renderDN omabox up --new`
+  (`omabox config gpu` lists them).
 - **Apps in a box that render in software** (llvmpipe; on NVIDIA they draw on the GPU, but Vulkan
   there still fails). Their CPU and frame cost measured there is software rendering's, and `gpu`
   counts none of their drawing. `up` says so once, `ls` and `gpu`/`cpu` show an `apps: llvmpipe, in software` line,
@@ -672,7 +683,7 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   plugins keep their settings; the terminal configs (`~/.config/{foot,alacritty,ghostty,kitty}`, the
   `*xdg-terminals.list` choice); the Hyprland toggles (`~/.local/state/omarchy/toggles/hypr`); git's
   `user.name` and `user.email` only. Never `api-keys.env`, `hooks/`, keyrings, tokens or the rest of
-  git's config. `--desk-shell` adds every plugin, `shell.json` unfiltered and the other files beside
+  git's config. `--desk-shell` adds every plugin (but omabox's own widget), `shell.json` unfiltered and the other files beside
   it; `--seed SRC:DEST` adds what you name.
 - **A plugin under test reads its settings from the desk's `extensions/`**
   (`~/.config/omarchy/extensions/NAME.json`), an on/off switch too: one off on the desk leaves its
@@ -764,7 +775,9 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   and `run -d` exits with its status: a server whose port is taken shows here, not as "started". One
   that ends later in its first 30 s with a status other than 0 is a warning on the box's next
   command, once (`run -d job CMD (pid N) exited with status 1 after 2.1s, since the last
-  command`). `run -d --replace -- CMD` stops the jobs `run -d` started in the box with the same
+  command`); not one you killed yourself with `omabox run -- pkill`/`kill`. A `run -d --wait` whose
+  job died by the time the screen settled (on something else) is `unsatisfied`, said the same way,
+  and exits with the job's status. `run -d --replace -- CMD` stops the jobs `run -d` started in the box with the same
   command and arguments (SIGTERM to the session, what it forked included; SIGKILL after 5 s), waits until their windows are
   gone, then starts CMD (`--wait` as usual). Only those: an app started another way (a bind, `run --
   setsid ...`, D-Bus activation) is not touched, even when the job only handed it its arguments (a
@@ -808,7 +821,8 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
 ## Box lifetime
 
 - Your box is named after the repo (or worktree) and your session, so no other session shares it;
-  subagents share it. `omabox down` before `/clear`. A box of a subagent's own: `omabox up --new
+  subagents share it (parallel ones each need their own: "Handing box work to a subagent").
+  `omabox down` before `/clear`. A box of a subagent's own: `omabox up --new
   [--plugin …]`, all its options on that call, then `-b box-3` (as printed) on every later call, typed
   out (your shell keeps no variables); it outlives you: `omabox down -b box-3`. A box the user
   started: `-b NAME` (`omabox ls`). `omabox down` never with `--all`: it takes others' and the user's
@@ -1098,6 +1112,12 @@ and data cannot be verified in a box: do not report it as tested. (`systemctl --
   mice, touchpads, tablets, cameras, USB or printers. No systemd user manager unless `up --systemd`
   (never journald or logind), no installed `.desktop` files or URL handlers, no idle or suspend; the
   lock screen locks but takes no real password ("Testing the lock screen").
+- **No PipeWire realtime in a box**: every box writes `~/.config/pipewire/client.conf.d/90-omabox.conf`
+  (`module.rt = false`: a box has no RealtimeKit, and the limit of 0 its portal gave got processes
+  SIGKILLed), so a client's `RLIMIT_RTTIME` stays unlimited where module-rt would set one, and a bug
+  in that (a `0/0` limit) does not show. One client without the file: `omabox run -- env
+  PIPEWIRE_CONFIG_DIR=/usr/share/pipewire APP` (PipeWire's own config only, no drop-ins); in a box
+  module-rt then sets `0/0`, as on a desk without RealtimeKit (one with it gets 200000).
 - Reporting: each plugin's `commit` in `ls --json`'s `plugin_status` ends in `+dirty` for uncommitted
   edits. Virtual monitors are not the user's: say which layout you tested.
 

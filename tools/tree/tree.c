@@ -1,13 +1,16 @@
 // omabox-tree: one window's accessibility (AT-SPI) tree as compact text, for `omabox tree` (#178).
 //
-//   omabox-tree --pid PID [--title TITLE] [--size WxH] [--find TEXT] [--json] [--all]
+//   omabox-tree --pid PID [--title TITLE] [--size WxH] [--twins N] [--find TEXT] [--json] [--all]
 //   omabox-tree --pid PID --layer --size WxH [--offset X,Y] [--active yes|no] [--find TEXT] [--json] [--all]
 //
 // Run by `omabox tree` inside the box (box_exec: the box's session bus and pid numbering), never on the
 // host, where it would read the real desktop's apps: it refuses outside a box. PID is the window's
 // process as the box's Hyprland has it, which is the AT-SPI application's (NOTES finding 244); TITLE
 // picks that application's window (its frame's name) when it has several; WxH is the window's size,
-// and what lies wholly outside it (a long page scrolled out) is left out.
+// and what lies wholly outside it (a long page scrolled out) is left out. An application's only frame
+// stands for a window whose title it does not name only when it is the window's size and N (the
+// application's other windows of that size, from `omabox tree`) is 0 (#302): an app can publish one of
+// its windows (egui's root viewport, not its child ones), and that one's tree is not this window's.
 //
 // A line is `role "name" 'text' =value [states] @x,y wxh`, indented two spaces a level; the bounds are
 // in window coordinates, what `omabox click --window` takes. Anonymous containers, hidden nodes, a
@@ -29,8 +32,9 @@
 // surface's own plus --offset (the layer's place on the screen: what `omabox click X Y` takes).
 //
 // Exit: 0 printed; 1 --find matched nothing; 3 no tree for that window (said why); 4 the box has no
-// accessibility bus; 5 the layer's frame has nothing under it; 6 several frames are the layer's size;
-// 2 usage, or outside a box.
+// accessibility bus; 5 the layer's frame has nothing under it; 6 several frames are the layer's size,
+// or the app's only frame is the size of several of its windows; 7 the app's only frame is not the
+// window's size (that window is not on the bus); 2 usage, or outside a box.
 #define _GNU_SOURCE
 #include <atspi/atspi.h>
 #include <gio/gio.h>
@@ -46,7 +50,7 @@
 #define MAX_CHILDREN 500 // children of one node read at most
 #define MAX_DEPTH 64
 
-static int opt_all, opt_json, win_w = -1, win_h = -1, opt_layer, layer_ox, layer_oy, active_hint = -1;
+static int opt_all, opt_json, win_w = -1, win_h = -1, opt_layer, layer_ox, layer_oy, active_hint = -1, twins;
 static const char *find;
 static int nodes, lines, matched, truncated;
 static GString *out;
@@ -498,7 +502,16 @@ static double now(void) {
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
-// The window: the frame named TITLE; else one whose name and TITLE hold each other; else the only one.
+// A frame's size, for --layer and the only frame of a window's application.
+static int frame_size(AtspiAccessible *f, int *w, int *h) {
+    int b[4];
+    if (!extents_in(f, ATSPI_COORD_TYPE_WINDOW, b)) return 0;
+    *w = b[2], *h = b[3];
+    return 1;
+}
+
+// The window: the frame named TITLE; else one whose name and TITLE hold each other; else the only one,
+// when it is the window's size (2 px either way, for rounding) and no other window of the app is.
 // Into *win, else says why and returns the exit code.
 static int window_frame(GPtrArray *apps, const char *title, AtspiAccessible **win_out) {
     AtspiAccessible *win = NULL, *loose = NULL;
@@ -524,7 +537,26 @@ static int window_frame(GPtrArray *apps, const char *title, AtspiAccessible **wi
         }
     }
     if (!win && loose_n == 1) win = g_object_ref(loose);
-    if (!win && frames == 1 && apps->len == 1) win = atspi_accessible_get_child_at_index(apps->pdata[0], 0, NULL);
+    if (!win && frames == 1 && apps->len == 1) {
+        AtspiAccessible *f = atspi_accessible_get_child_at_index(apps->pdata[0], 0, NULL);
+        int w, h, rc = 0;
+        if (f && win_w > 0 && frame_size(f, &w, &h) && (abs(w - win_w) > 2 || abs(h - win_h) > 2)) {
+            fprintf(stderr, "no accessibility tree for this window: its application publishes one window, %s %dx%d, and this "
+                    "one is %dx%d (its other windows are not on the accessibility bus)\n", names->str, w, h, win_w, win_h);
+            rc = 7;
+        } else if (f && twins > 0) {
+            fprintf(stderr, "its application publishes one window, %s, and %d of its windows are this one's size, %dx%d: "
+                    "which one it is cannot be told\n", names->str, twins + 1, win_w, win_h);
+            rc = 6;
+        }
+        if (rc) {
+            if (loose) g_object_unref(loose);
+            g_object_unref(f);
+            g_string_free(names, TRUE);
+            return rc;
+        }
+        win = f;
+    }
     if (loose) g_object_unref(loose);
     if (!win) {
         fprintf(stderr, "no accessibility tree for the window \"%s\": its application's windows are %s\n", title ? title : "",
@@ -537,13 +569,7 @@ static int window_frame(GPtrArray *apps, const char *title, AtspiAccessible **wi
     return 0;
 }
 
-// A frame's size and whether it is active (has the keyboard), for --layer.
-static int frame_size(AtspiAccessible *f, int *w, int *h) {
-    int b[4];
-    if (!extents_in(f, ATSPI_COORD_TYPE_WINDOW, b)) return 0;
-    *w = b[2], *h = b[3];
-    return 1;
-}
+// Whether a frame is active (has the keyboard), for --layer.
 static int is_active(AtspiAccessible *f) {
     AtspiStateSet *ss = atspi_accessible_get_state_set(f);
     int r = ss && atspi_state_set_contains(ss, ATSPI_STATE_ACTIVE);
@@ -627,6 +653,7 @@ static int tree_main(int argc, char **argv) {
         else if (!strcmp(a, "--pid") && v) pid = strtol(argv[++i], NULL, 10);
         else if (!strcmp(a, "--title") && v) title = argv[++i];
         else if (!strcmp(a, "--find") && v) find = argv[++i];
+        else if (!strcmp(a, "--twins") && v) twins = atoi(argv[++i]);
         else if (!strcmp(a, "--size") && v) {
             if (sscanf(argv[++i], "%dx%d", &win_w, &win_h) != 2) win_w = win_h = -1;
         } else if (!strcmp(a, "--layer")) opt_layer = 1;
@@ -636,7 +663,7 @@ static int tree_main(int argc, char **argv) {
             v = argv[++i];
             active_hint = !strcmp(v, "yes") ? 1 : !strcmp(v, "no") ? 0 : -1;
         } else {
-            fprintf(stderr, "usage: omabox-tree --pid PID [--title TITLE | --layer] [--size WxH] [--offset X,Y] [--active yes|no] "
+            fprintf(stderr, "usage: omabox-tree --pid PID [--title TITLE | --layer] [--size WxH] [--twins N] [--offset X,Y] [--active yes|no] "
                             "[--find TEXT] [--json] [--all]\n");
             return 2;
         }

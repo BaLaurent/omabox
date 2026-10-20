@@ -356,7 +356,8 @@ is linked to there, as on a desk, so readlink -f leads into its repo; any other 
 @ up run restart-shell
 --desk-shell: your desktop's shell as it is, to check a plugin against a real desk: every plugin in
 ~/.config/omarchy/plugins (read-only, as --plugin's; a --plugin of the same id wins: your working
-copy), your shell.json unfiltered (only idle held off: a box has no real input), and the other files
+copy) but omabox's own widget (it lists your boxes; --plugin mounts it), your shell.json unfiltered
+(only idle held off: a box has no real input; omabox's widget taken out of it), and the other files
 in ~/.config/omarchy your plugins read (a plugin's JSON, a folder beside shell.json) copied into the
 box's. Never api-keys.env nor anything named or holding a key, token, secret, password, credential,
 auth, cookie or session (any .env, .pem, .gpg...), hooks/ (your scripts), a git dir or a backup; regular
@@ -571,6 +572,9 @@ accesskit_unix 0.22+ (eframe 0.37+) with at-spi2-core 2.61+: an older one waits 
 ScreenReaderEnabled, which those no longer have (\`tree\` sets it where it is), so it never joins the
 bus and has no tree, said so; update the app's AccessKit. Chromium and Electron only
 when started with --force-renderer-accessibility; terminals have none: "no accessibility tree", exit 1.
+An app that publishes only some of its windows (egui's root viewport, not its child ones): a window it
+does not publish has no tree, and its only one stands for a window of another title only at that
+window's size, and when no other window of the app is that size (else "cannot be told"), exit 1.
 --layer SEL (or -l SEL) reads a layer surface instead (the shell's bar, panels, menus, a plugin's panel): its
 namespace (omabox hyprctl layers), address:0x... or pid:PID. Its bounds are the screen's coordinates:
 a plain \`click X Y\` at their middle lands on that node. Quickshell publishes them from 0.3.2 on, and
@@ -720,10 +724,13 @@ program with other arguments (named, with its pid). A \`run -d\` whose command e
 0.3 s, leaving nothing running (a server on a port already taken), says so instead of started, with
 its exit status and its log's last lines, and exits with that status. A \`run -d --wait\` whose
 command ended before the screen settled, leaving nothing running, says so too, and exits with that
-status (124 when it was 0: the screen is still the question). A job that ends later, within its
+status (124 when it was 0: the screen is still the question); one killed or failed by the time the
+screen settled on something else (a window closing) is unsatisfied, said the same way. A job that ends later, within its
 first 30 s, with a status other than 0 (a server that dies a second in) is said once by the box's
 next command, whatever it is: "warning: run -d job CMD (pid N) exited with status 1 after 2.1s,
-since the last command (omabox log -b NAME run)". Not one --replace stopped, nor one already said.
+since the last command (omabox log -b NAME run)". Not one --replace stopped, one killed (SIGTERM,
+SIGINT, SIGKILL) while an \`omabox run\` ran in the box or just after (\`omabox run -- pkill APP\`),
+nor one already said.
 @ up run
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
@@ -1430,12 +1437,15 @@ ns_hold_read() {
 # CMD"; the word "line" and the signal's are translated).
 ns_own_line() {
   [[ $1 =~ ^(nsenter|prlimit|env):\ . ]] && return 0
-  [[ $1 == "$0: "* ]] && [[ ${1#"$0: "} =~ ^[^\ ]+\ [0-9]+:\ +[0-9]+\ . ]]
+  ns_kill_line "$1"
 }
+ns_kill_line() { [[ $1 == "$0: "* ]] && [[ ${1#"$0: "} =~ ^[^\ ]+\ [0-9]+:\ +[0-9]+\ . ]]; }
 # What ns_held held, after a command that ended RC: on a box that went down meanwhile (its PID 1 can
 # outlive the command by a moment: up to 2 s), WORDS instead, or nothing when the caller says it (run);
 # else its own lines (ns_own_line; whole ones, at most 3, printable ASCII only), and how many bytes
-# of anything else were dropped. ns_said RC [WORDS]
+# of anything else were dropped. With NS_KILL_SAY (run's own command, #303), bash's line for a command
+# killed by a signal ("omabox: line 1867: 662938 Killed  prlimit --core=1: "$@"", its own script's
+# words) is said as run says a job's end: "the command was killed by SIGKILL (137)". ns_said RC [WORDS]
 ns_said() {
   [ -n "${NS_HELD:-}" ] || return 0
   if [ "$1" != 0 ]; then
@@ -1445,16 +1455,20 @@ ns_said() {
       sleep 0.2
     done
   fi
-  local LC_ALL=C l lines=() out="" n=0 kept=0 held=$NS_HELD
+  local LC_ALL=C l lines=() out="" n=0 kept=0 held=$NS_HELD killed=""
   # (A last line without its newline is not a whole one.)
   [[ $held == *$'\n'* ]] && mapfile -t lines <<<"${held%$'\n'*}"
   for l in "${lines[@]}"; do
     l=${l//[^[:print:]]/}
     if [ $n -lt 3 ] && [ ${#l} -le 400 ] && ns_own_line "$l"; then
+      if [ -n "${NS_KILL_SAY:-}" ] && [ "$1" -gt 128 ] && ns_kill_line "$l"; then
+        killed=1 n=$((n + 1)) kept=$((kept + ${#l} + 1)); continue
+      fi
       out+=$l$'\n' n=$((n + 1)) kept=$((kept + ${#l} + 1))
     fi
   done
   printf '%s' "$out" >&2
+  [ -z "$killed" ] || say "the command $(job_how "$1")"
   [ $((${#held} - kept)) -le 0 ] || say "dropped $((${#held} - kept)) bytes of other output on nsenter's stderr"
 }
 
@@ -2056,8 +2070,28 @@ wait_hyprland() {
 # report into a new folder under the box HOME's ~/.cache/quickshell/crashes and logs "Quickshell has
 # crashed" in shell.log (which shell.sh starts afresh); one within 10 s of its start is not restarted.
 # Those folders now, for shell_crash to tell a new one: SHELL_BEFORE, set before the shell starts.
+# Only the box shell's (#303, finding 408): every Quickshell in the box writes its reports there, a
+# project's own instance under test too, and that one's crash is not the shell's. A report names its
+# instance's config ("Config Path: DIR/shell.qml"), the box shell's DIR being the Omarchy tree's shell/;
+# not its pid ("Crashed process ID" is the child Quickshell's handler forks to dump, the shell itself
+# being exec'd again at its own pid). A folder whose report is not written yet is nobody's until it is.
+# The box writes them: no link, under the box HOME, a name on one line; one awk for them all.
 SHELL_BEFORE="" BAR_AT=0
-shell_crash_dirs() { ls -1 -- "$D/home/.cache/quickshell/crashes" 2>/dev/null || true; }
+shell_crash_dirs() {
+  local dir home want rep files=()
+  dir=$(readlink -e -- "$D/home/.cache/quickshell/crashes" 2>/dev/null) && home=$(readlink -e -- "$D/home") &&
+    [[ $dir == "$home"/* ]] || return 0
+  for rep in "$dir"/*; do
+    rep=${rep##*/}
+    [[ $rep != *$'\n'* ]] && [ ! -L "$dir/$rep" ] && [ ! -L "$dir/$rep/report.txt" ] && [ -f "$dir/$rep/report.txt" ] || continue
+    files+=("$dir/$rep/report.txt")
+  done
+  [ ${#files[@]} -gt 0 ] || return 0
+  want=$(meta omarchy); want=$(printf '%s' "${want:-/usr/share/omarchy}/shell" | tr -s /); want=${want%/}
+  awk -v want="$want" 'FNR == 1 { seen = 0 }
+    !seen && /^Config Path: / { seen = 1; c = substr($0, 14); gsub(/\/+/, "/", c); sub(/\/[^\/]*$/, "", c)
+      if (c == want) { n = FILENAME; sub(/\/report\.txt$/, "", n); sub(/.*\//, "", n); print n } }' "${files[@]}" 2>/dev/null || true
+}
 # The Omarchy shell's pid in the box (share/shell.sh writes it), or nothing.
 shell_pid() { local p; p=$(run_read omabox-shell.pid) && [[ $p =~ ^[0-9]+$ ]] && echo "$p"; }
 # Box pid PID is a process, and not one that exited and was not reaped yet.
@@ -2143,12 +2177,40 @@ shell_state() {
 # Its crashes since `up`: the report folders Quickshell's handler wrote (a crash past 10 s keeps its pid,
 # so only these tell it; a fresh box HOME has none, and a save keeps no .cache).
 shell_crashes() { shell_crash_dirs | grep -c . || true; }
+# Omarchy's launcher starting the shell again since shell.sh last started it (#303, finding 408): a
+# shell killed (SIGKILL: no crash handler, no report) or exiting non-zero is started again, a new pid,
+# and nothing else tells it. The launcher says each, "Omarchy shell exited with status N; relaunching.",
+# through the box's logger into shell.log, which shell.sh starts afresh and marks (omabox-shell.mark).
+# "MARK COUNT STATUS": that mark, how many such lines, the last one's status (- for none). A shell
+# stopped on purpose (`omarchy restart shell`, restart-shell) quits cleanly: no line.
+shell_relaunches() {
+  local mark f n=0 st=-
+  mark=$(run_read omabox-shell.mark) && [[ $mark =~ ^[0-9]+$ ]] || mark=0
+  if f=$(box_home_file shell.log); then
+    read -r n st < <(grep -aoE 'omarchy-shell: Omarchy shell exited with status [0-9]{1,3}; relaunching' "$f" 2>/dev/null |
+      awk '{ n++; s = $(NF - 1) } END { sub(/;$/, "", s); print n + 0, (s == "" ? "-" : s) }') || { n=0 st=-; }
+  fi
+  echo "$mark $n $st"
+}
+# What the next shell_note compares with, as things are now: after a command said it, or `up` and
+# `restart-shell` started the shell (what they said is not said again).
+shell_seen() {
+  shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true
+  shell_relaunches > "$D/shell-relaunches-seen" 2>/dev/null || true
+}
 # One line from shot, wait, windows, keys and click (#147): the shell gone, or crashed since the last
-# command said so (started again, but what the test sees changed).
+# command said so (started again, but what the test sees changed), or killed and started again by its
+# launcher (#303).
 shell_note() {
   [ "$(meta shell)" = true ] || return 0
-  local n seen state; n=$(shell_crashes); seen=$(cat "$D/shell-crashes-seen" 2>/dev/null) || seen=0
+  local n seen state rl old new=0 m c st om oc; n=$(shell_crashes); seen=$(cat "$D/shell-crashes-seen" 2>/dev/null) || seen=0
   [[ $seen =~ ^[0-9]+$ ]] || seen=0
+  rl=$(shell_relaunches); read -r m c st <<<"$rl"
+  # (None yet, a box an older omabox started: this one is the first look.)
+  old=$(head -c 100 "$D/shell-relaunches-seen" 2>/dev/null) || old=""; read -r om oc _ <<<"$old"
+  if [[ ${om:-} =~ ^[0-9]+$ && ${oc:-} =~ ^[0-9]+$ ]]; then
+    if [ "$m" = "$om" ]; then new=$((c - oc)); else new=$c; fi
+  fi
   state=$(shell_state)
   if [ "$state" = gone ]; then
     say "warning: box '$NAME' has no shell (gone$([ "$n" = 0 ] || echo " after $n crash(es)"); omabox log -b $NAME shell; omabox restart-shell -b $NAME)"
@@ -2156,8 +2218,12 @@ shell_note() {
     say "warning: the shell of box '$NAME' does not answer (hung: its bar is frozen; omabox log -b $NAME shell; omabox restart-shell -b $NAME)"
   elif [ "$n" -gt "$seen" ]; then
     say "warning: the shell crashed since the last command and was started again$([ "$state" = running ] || echo " (it is starting)") (omabox log -b $NAME shell)"
+  elif [ "$new" -gt 0 ]; then
+    local how="exited"; [[ $st =~ ^[0-9]+$ ]] && how=$(job_how "$st")
+    say "warning: the shell $how since the last command and was started again$([ "$state" = running ] || echo " (it is starting)") (omabox log -b $NAME shell)"
   fi
   echo "$n" > "$D/shell-crashes-seen" 2>/dev/null || true
+  echo "$rl" > "$D/shell-relaunches-seen" 2>/dev/null || true
 }
 # shell_crash's answer in words. shell_crash_text WHEN HOW
 shell_crash_text() {
@@ -2616,6 +2682,10 @@ desk_plugins() {
     [[ $id =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] ||
       { say "--desk-shell: not mounting plugins/${e##*/}: its manifest id '$id' is not letters, digits, . _ -"; continue; }
     [[ $have != *" $id "* ]] || continue
+    # omabox's own bar widget (#304): it lists your boxes with `omabox ls`, which a box has not (its
+    # shell would warn, then notify); --plugin mounts it all the same.
+    [ "$id" != chaves.omabox ] ||
+      { say "--desk-shell: not mounting plugins/${e##*/}: omabox's own widget, which lists your boxes (none in a box)"; continue; }
     if why=$(refuse_src "$dir"); then say "--desk-shell: not mounting plugins/${e##*/} ($dir): $why"; continue; fi
     have+="$id "
     printf '%s\t%s\n' "$id" "$dir"
@@ -2776,7 +2846,14 @@ seed_home() {
   # has it (one the desk has off stays off), only idle held off (no real input in a box: finding 10).
   # Of the plugins, only a --plugin the desk does not have is placed where its manifest says.
   if [ "${DESK_SHELL:-0}" = 1 ]; then
-    jq '.idle = {screensaver: 1000000, lock: 1000000}' "$DESK/shell.json" > "$h/.config/omarchy/shell.json" 2>/dev/null || {
+    # omabox's widget, left out of the box (desk_plugins), out of every list that places it (the bar, a
+    # plugin's own layout, its settings entry) too, unless a --plugin mounts it.
+    # shellcheck disable=SC2016 # jq, not shell
+    jq --argjson keep "$ids" '.idle = {screensaver: 1000000, lock: 1000000}
+      | if $keep | index("chaves.omabox") then . else
+          walk(if type == "array" then map(select((if type == "object" then .id else . end) != "chaves.omabox")) else . end)
+          | if .bar.centerAnchor? == "chaves.omabox" then del(.bar.centerAnchor) else . end end' \
+      "$DESK/shell.json" > "$h/.config/omarchy/shell.json" 2>/dev/null || {
       say "--desk-shell: no shell.json in $DESK (or not JSON): the box's shell starts from an empty one"
       echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"; }
   else
@@ -4515,7 +4592,7 @@ cmd_up() {
   # The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
   local crashed=""; [ "$shell" != 1 ] || crashed=$(shell_watch) || true
   # Crashes said here are not said again by the next command (shell_note, #147).
-  shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true
+  shell_seen
   [ -n "$crashed" ] || plugin_check
   client_render_check
   # --audio (#226): its speaker the default output before up returns, so a recording or a sound right
@@ -4527,7 +4604,7 @@ cmd_up() {
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
   rm -f "$D/starting"; touch "$D/used"
   local screen live_sc; screen=$(box_screen); live_sc=$(main_scale_live) || live_sc=""
-  say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")) in $D"
+  say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")$(more_screens "${screen%% *}")) in $D"
   [ "$CLEAN" = 0 ] || say "clean: $(clean_text "$THEME" "$net")"
   # A Hyprland that stops answering here (finding 353): said, the box left up, exit 1 at the end.
   local unanswered=0; hypr_errors_note || unanswered=1
@@ -5480,13 +5557,14 @@ box_procs() {
   done
 }
 
-# Of box_procs' lines (stdin), job PID's, as "HOST_PID BOX_PID": its session's. START is its leader's
-# start time, - when the leader had exited before the job was recorded: a leader that started at
-# another time (or at all, for -) has the pid after the job ended, and the job has none. The pid is
-# not reused while any process of the session is left. job_procs PID START
+# Of box_procs' lines (stdin), job PID's, as "HOST_PID BOX_PID": its session's, and its leader by its
+# pid before it has made that session (run-job.sh's subshell between its fork and its setsid, finding
+# 405). START is its leader's start time, - when the leader had exited before the job was recorded: a
+# leader that started at another time (or at all, for -) has the pid after the job ended, and the job
+# has none. The pid is not reused while any process of the session is left. job_procs PID START
 job_procs() {
   awk -v pid="$1" -v start="$2" '
-    $3 == pid { if ($2 == pid && $4 != start) reused = 1; out = out $1 " " $2 "\n" }
+    $3 == pid || $2 == pid { if ($2 == pid && $4 != start) reused = 1; out = out $1 " " $2 "\n" }
     END { if (!reused) printf "%s", out }'
 }
 
@@ -5497,26 +5575,36 @@ job_exe() {
   case $1 in */*) realpath -ms -- "$1" 2>/dev/null || printf '%s\n' "$1" ;; *) printf '%s\n' "$1" ;; esac
 }
 
-# After a launch: the record of job PID (in the box), unless it is gone already. job_record PID LOG ARGV...
+# After a launch: the record of job PID (in the box), START the start time of the process with that
+# pid: the job, or run-job.sh's subshell that is about to make it a session of its own (one process:
+# exec keeps it). Written for a job gone already too (START -): job_note and --wait name a job that
+# died in its first moment from it (finding 405). job_record PID LOG ARGV...
 job_record() {
-  local pid=$1 log=$2 procs start; shift 2
-  procs=$(box_procs | awk -v pid="$pid" '$3 == pid') || true
-  [ -n "$procs" ] || return 0
-  start=$(awk -v pid="$pid" '$2 == pid { print $4 }' <<<"$procs")
+  local pid=$1 log=$2 start; shift 2
+  start=$(box_procs | awk -v pid="$pid" '$2 == pid { s = $4 } END { print s }') || start=""
   mkdir -p "$D/jobs"
   jq -nc --arg pid "$pid" --arg start "${start:--}" --arg log "$log" --arg exe "$(job_exe "$1")" \
     '{pid: $pid, start: $start, log: $log, exe: $exe, argv: $ARGS.positional}' --args -- "$@" > "$D/jobs/$pid" || true
 }
 
-# The processes of the jobs recorded in FILES, as "HOST_PID BOX_PID" lines; a record whose job has
-# ended is removed. job_live FILE...
+# The processes of the jobs recorded in FILES, as "HOST_PID BOX_PID" lines. A record whose job has
+# ended is removed once its end has been dealt with (job_said): until then job_note needs it to name
+# what ended (finding 405). job_live FILE...
 job_live() {
-  local f procs pid start; procs=$(box_procs)
+  local f procs pid start log; procs=$(box_procs)
   for f in "$@"; do
-    { read -r pid; read -r start; } < <(jq -r '.pid, .start' "$f" 2>/dev/null) || { rm -f "$f"; continue; }
+    { read -r pid; read -r start; read -r log; } < <(jq -r '.pid, .start, .log' "$f" 2>/dev/null) || { rm -f "$f"; continue; }
     local p; p=$(job_procs "$pid" "$start" <<<"$procs")
-    if [ -n "$p" ]; then echo "$p"; else rm -f "$f"; fi
+    if [ -n "$p" ]; then echo "$p"; elif job_said "$log"; then rm -f "$f"; fi
   done
+}
+
+# Whether the end of the job whose log is LOG has been dealt with (job_note's $D/jobs-noted): said, or
+# not to be said. A box an older omabox started (no jobs-noted) and a log not named as run -d names
+# them: yes. job_said LOG
+job_said() {
+  [ -f "$D/jobs-noted" ] && [[ ${1##*/} =~ ^run-([0-9]{1,19})\.log$ ]] || return 0
+  grep -Fqx "omabox.run-${BASH_REMATCH[1]}.exit" "$D/jobs-noted"
 }
 
 # The live `run -d` jobs of ARGV's program (job_exe; argv[0] itself in a record made before it had
@@ -5617,6 +5705,7 @@ job_ended() {
     st=""; [ $i = 10 ] || sleep 0.1
   done
   job_noted "${ex##*/}"   # said here (or a 0 under QUIET), not again by the next command
+  rm -f "$D/jobs/$jpid"
   local what; what=$(job_how "$st")
   if [ -z "$st" ]; then JOB_RC=1
   else JOB_RC=$st; [ "$st" != 0 ] || [ "$when" = start ] || JOB_RC=124; fi
@@ -5632,6 +5721,19 @@ job_ended() {
   [ ${#miss[@]} = 0 ] || say "its arguments name host paths box '$NAME' does not have: ${miss[*]} (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME)"
   if [ -n "$tail" ]; then say "its log ends (omabox log -b $NAME run):"; printf '%s\n' "$tail" >&2
   else say "its log is empty"; fi
+}
+
+# run -d --wait's job PID (#297, finding 404): whether it has died, killed or with a status other than
+# 0 (its waiter's status file, read here in $D/run), nothing of its session left. A 0 is no death: a
+# one-shot (notify-send, a dispatch) changes the screen and ends with 0. No status file: it runs (the
+# leader's end writes one at once), and that costs a stat. job_failed PID
+job_failed() {
+  local f log st
+  [[ ${1:-} =~ ^[0-9]+$ ]] && f=$D/jobs/$1 && [ -f "$f" ] || return 1
+  log=$(jq -r .log "$f" 2>/dev/null) && [[ ${log##*/} =~ ^run-([0-9]{1,19})\.log$ ]] || return 1
+  st=$(run_read "omabox.run-${BASH_REMATCH[1]}.exit" | head -c 64) || st=""
+  [[ $st =~ ^[0-9]+$ ]] && [ "$st" != 0 ] || return 1
+  [ -z "$(job_live "$f")" ]
 }
 
 # A job's end in words, from its exit status (bash's: 128+N for signal N; empty when not kept).
@@ -5688,11 +5790,16 @@ job_note() {
     [ -n "$st" ] || [ $(( now / 1000 - ${end/./} )) -ge 2000 ] || continue
     job_noted "$n"
     [ "$st" != 0 ] || continue
-    # What it was: its record ($D/jobs, the host's), while run -d's checks have not dropped it. A
-    # leader that exited leaving its session running (a launcher, "started" for run -d too) is no end.
+    # Stopped by the agent itself (#300, finding 406): killed while an `omabox run` ran in the box
+    # (`omabox run -- pkill APP`), or just after. An exit or a crash is still said.
+    case $st in 130|137|143) ! job_run_stopped "${end/./}" || continue ;; esac
+    # What it was: its record ($D/jobs, the host's), kept until now (finding 405). Found by its log's
+    # name (a D spelled otherwise by another caller is the same box), each record a line read on its
+    # own: one being written or removed meanwhile does not lose the others. A leader that exited
+    # leaving its session running (a launcher, "started" for run -d too) is no end.
     rec=""; words="" pid=""
     if compgen -G "$D/jobs/*" >/dev/null; then
-      rec=$(jq -r --arg log "$D/home/run-$ns.log" 'select(.log == $log) | "\(input_filename)\t\(.pid)\t\(.argv | join(" "))"' "$D"/jobs/* 2>/dev/null | head -n 1) || rec=""
+      rec=$({ jq -Rr --arg log "/run-$ns.log" 'fromjson? | select(.log | strings | endswith($log)) | "\(input_filename)\t\(.pid)\t\(.argv | join(" "))"' "$D"/jobs/* 2>/dev/null || true; } | head -n 1)
     fi
     if [ -n "$rec" ]; then
       f=${rec%%$'\t'*} rec=${rec#*$'\t'}
@@ -5703,6 +5810,40 @@ job_note() {
     if [ "run-$ns.log" = "$newest" ]; then where="omabox log -b $NAME run"; else where="log: $D/home/run-$ns.log"; fi
     say "warning: run -d job ${words:-(its words were not kept)}${pid:+ (pid $pid)} $(job_how "$st") after $((ms / 1000)).$((ms % 1000 / 100))s, since the last command ($where)"
   done
+}
+
+# `omabox run` in a box up, timed for job_note (#300, finding 406): a run -d job killed (SIGTERM,
+# SIGINT, SIGKILL) while one ran, or within JOB_RUN_GRACE_MS of its end, was stopped by the agent
+# itself (`omabox run -- pkill APP`): no news. $D/runs (host-only) holds o.PID.START while one runs
+# (PID the omabox's) and c.START.END once it ended, in ms: names only, read with builtins.
+JOB_RUN_GRACE_MS=2000 RUN_MARK=""
+run_mark_begin() {
+  RUN_MARK=$(( ${EPOCHREALTIME/[.,]/} / 1000 ))
+  { mkdir -p "$D/runs" && : > "$D/runs/o.$$.$RUN_MARK"; } 2>/dev/null || RUN_MARK=""
+}
+run_mark_end() {
+  [ -n "$RUN_MARK" ] || return 0
+  local f now=$(( ${EPOCHREALTIME/[.,]/} / 1000 ))
+  mv -f -- "$D/runs/o.$$.$RUN_MARK" "$D/runs/c.$RUN_MARK.$now" 2>/dev/null || true
+  # Dropped: a run that ended 10 s before this one began (every end it covers was there for this
+  # one's job_note, but one not yet written: up to 2 s), and one whose omabox is gone (killed outright).
+  for f in "$D"/runs/*; do
+    if [[ ${f##*/} =~ ^c\.[0-9]+\.([0-9]+)$ ]]; then [ "${BASH_REMATCH[1]}" -ge $((RUN_MARK - 10000)) ] || rm -f -- "$f"
+    elif [[ ${f##*/} =~ ^o\.([0-9]+)\.[0-9]+$ ]]; then [ -d "/proc/${BASH_REMATCH[1]}" ] || rm -f -- "$f"; fi
+  done
+}
+# Whether a job that ended at END (ms) did so while an `omabox run` ran in the box, or within
+# JOB_RUN_GRACE_MS of one's end. job_run_stopped END
+job_run_stopped() {
+  local f
+  for f in "$D"/runs/*; do
+    if [[ ${f##*/} =~ ^c\.([0-9]+)\.([0-9]+)$ ]]; then
+      [ "${BASH_REMATCH[1]}" -le "$1" ] && [ "$1" -le $((BASH_REMATCH[2] + JOB_RUN_GRACE_MS)) ] && return 0
+    elif [[ ${f##*/} =~ ^o\.([0-9]+)\.([0-9]+)$ ]]; then
+      [ "${BASH_REMATCH[2]}" -le "$1" ] && [ -d "/proc/${BASH_REMATCH[1]}" ] && return 0
+    fi
+  done
+  return 1
 }
 
 # A throwaway whose `up` failed: its logs, copied out of the box dir its `down` removes (finding 167),
@@ -5838,12 +5979,20 @@ cmd_run() {
       return $rc
     fi
     local rc=0
-    box_exec "$@" || rc=$?
+    run_mark_begin   # (a job it stops is no news: job_note)
+    NS_KILL_SAY=1 box_exec "$@" || rc=$?
+    run_mark_end
     touch "$D/used" 2>/dev/null || true
     run_gone $rc || rc=125
     return $rc
   fi
-  [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"
+  if [ $detach = 1 ]; then
+    # This session's box, up under another directory's name: named, not an `up` that would start a
+    # second box (#296).
+    local mine=""; [ "${NAME_DERIVED:-0}" = 0 ] || mine=$(session_boxes)
+    [ -z "$mine" ] || need_box
+    die "run -d needs a box that is up (omabox up $NAME)"
+  fi
   for kv in "${envs[@]}"; do up_args+=(--env "$kv"); done
   # A box asked for by name (-b, $OMABOX), one that was up and died, or one that expired is not
   # replaced by a throwaway: that would run the command in a new network namespace without the box's mounts
@@ -5881,7 +6030,7 @@ cmd_run() {
   run_link_notes run 1 "$@"   # (links at the top of the repo: its up said them)
   run_cwd_note run "$@"       # outside a repo: nothing of this dir in the box (#251)
   local rc=0
-  box_exec "$@" || rc=$?
+  NS_KILL_SAY=1 box_exec "$@" || rc=$?
   run_gone $rc || rc=125
   return $rc
 }
@@ -8455,7 +8604,7 @@ cmd_tree() {
     err=$(mktemp)
     layer_read "$l" "$lys" "$err" "${args[@]}" || rc=$?
   else
-    local wins w pid title size
+    local wins w pid title size twins
     wins=$(box_windows) || exit $?
     if [ ${#sels[@]} = 0 ] && [ "$(jq length <<<"$wins")" = 0 ]; then
       say "tree: the box has no window; the shell's bar, panels and menus are layers: tree --layer NAMESPACE (omabox hyprctl layers)"
@@ -8466,8 +8615,11 @@ cmd_tree() {
     pid=$(jq -r .pid <<<"$w") title=$(jq -r .title <<<"$w") size=$(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w")
     what=$(win_desc "$w")
     [[ $pid =~ ^[1-9][0-9]*$ ]] || die "tree: window $what has no pid to find its app by ($pid)"
+    # Its app's other windows of its size: its only frame (one whose name is not the title) stands for
+    # it only when there are none (#302).
+    twins=$(jq --argjson w "$w" '[.[] | select(.pid == $w.pid and .address != $w.address and .size == $w.size)] | length' <<<"$wins")
     err=$(mktemp)
-    box_sys /usr/bin/timeout 30 "$BOX_TREE" --pid "$pid" --title "$title" --size "$size" "${args[@]}" 2>"$err" || rc=$?
+    box_sys /usr/bin/timeout 30 "$BOX_TREE" --pid "$pid" --title "$title" --size "$size" --twins "$twins" "${args[@]}" 2>"$err" || rc=$?
   fi
   why=$(sed 's/^omabox-tree: //' "$err"); rm -f "$err"
   case $rc in
@@ -8480,9 +8632,13 @@ cmd_tree() {
          say "GTK, Qt and egui/winit (AccessKit) apps have one; Chromium and Electron only when started with --force-renderer-accessibility; terminals (foot) have none: look with a shot (shot --window SEL). The shell's bar, panels and menus are layers: tree --layer NAMESPACE"
        fi
        exit 1 ;;
-    5) say "tree: $what: $why"; exit 1 ;;
-    6) say "tree: $what: $why; the layers of that pid and size:"
-       layer_lines "$(jq -c "$LAYER_LIST_JQ"' | map(select(.pid == $l.pid and .w == $l.w and .h == $l.h))' --argjson l "$l" <<<"$lys")" >&2
+    5|7) say "tree: $what: $why"; exit 1 ;;
+    6) if [ -n "$layer" ]; then
+         say "tree: $what: $why; the layers of that pid and size:"
+         layer_lines "$(jq -c "$LAYER_LIST_JQ"' | map(select(.pid == $l.pid and .w == $l.w and .h == $l.h))' --argjson l "$l" <<<"$lys")" >&2
+       else
+         say "tree: $what: $why"
+       fi
        exit 1 ;;
     4) die "tree: ${why:-no accessibility bus} (a box started by an omabox before 0.5.3, or with --env ATSPI_DBUS_IMPLEMENTATION=dbus-broker: omabox down $NAME, then up again)" ;;
     124) die "tree: $what did not answer in 30 s (busy or hung?)" ;;
@@ -10757,6 +10913,12 @@ settle_end() {
       fi ;;
     *) msg=$reason ;;
   esac
+  # run -d --wait (#297, finding 404): a screen that settled after the job had died (killed, or a
+  # status other than 0, nothing of it left) settled on something else: the last app's window
+  # closing, another agent's. Unsatisfied, so run -d says the job's end and its log as for a 124.
+  if [ "$res" = satisfied ] && [ "$SETTLE_FACTS" = run ] && job_failed "$SETTLE_FPID"; then
+    res=unsatisfied msg+="; the command had ended by then: not its screen"
+  fi
   # An action's --wait (#274): what changed on the desktop since just before the input, appended; on a
   # 124, where the input went first, and that nothing changed when nothing did. Not on unknown (the box
   # may be hung: no more seconds on it). changes is null when the desktop could not be read.
@@ -11519,6 +11681,14 @@ box_screen() {
   local m; m=$(hypr_json monitors) || exit $?
   jq -r <<<"$m" "$(main_screen)"' // empty | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
 }
+# The box's other monitors (--monitor, `monitor add`: #308), as up's line has the main one, each after
+# " + ": " + 1080x1920@60 + 800x600@30,scale=2"; nothing when it has none. more_screens MAIN_NAME
+more_screens() {
+  local m; m=$(hypr_json monitors) || return 0
+  jq -r --arg main "$1" '[.[] | select((.disabled | not) and .name != $main)
+    | " + \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)" + ((.scale * 100 | round / 100) as $s
+      | if $s == 1 then "" else ",scale=\($s)" end)] | join("")' <<<"$m" 2>/dev/null || true
+}
 # The box's main screen in `hyprctl -j monitors` (jq): a headless box's HEADLESS-2, or WAYLAND-1 on
 # NVIDIA (finding 77); an interactive box's first window (WAYLAND-N: after a close with confirm-close
 # the one it opened again, finding 70). Never one of `monitor add`'s (#122), not even while the main
@@ -12217,9 +12387,9 @@ cmd_output() {
   fi
   # Cycles: gone for --for (or, without it, gaps from 50 ms to 2 s in turn: one of them found the crash
   # in #146), back, a second to rebuild. The first shell crash ends them: that is what they look for.
-  local i g n0 n sh=0 screen
+  local i g n0 n sh=0 screen before
   [ "$(meta shell)" = true ] && sh=1
-  n0=$(shell_crashes)
+  before=$(shell_crash_dirs); n0=$(grep -c . <<<"$before" || true)
   for ((i = 1; i <= ${cycles:-1}; i++)); do
     g=${gap:-${OUTPUT_GAPS[(i - 1) % ${#OUTPUT_GAPS[@]}]}}
     output_drop "$out"
@@ -12230,9 +12400,9 @@ cmd_output() {
     n=0; [ $sh = 0 ] || n=$(shell_crashes)
     if [ "$n" -gt "$n0" ]; then
       echo "cycle $i/${cycles:-1}: gone for $(ms_s "$g"), back as $screen; shell crashed"
-      echo "$n" > "$D/shell-crashes-seen" 2>/dev/null || true
-      local new; new=$(find "$D/home/.cache/quickshell/crashes" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' 2>/dev/null | sort -rn | head -n 1) || true
-      new=${new#* }
+      shell_seen
+      # (The shell's own report: not another Quickshell's in the box, #303.)
+      local new; new=$(comm -13 <(sort <<<"$before") <(shell_crash_dirs | sort) | tail -n 1) || new=""
       [[ $new =~ ^[A-Za-z0-9_.-]+$ ]] && new="report: $D/home/.cache/quickshell/crashes/$new/report.txt; " || new=""
       die "output: the shell crashed in cycle $i (${new}omabox log -b $NAME shell)"
     fi
@@ -13280,7 +13450,7 @@ cmd_restart_shell() {
   wait_ready 1
   # A shell that crashed just after its bar came is no restart (#126): said with its report, exit 1.
   local crashed=""; crashed=$(shell_watch) || crashed=""
-  shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true   # said here, not again (shell_note, #147)
+  shell_seen   # said here, not again (shell_note, #147)
   if [ -n "$crashed" ]; then say "$crashed"; exit 1; fi
   say "shell restarted in box '$NAME'"
   plugin_check
@@ -13309,7 +13479,13 @@ cmd_restart_shell() {
 #   as xdg-open (Codex only sets values, so it gets the variables);
 # - no stopping the desktop's shell (#141): Quickshell's IPC needs no display, so `quickshell kill` and
 #   `ipc` reached it, and `omarchy restart shell` stopped it with nothing to start it again. That PATH's
-#   share/guard/quickshell and qs refuse them (Codex, with no PATH of ours, does not get them).
+#   share/guard/quickshell and qs refuse them (Codex, with no PATH of ours, does not get them);
+# - no reaching it through omarchy-shell either (#290): Omarchy 4.5's takes the newest wayland-N when
+#   $WAYLAND_DISPLAY names no socket, then talks to the shell's own socket. An empty file named after the
+#   guard's display in $XDG_RUNTIME_DIR (GUARD_MARK, made by the hooks, `guard exec` and any omabox run
+#   under the guard) makes it a name that exists: omarchy-shell keeps it, finds no shell for it and goes
+#   to qs as 4.0.6 did, for every caller and every agent, Codex's too. A Wayland client still finds
+#   nothing to talk to there (connection refused). share/guard/omarchy-shell refuses with a reason.
 GUARD_PATH=$ROOT/share/guard
 GUARD_ENV=(WAYLAND_DISPLAY="$GUARD" HYPRLAND_INSTANCE_SIGNATURE="$GUARD" DISPLAY= QT_QPA_PLATFORMTHEME= QT_FORCE_STDERR_LOGGING=1
   BROWSER="$GUARD_PATH/xdg-open" GH_BROWSER="$GUARD_PATH/xdg-open")
@@ -13330,6 +13506,7 @@ this task, run that command with: omabox host -- CMD"
 # SessionStart fires again on resume and compact: the line goes in once, an older omabox's in its place
 # (any line naming WAYLAND_DISPLAY=$GUARD), rewritten in the file Claude Code gave (#243).
 GUARD_HERE="{ [ -x '$ROOT/bin/omabox' ] || command -v omabox >/dev/null 2>&1; }"
+GUARD_MARK="{ [ -z \"\${XDG_RUNTIME_DIR:-}\" ] || : >> \"\$XDG_RUNTIME_DIR/$GUARD\"; } 2>/dev/null"
 GUARD_GONE="omabox guard: omabox is gone ($ROOT/bin/omabox)"
 # An upgrade that changes what `guard on` writes went unnoticed: the old hook keeps working, and only
 # `omabox guard` read it outdated (#243's change). share/guard/hook-version holds a stamp per agent
@@ -13345,7 +13522,7 @@ guard_stale() {
 echo 'omabox guard: this hook is outdated (omabox changed it): tell the user to run omabox guard on to renew it'"
 }
 GUARD_HOOK="if ! $GUARD_HERE; then echo '$GUARD_GONE, so the guard is not applied: shell commands here reach the real desktop. Its SessionStart hook (the one naming $GUARD) can go from settings.json'; \
-else if [ -n \"\$CLAUDE_ENV_FILE\" ] && l='case :\$PATH: in *:$GUARD_PATH:*) ;; *) PATH=\"$GUARD_PATH:\$PATH\" ;; esac; export ${GUARD_ENV[*]} PATH; prlimit --pid \$\$ --core=1: 2>/dev/null || true' && \
+else $GUARD_MARK; if [ -n \"\$CLAUDE_ENV_FILE\" ] && l='case :\$PATH: in *:$GUARD_PATH:*) ;; *) PATH=\"$GUARD_PATH:\$PATH\" ;; esac; export ${GUARD_ENV[*]} PATH; prlimit --pid \$\$ --core=1: 2>/dev/null || true' && \
 { grep -qxF \"\$l\" \"\$CLAUDE_ENV_FILE\" 2>/dev/null || { o=\$(grep -vF 'WAYLAND_DISPLAY=$GUARD ' \"\$CLAUDE_ENV_FILE\" 2>/dev/null); \
 { [ -z \"\$o\" ] || printf '%s\n' \"\$o\"; printf '%s\n' \"\$l\"; } > \"\$CLAUDE_ENV_FILE\"; }; }; then echo '$GUARD_NOTE'; \
 else echo 'omabox guard: NOT applied (no CLAUDE_ENV_FILE): shell commands here reach the real desktop; do GUI work in omabox anyway'; fi; \
@@ -13361,7 +13538,7 @@ GUARD_JQ='def ours: (.command? // "") | contains($g);
 # Codex sets variables, not limits. Those are fixed values, so they stay when omabox is gone: a
 # SessionStart hook in its hooks.json (issue #51; the same format as Claude Code's settings) gives the
 # note while omabox is there, and says how to take the guard out once it is not.
-GUARD_CODEX_HOOK="if $GUARD_HERE; then echo '$GUARD_NOTE'; $(guard_stale 2); \
+GUARD_CODEX_HOOK="if $GUARD_HERE; then $GUARD_MARK; echo '$GUARD_NOTE'; $(guard_stale 2); \
 else echo '$GUARD_GONE, but Codex still applies its guard: shell commands here have no display (WAYLAND_DISPLAY=$GUARD). To end it, delete the lines from # >>> omabox guard to # <<< omabox guard in Codex config.toml, and this hook from its hooks.json'; fi"
 GUARD_CODEX="# >>> omabox guard (\`omabox guard off\` removes this block)
 [shell_environment_policy.set]
@@ -13628,6 +13805,7 @@ cmd_guard() {
       [ $# -gt 0 ] || die "guard exec: nothing to run (omabox guard exec -- AGENT ...)"
       parsed
       export "${GUARD_ENV[@]}" PATH="$GUARD_PATH:$PATH"; prlimit --pid $$ --core=1: 2>/dev/null || true
+      eval "$GUARD_MARK" || true
       # The pid the agent runs as (exec keeps it), so its box can go with it (finding 93). A session
       # it keeps keeps its agent too, while this runs under that one: a guard exec inside a guarded
       # agent shares the outer one's box, which must not go when the inner one exits.
@@ -14360,8 +14538,8 @@ cmd_brief() {
     echo "You drive an omabox box: a private Omarchy desktop, not the user's. Start yours: omabox up --new [--plugin PATH]"
     echo "(all its options there); it prints its name (box-3): that is NAME below. It has no windows yet."
   fi
-  local own="The box is your parent's: leave it up."
-  [ "$b" != NAME ] || own="The box is yours: omabox down -b NAME when done."
+  local own="The box is your parent's: leave it up, and never down another box you did not start."
+  [ "$b" != NAME ] || own="The box is yours: omabox down -b NAME when done; never down a box you did not start (your session's other agents use theirs)."
   cat <<EOF
 Every call: omabox -b $b CMD ..., one literal command per call: no \$VAR, \$(...), pipes, && or ;. Look a value up, then type it.
 The loop: look, act once, look again. Text first (omabox -b $b windows, tree --find TEXT --window SEL); pixels: shot --window SEL prints a PNG path: Read it.
@@ -15569,6 +15747,9 @@ main() {
   global_box "$@"; set -- "${ARGS[@]}"
   local cmd=${1:-help}; shift || true
   MAIN_CMD=$cmd   # the command asked for, whatever runs it (peek_marker)
+  # Under the guard, its file (GUARD_MARK, #290), should the session's hook be older than it.
+  [ "${WAYLAND_DISPLAY:-}" != "$GUARD" ] || [ -z "${XDG_RUNTIME_DIR:-}" ] || [ -e "$XDG_RUNTIME_DIR/$GUARD" ] ||
+    { : >> "$XDG_RUNTIME_DIR/$GUARD"; } 2>/dev/null || true
   # run's own failures are 125, never a code its command could have given (#273, audit X3).
   [ "$cmd" != run ] || DIE_RC=125
   # --opt=value as --opt value, before the relay or the broker takes the words.

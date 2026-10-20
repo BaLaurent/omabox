@@ -27,6 +27,16 @@ text, defaults and heuristics, image pixels, what other programs report through 
   that is an animation` gives the window's coordinates there too. To watch a part of the screen
   whatever the window, `-g` without `--window`.
 
+- The skill's reference says a box turns PipeWire's realtime module off for its clients, which hides
+  a realtime-limit bug, and how to run one client without that
+  ([#305](https://github.com/diogochaves/omabox/issues/305)).
+- The reference says plainly that wgpu apps (eframe's default renderer, iced, Bevy) do not start in
+  a box on NVIDIA, and what to do: a GL renderer, or a box on the AMD/Mesa GPU
+  ([#306](https://github.com/diogochaves/omabox/issues/306)).
+- Parallel subagents of one session share its default box name: the reference tells each to take a
+  box of its own (`up --new` or `-b` a name of its task), and `omabox brief` to take down no box it
+  did not start ([#295](https://github.com/diogochaves/omabox/issues/295)).
+
 ### Removed
 
 - The forms deprecated in 0.9.0 are refused (exit 2; `run`'s 125) with one line naming what to
@@ -45,6 +55,76 @@ text, defaults and heuristics, image pixels, what other programs report through 
 
 ### Fixed
 
+- **`tree --window` printed another window's tree for a window its app does not publish**
+  ([#302](https://github.com/diogochaves/omabox/issues/302)). An app that puts only one of its
+  windows on the accessibility bus (egui's root viewport, not its child ones) had that window's tree
+  printed for every other one. Now the app's only window stands for one of another title only when
+  it is that window's size and no other window of the app is; else `tree` says the window has no
+  tree, or that which one it is cannot be told, exit 1.
+
+- **`run -d` in a repo no longer says to start a box when your session has one up elsewhere**
+  ([#296](https://github.com/diogochaves/omabox/issues/296)). After `omabox up` in a scratch folder,
+  `run -d` back in the repo said `omabox up <repo>-…`, and agents started a second box. It now names
+  the session's box to pass with `-b`, as the other commands do there.
+
+- **`up --desk-shell` leaves omabox's own bar widget out**
+  ([#304](https://github.com/diogochaves/omabox/issues/304)). It lists your boxes with `omabox ls`,
+  which a box does not have, so the box's shell logged a warning for it (and would have notified).
+  `up` says it left it out; `--plugin` still mounts it.
+
+- **`up`'s line names every monitor** ([#308](https://github.com/diogochaves/omabox/issues/308)):
+  `box 'NAME' up (1920x1080@60 + 1080x1920@60)` for a box started with `--monitor 1080x1920`, not
+  the main screen alone.
+
+- **`run -d --wait` said `satisfied` for a command that had already died**
+  ([#297](https://github.com/diogochaves/omabox/issues/297)), when something else on the screen
+  settled meanwhile (the last app's window closing, another agent's window), and its end only came
+  as a warning on the next command. Now a command killed or ended with a status other than 0 by the
+  time the screen settles makes the answer `unsatisfied`, says its end and its log's last lines, and
+  exits with its status. One that ends with 0 having changed the screen stays satisfied.
+
+- **A `run -d` job's warning said "its words were not kept" for ordinary jobs**
+  ([#298](https://github.com/diogochaves/omabox/issues/298)). The next command's warning about a
+  job that ended lost what the job was when it died at once, when the box was slow to make it a
+  session of its own, when `--replace` or another command had looked at it first, or when another
+  command touched the job records at the same moment. A job's record is now always kept until its
+  end has been said, so the warning names the command and its pid.
+
+- **The warning about a `run -d` job that ended fired for jobs you stopped yourself**
+  ([#300](https://github.com/diogochaves/omabox/issues/300)): after `omabox run -- pkill APP`, the
+  next command said the job "was killed by SIGTERM". A job killed (SIGTERM, SIGINT or SIGKILL) while
+  an `omabox run` ran in its box, or within 2 s of one ending, is no longer said; exits and crashes
+  still are.
+
+- **A box going down could show on your desktop as "Process crashed: Xwayland"** (`up --xwayland`).
+  Hyprland starts Xwayland with `-core`, which raised its core limit back past the 1 byte everything
+  in a box gets, so its abort when the box's compositor went was recorded as a crash. A box's Xwayland
+  now keeps the 1-byte limit (unless you raised it yourself).
+- **The shell-crash warning fired for any Quickshell in the box, and missed a killed shell.** A
+  Quickshell of your own crashing (to test its crash handling) was reported as the shell crashing,
+  and omabox closed its crash dialog; now only the box shell's crashes count and only its dialog is
+  closed. A shell killed outright (`kill -9`) and started again by Omarchy's launcher is now said by
+  the next command: `the shell was killed by SIGKILL (137) since the last command and was started
+  again`.
+- **`run` printed bash's `line N: PID Killed prlimit …` for a command killed by a signal**; it now
+  says `the command was killed by SIGKILL (137)`, with the same exit status.
+
+## 0.9.2 — 2026-10-20
+
+A fix to the agent guard for hosts on Omarchy 4.5 (its release candidates and the edge channel):
+without it, a guarded agent could reach your desktop's shell through `omarchy-shell`. Run `omabox
+guard on` once after updating. Also: a box's shell is no longer killed now and then as it starts
+under load.
+
+### Fixed
+
+- **The agent guard let Omarchy 4.5's `omarchy-shell` reach your desktop's shell** (#290). On
+  Omarchy 4.5 (its release candidates and the edge channel today), `omarchy-shell` finds your
+  session's display when the one it is given does not exist, which the guard's never does, and then
+  talks to your bar's shell directly, so a guarded agent's `omarchy shell …`, menus or theme hooks
+  could act on your real desktop. The guard now leaves a file in your runtime directory that keeps
+  `omarchy-shell` from looking further, and its own `omarchy-shell` refuses with a reason. Run
+  `omabox guard on` once to renew the hooks (sessions say theirs is outdated until you do).
 - **A box's shell was now and then killed as it started, under load** (`the shell exited after
   starting`; its log: `exited with status 137`). PipeWire, asking a box's portal for realtime limits
   it cannot give (a box has no RealtimeKit), set the shell's realtime time limit to zero, and the

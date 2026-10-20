@@ -203,7 +203,7 @@ say why, with Omarchy's plugin validator's message when it has one; the box come
 
 To check a plugin against your real desk (a bar plugin that hosts others, plugins that read their
 own files), `omabox up --desk-shell [--plugin ~/code/myplugin]` mirrors your whole shell: every
-plugin in `~/.config/omarchy/plugins`, your `shell.json` as it is, and the other files in
+plugin in `~/.config/omarchy/plugins` (but omabox's own widget), your `shell.json` as it is, and the other files in
 `~/.config/omarchy` your plugins read, copied. Never `api-keys.env` or anything named or holding a
 key, token, secret or password, nor your hooks; `up` lists what went in and what did not, and why.
 
@@ -378,6 +378,10 @@ A browser already running on your desktop takes a URL over its own socket, not t
 own IPC needs no display either, so `quickshell kill` or `qs ipc` from a guarded shell would reach
 your desktop's shell (`omarchy restart shell` stopped it, and could not start it again): the same
 PATH puts `share/guard/quickshell` and `qs` first, which refuse `kill` and `ipc` and pass the rest on.
+Omarchy 4.5's `omarchy-shell` goes further: given a display that does not exist, it finds your
+session's and talks to the shell's own socket. The guard leaves an empty `omabox-guard` file in your
+runtime directory, so the guard's display exists and `omarchy-shell` stays with it, and its own
+`share/guard/omarchy-shell` refuses with a reason.
 
 - **Claude Code**: one `SessionStart` hook in `~/.claude/settings.json` (merged with yours). Every
   shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a

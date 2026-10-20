@@ -8411,6 +8411,189 @@ from them.
     module-rt has no `module.rt` condition) would still get 0/0. Tests: t_omarchy_restart (the
     shell's RLIMIT_RTTIME holds unlimited once its PipeWire service has tried to connect; it read
     0/0 before).
+403. **Omarchy 4.5's omarchy-shell reaches the desktop's shell past the guard** (2026-10-20, #290,
+    read from v4.5.0-rc1 and reproduced with its script). 4.0.6's took the newest `wayland-N` in
+    `$XDG_RUNTIME_DIR` only when `$WAYLAND_DISPLAY` was empty, then went through `qs ipc`, which
+    the guard's qs refuses (#141). 4.5's also does it when the display names no socket, which the
+    guard's `omabox-guard` never does, and then answers over the shell's own socket
+    (`omarchy-shell-<md5 of config and display>.sock`) with socat, never calling qs: menus, panels,
+    the bar. `omarchy shell ...` runs it by its path, so a PATH shim alone misses that caller, and
+    Codex gets no PATH of ours at all. **Fix**: an empty file `$XDG_RUNTIME_DIR/omabox-guard`
+    (GUARD_MARK), made by both agents' SessionStart hooks, by `guard exec`, and by any omabox
+    command run under the guard (a session whose hook predates this): the display then names
+    something that exists, so omarchy-shell keeps it, finds no shell socket for it and goes to qs as
+    4.0.6 did; a Wayland client connecting there gets "connection refused" instead of "no such
+    file", the same failure. Plus `share/guard/omarchy-shell`, first on the guarded PATH: it refuses
+    (exit 4; 0 under `-q`, which promises success) while the display is not a socket, and passes a
+    real one on. The hooks changed, so their stamps did (finding 346): guarded sessions say their
+    hook is outdated until `omabox guard on`. Tests: t_unit_guard_omarchy_shell (with
+    OMABOX_TEST_OMARCHY on a 4.5 tree, a control shows its omarchy-shell reaching a stand-in shell
+    socket without the file; under `guard exec` nothing reaches it, by path or by name).
+
+404. **`run -d --wait` said satisfied for a job that had died at once, when something else on screen
+    settled** (2026-10-20, #297). Seen twice: a Qt app started right after `omabox run -- pkill` of
+    the last one (the closing window was the awaited change) and a binary given a host path the box
+    lacks, in a box another agent was using (its window). The job's end (SIGABRT at 0.0 s, exit 255
+    at 0.1 s) only came on the next command, as finding 399's warning. `--wait` watches the whole
+    screen, and `job_ended` (#215) was asked only on a 124. Reproduced: a foot window open, `run -d
+    --wait -- sh -c 'pkill -f "^foot -T K "; exit 3'` said `satisfied: settled after 0.81s ...;
+    window closed: foot "K"`, exit 0. *Decided*: the liveness check, not counting only the job's own
+    windows: a job that never opens one (a server, a one-shot) would have nothing to settle on, and
+    the job's state is what the agent needs. **Fix**: when the screen settles under `run -d --wait`,
+    `job_failed` reads the job's status file ($D/run, one stat while it runs); a job killed or ended
+    with a status other than 0, nothing of its session left, turns the answer to `unsatisfied: settled
+    after 0.48s (...); the command had ended by then: not its screen; ...` and run -d says its end,
+    the host paths it lacked and its log's tail, and exits with its status, as for a 124. A 0 stays
+    satisfied: a one-shot (`notify-send`, a dispatch, a `pkill` of a window) changes the screen and
+    ends with 0. **Checked** in a box: the reproduction above now exits 3 with the job's end and log;
+    `kill -ABRT $$` 134; `--json` gives `result: unsatisfied`. Tests: t_replace (a job dead as
+    another window closed: 3, unsatisfied, its end and log, not said again by the next command; a
+    one-shot that closes it and exits 0: satisfied).
+
+405. **A `run -d` job's warning said "its words were not kept" for ordinary jobs** (2026-10-20,
+    #298). Finding 399's warning names the job from its record (`$D/jobs/PID`), and the record went
+    missing in four ways. (1) `job_record` wrote none for a job gone before it looked: the SIGABRT at
+    0.0 s and the exit 255 at 0.1 s of #297. (2) It looked for the job as a session (`sid == pid`),
+    but run-job.sh says the pid right after its fork, before the subshell has exec'd setsid: a host
+    quicker than the box found no such session yet and wrote nothing, for a job that then ran for
+    minutes (by reading; 50 starts in an idle and a loaded box all kept theirs). (3) `job_live`
+    removed the record of any job it found ended, before the next command's `job_note` had said the
+    end: `--replace` (its own records and, through job_others, every ended job of the same program:
+    399's *Off*), `job_ended`, and a concurrent command's. (4) `job_note` read all records in one
+    `jq` under pipefail: one being written or removed by another command meanwhile (jq exits 2 or 5)
+    lost every record's words, and the log was matched by its full path, so a caller whose
+    `XDG_RUNTIME_DIR` is spelled otherwise (`/run/user/1000/`) matched none. **Fix**: a record is
+    always written, its start time that of the process with the job's pid, whatever its session
+    (one process from fork to the app: exec keeps it; `-` when none is left); `job_procs` counts
+    that process as the job before its setsid. `job_live` drops an ended job's record only once its
+    end is in `jobs-noted` (`job_said`; a box from an older omabox: as before), so it stays until
+    `job_note` or `job_ended` has dealt with it; those then drop it. `job_note` reads each record as
+    a line of its own (`jq -R 'fromjson?'`, its exit status ignored) and matches the log by its name
+    `run-NS.log`. A record whose end never comes (its waiter killed in the box) stays until `down`.
+    Tests: t_unit_job_note (a record matched by its name beside a half-written one; job_live keeps an
+    ended job's record until its end is noted, then drops it; job_record records a job gone already,
+    and one before its setsid by its start); t_unit_cli (job_procs: the leader before its setsid).
+
+406. **The job-ended warning fired for jobs the agent had stopped itself with `omabox run -- pkill`**
+    (2026-10-20, #300). One agent's loop of start, probe, stop got finding 399's warning a dozen
+    times, often on an unrelated command; it added `grep -v warning` everywhere, and the log path in
+    the line then broke a `grep -o '/run/[^)]*log'` capture of its own. A SIGTERM sent through
+    `omabox run` in the same box is no news. **Fix**: `omabox run` in a box up marks its time in
+    `$D/runs` (host-only; `o.PID.START` while it runs, PID the omabox's, renamed `c.START.END` when it
+    returns, ms), and `job_note` does not say a job that ended by SIGTERM, SIGINT or SIGKILL (143, 130,
+    137) while one ran or up to 2 s after one ended (an app slow to quit on SIGTERM under load; the
+    issue asked about a second); it is noted all the same. Exits and crashes (SIGSEGV, SIGABRT) are
+    said as before, and so is a kill with no `run` around it. An `o.` mark counts only while its
+    omabox lives (one killed outright leaves its mark: ignored, then dropped). Marks are names read
+    with builtins; each `run`'s end drops those that ended 10 s before it began (its own `job_note`
+    had every end they could cover by then). *Off*: a job killed by something else in the box during
+    an agent's `omabox run` (another agent's `pkill`, the OOM killer) is not said either; `run -d --
+    pkill` is not a stop through `run`. Tests: t_unit_job_note (killed during a run or 2 s after: not
+    said; an exit then and a kill 3 s after: said; during a run still going: not said; a run whose
+    omabox is gone: said; run marks open, then closed, old and dead ones dropped); t_replace (`run --
+    pkill -xf 'sleep 611'`: the next command says nothing; a job killing itself 3 s in: said).
+
+407. **A box's Xwayland kept no 1-byte core limit: its `-core` raised it** (2026-10-20, #294). A box
+    going down (its Hyprland killed after a hang) showed on the desktop as "Process crashed:
+    Xwayland": the journal's entry had `COREDUMP_RLIMIT=18446744073709551615`, SIGABRT, the command
+    line `Xwayland :0 -rootless -core -listenfd …`. Everything in a box runs under `prlimit
+    --core=1:` (finding 67), which lowers only the soft limit; Hyprland starts Xwayland as `/bin/sh -c
+    "exec Xwayland {} -rootless -core …"` (its format string, read from the binary: by name, through
+    Hyprland's PATH), and xserver's `-core` sets the soft limit to the hard one (os/utils.c). When the
+    compositor goes, Xwayland's fatal error ("Couldn't add screen") aborts, and with no limit left
+    systemd-coredump records it. **Fix**: `share/bin/Xwayland`, first on every box PATH (session.sh,
+    and hyprland.lua puts the stand-ins first again after Omarchy's envs), execs the next Xwayland on
+    PATH under `prlimit --core=1:1`: the hard limit 1 byte too, so `-core` raises the soft one to 1.
+    A soft limit other than 1 byte is not omabox's (a Hyprland given `ulimit -c unlimited` on
+    purpose, the core a #135 debugging session wants): passed on as it is. Lowering the hard limit
+    for the whole box would have done it too, but takes away `ulimit -c unlimited` inside (the
+    skill's way to get a core). Checked in a real box (`up --xwayland`): Xwayland's
+    `/proc/PID/limits` 1 1 (Hyprland's 1 unlimited); its Hyprland SIGKILLed from inside, Xwayland
+    aborted and the kernel logged `106(Xwayland): RLIMIT_CORE is set to 1, aborting core`, no new
+    entry in `coredumpctl list`. Tests: t_unit_xwayland (a fake Xwayland next on PATH gets 1/1, and
+    unlimited/unlimited passed on), t_keys (the running Xwayland's limits).
+
+408. **The shell-crash warning was any Quickshell's, and missed a killed shell** (2026-10-20, #303).
+    An agent crashing its own Quickshell instance in a box (its own config) to test Quickshell's crash
+    handling got `warning: the shell crashed since the last command and was started again` after each
+    crash, the box's shell alive throughout, and omabox closed that instance's crash dialog
+    (`closed the shell's crash dialog`): it interfered with the very thing under test. Then its
+    `pkill -9 -f /usr/bin/quickshell` killed the box's shell too, Omarchy's launcher started it again
+    (a new pid), and nothing was said. **Why**: shell_crashes, shell_crash_report and output's cycles
+    counted every folder under the box HOME's `~/.cache/quickshell/crashes`, where every Quickshell
+    writes its reports, and hyprland.lua closed any reporter's window (told by
+    `__QUICKSHELL_CRASH_DUMP_PID` in its environment). A SIGKILL leaves no report (no handler runs).
+    A report's `Crashed process ID` cannot key it to the shell: it is the child Quickshell's handler
+    forks to dump (`raise(sig)` there), the shell itself being exec'd again at its own pid. **Fix**:
+    a report is the shell's when its `Config Path` is the Omarchy tree's `shell/shell.qml` (slashes
+    squeezed; `meta omarchy` is a resolved path); a folder whose report is not written yet counts
+    once it is. The dialog: hyprland.lua passes the reporter's pid and its dump pid to
+    `share/crash-dialog.sh`, which finds the report naming that dump pid (written before the dialog
+    shows; up to 1 s for it) and closes the dialog only when the report is the shell's; with no
+    report, only when the reporter's parent is the box shell's pid. A shell killed or exiting non-zero
+    is said from the launcher's own line (`Omarchy shell exited with status N; relaunching.`, the
+    box's logger puts it in shell.log): shell_note keeps "MARK COUNT STATUS" (shell.sh's
+    omabox-shell.mark, how many such lines, the last status) in `shell-relaunches-seen` beside
+    `shell-crashes-seen` (`up`, `restart-shell` and output's cycles write both: shell_seen), and says
+    `warning: the shell was killed by SIGKILL (137) since the last command and was started again`
+    once; a crash said with its relaunch is said as the crash. A shell stopped on purpose (`omarchy
+    restart shell`) quits cleanly and logs no such line, so it is not said; a pid change alone would
+    have said it. t_unit_omarchy_contract checks the launcher still logs that line. Checked in a real
+    box: a `quickshell -p /tmp/qt` of the test's own SIGSEGVed, its report and dialog left, no
+    warning, `ls` running with no crash counted; the shell SIGKILLed, the next command's warning,
+    once. Tests: t_unit_shell_reports, t_unit_shell_crash (reports carry their config now: one not
+    written yet and another instance's are no crash), t_shell_other_crash; t_shell_crash unchanged.
+
+409. **`run` said a command killed by a signal in bash's words** (2026-10-20, #303). `omabox run --
+    CMD` whose command was SIGKILLed printed `…/bin/omabox: line 1867: 662938 Killed  prlimit
+    --core=1: "$@"`: bash's job-control line for its child, which ns_held holds with nsenter's stderr
+    and ns_said passed on as one of nsenter's own lines (finding 235). For run's own command
+    (`NS_KILL_SAY`) that line is now said as run says a job's end: `omabox: the command was killed by
+    SIGKILL (137)` (job_how), the exit status unchanged; omabox's own calls into the box keep the
+    line. Checked in a real box (`run -- sh -c 'kill -KILL $$'`: exit 137, that one line). Tests:
+    t_unit_box_gone (SIGKILL and SIGTERM, nsenter's own line kept), t_shell_other_crash.
+
+410. **`tree --window` printed an app's only frame for a window it does not publish** (2026-10-20,
+    #302). An egui app with a root window and two child viewports publishes one AT-SPI frame, the
+    root's; `tree --window "title:<child>"` printed the root's tree for both children (one of them
+    920x1056, the root 920x521), since a window whose title no frame names fell back to the app's only
+    frame. **Fix**: tools/tree takes that frame only when it is the window's size (2 px either way)
+    and no other window of the app's pid is that size (`omabox tree` passes the count, `--twins`):
+    else `no accessibility tree for this window: its application publishes one window, "Root" 920x521,
+    and this one is 920x1056` (exit 7), or `... and 2 of its windows are this one's size ...: which
+    one it is cannot be told` (exit 6); `tree` says either, exit 1. A window whose title the frame
+    names is unchanged. Reproduced without egui: a GTK4 window beside bare GDK toplevels
+    (`Gdk.Surface.new_toplevel`, drawn by a `Gsk.CairoRenderer`), which have no accessible. Tests:
+    t_tree (a window of another size; one of two of the frame's size; the root's tree still read).
+
+411. **`run -d` from a repo told an agent to start a second box while its session's was up**
+    (2026-10-20, #296). An agent's `cd <scratch>; omabox up` made `default-<sfx>`; back in the repo
+    (Claude Code resets the directory between calls), `run -d` derived `<repo>-<sfx>`, found it down
+    and said `run -d needs a box that is up (omabox up <repo>-<sfx>)`, while every other command
+    there says need_box's `no box '<repo>-<sfx>' is up; this session's box is 'default-<sfx>'
+    (started from another directory): -b default-<sfx>`; the agent's report had both lines, which
+    disagree. **Fix**: run -d with a derived name, when the session has boxes up under other names,
+    gives need_box's answer alone; with none, the `up` line as before. Using the session's only box
+    from any directory waits for an owner per box (#295): with parallel subagents it may be a
+    sibling's. Tests: t_unit_agent_session.
+
+412. **`up --desk-shell` loaded omabox's own bar widget, which cannot work in a box** (2026-10-20,
+    #304). `chaves.omabox` polls `omabox ls --json`; a box has no omabox on its PATH, so its shell
+    logged `WARN: Process failed to start ... Command: QList("omabox", "ls", "--json")` (and after
+    three failures the widget would notify inside the box): a line in every count of an agent
+    comparing two builds of a plugin by their warnings. **Fix**: desk_plugins leaves the desk's
+    `chaves.omabox` out, said as the other plugins it skips are (`--desk-shell: not mounting
+    plugins/chaves.omabox: omabox's own widget, which lists your boxes (none in a box)`), and the box's
+    shell.json loses it wherever it is placed (the bar, a plugin's own list, its settings entry), so no
+    layout names a widget the box has not. A `--plugin` of it still mounts it (its own tests). Checked
+    on this desk: the box's shell log has no omabox line. Tests: t_unit_desk_shell, t_desk_shell.
+
+413. **`up`'s line named only the main screen** (2026-10-20, #308). `up NAME --monitor 1080x1920`
+    said `box 'NAME' up (1920x1080@60)`, though the second monitor was there (a window sat on it), and
+    an agent ran `monitor list` to be sure. **Fix**: every other enabled monitor follows the main
+    one, as Hyprland has it once `up`'s `monitor add`s are done: `up (1920x1080@60 + 1280x720@60,scale=1.6
+    + 1080x1920@60)`. `up --json` and `ls --json` had every one already (`monitors`), unchanged.
+    Tests: t_monitors_wait, t_monitors_wait_nvidia.
 
 402. **1.0: the 0.9 deprecations refused, F8 switched, one deprecation helper, the promise written**
     (2026-10-20, #287; Diogo's decision on the issue). Each form 0.9.0 warned (findings 381, 385,

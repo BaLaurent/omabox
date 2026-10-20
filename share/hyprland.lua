@@ -333,10 +333,12 @@ end
 
 -- Quickshell's crash reporter (#126, NOTES finding 183): when the shell crashes, Quickshell writes a
 -- report under ~/.cache/quickshell/crashes, then opens a dialog that takes focus. Nobody reads it in a
--- box, and it took the keys meant for the app under test (Return on it opened a browser). It is
--- closed as it opens; the report stays, and `up`/`restart-shell` name it. Told apart by its process's
--- environment, which only the reporter has, never by its class: every Quickshell window, a project's
--- own included, is org.quickshell. (Not QS_DISABLE_CRASH_HANDLER: that writes no report at all.)
+-- box, and it took the keys meant for the app under test (Return on it opened a browser). The box
+-- shell's is closed as it opens; the report stays, and `up`/`restart-shell` name it. Told apart by its
+-- process's environment, which only the reporter has, never by its class: every Quickshell window, a
+-- project's own included, is org.quickshell. Another instance's dialog (a project's own Quickshell,
+-- crashed on purpose to test its crash handling) is left alone (#303, finding 408): crash-dialog.sh
+-- tells them apart by the report. (Not QS_DISABLE_CRASH_HANDLER: that writes no report at all.)
 -- Global guard: one handler, however many reloads.
 if not omabox_crash_hook then
   omabox_crash_hook = hl.on("window.open", function(w)
@@ -345,10 +347,9 @@ if not omabox_crash_hook then
     if not f then return end
     local env = f:read("a") or ""
     f:close()
-    if not env:find("__QUICKSHELL_CRASH_DUMP_PID=", 1, true) then return end
-    local pid = math.floor(w.pid)
-    hl.exec_cmd("kill " .. pid .. "; echo \"$(date '+%F %T.%3N') omabox: closed the shell's crash dialog (pid " .. pid ..
-      "); the report is in ~/.cache/quickshell/crashes\" >> \"$HOME/shell.log\"")
+    local dump = ("\0" .. env):match("\0__QUICKSHELL_CRASH_DUMP_PID=(%d+)")
+    if not dump then return end
+    hl.exec_cmd("/opt/omabox/share/crash-dialog.sh " .. math.floor(w.pid) .. " " .. dump)
   end)
 end
 
