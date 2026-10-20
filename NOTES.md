@@ -8412,6 +8412,30 @@ from them.
     shell's RLIMIT_RTTIME holds unlimited once its PipeWire service has tried to connect; it read
     0/0 before).
 
+405. **A `run -d` job's warning said "its words were not kept" for ordinary jobs** (2026-10-20,
+    #298). Finding 399's warning names the job from its record (`$D/jobs/PID`), and the record went
+    missing in four ways. (1) `job_record` wrote none for a job gone before it looked: the SIGABRT at
+    0.0 s and the exit 255 at 0.1 s of #297. (2) It looked for the job as a session (`sid == pid`),
+    but run-job.sh says the pid right after its fork, before the subshell has exec'd setsid: a host
+    quicker than the box found no such session yet and wrote nothing, for a job that then ran for
+    minutes (by reading; 50 starts in an idle and a loaded box all kept theirs). (3) `job_live`
+    removed the record of any job it found ended, before the next command's `job_note` had said the
+    end: `--replace` (its own records and, through job_others, every ended job of the same program:
+    399's *Off*), `job_ended`, and a concurrent command's. (4) `job_note` read all records in one
+    `jq` under pipefail: one being written or removed by another command meanwhile (jq exits 2 or 5)
+    lost every record's words, and the log was matched by its full path, so a caller whose
+    `XDG_RUNTIME_DIR` is spelled otherwise (`/run/user/1000/`) matched none. **Fix**: a record is
+    always written, its start time that of the process with the job's pid, whatever its session
+    (one process from fork to the app: exec keeps it; `-` when none is left); `job_procs` counts
+    that process as the job before its setsid. `job_live` drops an ended job's record only once its
+    end is in `jobs-noted` (`job_said`; a box from an older omabox: as before), so it stays until
+    `job_note` or `job_ended` has dealt with it; those then drop it. `job_note` reads each record as
+    a line of its own (`jq -R 'fromjson?'`, its exit status ignored) and matches the log by its name
+    `run-NS.log`. A record whose end never comes (its waiter killed in the box) stays until `down`.
+    Tests: t_unit_job_note (a record matched by its name beside a half-written one; job_live keeps an
+    ended job's record until its end is noted, then drops it; job_record records a job gone already,
+    and one before its setsid by its start); t_unit_cli (job_procs: the leader before its setsid).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

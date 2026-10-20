@@ -14,6 +14,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   happens under load. PipeWire's clients in a box no longer load that module, so the limit stays
   unlimited.
 
+- **A `run -d` job's warning said "its words were not kept" for ordinary jobs**
+  ([#298](https://github.com/diogochaves/omabox/issues/298)). The next command's warning about a
+  job that ended lost what the job was when it died at once, when the box was slow to make it a
+  session of its own, when `--replace` or another command had looked at it first, or when another
+  command touched the job records at the same moment. A job's record is now always kept until its
+  end has been said, so the warning names the command and its pid.
+
 ## 0.9.1 — 2026-10-20
 
 The release candidate for 1.0 (planned for 2026-10-24). The skill's core is about half its size,

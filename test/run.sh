@@ -4103,6 +4103,30 @@ t_unit_job_note() {
   check "...and noted" grep -q . "$d/jobs-noted"
   jn_job 2 100 1 121 dead ./z >/dev/null
   check_match "...a job ending after that is said" "job ./z \(pid 121\) exited with status 1" "$(jn_note)"
+  # #298, finding 405: a record found by its log's name (another caller's D spelled otherwise), and
+  # one half written beside it (read each on its own: it lost every record's words before)
+  ns=$(jn_job 3 100 6 123 dead ./v)
+  jq -c '.log |= sub("/home/"; "//home/")' "$d/jobs/123" > "$d/jobs/123.t" && mv "$d/jobs/123.t" "$d/jobs/123"
+  printf '{"pid":' > "$d/jobs/0"
+  check_match "a record by its log's name, a half-written one beside it: its words" "job \./v \(pid 123\) exited with status 6" "$(jn_note)"
+  rm -f "$d/jobs/0"
+  # The record kept until the end is dealt with: job_live (box_procs stubbed as BOX_PID SID START)
+  # lists a live job, keeps an ended one's record until job_note has noted its end, then drops it.
+  jl() { local ps=$1; shift; NAME=u D=$d PS=$ps bash -c 'source "$1"; shift; box_procs() { [ -z "$PS" ] || awk "{ print 900 + NR, \$0 }" <<<"$PS"; }; "$@"' _ "$TMP/lib/bin/omabox" "$@"; }
+  printf '{"pid":"50","start":"777","log":"%s/home/run-1000.log","argv":["a"]}\n' "$d" > "$d/jobs/50"
+  printf '{"pid":"51","start":"778","log":"%s/home/run-1001.log","argv":["b"]}\n' "$d" > "$d/jobs/51"
+  check_eq "job_live: a live job listed, an ended one not" "901 50" "$(jl '50 50 777' job_live "$d/jobs/50" "$d/jobs/51")"
+  check "...the ended one's record kept: its end not noted yet" test -f "$d/jobs/51"
+  echo omabox.run-1001.exit >> "$d/jobs-noted"
+  jl '50 50 777' job_live "$d/jobs/51" >/dev/null
+  check_fails "...dropped once it is" test -e "$d/jobs/51"
+  # job_record: a job gone before it is recorded still is (start -), and one caught before its setsid
+  # (its pid in run-job.sh's session) by its own start time
+  jl '' job_record 52 "$d/home/run-1002.log" ./gone
+  check_eq "job_record: a job gone already is recorded, start -" "52 - ./gone" "$(jq -r '"\(.pid) \(.start) \(.argv | join(" "))"' "$d/jobs/52" 2>&1)"
+  jl '53 49 555' job_record 53 "$d/home/run-1003.log" ./early
+  check_eq "...one before its setsid: its start" "555" "$(jq -r .start "$d/jobs/53" 2>&1)"
+  check_eq "...and live" "901 53" "$(jl '53 49 555' job_live "$d/jobs/53")"
 }
 
 # run -d --replace with other arguments (#255): a job of the same program is named, by its resolved
@@ -4235,6 +4259,8 @@ t_unit_cli() {
   check_eq "job_procs: the leader restarted under the pid: none" "" "$(lib job_procs 7 499 <<<"$ps")"
   check_eq "job_procs: the leader gone, its session left" "101 8" "$(lib job_procs 7 - <<<$'101 8 7 510')"
   check_eq "job_procs: - with a leader there: none" "" "$(lib job_procs 7 - <<<"$ps")"
+  check_eq "job_procs: the leader before its setsid (run-job.sh's session): it (finding 405)" "103 7" "$(lib job_procs 7 500 <<<$'103 7 6 500')"
+  check_eq "...one of another start: none" "" "$(lib job_procs 7 500 <<<$'103 7 6 499')"
 }
 
 # `omabox clip` (issue #23, finding 119): never for an agent, and what it hands over. Only refusals and

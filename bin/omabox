@@ -5465,13 +5465,14 @@ box_procs() {
   done
 }
 
-# Of box_procs' lines (stdin), job PID's, as "HOST_PID BOX_PID": its session's. START is its leader's
-# start time, - when the leader had exited before the job was recorded: a leader that started at
-# another time (or at all, for -) has the pid after the job ended, and the job has none. The pid is
-# not reused while any process of the session is left. job_procs PID START
+# Of box_procs' lines (stdin), job PID's, as "HOST_PID BOX_PID": its session's, and its leader by its
+# pid before it has made that session (run-job.sh's subshell between its fork and its setsid, finding
+# 405). START is its leader's start time, - when the leader had exited before the job was recorded: a
+# leader that started at another time (or at all, for -) has the pid after the job ended, and the job
+# has none. The pid is not reused while any process of the session is left. job_procs PID START
 job_procs() {
   awk -v pid="$1" -v start="$2" '
-    $3 == pid { if ($2 == pid && $4 != start) reused = 1; out = out $1 " " $2 "\n" }
+    $3 == pid || $2 == pid { if ($2 == pid && $4 != start) reused = 1; out = out $1 " " $2 "\n" }
     END { if (!reused) printf "%s", out }'
 }
 
@@ -5482,26 +5483,36 @@ job_exe() {
   case $1 in */*) realpath -ms -- "$1" 2>/dev/null || printf '%s\n' "$1" ;; *) printf '%s\n' "$1" ;; esac
 }
 
-# After a launch: the record of job PID (in the box), unless it is gone already. job_record PID LOG ARGV...
+# After a launch: the record of job PID (in the box), START the start time of the process with that
+# pid: the job, or run-job.sh's subshell that is about to make it a session of its own (one process:
+# exec keeps it). Written for a job gone already too (START -): job_note and --wait name a job that
+# died in its first moment from it (finding 405). job_record PID LOG ARGV...
 job_record() {
-  local pid=$1 log=$2 procs start; shift 2
-  procs=$(box_procs | awk -v pid="$pid" '$3 == pid') || true
-  [ -n "$procs" ] || return 0
-  start=$(awk -v pid="$pid" '$2 == pid { print $4 }' <<<"$procs")
+  local pid=$1 log=$2 start; shift 2
+  start=$(box_procs | awk -v pid="$pid" '$2 == pid { s = $4 } END { print s }') || start=""
   mkdir -p "$D/jobs"
   jq -nc --arg pid "$pid" --arg start "${start:--}" --arg log "$log" --arg exe "$(job_exe "$1")" \
     '{pid: $pid, start: $start, log: $log, exe: $exe, argv: $ARGS.positional}' --args -- "$@" > "$D/jobs/$pid" || true
 }
 
-# The processes of the jobs recorded in FILES, as "HOST_PID BOX_PID" lines; a record whose job has
-# ended is removed. job_live FILE...
+# The processes of the jobs recorded in FILES, as "HOST_PID BOX_PID" lines. A record whose job has
+# ended is removed once its end has been dealt with (job_said): until then job_note needs it to name
+# what ended (finding 405). job_live FILE...
 job_live() {
-  local f procs pid start; procs=$(box_procs)
+  local f procs pid start log; procs=$(box_procs)
   for f in "$@"; do
-    { read -r pid; read -r start; } < <(jq -r '.pid, .start' "$f" 2>/dev/null) || { rm -f "$f"; continue; }
+    { read -r pid; read -r start; read -r log; } < <(jq -r '.pid, .start, .log' "$f" 2>/dev/null) || { rm -f "$f"; continue; }
     local p; p=$(job_procs "$pid" "$start" <<<"$procs")
-    if [ -n "$p" ]; then echo "$p"; else rm -f "$f"; fi
+    if [ -n "$p" ]; then echo "$p"; elif job_said "$log"; then rm -f "$f"; fi
   done
+}
+
+# Whether the end of the job whose log is LOG has been dealt with (job_note's $D/jobs-noted): said, or
+# not to be said. A box an older omabox started (no jobs-noted) and a log not named as run -d names
+# them: yes. job_said LOG
+job_said() {
+  [ -f "$D/jobs-noted" ] && [[ ${1##*/} =~ ^run-([0-9]{1,19})\.log$ ]] || return 0
+  grep -Fqx "omabox.run-${BASH_REMATCH[1]}.exit" "$D/jobs-noted"
 }
 
 # The live `run -d` jobs of ARGV's program (job_exe; argv[0] itself in a record made before it had
@@ -5602,6 +5613,7 @@ job_ended() {
     st=""; [ $i = 10 ] || sleep 0.1
   done
   job_noted "${ex##*/}"   # said here (or a 0 under QUIET), not again by the next command
+  rm -f "$D/jobs/$jpid"
   local what; what=$(job_how "$st")
   if [ -z "$st" ]; then JOB_RC=1
   else JOB_RC=$st; [ "$st" != 0 ] || [ "$when" = start ] || JOB_RC=124; fi
@@ -5673,11 +5685,13 @@ job_note() {
     [ -n "$st" ] || [ $(( now / 1000 - ${end/./} )) -ge 2000 ] || continue
     job_noted "$n"
     [ "$st" != 0 ] || continue
-    # What it was: its record ($D/jobs, the host's), while run -d's checks have not dropped it. A
-    # leader that exited leaving its session running (a launcher, "started" for run -d too) is no end.
+    # What it was: its record ($D/jobs, the host's), kept until now (finding 405). Found by its log's
+    # name (a D spelled otherwise by another caller is the same box), each record a line read on its
+    # own: one being written or removed meanwhile does not lose the others. A leader that exited
+    # leaving its session running (a launcher, "started" for run -d too) is no end.
     rec=""; words="" pid=""
     if compgen -G "$D/jobs/*" >/dev/null; then
-      rec=$(jq -r --arg log "$D/home/run-$ns.log" 'select(.log == $log) | "\(input_filename)\t\(.pid)\t\(.argv | join(" "))"' "$D"/jobs/* 2>/dev/null | head -n 1) || rec=""
+      rec=$({ jq -Rr --arg log "/run-$ns.log" 'fromjson? | select(.log | strings | endswith($log)) | "\(input_filename)\t\(.pid)\t\(.argv | join(" "))"' "$D"/jobs/* 2>/dev/null || true; } | head -n 1)
     fi
     if [ -n "$rec" ]; then
       f=${rec%%$'\t'*} rec=${rec#*$'\t'}
