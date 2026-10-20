@@ -53,6 +53,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`click --window` over a notification toast says so.** A layer surface (a notification toast, a
+  panel, the bar over a float) over the point a `click`, `scroll`, `drag` or `pointer` `--window`
+  aims at takes the input there, and nothing said it: the click went to a toast and the app seemed
+  flaky. Now it is said on stderr, naming the layer, and `--no-raise` refuses (raising the window
+  would not help); `windows` lists the layers over windows under its table, and `--json` has each
+  window's `layers`. Only a layer's rectangle is known, not where it takes input: while the Omarchy
+  shell shows a toast, its full-screen layer is named over every point. `omabox wait layer
+  omarchy-notifications --gone` waits toasts out.
+
 - **A config error no longer hangs a box.** Under load, `hyprctl reload` in a box whose config had
   an error could freeze its Hyprland for good while it drew the red "Your config has errors" bar (a
   Hyprland deadlock in that bar's text). A box now draws no such bar, even when your

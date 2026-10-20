@@ -217,6 +217,7 @@ with `--keep wallpaper` or after a theme set in the box.
 | A click missed a cropped or scaled shot | `click --in THAT.png X Y`. |
 | Clicks land up and to the left of what you read, more so further from 0,0 | You read points in the scaled-down image you were shown: `shot --fit 1456` and `click --in` it; `omabox calibrate` measures the size for you (Shots). |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
+| `click --window` says "a layer surface "NS" … is over X,Y" (or `--no-raise` refuses it) | A toast or panel is over that point and takes the click where it takes input (only its rectangle is known: Omarchy's toasts sit in a full-screen layer). `omabox wait layer NS --gone`, then click again. |
 | `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
 | `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new` with those options (it starts the box), then `-b box-N` as it printed. |
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |

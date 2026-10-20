@@ -7241,6 +7241,43 @@ QML
   ob down "$B" >/dev/null
 }
 
+# A layer surface over the point a --window click aims at (#263): the Omarchy shell's notification
+# toast, in a full-screen overlay that takes input on the toasts only. Said on stderr and clicked (the
+# click lands on the toast, which closes), refused under --no-raise, only said by pointer; `windows`
+# names it. Without one, nothing is said.
+t_click_layer() {
+  local B=$P-cl out rc w at x y
+  ob up "$B" --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  ob run -b "$B" -d -q -- foot -T L sh -c 'cat > /dev/null'
+  ob wait -b "$B" window 'title:^L$' >/dev/null 2>&1
+  out=$(ob click -b "$B" --window 'title:^L$' --no-raise 20 20 2>&1); rc=$?
+  check_eq "no toast: --no-raise clicks, nothing said" "0 " "$rc $out"
+  ob run -b "$B" -- notify-send -t 120000 T263 "a toast over the window"
+  if ! ob wait -b "$B" layer omarchy-notifications >/dev/null 2>&1; then no "the toast shows" "no omarchy-notifications layer"; ob down "$B" >/dev/null; return; fi
+  # The toast sits at the screen's top right: window coordinates of a point in it.
+  w=$(ob windows -b "$B" --json | jq -c '.[] | select(.title == "L")')
+  at=$(jq -r '"\(.at[0]) \(.at[1])"' <<<"$w")
+  x=$((1700 - ${at% *})) y=$((40 - ${at#* }))
+  out=$(ob windows -b "$B")
+  check_match "windows names the layer over the window" \
+    "layer \"omarchy-notifications\" \(overlay 1920x1080 at 0,0\) is over $(jq -r .address <<<"$w"): where it takes input" "$out"
+  out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$x" "$y" 2>&1); rc=$?
+  check_eq "--no-raise under the toast: refused, exit 1" 1 "$rc"
+  check_match "...naming the layer and the way out" \
+    "a layer surface \"omarchy-notifications\" \(overlay 1920x1080 at 0,0\) is over $x,$y of window 0x[0-9a-f]+ foot \"L\": .*refused under --no-raise.*omabox wait layer omarchy-notifications --gone" "$out"
+  check "...nothing sent: the toast is still up" ob wait -b "$B" --timeout 1s layer omarchy-notifications
+  out=$(ob pointer -b "$B" --window 'title:^L$' move 20 20 2>&1); rc=$?
+  check_eq "pointer --window: moved (exit 0)" 0 "$rc"
+  check_match "...the layer said" "a layer surface \"omarchy-notifications\" .* is over 20,20 of window" "$out"
+  out=$(ob click -b "$B" --window 'title:^L$' "$x" "$y" 2>&1); rc=$?
+  check_eq "click --window under the toast: clicked (exit 0)" 0 "$rc"
+  check_match "...said on stderr" "a layer surface \"omarchy-notifications\" .* input there goes to it, not to the window" "$out"
+  check "...the click went to the toast, which closed" ob wait -b "$B" --timeout 3s layer omarchy-notifications --gone
+  out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$x" "$y" 2>&1); rc=$?
+  check_eq "...then the same --no-raise click goes on, nothing said" "0 " "$rc $out"
+  ob down "$B" >/dev/null
+}
+
 # A box whose Hyprland is alive but does not answer (stopped here; in use, a plugin under test's
 # deadlock): what asks it ends, saying so in words (#124, #125, findings 181-182). Continued, it
 # answers again.
@@ -10746,6 +10783,37 @@ t_unit_window_select() {
   check_match "a point under the float is covered, named" "covered there by 0xf zenity" "$(lib win_blocked "$A" 150 150)"
   check_eq "a point beside it is not" "" "$(lib win_blocked "$A" 900 900)"
   check_match "off screen says so" "not on screen \(workspace 5\)" "$(lib win_blocked "$(jq -c '.[] | select(.address == "0xc")' <<<"$W")" 1 1)"
+  # Layer surfaces over windows (#263): top and overlay only, bottom to top, not 1x1 hidden menus,
+  # not over an off-screen window, not a top one over a workspace with a real fullscreen window.
+  local l Wl
+  l='{"M":{"levels":{"0":[{"namespace":"bg","pid":1,"x":0,"y":0,"w":1920,"h":1080}],"1":[],
+    "2":[{"namespace":"bar","pid":1,"x":0,"y":0,"w":42,"h":1080},{"namespace":"panel","pid":1,"x":1000,"y":500,"w":50,"h":50}],
+    "3":[{"namespace":"toast","pid":1,"x":1500,"y":0,"w":400,"h":100},{"namespace":"menu","pid":1,"x":0,"y":0,"w":1,"h":1},
+         {"namespace":"osd","pid":1,"x":20,"y":500,"w":100,"h":100}]}}}'
+  lay() { jq -r --arg a "$2" '.[] | select(.address == $a) | [.layers[] | "\(.namespace):\(.layer)"] | join(" ")' <<<"$1"; }
+  check_eq "no LAYERS: no layers field" null "$(jq -c '.[0].layers' <<<"$W")"
+  Wl=$(lib win_annotate "$c" "$m" "$act" "$l")
+  check_eq "layers over a tiled window: the bar (top) and an overlay, bottom to top; not the background nor a 1x1 menu" "bar:top osd:overlay" "$(lay "$Wl" 0xa)"
+  check_eq "...a top panel and a toast over the other one" "panel:top toast:overlay" "$(lay "$Wl" 0xb)"
+  check_eq "...none over an off-screen window" "" "$(lay "$Wl" 0xc)"
+  check_eq "...none over a float clear of them" "" "$(lay "$Wl" 0x2)"
+  local Wf2 Wf1
+  Wf2=$(lib win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 2 else . end)' <<<"$c")" "$m" "$act" "$l")
+  check_eq "a real fullscreen window (2): top layers pass it by, overlays not" "osd:overlay" "$(lay "$Wf2" 0xa)"
+  check_eq "...nor over another window on its workspace" "toast:overlay" "$(lay "$Wf2" 0xb)"
+  Wf1=$(lib win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$act" "$l")
+  check_eq "...a maximized one (1): they count" "bar:top osd:overlay" "$(lay "$Wf1" 0xa)"
+  A=$(jq -c '.[] | select(.address == "0xa")' <<<"$Wl")
+  check_eq "win_layer: the one over the point" '"osd" overlay 100x100 at 20,500' "$(lib win_layer "$A" 50 550)"
+  check_eq "...the bar's" '"bar" top 42x1080 at 0,0' "$(lib win_layer "$A" 10 10)"
+  check_eq "...nothing beside them" "" "$(lib win_layer "$A" 500 500)"
+  check_eq "...the topmost of two (an overlay over the bar)" '"osd" overlay 100x100 at 20,500' "$(lib win_layer "$A" 30 550)"
+  check_eq "...the edge is outside (x + w)" "" "$(lib win_layer "$A" 120 550)"
+  check_eq "...a window without the field: nothing" "" "$(lib win_layer "$(jq -c '.[] | select(.address == "0xa")' <<<"$W")" 10 10)"
+  check_eq "windows: one line per layer, naming the windows under it" \
+    'layer "toast" (overlay 400x100 at 1500,0) is over 0xb: where it takes input, input there goes to it' \
+    "$(lib windows_layers <<<"$Wl" | grep toast)"
+  check_eq "...nothing without layers" "" "$(lib windows_layers <<<"$W")"
   # --in (finding 81): image pixel -> screen pixel under its centre
   check_eq "1:1 maps to itself" "0 1919" "$(lib img_px 0 1920 1920) $(lib img_px 1919 1920 1920)"
   check_eq "x1.92: 500 of 1000 is 960" 960 "$(lib img_px 500 1000 1920)"
@@ -12905,7 +12973,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

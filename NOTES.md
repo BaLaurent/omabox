@@ -7802,6 +7802,37 @@ from them.
     approved without it: all same; a window crop's `--ignore`), t_unit_check (exit 2 for nine
     refusals; the conversion at scales 1, 1.5 and 2).
 
+379. **`--window` input names a layer surface over its point** (2026-10-20, #263). A walk's `click
+    --window APP X Y` on a link near the window's top right went to an Omarchy notification toast
+    over that corner, exit 0, nothing said: `win_point` checked only windows over the point (finding
+    81 left layers out as full-screen surfaces). Hyprland gives the pointer to a layer surface on the
+    overlay level, then the top level, before any window (`InputManager::mouseMoveUnified`), except
+    that on a monitor whose workspace has a window in real fullscreen (internal mode 2; `hyprctl
+    clients`' `fullscreen` is 2, maximized is 1) a top one whose `aboveFullscreen` is false (the
+    fullscreen handler clears it for every layer of that monitor) is passed by; overlays always get
+    it. So `win_annotate` takes `hyprctl -j layers` (optional fourth argument; read once per
+    `win_point`, raising changes none) and gives each on-screen window `layers`: the top and overlay
+    ones whose rectangle overlaps it, bottom to top, top ones dropped under a real fullscreen window
+    of its workspace, 1x1 hidden menus (finding 146) left out. `win_layer` names the topmost over the
+    point. `click`, `scroll` and `drag --window` say it on stderr and send the input; under
+    `--no-raise` they refuse, exit 1 (raising would not help); `pointer --window`, which never
+    raises but refuses a covering window, only says it (decided: a full-screen overlay would
+    otherwise refuse every move while a toast is up). `windows` prints one line per such layer under
+    its table, naming the windows under it; `--json` has `layers`. The limit: only a layer's
+    rectangle is known. Omarchy 4.0.6's toasts sit in one full-screen overlay (`omarchy-notifications`,
+    `anchors` on all four sides, `mask: Region { item: popupColumn }`, mapped only while a toast
+    shows), so while a toast is up every point of every window is "under" it: the warning is honest
+    ("where it takes input, input there goes to it"), but `--no-raise` refuses clicks far from the
+    toast too. Nothing in Hyprland 0.56.2 gives a layer's input region or the surface under a point:
+    not `hyprctl layers`, not Lua's layer objects (`x y w h namespace pid monitor mapped layer
+    interactivity above_fullscreen`), no pointer-focus event. The way out the messages name: `omabox
+    wait layer NS --gone` (a toast goes by itself; a click on it closes it). Real box (Omarchy 4.0.6,
+    Hyprland 0.56.2, 1920x1080): with a `notify-send` toast up, `--no-raise` at the toast refused and
+    left it up, `pointer --window` said it and moved, a plain `click --window` said it and the toast
+    closed; without a toast, nothing said. t_click_layer (that; the `--no-raise` refusal fails on the
+    old code), t_unit_window_select (the levels, the fullscreen rule, a maximized window, the topmost
+    of two, the edges, `windows`' lines).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

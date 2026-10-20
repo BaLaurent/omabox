@@ -312,6 +312,9 @@ several is exit 2, with the candidates (\`wait window SEL\` asks for a window li
 does, each named). \`shot --window\` (-w; --active is --window active) is the
 window's own pixels, covered or on another workspace too; \`click --window\` takes the window's
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
+a layer surface over that point (a notification toast, a panel) is said on stderr, the click sent
+(it goes to the layer where the layer takes input; only its rectangle is known), and --no-raise
+refuses (\`wait layer NAMESPACE --gone\` waits one out); \`windows\` lists them under its table.
 \`keys --window\` focuses it, then types.
 @ keys
 \`keys --window\` focuses the window (the active one again), then types; while a layer holds the
@@ -5492,8 +5495,14 @@ run_gone() {
 # top, except that floating windows are above tiled ones, fullscreen above the rest and a special
 # workspace above a normal one. Each with where it is (`at`/`size`: its own surface, no border), its
 # workspace, whether it is on screen (its workspace shown and not an inactive group tab) and `cover`:
-# the windows drawn over part of it, with their geometry for a point test. Shell layers (bar, menus,
-# panels) are not counted: they are full-screen surfaces. win_annotate CLIENTS MONITORS ACTIVEWINDOW
+# the windows drawn over part of it, with their geometry for a point test. With LAYERS (`hyprctl -j
+# layers`), also `layers`: the layer surfaces on the top and overlay levels over part of an on-screen
+# window (#263), bottom to top, which Hyprland gives the pointer before any window: a notification
+# toast, the bar over a float. A top one does not count over a workspace with a window in real
+# fullscreen (`fullscreen` 2; 1 is maximized), where Hyprland passes it by; an overlay one always does.
+# Only their rectangle is known, not the part that takes input (Omarchy's toasts sit in a full-screen
+# overlay that takes input on the toasts only); a 1x1 one is a hidden menu (finding 146), left out.
+# win_annotate CLIENTS MONITORS ACTIVEWINDOW [LAYERS]
 # shellcheck disable=SC2016 # jq, not shell
 WIN_JQ='
   def overlaps($o): .at[0] < $o.at[0] + $o.size[0] and $o.at[0] < .at[0] + .size[0]
@@ -5504,14 +5513,19 @@ WIN_JQ='
     elif ($o.fullscreen > 0) != ($t.fullscreen > 0) then $o.fullscreen > 0
     elif $o.floating != $t.floating then $o.floating
     else $o.z > $t.z end;
-  ([$m[] | .activeWorkspace.id, .specialWorkspace.id] | map(select(. != 0))) as $shown
+  [$l | objects | .[] | .levels? // {} | (.["2"] // [] | map(. + {layer: "top"})), (.["3"] // [] | map(. + {layer: "overlay"}))
+   | .[] | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h]}] as $L
+  | ([$m[] | .activeWorkspace.id, .specialWorkspace.id] | map(select(. != 0))) as $shown
   | [$c | map(select(.mapped)) | to_entries[] | .value + {z: .key}
      | .onscreen = (.workspace.id as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
   | [$all[] | . as $t | {address, stableId, class, title, initialClass, initialTitle, pid,
       workspace: .workspace.name, at, size, floating, fullscreen: (.fullscreen > 0), xwayland,
       active: (.address == $a.address), onscreen,
       cover: [$all[] | select(.address != $t.address and .onscreen and above(.; $t) and overlaps($t))
-              | {address, class, title, at, size}]}]'
+              | {address, class, title, at, size}]}
+     + if $l == null then {} else {layers: (if $t.onscreen | not then [] else
+         any($all[]; .onscreen and .workspace.id == $t.workspace.id and .fullscreen >= 2) as $fs
+         | [$L[] | select((.layer == "overlay" or ($fs | not)) and overlaps($t))] end)} end]'
 # The scale of a window's capture (grim -T): the buffer is drawn at its monitor's (#227, finding 299).
 # 1 when it cannot be read. Callers take it with `sc=$(win_scale ADDRESS) || exit $?` (hypr_json).
 win_scale() {
@@ -5533,15 +5547,17 @@ win_buf_geom() {
       if (x1 <= x0) x1 = x0 + 1; if (y1 <= y0) y1 = y0 + 1
       printf "%d,%d %dx%d\n", x0, y0, x1 - x0, y1 - y0 }'
 }
-win_annotate() { jq -c -n --argjson c "$1" --argjson m "$2" --argjson a "$3" "$WIN_JQ"; }
+win_annotate() { jq -c -n --argjson c "$1" --argjson m "$2" --argjson a "$3" --argjson l "${4:-null}" "$WIN_JQ"; }
 # One question at a time, the first left unanswered the end (hypr_json): callers take its list with
-# `wins=$(box_windows) || exit $?`, never as an argument, where its exit would be lost.
+# `wins=$(box_windows) || exit $?`, never as an argument, where its exit would be lost. LAYERS, the
+# box's `hyprctl -j layers` read by the caller, adds each window's `layers` (win_annotate).
+# box_windows [LAYERS]
 box_windows() {
   local c m a
   c=$(hypr_json clients) || exit $?
   m=$(hypr_json monitors) || exit $?
   a=$(hypr_json activewindow) || exit $?
-  win_annotate "$c" "$m" "$a"
+  win_annotate "$c" "$m" "$a" "${1:-}"
 }
 
 # A window selector (SEL): active, an address (0x..., address:0x...), pid:N, class:RE, title:RE,
@@ -5593,6 +5609,14 @@ win_blocked() {
         | "covered there by \(.address) \(.class) \(.title | tojson)") // empty end' <<<"$1"
 }
 
+# The topmost layer surface over a point of a window (window coordinates), as "NAMESPACE LAYER WxH
+# at X,Y" (the namespace JSON-quoted), or nothing. win_layer WINDOW X Y
+win_layer() {
+  jq -r --argjson x "$2" --argjson y "$3" '(.at[0] + $x) as $px | (.at[1] + $y) as $py
+    | last(.layers[]? | select($px >= .at[0] and $px < .at[0] + .size[0] and $py >= .at[1] and $py < .at[1] + .size[1]))
+    | "\(.namespace | tojson) \(.layer) \(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])"' <<<"$1"
+}
+
 # Focus a window as a user would: its workspace comes to the screen (a special one opens), an
 # inactive group tab comes to the front, and a floating window is raised; a tiled one stays under the
 # floats. Waits until it is the active window.
@@ -5628,12 +5652,17 @@ if not ok then error(err, 0) end" 2>&1) || true
 
 # The screen point for window coordinates X,Y of the window SEL picks, raised first when it is not on
 # screen or something covers that point (unless RAISE is 0); a point still covered is refused, naming
-# what covers it. win_point RAISE X Y SEL... → "SX SY"
+# what covers it. A layer surface over the point (win_layer, #263) is said on stderr, and refused when
+# RAISE is 0 (--no-raise): raising the window does not put it above one. RAISE `pointer` (pointer
+# --window, which never raises) refuses a covering window and only says a layer: a full-screen
+# overlay's rectangle (toasts) would refuse every move while it is up. win_point RAISE X Y SEL... → "SX SY"
 win_point() {
   local raise=$1 x=$2 y=$3 w desc why; shift 3
   # `|| exit`: win_point runs in its caller's $(...), where errexit is off (no inherit_errexit), so
   # win_select's exit 2 (none or several) would otherwise fall through to a wrong message and exit 1.
-  local wins; wins=$(box_windows) || exit $?
+  # The layers read once: raising a window changes none of them.
+  local lys wins; lys=$(hypr_json layers) || exit $?
+  wins=$(box_windows "$lys") || exit $?
   w=$(win_select "$wins" "$@") || exit $?
   desc=$(win_desc "$w")
   jq -e --argjson x "$x" --argjson y "$y" '$x < .size[0] and $y < .size[1]' <<<"$w" >/dev/null ||
@@ -5642,10 +5671,18 @@ win_point() {
   if [ -n "$why" ]; then
     [ "$raise" = 1 ] || die "window $desc is $why (click --window raises it; --no-raise and pointer do not)"
     win_raise "$w"
-    wins=$(box_windows) || exit $?
+    wins=$(box_windows "$lys") || exit $?
     w=$(win_select "$wins" "$(jq -r .address <<<"$w")") || exit $?
     why=$(win_blocked "$w" "$x" "$y")
     [ -z "$why" ] || die "window $desc is still $why after focusing it: move or close that window first"
+  fi
+  local lay ns; lay=$(win_layer "$w" "$x" "$y")
+  if [ -n "$lay" ]; then
+    # "NAMESPACE" LAYER WxH at X,Y: only the rectangle is known, not where it takes input.
+    ns=$(jq -r '.' <<<"${lay%% *}" 2>/dev/null) || ns=""
+    lay="a layer surface ${lay%% *} (${lay#* }) is over $x,$y of window $desc: where it takes input (a notification, a panel), input there goes to it, not to the window"
+    [ "$raise" != 0 ] || die "$lay (refused under --no-raise; without it, this is a warning${ns:+; omabox wait layer $ns --gone waits it out})"
+    say "$lay${ns:+ (omabox wait layer $ns --gone waits it out)}"
   fi
   jq -r --argjson x "$x" --argjson y "$y" '"\(.at[0] + $x) \(.at[1] + $y)"' <<<"$w"
 }
@@ -5662,7 +5699,8 @@ cmd_windows() {
     shift
   done
   select_box "$name"; need_box; shell_note
-  local wins; wins=$(box_windows)
+  local lys wins; lys=$(hypr_json layers) || exit $?
+  wins=$(box_windows "$lys") || exit $?
   if [ $json = 1 ]; then jq . <<<"$wins"; return; fi
   # A box on a Hyprland build of its own (finding 116) says so first.
   [ -z "$(meta hyprland)" ] || printf 'box %s runs Hyprland %s%s\n' "$NAME" "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
@@ -5671,6 +5709,13 @@ cmd_windows() {
   # Bottom to top, as they stack.
   printf '%-16s %-8s %-10s %-20s %-22s %-16s %s\n' ADDRESS PID WORKSPACE STATE GEOMETRY CLASS TITLE
   windows_table <<<"$wins"
+  windows_layers <<<"$wins"
+}
+# The layer surfaces over windows (#263), one line each under windows' table, naming the windows.
+windows_layers() {
+  jq -r '[.[] | .address as $a | .layers[]? | {k: [.namespace, .layer, .at, .size], a: $a}]
+    | group_by(.k)[] | .[0].k as [$n, $l, $at, $sz]
+    | "layer \($n | tojson) (\($l) \($sz[0])x\($sz[1]) at \($at[0]),\($at[1])) is over \(map(.a) | join(", ")): where it takes input, input there goes to it"'
 }
 # windows' rows from box_windows' JSON on stdin, padded in jq (finding 174): through @tsv and a tab
 # IFS, an empty class collapsed (the title under CLASS) and a title's quotes were escaped twice. The
@@ -9174,12 +9219,12 @@ cmd_pointer() {
       fi
       p="$((10#$2)) $((10#$3))"
       if [ ${#sels[@]} -gt 0 ]; then
-        p=$(win_point 0 "${p% *}" "${p#* }" "${sels[@]}") || exit $?
+        p=$(win_point pointer "${p% *}" "${p#* }" "${sels[@]}") || exit $?
       elif [ -n "$in" ]; then
         p=$(shot_point "$in" "${p% *}" "${p#* }")
         if [[ $p == window* ]]; then
           local wa wx wy; read -r _ wa wx wy <<<"$p"
-          p=$(win_point 0 "$wx" "$wy" "$wa") || exit $?
+          p=$(win_point pointer "$wx" "$wy" "$wa") || exit $?
         else p=${p#screen }; fi
       fi
       on_screen pointer "${p% *}" "${p#* }" "$ext"
