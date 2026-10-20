@@ -356,7 +356,8 @@ is linked to there, as on a desk, so readlink -f leads into its repo; any other 
 @ up run restart-shell
 --desk-shell: your desktop's shell as it is, to check a plugin against a real desk: every plugin in
 ~/.config/omarchy/plugins (read-only, as --plugin's; a --plugin of the same id wins: your working
-copy), your shell.json unfiltered (only idle held off: a box has no real input), and the other files
+copy) but omabox's own widget (it lists your boxes; --plugin mounts it), your shell.json unfiltered
+(only idle held off: a box has no real input; omabox's widget taken out of it), and the other files
 in ~/.config/omarchy your plugins read (a plugin's JSON, a folder beside shell.json) copied into the
 box's. Never api-keys.env nor anything named or holding a key, token, secret, password, credential,
 auth, cookie or session (any .env, .pem, .gpg...), hooks/ (your scripts), a git dir or a backup; regular
@@ -571,6 +572,9 @@ accesskit_unix 0.22+ (eframe 0.37+) with at-spi2-core 2.61+: an older one waits 
 ScreenReaderEnabled, which those no longer have (\`tree\` sets it where it is), so it never joins the
 bus and has no tree, said so; update the app's AccessKit. Chromium and Electron only
 when started with --force-renderer-accessibility; terminals have none: "no accessibility tree", exit 1.
+An app that publishes only some of its windows (egui's root viewport, not its child ones): a window it
+does not publish has no tree, and its only one stands for a window of another title only at that
+window's size, and when no other window of the app is that size (else "cannot be told"), exit 1.
 --layer SEL (or -l SEL) reads a layer surface instead (the shell's bar, panels, menus, a plugin's panel): its
 namespace (omabox hyprctl layers), address:0x... or pid:PID. Its bounds are the screen's coordinates:
 a plain \`click X Y\` at their middle lands on that node. Quickshell publishes them from 0.3.2 on, and
@@ -2602,6 +2606,10 @@ desk_plugins() {
     [[ $id =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] ||
       { say "--desk-shell: not mounting plugins/${e##*/}: its manifest id '$id' is not letters, digits, . _ -"; continue; }
     [[ $have != *" $id "* ]] || continue
+    # omabox's own bar widget (#304): it lists your boxes with `omabox ls`, which a box has not (its
+    # shell would warn, then notify); --plugin mounts it all the same.
+    [ "$id" != chaves.omabox ] ||
+      { say "--desk-shell: not mounting plugins/${e##*/}: omabox's own widget, which lists your boxes (none in a box)"; continue; }
     if why=$(refuse_src "$dir"); then say "--desk-shell: not mounting plugins/${e##*/} ($dir): $why"; continue; fi
     have+="$id "
     printf '%s\t%s\n' "$id" "$dir"
@@ -2762,7 +2770,14 @@ seed_home() {
   # has it (one the desk has off stays off), only idle held off (no real input in a box: finding 10).
   # Of the plugins, only a --plugin the desk does not have is placed where its manifest says.
   if [ "${DESK_SHELL:-0}" = 1 ]; then
-    jq '.idle = {screensaver: 1000000, lock: 1000000}' "$DESK/shell.json" > "$h/.config/omarchy/shell.json" 2>/dev/null || {
+    # omabox's widget, left out of the box (desk_plugins), out of every list that places it (the bar, a
+    # plugin's own layout, its settings entry) too, unless a --plugin mounts it.
+    # shellcheck disable=SC2016 # jq, not shell
+    jq --argjson keep "$ids" '.idle = {screensaver: 1000000, lock: 1000000}
+      | if $keep | index("chaves.omabox") then . else
+          walk(if type == "array" then map(select((if type == "object" then .id else . end) != "chaves.omabox")) else . end)
+          | if .bar.centerAnchor? == "chaves.omabox" then del(.bar.centerAnchor) else . end end' \
+      "$DESK/shell.json" > "$h/.config/omarchy/shell.json" 2>/dev/null || {
       say "--desk-shell: no shell.json in $DESK (or not JSON): the box's shell starts from an empty one"
       echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"; }
   else
@@ -4512,7 +4527,7 @@ cmd_up() {
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
   rm -f "$D/starting"; touch "$D/used"
   local screen live_sc; screen=$(box_screen); live_sc=$(main_scale_live) || live_sc=""
-  say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")) in $D"
+  say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")$(more_screens "${screen%% *}")) in $D"
   [ "$CLEAN" = 0 ] || say "clean: $(clean_text "$THEME" "$net")"
   # A Hyprland that stops answering here (finding 353): said, the box left up, exit 1 at the end.
   local unanswered=0; hypr_errors_note || unanswered=1
@@ -5828,7 +5843,13 @@ cmd_run() {
     run_gone $rc || rc=125
     return $rc
   fi
-  [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"
+  if [ $detach = 1 ]; then
+    # This session's box, up under another directory's name: named, not an `up` that would start a
+    # second box (#296).
+    local mine=""; [ "${NAME_DERIVED:-0}" = 0 ] || mine=$(session_boxes)
+    [ -z "$mine" ] || need_box
+    die "run -d needs a box that is up (omabox up $NAME)"
+  fi
   for kv in "${envs[@]}"; do up_args+=(--env "$kv"); done
   # A box asked for by name (-b, $OMABOX), one that was up and died, or one that expired is not
   # replaced by a throwaway: that would run the command in a new network namespace without the box's mounts
@@ -8440,7 +8461,7 @@ cmd_tree() {
     err=$(mktemp)
     layer_read "$l" "$lys" "$err" "${args[@]}" || rc=$?
   else
-    local wins w pid title size
+    local wins w pid title size twins
     wins=$(box_windows) || exit $?
     if [ ${#sels[@]} = 0 ] && [ "$(jq length <<<"$wins")" = 0 ]; then
       say "tree: the box has no window; the shell's bar, panels and menus are layers: tree --layer NAMESPACE (omabox hyprctl layers)"
@@ -8451,8 +8472,11 @@ cmd_tree() {
     pid=$(jq -r .pid <<<"$w") title=$(jq -r .title <<<"$w") size=$(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w")
     what=$(win_desc "$w")
     [[ $pid =~ ^[1-9][0-9]*$ ]] || die "tree: window $what has no pid to find its app by ($pid)"
+    # Its app's other windows of its size: its only frame (one whose name is not the title) stands for
+    # it only when there are none (#302).
+    twins=$(jq --argjson w "$w" '[.[] | select(.pid == $w.pid and .address != $w.address and .size == $w.size)] | length' <<<"$wins")
     err=$(mktemp)
-    box_sys /usr/bin/timeout 30 "$BOX_TREE" --pid "$pid" --title "$title" --size "$size" "${args[@]}" 2>"$err" || rc=$?
+    box_sys /usr/bin/timeout 30 "$BOX_TREE" --pid "$pid" --title "$title" --size "$size" --twins "$twins" "${args[@]}" 2>"$err" || rc=$?
   fi
   why=$(sed 's/^omabox-tree: //' "$err"); rm -f "$err"
   case $rc in
@@ -8465,9 +8489,13 @@ cmd_tree() {
          say "GTK, Qt and egui/winit (AccessKit) apps have one; Chromium and Electron only when started with --force-renderer-accessibility; terminals (foot) have none: look with a shot (shot --window SEL). The shell's bar, panels and menus are layers: tree --layer NAMESPACE"
        fi
        exit 1 ;;
-    5) say "tree: $what: $why"; exit 1 ;;
-    6) say "tree: $what: $why; the layers of that pid and size:"
-       layer_lines "$(jq -c "$LAYER_LIST_JQ"' | map(select(.pid == $l.pid and .w == $l.w and .h == $l.h))' --argjson l "$l" <<<"$lys")" >&2
+    5|7) say "tree: $what: $why"; exit 1 ;;
+    6) if [ -n "$layer" ]; then
+         say "tree: $what: $why; the layers of that pid and size:"
+         layer_lines "$(jq -c "$LAYER_LIST_JQ"' | map(select(.pid == $l.pid and .w == $l.w and .h == $l.h))' --argjson l "$l" <<<"$lys")" >&2
+       else
+         say "tree: $what: $why"
+       fi
        exit 1 ;;
     4) die "tree: ${why:-no accessibility bus} (a box started by an omabox before 0.5.3, or with --env ATSPI_DBUS_IMPLEMENTATION=dbus-broker: omabox down $NAME, then up again)" ;;
     124) die "tree: $what did not answer in 30 s (busy or hung?)" ;;
@@ -11479,6 +11507,14 @@ box_screen() {
   local m; m=$(hypr_json monitors) || exit $?
   jq -r <<<"$m" "$(main_screen)"' // empty | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
 }
+# The box's other monitors (--monitor, `monitor add`: #308), as up's line has the main one, each after
+# " + ": " + 1080x1920@60 + 800x600@30,scale=2"; nothing when it has none. more_screens MAIN_NAME
+more_screens() {
+  local m; m=$(hypr_json monitors) || return 0
+  jq -r --arg main "$1" '[.[] | select((.disabled | not) and .name != $main)
+    | " + \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)" + ((.scale * 100 | round / 100) as $s
+      | if $s == 1 then "" else ",scale=\($s)" end)] | join("")' <<<"$m" 2>/dev/null || true
+}
 # The box's main screen in `hyprctl -j monitors` (jq): a headless box's HEADLESS-2, or WAYLAND-1 on
 # NVIDIA (finding 77); an interactive box's first window (WAYLAND-N: after a close with confirm-close
 # the one it opened again, finding 70). Never one of `monitor add`'s (#122), not even while the main
@@ -14328,8 +14364,8 @@ cmd_brief() {
     echo "You drive an omabox box: a private Omarchy desktop, not the user's. Start yours: omabox up --new [--plugin PATH]"
     echo "(all its options there); it prints its name (box-3): that is NAME below. It has no windows yet."
   fi
-  local own="The box is your parent's: leave it up."
-  [ "$b" != NAME ] || own="The box is yours: omabox down -b NAME when done."
+  local own="The box is your parent's: leave it up, and never down another box you did not start."
+  [ "$b" != NAME ] || own="The box is yours: omabox down -b NAME when done; never down a box you did not start (your session's other agents use theirs)."
   cat <<EOF
 Every call: omabox -b $b CMD ..., one literal command per call: no \$VAR, \$(...), pipes, && or ;. Look a value up, then type it.
 The loop: look, act once, look again. Text first (omabox -b $b windows, tree --find TEXT --window SEL); pixels: shot --window SEL prints a PNG path: Read it.

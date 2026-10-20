@@ -3,6 +3,43 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Changed
+
+- The skill's reference says a box turns PipeWire's realtime module off for its clients, which hides
+  a realtime-limit bug, and how to run one client without that
+  ([#305](https://github.com/diogochaves/omabox/issues/305)).
+- The reference says plainly that wgpu apps (eframe's default renderer, iced, Bevy) do not start in
+  a box on NVIDIA, and what to do: a GL renderer, or a box on the AMD/Mesa GPU
+  ([#306](https://github.com/diogochaves/omabox/issues/306)).
+- Parallel subagents of one session share its default box name: the reference tells each to take a
+  box of its own (`up --new` or `-b` a name of its task), and `omabox brief` to take down no box it
+  did not start ([#295](https://github.com/diogochaves/omabox/issues/295)).
+
+### Fixed
+
+- **`tree --window` printed another window's tree for a window its app does not publish**
+  ([#302](https://github.com/diogochaves/omabox/issues/302)). An app that puts only one of its
+  windows on the accessibility bus (egui's root viewport, not its child ones) had that window's tree
+  printed for every other one. Now the app's only window stands for one of another title only when
+  it is that window's size and no other window of the app is; else `tree` says the window has no
+  tree, or that which one it is cannot be told, exit 1.
+
+- **`run -d` in a repo no longer says to start a box when your session has one up elsewhere**
+  ([#296](https://github.com/diogochaves/omabox/issues/296)). After `omabox up` in a scratch folder,
+  `run -d` back in the repo said `omabox up <repo>-…`, and agents started a second box. It now names
+  the session's box to pass with `-b`, as the other commands do there.
+
+- **`up --desk-shell` leaves omabox's own bar widget out**
+  ([#304](https://github.com/diogochaves/omabox/issues/304)). It lists your boxes with `omabox ls`,
+  which a box does not have, so the box's shell logged a warning for it (and would have notified).
+  `up` says it left it out; `--plugin` still mounts it.
+
+- **`up`'s line names every monitor** ([#308](https://github.com/diogochaves/omabox/issues/308)):
+  `box 'NAME' up (1920x1080@60 + 1080x1920@60)` for a box started with `--monitor 1080x1920`, not
+  the main screen alone.
+
 ## 0.9.2 — 2026-10-20
 
 A fix to the agent guard for hosts on Omarchy 4.5 (its release candidates and the edge channel):

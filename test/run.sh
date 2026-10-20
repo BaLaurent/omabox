@@ -2081,7 +2081,8 @@ t_unit_shell_warnings() {
 
 # A fake desk's Omarchy config (#206): what `up --desk-shell` reads, in place of ~/.config/omarchy.
 # desk_fixture DIR PREFIX: plugins PREFIX.da (a dir), PREFIX.db (a link to a dir elsewhere, as a
-# dev-linked desk has) and PREFIX.doff (off in its shell.json); a shell.json with a key of its own;
+# dev-linked desk has) and PREFIX.doff (off in its shell.json); omabox's own widget (chaves.omabox,
+# in the bar, in a plugin's list and with settings: #304); a shell.json with a key of its own;
 # a plugin's JSON and a folder of profiles beside it; and what must stay out: secrets by name and by
 # content, links out of the folder and to a secret, hooks, a backup, a big file, a FIFO, a git dir.
 desk_fixture() {
@@ -2095,9 +2096,10 @@ desk_fixture() {
       entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$at/manifest.json"
     printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$n" > "$at/W.qml"
   done
+  mkdir -p "$d/desk/plugins/omabox"; echo '{"id": "chaves.omabox"}' > "$d/desk/plugins/omabox/manifest.json"
   jq -n --arg a "$p.da" --arg b "$p.db" '{version: 1, deskMark: "kept", idle: {screensaver: 150, lock: 300},
-    bar: {layout: {left: [{id: "omarchy.menu"}, {id: "omarchy.workspaces"}, {id: $a}], center: [{id: "omarchy.clock"}], right: [{id: $b}]}},
-    plugins: [{id: $a, hosts: [$b]}]}' > "$d/desk/shell.json"
+    bar: {layout: {left: [{id: "omarchy.menu"}, {id: "omarchy.workspaces"}, {id: $a}], center: [{id: "omarchy.clock"}], right: [{id: $b}, {id: "chaves.omabox"}]}},
+    plugins: [{id: $a, hosts: [$b, "chaves.omabox"]}, {id: "chaves.omabox", refreshIntervalSec: 5}]}' > "$d/desk/shell.json"
   echo '{"widgets": ["a", "b"]}' > "$d/desk/hostfix.json"
   echo '{"name": "one"}' > "$d/desk/profiles/one.json"
   echo '{"name": "two"}' > "$d/desk/profiles/deep/two.json"
@@ -2182,6 +2184,9 @@ sneaky.json|a link to api-keys.env: a secret's name"
   check_eq "desk_plugins: a dir and a link to one (resolved); off ones too; not the --plugin's id" \
     "$P.da	$d/desk/plugins/da|$P.doff	$d/desk/plugins/doff" "$(grep -v '^omabox:' <<<"$out" | tr '\n' '|' | sed 's/|$//')"
   check_match "...one with no manifest said" "not mounting plugins/nomani: no manifest.json" "$out"
+  check_match "...omabox's own widget left out, said (#304)" "not mounting plugins/omabox: omabox's own widget, which lists your boxes \(none in a box\)" "$out"
+  check_fails "...but not over a --plugin of its id" grep -q "plugins/omabox" \
+    <<<"$(bash -c 'source "$1"; PLUGINS=("chaves.omabox	/elsewhere"); desk_plugins "$2"' _ "$TMP/lib/bin/omabox" "$d/desk" 2>&1)"
   check_match "...an id that is not a name said" "not mounting plugins/badid: its manifest id '../x'" "$out"
   check_fails "...a second dir with the same id: left out, unsaid" grep -q dup <<<"$out"
   # Refused before anything is made.
@@ -4277,6 +4282,7 @@ t_unit_brief() {
   check_match "...says so on stderr" "no box '$P-nobrief' is up" "$err"
   check "...20 lines at most" test "$(wc -l <<<"$out")" -le 20
   check_match "...a box of its own: up --new, down when done" "omabox up --new.*omabox down -b NAME when done" "${out//$'\n'/ }"
+  check_match "...and no box it did not start (#295: a session's agents share its default names)" "never down a box you did not start" "$out"
   for r in "omabox -b NAME CMD" "one literal command per call" "look, act once, look again" \
     "never resend input you have not seen land" "No sleep" "wait until -- CMD \(never wait cmd\)" "record hold" \
     "Never the real desktop" "path --home" "Read, Write and Edit" "run -- sh /home/sbx/" "Stay in your worktree" \
@@ -4463,6 +4469,14 @@ t_unit_agent_session() {
     "no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' \(started from another directory\): -b $P-r-$sid" \
     "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
       bash -c 'source "$1"; want=$2; box_state() { if [ "$NAME" = "$want" ]; then echo up; else echo dead; fi; }; box_alive() { false; }; MAIN_CMD=wait; select_box ""; need_box' _ "$lib" "$P-r-$sid" 2>&1)"
+  # #296: run -d there named the session's box after an `omabox up` of the derived name.
+  check_eq "...run -d there: only the session's box, no up of another" \
+    "omabox: no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' (started from another directory): -b $P-r-$sid" \
+    "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
+      bash -c 'source "$1"; want=$2; box_state() { if [ "$NAME" = "$want" ]; then echo up; else echo dead; fi; }; box_alive() { false; }; MAIN_CMD=run; cmd_run -d -- true' _ "$lib" "$P-r-$sid" 2>&1)"
+  check_eq "...none: the up it needs" "omabox: run -d needs a box that is up (omabox up $P-as-$sid)" \
+    "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
+      bash -c 'source "$1"; box_state() { echo dead; }; box_alive() { false; }; MAIN_CMD=run; cmd_run -d -- true' _ "$lib" 2>&1)"
   check_eq "up there: the session's box named, the new one still starts"     "omabox: note: this session already has box $P-r-$sid (started from another directory); -b NAME to use it"     "$(sel "$P-r-$sid" up up_session_note)"
   check_eq "...nothing when it has none" "" "$(sel "$P-r-0000beef" up up_session_note)"
   check_match "...a name given: as before" "no box 'nope' is up \(up: " "$(sel "$P-r-$sid" wait select_box nope \; need_box)"
@@ -5454,6 +5468,8 @@ t_desk_shell() {
   check_match "...and what it did not, and why" "not copied: $d/desk/api-keys.env \(a secret's name\)" "$out"
   check_match "...a link out of the folder" "not copied: $d/desk/out.json \(a link out of the folder \(not followed\)\)" "$out"
   check_fails "...a plugin the desk has off: no warning" grep -q "$P.doff" <<<"$out"
+  check_match "...omabox's own widget left out, said (#304)" "not mounting plugins/omabox: omabox's own widget" "$out"
+  check_fails "...and out of the box's shell.json: bar, a plugin's list, its settings" grep -q chaves.omabox "$H/.config/omarchy/shell.json"
   j=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n)')
   check_eq "the desk's plugins load where its shell.json has them; the one it has off stays off" "loaded loaded disabled" \
     "$(jq -r --arg p "$P" '.plugin_status | [.[$p + ".da", $p + ".db", $p + ".doff"] | .state] | join(" ")' <<<"$j")"
@@ -6542,6 +6558,56 @@ PY
     out=$(ob tree -b "$B" --window 'Tree demo GTK4' 2>&1)
     check_match "...a tree that was read leaves them out" '^frame "Tree demo GTK4" ' "$out"
     check_fails "...no warning line in it" grep -q 'WARNING\|omabox: tree:' <<<"$out"
+    # #302: an app that publishes one of its windows (egui's root viewport, not its child ones): its only
+    # frame is not the tree of a window of another size, nor of one of two windows of its size. The
+    # unpublished windows are bare GDK surfaces (no GTK window behind them, so no accessible).
+    cat > "$H/viewports.py" <<'PY'
+import gi, sys
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gsk", "4.0")
+gi.require_version("Graphene", "1.0")
+from gi.repository import Gtk, Gdk, Gsk, Graphene
+keep = []
+def bare(display, title):
+    s = Gdk.Surface.new_toplevel(display)
+    s.set_title(title)
+    r = Gsk.CairoRenderer()
+    r.realize(s)
+    def draw(s, w, h):
+        c = Gdk.RGBA(); c.parse("#336699")
+        r.render(Gsk.ColorNode.new(c, Graphene.Rect().init(0, 0, w, h)), None)
+    s.connect("compute-size", lambda s, sz: sz.set_size(300, 300))
+    s.connect("layout", draw)
+    s.present(Gdk.ToplevelLayout.new())
+    keep.extend((s, r))
+def build(app):
+    w = Gtk.ApplicationWindow(application=app, title="Root viewport")
+    w.set_child(Gtk.Button(label="Root button"))
+    w.present()
+    for i in range(int(sys.argv[1])):
+        bare(w.get_display(), "%s viewport %d" % (sys.argv[2], i + 1))
+app = Gtk.Application(application_id="org.omabox.Viewports")
+app.connect("activate", build)
+app.run(None)
+PY
+    # Alone on the workspace, so tiled: two windows of one size, then the root beside two halves.
+    ob run -b "$B" -- pkill -f 'tree-demo|mute-a11y' >/dev/null 2>&1 || true
+    ob wait -b "$B" --timeout 10s window 'title:^Tree demo GTK4$' --gone >/dev/null 2>&1 || true
+    ob wait -b "$B" --timeout 10s window 'title:^Tree demo QML$' --gone >/dev/null 2>&1 || true
+    ob run -b "$B" -d -- env GSK_RENDERER=cairo python3 /home/sbx/viewports.py 1 Twin >/dev/null 2>&1
+    ob wait -b "$B" --timeout 20s window 'title:^Twin viewport 1$' >/dev/null
+    rc=0; out=$(ob tree -b "$B" --window 'title:^Twin viewport 1$' 2>&1) || rc=$?
+    check_eq "an app's only frame, the size of two of its windows: cannot be told, exit 1" "1 yes" \
+      "$rc $(grep -q 'publishes one window, "Root viewport", and 2 of its windows are this one.s size.*cannot be told' <<<"$out" && echo yes)"
+    check_match "...the window it names still has its tree" '^frame "Root viewport" ' "$(ob tree -b "$B" --window 'title:^Root viewport$' 2>&1)"
+    ob run -b "$B" -- pkill -f viewports.py >/dev/null 2>&1 || true
+    ob wait -b "$B" --timeout 10s window 'title:^Twin viewport 1$' --gone >/dev/null 2>&1 || true
+    ob run -b "$B" -d -- env GSK_RENDERER=cairo python3 /home/sbx/viewports.py 2 Child >/dev/null 2>&1
+    ob wait -b "$B" --timeout 20s window 'title:^Child viewport 2$' >/dev/null
+    rc=0; out=$(ob tree -b "$B" --window 'title:^Child viewport 2$' 2>&1) || rc=$?
+    check_eq "...one of another size: no tree for it (not the root's), exit 1" "1 yes" \
+      "$rc $(grep -qE 'no accessibility tree for this window: its application publishes one window, "Root viewport" [0-9]+x[0-9]+, and this one is [0-9]+x[0-9]+' <<<"$out" && echo yes)"
+    ob run -b "$B" -- pkill -f viewports.py >/dev/null 2>&1 || true
   else
     skip "tree of a GTK4 window" "no GTK4 or python-gobject"
   fi
@@ -8953,7 +9019,7 @@ t_brief() {
   check_match "...its window, by the word that finds it" $'\n  t271  "brief-one"  [0-9]+x[0-9]+ at [0-9]+,[0-9]+  on-screen, active\n' "$out"
   check_match "...-b NAME in its rules" "omabox -b $B CMD" "$out"
   check_match "...the box HOME's host path" "/home/sbx is $XDG_RUNTIME_DIR/omabox/$B/home on the host" "$out"
-  check_match "...the box is the parent's" "leave it up" "$out"
+  check_match "...the box is the parent's" "leave it up, and never down another box you did not start" "$out"
   check "...20 lines at most" test "$(wc -l <<<"$out")" -le 20
   ob run -b "$B" -d --wait -- foot --app-id t271 -T brief-two sleep 600 >/dev/null 2>&1
   out=$(ob brief -b "$B" 2>&1)
@@ -10199,6 +10265,8 @@ monitors_wait_on() {
   local n=$1 B=$2 out rc g w when c gx gy gw gh i
   OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
     --monitor 1080x1920,below || { no "up with two more monitors" "$UP_OUT"; return; }
+  check_match "up's line names every monitor, a scale where it is not 1 (#308)" \
+    "box '$B' up \(1920x1080@60 \+ 1280x720@60,scale=1.6 \+ 1080x1920@60\) in " "$UP_OUT"
   ob pointer -b "$B" -- move 2300 200 >/dev/null
   ob run -b "$B" -d -q -- foot -T N sh -c 'i=0; while :; do printf "\r%s" $((i++ % 10)); sleep 0.05; done'
   ob wait -b "$B" window 'title:^N$' >/dev/null

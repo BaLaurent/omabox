@@ -8431,6 +8431,48 @@ from them.
     OMABOX_TEST_OMARCHY on a 4.5 tree, a control shows its omarchy-shell reaching a stand-in shell
     socket without the file; under `guard exec` nothing reaches it, by path or by name).
 
+410. **`tree --window` printed an app's only frame for a window it does not publish** (2026-10-20,
+    #302). An egui app with a root window and two child viewports publishes one AT-SPI frame, the
+    root's; `tree --window "title:<child>"` printed the root's tree for both children (one of them
+    920x1056, the root 920x521), since a window whose title no frame names fell back to the app's only
+    frame. **Fix**: tools/tree takes that frame only when it is the window's size (2 px either way)
+    and no other window of the app's pid is that size (`omabox tree` passes the count, `--twins`):
+    else `no accessibility tree for this window: its application publishes one window, "Root" 920x521,
+    and this one is 920x1056` (exit 7), or `... and 2 of its windows are this one's size ...: which
+    one it is cannot be told` (exit 6); `tree` says either, exit 1. A window whose title the frame
+    names is unchanged. Reproduced without egui: a GTK4 window beside bare GDK toplevels
+    (`Gdk.Surface.new_toplevel`, drawn by a `Gsk.CairoRenderer`), which have no accessible. Tests:
+    t_tree (a window of another size; one of two of the frame's size; the root's tree still read).
+
+411. **`run -d` from a repo told an agent to start a second box while its session's was up**
+    (2026-10-20, #296). An agent's `cd <scratch>; omabox up` made `default-<sfx>`; back in the repo
+    (Claude Code resets the directory between calls), `run -d` derived `<repo>-<sfx>`, found it down
+    and said `run -d needs a box that is up (omabox up <repo>-<sfx>)`, while every other command
+    there says need_box's `no box '<repo>-<sfx>' is up; this session's box is 'default-<sfx>'
+    (started from another directory): -b default-<sfx>`; the agent's report had both lines, which
+    disagree. **Fix**: run -d with a derived name, when the session has boxes up under other names,
+    gives need_box's answer alone; with none, the `up` line as before. Using the session's only box
+    from any directory waits for an owner per box (#295): with parallel subagents it may be a
+    sibling's. Tests: t_unit_agent_session.
+
+412. **`up --desk-shell` loaded omabox's own bar widget, which cannot work in a box** (2026-10-20,
+    #304). `chaves.omabox` polls `omabox ls --json`; a box has no omabox on its PATH, so its shell
+    logged `WARN: Process failed to start ... Command: QList("omabox", "ls", "--json")` (and after
+    three failures the widget would notify inside the box): a line in every count of an agent
+    comparing two builds of a plugin by their warnings. **Fix**: desk_plugins leaves the desk's
+    `chaves.omabox` out, said as the other plugins it skips are (`--desk-shell: not mounting
+    plugins/chaves.omabox: omabox's own widget, which lists your boxes (none in a box)`), and the box's
+    shell.json loses it wherever it is placed (the bar, a plugin's own list, its settings entry), so no
+    layout names a widget the box has not. A `--plugin` of it still mounts it (its own tests). Checked
+    on this desk: the box's shell log has no omabox line. Tests: t_unit_desk_shell, t_desk_shell.
+
+413. **`up`'s line named only the main screen** (2026-10-20, #308). `up NAME --monitor 1080x1920`
+    said `box 'NAME' up (1920x1080@60)`, though the second monitor was there (a window sat on it), and
+    an agent ran `monitor list` to be sure. **Fix**: every other enabled monitor follows the main
+    one, as Hyprland has it once `up`'s `monitor add`s are done: `up (1920x1080@60 + 1280x720@60,scale=1.6
+    + 1080x1920@60)`. `up --json` and `ls --json` had every one already (`monitors`), unchanged.
+    Tests: t_monitors_wait, t_monitors_wait_nvidia.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
