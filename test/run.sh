@@ -5277,7 +5277,7 @@ t_connected() {
 # the shared port still forwards the servers it starts later, on higher ports: with one strong rule
 # for every port, pasta gave up on the ports after one it could not bind.
 t_ports() {
-  local A=$P-pa B=$P-pb own shared local6 hostp out later b two at
+  local A=$P-pa B=$P-pb own shared local6 hostp out later b two at started
   if ! ob up "$A" --no-shell >/dev/null 2>&1 || ! ob up "$B" --no-shell >/dev/null 2>&1; then
     no "ports: up two boxes" "failed"; ob down "$A" >/dev/null 2>&1; ob down "$B" >/dev/null 2>&1; return
   fi
@@ -5289,12 +5289,15 @@ t_ports() {
   mkdir -p "$TMP/ports"
   python3 -m http.server "$hostp" --bind 127.0.0.1 --directory "$TMP/ports" >/dev/null 2>&1 & SERVERS+=($!)
   ob run -b "$A" -d -- python3 -m http.server "$own" --bind 127.0.0.1 --directory /home/sbx >/dev/null
-  ob run -b "$A" -d -- python3 -m http.server "$shared" --bind 127.0.0.1 --directory /home/sbx >/dev/null
+  # A's and B's servers on $shared both run only because no pasta rescan (each second) falls between
+  # their starts: one started after the other's port reached the host finds it mirrored into its own box
+  # and fails, address in use (finding 156, #89). Started together: one after the other, run -d's
+  # early-exit watch (#286) put ~0.4 s between them, and a rescan fell there about once a suite.
+  ob run -b "$A" -d -- python3 -m http.server "$shared" --bind 127.0.0.1 --directory /home/sbx >/dev/null & started=$!
   ob run -b "$B" -d -- python3 -m http.server "$shared" --bind 0.0.0.0 --directory /home/sbx >/dev/null
+  wait "$started" || true
   ob run -b "$A" -d -- python3 -m http.server "$local6" --bind ::1 --directory /home/sbx >/dev/null
-  # A's and B's servers on $shared start ~50 ms apart and both run only because no pasta rescan (each
-  # second) falls between them: one started after the other's port reached the host finds it mirrored
-  # into its own box and fails, address in use (finding 156, #89). A rare flake, so say which one.
+  # A rare flake still, so say which one.
   for b in "$A" "$B"; do
     check "ports: $b's server on the shared port listens in its box (no rescan between the two starts)" \
       until_ok 10 ob run -b "$b" -- bash -c "ss -Htlnp 'sport = :$shared' | grep -q python3"
