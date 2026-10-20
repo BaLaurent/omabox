@@ -3,7 +3,45 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.0.0 — unreleased
+
+What scripts and agents branch on is kept from this release: exit codes and `--json` fields stay as
+they are within 1.x, or change only by addition, and a command, option or variable that has to
+change warns for one minor release first (`omabox: deprecated: …`, naming the new form) before it
+is refused. README, "Stability", says what that covers and what it does not (message wording, help
+text, defaults and heuristics, image pixels, what other programs report through omabox). The forms
+0.9.0 deprecated are refused now, and a region given beside `--window` is the window's everywhere.
+
+### Added
+
+- **`OMABOX_STRICT=1`** refuses a deprecated form at once (exit 2) instead of warning, for CI.
+  Every deprecation warning from 1.0 on starts `omabox: deprecated:` and names what to write; 1.0
+  itself has none ([#287](https://github.com/diogochaves/omabox/issues/287)).
+
+### Changed
+
+- **Beside `--window`, `-g` and `--ignore` are the window's own coordinates everywhere** (0,0 its top
+  left corner), as `click`'s X Y, `shot -g` and `check point` already were: `wait still|change
+  --window SEL --ignore`, and `--wait`'s `-g` and `--ignore` beside `--window` on `keys`, `click`,
+  `scroll` and `drag`. 0.9 took them in the screen's, with a warning. A 124's `--ignore "X,Y WxH" if
+  that is an animation` gives the window's coordinates there too. To watch a part of the screen
+  whatever the window, `-g` without `--window`.
+
+### Removed
+
+- The forms deprecated in 0.9.0 are refused (exit 2; `run`'s 125) with one line naming what to
+  write, never read another way ([#287](https://github.com/diogochaves/omabox/issues/287)):
+  - `wait cmd`: write `wait until -- CMD`.
+  - `up --idle 45` and `OMABOX_IDLE=45`, a bare number (minutes up to 0.9): write `45m`.
+  - `keys -s 300` and `pointer -- sleep 300`, a bare number (milliseconds up to 0.9): write `300ms`.
+  - `up -i`: write `--interactive`. `save -f`: write `--force`.
+  - `shot` and `calibrate` given two files: name one.
+  - A box name given with characters a box name cannot have, or past 40 of them (`-b "my box"`):
+    the refusal names the one that fits (`my-box`).
+  - `keys --delay MS`: for a pause, `-s DURATION`.
+- The JSON fields 0.9 kept beside their successors: `config --json`'s kebab-case keys (`bar-icon`,
+  `confirm-close-available`, `gpu-now`...: read `bar_icon`...), `ls --json`'s `allow` (read
+  `allowed`), `ports --json`'s `address` (read `addresses`).
 
 ### Fixed
 
