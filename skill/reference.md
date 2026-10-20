@@ -668,7 +668,7 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   plugins keep their settings; the terminal configs (`~/.config/{foot,alacritty,ghostty,kitty}`, the
   `*xdg-terminals.list` choice); the Hyprland toggles (`~/.local/state/omarchy/toggles/hypr`); git's
   `user.name` and `user.email` only. Never `api-keys.env`, `hooks/`, keyrings, tokens or the rest of
-  git's config. `--desk-shell` adds every plugin, `shell.json` unfiltered and the other files beside
+  git's config. `--desk-shell` adds every plugin (but omabox's own widget), `shell.json` unfiltered and the other files beside
   it; `--seed SRC:DEST` adds what you name.
 - **A plugin under test reads its settings from the desk's `extensions/`**
   (`~/.config/omarchy/extensions/NAME.json`), an on/off switch too: one off on the desk leaves its

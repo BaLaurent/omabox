@@ -356,7 +356,8 @@ is linked to there, as on a desk, so readlink -f leads into its repo; any other 
 @ up run restart-shell
 --desk-shell: your desktop's shell as it is, to check a plugin against a real desk: every plugin in
 ~/.config/omarchy/plugins (read-only, as --plugin's; a --plugin of the same id wins: your working
-copy), your shell.json unfiltered (only idle held off: a box has no real input), and the other files
+copy) but omabox's own widget (it lists your boxes; --plugin mounts it), your shell.json unfiltered
+(only idle held off: a box has no real input; omabox's widget taken out of it), and the other files
 in ~/.config/omarchy your plugins read (a plugin's JSON, a folder beside shell.json) copied into the
 box's. Never api-keys.env nor anything named or holding a key, token, secret, password, credential,
 auth, cookie or session (any .env, .pem, .gpg...), hooks/ (your scripts), a git dir or a backup; regular
@@ -2605,6 +2606,10 @@ desk_plugins() {
     [[ $id =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*$ ]] ||
       { say "--desk-shell: not mounting plugins/${e##*/}: its manifest id '$id' is not letters, digits, . _ -"; continue; }
     [[ $have != *" $id "* ]] || continue
+    # omabox's own bar widget (#304): it lists your boxes with `omabox ls`, which a box has not (its
+    # shell would warn, then notify); --plugin mounts it all the same.
+    [ "$id" != chaves.omabox ] ||
+      { say "--desk-shell: not mounting plugins/${e##*/}: omabox's own widget, which lists your boxes (none in a box)"; continue; }
     if why=$(refuse_src "$dir"); then say "--desk-shell: not mounting plugins/${e##*/} ($dir): $why"; continue; fi
     have+="$id "
     printf '%s\t%s\n' "$id" "$dir"
@@ -2765,7 +2770,14 @@ seed_home() {
   # has it (one the desk has off stays off), only idle held off (no real input in a box: finding 10).
   # Of the plugins, only a --plugin the desk does not have is placed where its manifest says.
   if [ "${DESK_SHELL:-0}" = 1 ]; then
-    jq '.idle = {screensaver: 1000000, lock: 1000000}' "$DESK/shell.json" > "$h/.config/omarchy/shell.json" 2>/dev/null || {
+    # omabox's widget, left out of the box (desk_plugins), out of every list that places it (the bar, a
+    # plugin's own layout, its settings entry) too, unless a --plugin mounts it.
+    # shellcheck disable=SC2016 # jq, not shell
+    jq --argjson keep "$ids" '.idle = {screensaver: 1000000, lock: 1000000}
+      | if $keep | index("chaves.omabox") then . else
+          walk(if type == "array" then map(select((if type == "object" then .id else . end) != "chaves.omabox")) else . end)
+          | if .bar.centerAnchor? == "chaves.omabox" then del(.bar.centerAnchor) else . end end' \
+      "$DESK/shell.json" > "$h/.config/omarchy/shell.json" 2>/dev/null || {
       say "--desk-shell: no shell.json in $DESK (or not JSON): the box's shell starts from an empty one"
       echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"; }
   else

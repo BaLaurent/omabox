@@ -8436,6 +8436,17 @@ from them.
     from any directory waits for an owner per box (#295): with parallel subagents it may be a
     sibling's. Tests: t_unit_agent_session.
 
+412. **`up --desk-shell` loaded omabox's own bar widget, which cannot work in a box** (2026-10-20,
+    #304). `chaves.omabox` polls `omabox ls --json`; a box has no omabox on its PATH, so its shell
+    logged `WARN: Process failed to start ... Command: QList("omabox", "ls", "--json")` (and after
+    three failures the widget would notify inside the box): a line in every count of an agent
+    comparing two builds of a plugin by their warnings. **Fix**: desk_plugins leaves the desk's
+    `chaves.omabox` out, said as the other plugins it skips are (`--desk-shell: not mounting
+    plugins/chaves.omabox: omabox's own widget, which lists your boxes (none in a box)`), and the box's
+    shell.json loses it wherever it is placed (the bar, a plugin's own list, its settings entry), so no
+    layout names a widget the box has not. A `--plugin` of it still mounts it (its own tests). Checked
+    on this desk: the box's shell log has no omabox line. Tests: t_unit_desk_shell, t_desk_shell.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -26,6 +26,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `run -d` back in the repo said `omabox up <repo>-…`, and agents started a second box. It now names
   the session's box to pass with `-b`, as the other commands do there.
 
+- **`up --desk-shell` leaves omabox's own bar widget out**
+  ([#304](https://github.com/diogochaves/omabox/issues/304)). It lists your boxes with `omabox ls`,
+  which a box does not have, so the box's shell logged a warning for it (and would have notified).
+  `up` says it left it out; `--plugin` still mounts it.
+
 ## 0.9.1 — 2026-10-20
 
 The release candidate for 1.0 (planned for 2026-10-24). The skill's core is about half its size,

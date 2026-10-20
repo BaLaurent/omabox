@@ -2081,7 +2081,8 @@ t_unit_shell_warnings() {
 
 # A fake desk's Omarchy config (#206): what `up --desk-shell` reads, in place of ~/.config/omarchy.
 # desk_fixture DIR PREFIX: plugins PREFIX.da (a dir), PREFIX.db (a link to a dir elsewhere, as a
-# dev-linked desk has) and PREFIX.doff (off in its shell.json); a shell.json with a key of its own;
+# dev-linked desk has) and PREFIX.doff (off in its shell.json); omabox's own widget (chaves.omabox,
+# in the bar, in a plugin's list and with settings: #304); a shell.json with a key of its own;
 # a plugin's JSON and a folder of profiles beside it; and what must stay out: secrets by name and by
 # content, links out of the folder and to a secret, hooks, a backup, a big file, a FIFO, a git dir.
 desk_fixture() {
@@ -2095,9 +2096,10 @@ desk_fixture() {
       entryPoints: {barWidget: "W.qml"}, barWidget: {displayName: $id, defaultSection: "right"}}' > "$at/manifest.json"
     printf 'import QtQuick\nimport qs.Ui\nBarWidget {\n  id: root\n  implicitWidth: b.implicitWidth\n  implicitHeight: b.implicitHeight\n  WidgetButton { id: b; bar: root.bar; text: "%s" }\n}\n' "$n" > "$at/W.qml"
   done
+  mkdir -p "$d/desk/plugins/omabox"; echo '{"id": "chaves.omabox"}' > "$d/desk/plugins/omabox/manifest.json"
   jq -n --arg a "$p.da" --arg b "$p.db" '{version: 1, deskMark: "kept", idle: {screensaver: 150, lock: 300},
-    bar: {layout: {left: [{id: "omarchy.menu"}, {id: "omarchy.workspaces"}, {id: $a}], center: [{id: "omarchy.clock"}], right: [{id: $b}]}},
-    plugins: [{id: $a, hosts: [$b]}]}' > "$d/desk/shell.json"
+    bar: {layout: {left: [{id: "omarchy.menu"}, {id: "omarchy.workspaces"}, {id: $a}], center: [{id: "omarchy.clock"}], right: [{id: $b}, {id: "chaves.omabox"}]}},
+    plugins: [{id: $a, hosts: [$b, "chaves.omabox"]}, {id: "chaves.omabox", refreshIntervalSec: 5}]}' > "$d/desk/shell.json"
   echo '{"widgets": ["a", "b"]}' > "$d/desk/hostfix.json"
   echo '{"name": "one"}' > "$d/desk/profiles/one.json"
   echo '{"name": "two"}' > "$d/desk/profiles/deep/two.json"
@@ -2182,6 +2184,9 @@ sneaky.json|a link to api-keys.env: a secret's name"
   check_eq "desk_plugins: a dir and a link to one (resolved); off ones too; not the --plugin's id" \
     "$P.da	$d/desk/plugins/da|$P.doff	$d/desk/plugins/doff" "$(grep -v '^omabox:' <<<"$out" | tr '\n' '|' | sed 's/|$//')"
   check_match "...one with no manifest said" "not mounting plugins/nomani: no manifest.json" "$out"
+  check_match "...omabox's own widget left out, said (#304)" "not mounting plugins/omabox: omabox's own widget, which lists your boxes \(none in a box\)" "$out"
+  check_fails "...but not over a --plugin of its id" grep -q "plugins/omabox" \
+    <<<"$(bash -c 'source "$1"; PLUGINS=("chaves.omabox	/elsewhere"); desk_plugins "$2"' _ "$TMP/lib/bin/omabox" "$d/desk" 2>&1)"
   check_match "...an id that is not a name said" "not mounting plugins/badid: its manifest id '../x'" "$out"
   check_fails "...a second dir with the same id: left out, unsaid" grep -q dup <<<"$out"
   # Refused before anything is made.
@@ -5462,6 +5467,8 @@ t_desk_shell() {
   check_match "...and what it did not, and why" "not copied: $d/desk/api-keys.env \(a secret's name\)" "$out"
   check_match "...a link out of the folder" "not copied: $d/desk/out.json \(a link out of the folder \(not followed\)\)" "$out"
   check_fails "...a plugin the desk has off: no warning" grep -q "$P.doff" <<<"$out"
+  check_match "...omabox's own widget left out, said (#304)" "not mounting plugins/omabox: omabox's own widget" "$out"
+  check_fails "...and out of the box's shell.json: bar, a plugin's list, its settings" grep -q chaves.omabox "$H/.config/omarchy/shell.json"
   j=$(ob ls --json | jq -c --arg n "$B" '.[] | select(.name == $n)')
   check_eq "the desk's plugins load where its shell.json has them; the one it has off stays off" "loaded loaded disabled" \
     "$(jq -r --arg p "$P" '.plugin_status | [.[$p + ".da", $p + ".db", $p + ".doff"] | .state] | join(" ")' <<<"$j")"
