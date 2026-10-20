@@ -939,19 +939,53 @@ t_unit_cli_contract() {
   # The other way (#273, part C): every option a command takes is in its help (its lines or its
   # paragraphs: an alias, -o or --output, said once there), but the deprecated forms 0.9 warns (up -i,
   # save -f, keys --delay), which help never shows; check's UP OPTIONS are up's, documented there.
-  local o h up; bad=""
+  # Both forms (#269): the short one, which agents read, and --long.
+  local o h up f; bad=""
   up=$(lib eval 'echo $UP_BOX_OPTS' | tr ' ' '\n' | sed 's/=$//')
   for c in $(lib eval 'printf "%s\n" "${!CMD_OPTS[@]}"' | sort); do
-    h=$(ob help "$c")
-    for o in $(lib cmd_opts "$c" | sed 's/[=?]$//'); do
-      case "$c $o" in "up -i"|"save -f"|"keys --delay") continue ;; esac
-      [[ $h != *"UP OPTIONS"* ]] || ! grep -qx -- "$o" <<<"$up" || continue
-      grep -qE -- "(^|[^a-zA-Z0-9-])$o([^a-zA-Z0-9-]|\$)" <<<"$h" || bad+=" $c $o;"
+    for f in "" --long; do
+      h=$(ob help "$c" ${f:+"$f"})
+      for o in $(lib cmd_opts "$c" | sed 's/[=?]$//'); do
+        case "$c $o" in "up -i"|"save -f"|"keys --delay") continue ;; esac
+        [[ $h != *"UP OPTIONS"* ]] || ! grep -qx -- "$o" <<<"$up" || continue
+        grep -qE -- "(^|[^a-zA-Z0-9-])$o([^a-zA-Z0-9-]|\$)" <<<"$h" || bad+=" $c${f:+ $f} $o;"
+      done
     done
   done
-  check_eq "...and every option in CMD_OPTS is in its command's help (aliases too)" "" "$bad"
+  check_eq "...and every option in CMD_OPTS is in its command's help, short and --long (aliases too)" "" "$bad"
   check_match "...--box said for every box command (help windows)" "\-b NAME \(or --box NAME\)" "$(ob help windows)"
   check_eq "...-o (or --output) where -o goes" "4" "$(for c in shot record calibrate check; do ob help "$c"; done | grep -c -- '-o (or --output)')"
+  # #269: help CMD is short, its options one line each and a pointer to --long, which is every note.
+  local s l n lines="" more="" sub="" sec="" bare shorts
+  shorts=$(lib usage_text | awk '/^@/ { on = $1 == "@short"; next } on')
+  for c in $(ob help | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u) exit-codes; do
+    s=$(ob help "$c"); l=$(ob help "$c" --long)
+    n=$(wc -l <<<"$s"); [ "$n" -le 30 ] || lines+=" $c:$n"
+    # (the pointer only where --long has more: help env, exit-codes are all there is)
+    if [ "$s" != "$l" ]; then
+      [ "$(tail -n 1 <<<"$s")" = "more: omabox help $c --long" ] || more+=" $c"
+      [ "$(wc -c <<<"$s")" -lt "$(wc -c <<<"$l")" ] || more+=" $c(size)"
+    fi
+    [ "$(tail -n 1 <<<"$l")" = "omabox help: every command." ] || more+=" $c(long)"
+    # what the short form has but its @short lines, the long one has
+    comm -23 <(sed '$d' <<<"$s" | grep -vxF -- "$shorts" | sort -u) \
+      <(sort -u <<<"$l") | grep -q . && sub+=" $c"
+    # never an @short line in --long
+    ! grep -qxF -- "$shorts" <<<"$l" || sec+=" $c"
+  done
+  check_eq "help CMD: 30 lines at most" "" "$lines"
+  check_eq "...ends with more: omabox help CMD --long, shorter; --long ends as the full text did" "" "$more"
+  check_eq "...--long has every line of it but its @short ones" "" "$sub"
+  check_eq "...and none of those" "" "$sec"
+  check_eq "...a paragraph's mark is @, @+ (both forms) or @short (the short one only)" "" \
+    "$(lib usage_text | awk '/^@/ && $1 !~ /^@(\+|short)?$/')"
+  check_eq "...--long before CMD too, CMD --help is the short form" "yes yes" \
+    "$([ "$(ob help --long up)" = "$(ob help up --long)" ] && echo yes) $([ "$(ob up --help)" = "$(ob help up)" ] && echo yes)"
+  bare=$(ob help)
+  check_eq "help: every command's lines, then the pointer" "more: omabox help CMD (one command's options), omabox help --long (every command's notes too)" \
+    "$(tail -n 1 <<<"$bare")"
+  check_eq "...a fifth of help --long at most, which has no @short line" "yes no" \
+    "$( (( ${#bare} * 5 < $(ob help --long | wc -c) )) && echo yes) $(ob help --long | grep -qxF -- "$shorts" && echo yes || echo no)"
   check_eq "...every command with options has a CMD_OPTS line" "" \
     "$(for c in $(ob help | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u); do
          case $c in help|--version|which|guard|host|broker|check) continue ;; esac
@@ -4014,11 +4048,11 @@ t_unit_cli() {
   check_eq "...an alias's (screenshot)" "$(ob help shot)" "$(ob screenshot -h)"
   check_match "...a fraction of the full help" "^yes$" "$( (( $(ob help shot | wc -c) * 5 < ${#full} )) && echo yes)"
   check_match "...run's has up's options" "omabox up .*--net isolated" "$(ob help run | tr '\n' ' ')"
-  check_match "...ports' names its states (#94)" "this-resets .*shared " "$(ob help ports | tr '\n' ' ')"
+  check_match "...ports' names its states (#94)" "this-resets .*shared " "$(ob help ports --long | tr '\n' ' ')"
   check_match "...down's says the session's box is taken from outside any repo too (#136, finding 237)" \
-    "\`down\` too, so \`omabox down\` there takes that box down" "$(ob help down | tr '\n' ' ')"
+    "\`down\` too, so \`omabox down\` there takes that box down" "$(ob help down --long | tr '\n' ' ')"
   check_match "...drag's: --hold is a duration, a bare number seconds, as ms_duration reads it (#103)" \
-    "--hold DURATION.*like 300ms or 2s: a bare number is seconds" "$(ob help drag | tr '\n' ' ')"
+    "--hold DURATION.*like 300ms or 2s: a bare number is seconds" "$(ob help drag --long | tr '\n' ' ')"
   check_eq "...which it does" 2000 "$(lib ms_duration 2)"
   check "confirm-close calls the box's own hyprctl and jq (#113: a stub must not end the box)" \
     grep -qE '^hyprctl\(\) \{ /usr/bin/hyprctl .*$' "$ROOT/share/confirm-close.sh"
@@ -13061,7 +13095,7 @@ t_unit_wait() {
   check_eq "...several monitors: a quarter of their own area (area=), not of the box around them" \
     'unsatisfied: still changing after 10.00s (last change 9.99s at 1920,450 1080x900)' "$out"
   check_match "help scroll and help drag have the --wait section (#162)" "take --wait.*take --wait" \
-    "$(ob help scroll | tr '\n' ' ') $(ob help drag | tr '\n' ' ')"
+    "$(ob help scroll --long | tr '\n' ' ') $(ob help drag --long | tr '\n' ' ')"
   local out rc=0
   out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --die-with-parent \
         env -i "$ROOT/tools/still/omabox-still" still --timeout 100 2>&1) || rc=$?

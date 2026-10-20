@@ -50,6 +50,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
+- **`omabox help CMD` is short**: the command's lines and its options, one line each (30 lines at
+  most; `help up` 2 kB where it was 19 kB), ending with `more: omabox help CMD --long`, which
+  prints the whole text as before: what each option does, defaults, limits. `omabox CMD --help` is
+  the short form too. `omabox help` lists every command's lines (11 kB); `omabox help --long` is
+  all of it, as `omabox help` was (60 kB)
+  ([#269](https://github.com/diogochaves/omabox/issues/269)).
 - `config --json` gives its keys in snake_case (`bar_icon`, `shot_fit`, `gpu_now`), as every other
   `--json` does; the bar widget reads them. `windows --json` is one line, as the others are.
 - `omabox help CMD` names every option the command takes, aliases too: `--box`, `--output`,

@@ -52,24 +52,47 @@ GUARD=omabox-guard
 # The help: every command, or one (`omabox help CMD`, `CMD --help`): its lines above the blank line
 # and the paragraphs below it whose `@` line names it. An agent after one command's flags reads a few
 # lines, not the whole text. `@` lines never show.
+# Two forms (#269): the short one (the default) is a command's lines and the `@+` and `@short`
+# paragraphs naming it, the options one line each; --long is its lines and its `@` and `@+`
+# paragraphs, every note. `@short` paragraphs never show in --long, nor in `help --long`: they say in
+# a line what an `@` paragraph says at length, for an option the command's lines leave out. Bare
+# `help` is the lines of every command; `help --long` all of it.
 usage() {
-  if [ $# = 0 ]; then usage_text | grep -v '^@'; return; fi
-  local c=$1 out
+  local long=0 a args=()
+  for a in "$@"; do if [ "$a" = --long ]; then long=1; else args+=("$a"); fi; done
+  set -- ${args[@]+"${args[@]}"}
+  if [ $# = 0 ]; then
+    if [ $long = 1 ]; then usage_text | awk '/^@/ { skip = $1 == "@short"; next } !skip'; return; fi
+    usage_text | awk 'NR > 2 && $0 == "" { exit } 1'
+    printf '\n%s\n' "more: omabox help CMD (one command's options), omabox help --long (every command's notes too)"
+    return
+  fi
+  local c=$1 out short
   case $c in
     -h|--help) usage; return ;;
     screenshot) c="shot" ;; logs) c="log" ;; list) c="ls" ;; version|-V) c="--version" ;;
   esac
-  # run takes up's options (a throwaway box): its help has up's lines too, after its own.
-  out=$(usage_text | awk -v c="$c" '
+  out=$(usage_form "$c" 1)
+  [ -n "$out" ] || unknown_command "$1"
+  # The short form, but where it is all there is (help exit-codes).
+  if [ $long = 0 ]; then
+    short=$(usage_form "$c" 0)
+    [ "$short" = "$out" ] || { printf '%s\n\n%s\n' "$short" "more: omabox help $c --long"; return; }
+  fi
+  printf '%s\n\n%s\n' "$out" "omabox help: every command."
+}
+# One command's help, long (1) or short (0), without its last line. run takes up's options (a
+# throwaway box): its help has up's lines too, after its own. usage_form CMD 1|0
+usage_form() {
+  usage_text | awk -v c="$1" -v long="$2" '
     NR <= 2 { next }
     !prose && $0 == "" { prose = 1; printf "%s", up; next }
     !prose { if ($1 == "omabox") { on = $2 == c; mine = on || (c == "run" && $2 == "up") }
              if (on) print; else if (mine) up = up $0 "\n"; next }
-    /^@/ { on = 0; for (i = 2; i <= NF; i++) if ($i == c) on = 1
+    /^@/ { on = 0
+           if (long ? $1 != "@short" : $1 != "@") for (i = 2; i <= NF; i++) if ($i == c) on = 1
            if (on && !gap++) print ""; next }
-    on')
-  [ -n "$out" ] || unknown_command "$1"
-  printf '%s\n\n%s\n' "$out" "omabox help: every command."
+    on'
 }
 
 # Not here, on purpose (#273): omabox's own plumbing, which no promise covers and help never lists.
@@ -183,7 +206,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox setup --feedback-skill|--no-feedback-skill      opt in to the omabox-feedback skill, or out again
   omabox setup --aquamarine [--force]                    build omabox's aquamarine: the fix, and its own patches
   omabox --version [--json]                              and which aquamarine new boxes use
-  omabox help [COMMAND | exit-codes]                     one command's options and notes; what each exit code means
+  omabox help [COMMAND [--long] | exit-codes]            one command's options (--long: its notes); what each exit code means
 
 @ up run ls down path
 NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
@@ -194,11 +217,24 @@ is default-SESSION; with no box of that name, every command but \`up\` uses the 
 started from its repo, said once: \`down\` too, so \`omabox down\` there takes that box down. A
 \`down\` whose name has no box, while the session has boxes up started elsewhere, names each with the
 \`down -b\` that takes it, and exits 1.
-@ up run shot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip
+@+ up run shot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
-@ shot record calibrate check
+@+ shot record calibrate check
 -o (or --output) names what the command writes.
+@short shot pixel tree check keys click scroll pointer drag wait
+--window SEL (or -w SEL): a window: active (or --active), 0x... (its address), pid:N, class:RE, title:RE, a word
+@short keys click scroll drag run
+--wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--strict] [--json]
+       after it, a change on screen within --start, then still for --quiet; 124 if not by --timeout
+@short run
+-d (or --detach): the command left running in the box, its log said on stderr; --replace: the same one stopped first
+@short shot
+--monitor NAME: one monitor of the box's (omabox monitor list)
+@short tree
+--layer SEL (or -l SEL): a layer surface (the bar, a panel, a menu): its namespace, address:0x... or pid:N
+@short log events
+-f (or --follow): on until the box goes down
 @ path
 From the host, the box's HOME (/home/sbx in it) is <dir>/home, \`omabox path --home\`, and its
 /run/user/\$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, \`omabox path
@@ -760,7 +796,7 @@ A save keeps what a box's apps set up (signed in, a PIN, a library): the box HOM
 its logs, keyring included, paused for the copy. \`up --from\` starts with it, then seeds your Omarchy
 look on top as for any box (theme, bar, terminals: today's, or --theme's, not the save's). Close an
 app first for a clean save. Saves live in ~/.local/share/omabox/saves until \`saves rm\`.
-@ exit-codes help
+@+ exit-codes help
 Exit codes, the same in every command:
   0         done, or the condition held (wait, events --until; check run: nothing changed)
   1         it ran and failed, or the answer is no: no such box up, a refusal, wait's "unknown" (the

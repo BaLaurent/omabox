@@ -167,7 +167,7 @@ omabox which 12345                     # the box a host pid is in, a bar like yo
   loaded changes, as on your desktop), `omabox gpu 10` (GPU time of one box's
   processes; on NVIDIA, its driver's own sampling) and `omabox cpu 10` (their CPU, as % of one
   core, and memory; `--app NAME` or `--pid PID` for one). `omabox help` lists every flag,
-  `omabox help CMD` (or `omabox CMD --help`) one command's.
+  `omabox help CMD` (or `omabox CMD --help`) one command's; `--long` adds what each one does.
 
 ### Tests that touch the desktop
 

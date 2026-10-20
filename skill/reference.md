@@ -24,8 +24,9 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   `-b`. A box goes down when your agent exits, not on `/clear` or `/resume`. `-b NAME` also goes
   before the command (`omabox -b box-3 shot`). In a worktree-isolated Claude Code subagent: "For
   subagents in an isolated worktree" below.
-- `omabox help CMD` (or `omabox CMD --help`): one command's flags and notes; `omabox help`: every
-  command (long: for an overview only).
+- `omabox help CMD` (or `omabox CMD --help`): one command's flags, one line each; `omabox help CMD
+  --long` adds its notes (what each flag does, defaults, limits): read it before guessing.
+  `omabox help`: every command's flags.
 
 ## Exit codes
 

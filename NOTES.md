@@ -8111,6 +8111,39 @@ from them.
     (shot, windows, ls, mode, record status, events --mark, path --logs; box), t_ports (addresses),
     t_widget_list (snake_case), t_widget (kebab from an older CLI).
 
+391. **`help CMD` is short: the command's lines and its options; the notes behind `--long`**
+    (2026-10-20, #269). Agents asked `omabox help CMD` 164 times in 50 sessions (~600 tokens a call)
+    and piped 155 of those through `head`: they wanted the usage and the options, and got the prose.
+    The short form is derived from the one text, not kept beside it: a command's lines (above the
+    blank line in `usage_text`; `run`'s with up's, as before) already are its options, mostly one a
+    line, so the short form is those, plus the paragraphs marked `@+` (the `-b NAME (or --box
+    NAME)` and `-o (or --output)` ones, and the exit-codes table) and `@short`: six one-line
+    paragraphs, short-form only, for what the lines leave out (`--window SEL (or -w SEL)` and
+    `--active`, `--wait`'s own options, `run -d (or --detach)`, `shot --monitor`, `tree --layer (or
+    -l)`, `-f (or --follow)`), then `more: omabox help CMD --long`. `--long` (after or before CMD) is
+    the text as it was, byte for byte for every command, alias and topic (checked against dfb7c2b),
+    but `help`'s own line, which gains `[--long]`; `@short` paragraphs never show in it. Where the
+    short form is all there is (`help env`, `hyprctl`, `exit-codes`, `help help`) it is the long one,
+    no pointer. `CMD --help` is the short form; the usage errors' "(omabox help CMD)" point at it.
+    Bare `help` is every command's lines and a pointer (`help --long`: everything, as `help` was).
+    Sizes, chars short/long (lines short), from the largest long: up 2027/18739 (23), run 2551/15789
+    (28), shot 739/8149 (11), record 1202/7805 (15), drag 805/5764 (11), pointer 671/5474 (10),
+    scroll 739/4788 (11), keys 624/4737 (9), click 700/4655 (10), check 995/4247 (13), wait
+    636/3202 (10), peek 285/3112 (6), tree 520/2941 (8), monitor 268/2787 (6), pixel 388/2563 (7), cpu
+    385/2213 (7), setup 367/1814 (5), gpu 378/1748 (7), ports 280/1603 (6), log 669/1592 (11), path
+    398/1484 (7), help 1480/1480 (20), restart-shell 273/1467 (6), calibrate 450/1380 (8), config
+    150/1368 (3), exit-codes 1354/1354 (19), down 286/1345 (6), audio 279/1343 (6), windows 273/1339
+    (6), output 287/1308 (6), ls 50/1112 (3), reload 270/1092 (6), keys-to-box 289/949 (6), events
+    496/943 (9), gdb 276/869 (6), mode 266/851 (6), clip 266/661 (6), save 272/660 (6), lua 269/630
+    (6), which 146/543 (3), saves 113/501 (3), guard 217/492 (4), broker 138/417 (3), host 138/414
+    (3), env 252/252 (6), hyprctl 194/194 (6); the 46 together 24 111 / 128 170 (a fifth); bare
+    `help` 11 006 (107 lines) / 59 775. The skill's reference names `--long` once; SKILL.md is
+    unchanged (its "`omabox help CMD`" still holds). Tests: t_unit_cli_contract (every CMD_OPTS
+    option in both forms; each command's short form 30 lines at most, shorter than --long, ending
+    with the pointer; --long has every line of it but the `@short` ones and none of those; the marks
+    are `@`, `@+`, `@short`; `--long` before CMD; `CMD --help`; bare help), t_unit_cli and t_unit_wait
+    read the notes they check with `--long`.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
