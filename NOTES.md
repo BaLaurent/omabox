@@ -7747,6 +7747,15 @@ from them.
     complaint, and `down` goes on. Tests: t_unit_rm_tree (a read-only HOME, a mode-000 runtime dir,
     a gone box's HOME, a link not followed, a failure said), t_up_again (a box whose app made the
     folder: HOME gone, `down` says only that the box is down; both failed on the old code).
+375. **While a box is up, the desktop's stranded-lock recovery waits** (2026-10-20, #277). Omarchy
+    4.0.5's `omarchy-hyprland-session-lock-stranded`, which the desktop's shell asks after a crash
+    with the screen locked, answers "undetermined" (exit 2) while any `quickshell|qs|hyprlock` of
+    the user runs besides the caller (`pgrep -u $UID -x`), and a box's shell is one. On the host,
+    Omarchy 4.0.6, only `omarchy-hyprland-session-locked` stubbed to "locked", the desktop shell's
+    pid passed: exit 2 with one box up (`omabox which` named the other quickshell as the box's),
+    exit 0 once it was down. So the lock is not retaken until every box is down; it fails closed.
+    Omarchy's to scope (only lockers under the caller's Hyprland instance); omabox only says it:
+    skill/reference.md, Mounts, HOME and the session. No `ls`/`up` warning (decided).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

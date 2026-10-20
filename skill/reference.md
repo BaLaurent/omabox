@@ -567,6 +567,12 @@ with `--keep wallpaper` or after a theme set in the box.
   pid is in (by its pid namespace, or an ancestor's for a sandbox inside the box; else by
   `OMABOX_BOX`, said so), or `not in a box` with exit 1 (another user's process too); exit 2 for a
   pid that is gone. `grep -z OMABOX_BOX /proc/PID/environ` says the same by hand.
+- What that does to the desktop's lock: Omarchy's stranded-lock recovery
+  (`omarchy-hyprland-session-lock-stranded`, Omarchy 4.0.5 on) counts any `quickshell`, `qs` or
+  `hyprlock` of your user as a live locker, a box's shell included. If the desktop's shell crashes
+  while the screen is locked, the lock is not taken again while any box is up (any session's, an
+  idle one for up to 2 h): the user is left at Hyprland's "lockscreen app died" screen until every
+  box is down (`omabox ls`, `omabox down -b NAME`). It fails closed: nothing unlocks.
 - `--no-shell` starts Hyprland only (no bar, tray or notifications): faster for plain app work.
 - A crash in a box leaves no core file and no crash notification on the user's desktop (the core
   limit is 1 byte). To get a core: `omabox run -- bash -c 'ulimit -c unlimited; exec ./app'`.
