@@ -60,6 +60,19 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   an `omabox run` ran in its box, or within 2 s of one ending, is no longer said; exits and crashes
   still are.
 
+- **A box going down could show on your desktop as "Process crashed: Xwayland"** (`up --xwayland`).
+  Hyprland starts Xwayland with `-core`, which raised its core limit back past the 1 byte everything
+  in a box gets, so its abort when the box's compositor went was recorded as a crash. A box's Xwayland
+  now keeps the 1-byte limit (unless you raised it yourself).
+- **The shell-crash warning fired for any Quickshell in the box, and missed a killed shell.** A
+  Quickshell of your own crashing (to test its crash handling) was reported as the shell crashing,
+  and omabox closed its crash dialog; now only the box shell's crashes count and only its dialog is
+  closed. A shell killed outright (`kill -9`) and started again by Omarchy's launcher is now said by
+  the next command: `the shell was killed by SIGKILL (137) since the last command and was started
+  again`.
+- **`run` printed bash's `line N: PID Killed prlimit …` for a command killed by a signal**; it now
+  says `the command was killed by SIGKILL (137)`, with the same exit status.
+
 ## 0.9.2 — 2026-10-20
 
 A fix to the agent guard for hosts on Omarchy 4.5 (its release candidates and the edge channel):

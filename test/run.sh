@@ -1400,6 +1400,13 @@ t_unit_box_gone() {
   out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
     NS_HELD="$0: line 12: 4242 Killed                  nsenter -t 1 -- true"$'"'"'\n'"'"'; ns_said 137' _ "$L" 2>&1)
   check_eq "...bash's line for a command killed by a signal passes" "_: line 12: 4242 Killed                  nsenter -t 1 -- true" "$out"
+  # #303: run's own command (NS_KILL_SAY) is said as run says a job's end, not by bash's line.
+  out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
+    NS_HELD="$0: line 12: 4242 Killed                  prlimit --core=1: \"\$@\""$'"'"'\n'"'"'"nsenter: x"$'"'"'\n'"'"'; NS_KILL_SAY=1 ns_said 137' _ "$L" 2>&1)
+  check_eq "...for run's own command: said in words, nsenter's own line kept" $'nsenter: x\nomabox: the command was killed by SIGKILL (137)' "$out"
+  out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
+    NS_HELD="$0: line 12: 4242 Terminated              prlimit --core=1: \"\$@\""$'"'"'\n'"'"'; NS_KILL_SAY=1 ns_said 143' _ "$L" 2>&1)
+  check_eq "...SIGTERM too" "omabox: the command was killed by SIGTERM (143)" "$out"
   # The command's own stderr is never held back: it is the caller's, through the fd the command takes.
   out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 1; }
     nsenter() { while [ "$1" != -- ]; do shift; done; shift; "$@"; }
@@ -2079,6 +2086,61 @@ t_unit_shell_warnings() {
     $'Plugin widget x.qml failed: boom\nbad' "$(lib shell_warnings "$f")"
 }
 
+# #303 (finding 408): the shell's crash reports are its own, not another Quickshell's in the box (a
+# project's instance under test), told by the report's config; a shell its launcher started again
+# (killed: no report) is said by the next command, once.
+t_unit_shell_reports() {
+  local d=$TMP/$P-shrep c out
+  c=$d/home/.cache/quickshell/crashes
+  mkdir -p "$c"/{ours,other,unwritten,linked,odd} "$d/run" "$d/elsewhere"
+  printf 'Signal: x\nCrashed process ID: 77\nConfig Path: /usr/share/omarchy/shell/shell.qml\n' > "$c/ours/report.txt"
+  printf 'Crashed process ID: 78\nConfig Path: /tmp/qt/shell.qml\n' > "$c/other/report.txt"
+  printf 'Config Path: /usr/share/omarchy/shell/shell.qml\n' > "$d/elsewhere/report.txt"
+  ln -s "$d/elsewhere/report.txt" "$c/linked/report.txt"
+  printf 'Config Path: /usr/share/omarchy//shell/shell.qml\nConfig Path: /tmp/x/shell.qml\n' > "$c/odd/report.txt"
+  echo '{"shell": true}' > "$d/box.json"
+  out=$(bash -c 'source "$1"; D=$2; shell_crash_dirs | sort | tr "\n" " "; shell_crashes' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
+  check_eq "the shell's reports only: not another instance's, one not written yet, nor a link (its first Config Path, slashes squeezed)" "odd ours 2" "$out"
+  echo '{"shell": true, "omarchy": "/x/om"}' > "$d/box.json"
+  printf 'Config Path: /x/om/shell/shell.qml\n' > "$c/unwritten/report.txt"
+  check_eq "...an --omarchy tree's shell" "unwritten" "$(bash -c 'source "$1"; D=$2; shell_crash_dirs' _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
+  rm -rf "$c"; mkdir -p "$c/other"; printf 'Config Path: /tmp/qt/shell.qml\n' > "$c/other/report.txt"
+  echo '{"shell": true}' > "$d/box.json"; echo 100 > "$d/run/omabox-shell.mark"; : > "$d/home/shell.log"
+  # shellcheck disable=SC2016 # the inner bash's
+  local note='source "$1"; D=$2 NAME=sr; shell_state() { echo running; }; shell_note'
+  check_eq "shell_note: a first look says nothing" "" "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
+  check_eq "...nor another instance's crash" "" "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
+  echo '2026-10-20 16:00:00.000 omarchy-shell: Omarchy shell exited with status 137; relaunching.' >> "$d/home/shell.log"
+  check_eq "...the launcher starting a killed shell again: said" \
+    "omabox: warning: the shell was killed by SIGKILL (137) since the last command and was started again (omabox log -b sr shell)" \
+    "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
+  check_eq "...once" "" "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
+  # A new start of shell.sh (its mark): a fresh log, every line in it new.
+  echo 200 > "$d/run/omabox-shell.mark"
+  echo 'omarchy-shell: Omarchy shell exited with status 1; relaunching.' > "$d/home/shell.log"
+  check_match "...after a new start, one that exited: its status" "the shell exited with status 1 since the last command" \
+    "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
+  mkdir -p "$c/mine"; printf 'Config Path: /usr/share/omarchy/shell/shell.qml\n' > "$c/mine/report.txt"
+  echo 'omarchy-shell: Omarchy shell exited with status 134; relaunching.' >> "$d/home/shell.log"
+  check_eq "...a crash and its relaunch: the crash said, once" \
+    "omabox: warning: the shell crashed since the last command and was started again (omabox log -b sr shell)" \
+    "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
+  check_eq "...and not again" "" "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
+}
+
+# #294 (finding 407): the box's Xwayland stand-in keeps the core limit at 1 byte (hard too, so
+# Xwayland's -core cannot raise it), and passes a limit the user raised on as it is. A fake Xwayland
+# next on PATH prints its own limits.
+t_unit_xwayland() {
+  local d=$TMP/$P-xw out
+  mkdir -p "$d"
+  printf '#!/bin/sh\nawk '"'"'/^Max core file size/ { print $5, $6 }'"'"' /proc/self/limits\necho "$@"\n' > "$d/Xwayland"; chmod +x "$d/Xwayland"
+  out=$(PATH=$ROOT/share/bin:$d:/usr/bin prlimit --core=1:unlimited "$ROOT/share/bin/Xwayland" :0 -core 2>&1)
+  check_eq "a box's limit (1 byte, hard unlimited): the real one, the next on PATH, gets 1 and 1" $'1 1\n:0 -core' "$out"
+  out=$(PATH=$ROOT/share/bin:$d:/usr/bin prlimit --core=unlimited:unlimited "$ROOT/share/bin/Xwayland" :0 2>&1)
+  check_eq "...cores asked for: left as they are" $'unlimited unlimited\n:0' "$out"
+}
+
 # A fake desk's Omarchy config (#206): what `up --desk-shell` reads, in place of ~/.config/omarchy.
 # desk_fixture DIR PREFIX: plugins PREFIX.da (a dir), PREFIX.db (a link to a dir elsewhere, as a
 # dev-linked desk has) and PREFIX.doff (off in its shell.json); omabox's own widget (chaves.omabox,
@@ -2567,6 +2629,9 @@ omarchy_contract() {
   oc "omarchy-launch-shell runs the shell under systemd-cat -t omarchy-shell (share/bin/systemd-cat logs it to ~/shell.log)" \
     "no omarchy-launch-shell, or it starts the shell another way: omarchy restart shell would leave a box with no bar (finding 131)" \
     oc_has "$o/bin/omarchy-launch-shell" "systemd-cat -t omarchy-shell"
+  oc "omarchy-launch-shell logs each relaunch as \"Omarchy shell exited with status N; relaunching.\" (shell_note reads it: a killed shell, #303)" \
+    "it says a relaunch another way: a shell killed and started again goes unsaid" \
+    oc_has "$o/bin/omarchy-launch-shell" 'logger -t omarchy-shell "Omarchy shell exited with status $status; relaunching."'
   oc "the plugin registry watches pluginsDir with this inotifywait (share/bin/inotifywait keeps that watch idle, #129)" \
     "PluginRegistry.qml runs inotifywait another way: in a box a mounted plugin reloads by itself on every save again" \
     bash -c 'tr -d " \n" < "$1" | grep -qF "command:[\"inotifywait\",\"-m\",\"-r\",\"-q\",\"-e\",\"close_write,create,delete,move\",\"--format\",\"%w%f\",registry.pluginsDir]"' _ "$s/services/PluginRegistry.qml"
@@ -8006,6 +8071,10 @@ t_keys() {
   check_box_safety "$B"
   # #211: labwc holds no X display now, so Hyprland's Xwayland is :0 (it was :1, behind labwc's lazy one).
   check_eq "--xwayland: run's DISPLAY is Hyprland's Xwayland on :0" ":0" "$(ob run -b "$B" -- printenv DISPLAY 2>&1)"
+  # #294 (finding 407): Hyprland starts it with -core, which raised its soft core limit to the hard one
+  # (unlimited): a box going down made it abort with a core the desktop announced. Now 1 byte, hard too.
+  check_match "...its core limit stays 1 byte, the hard one too (its -core raised it)" "^Max core file size +1 +1 +bytes" \
+    "$(ob run -b "$B" -- sh -c 'p=$(pidof Xwayland) && grep "^Max core file size" "/proc/$p/limits"' 2>&1)"
   ob hyprctl -b "$B" eval "hl.bind('SUPER + CTRL + ALT + J', hl.dsp.exec_cmd('touch /tmp/lower'))
     hl.bind('SUPER + CTRL + ALT + SHIFT + J', hl.dsp.exec_cmd('touch /tmp/upper'))
     hl.bind('SUPER + CTRL + ALT + slash', hl.dsp.exec_cmd('touch /tmp/slash'))" >/dev/null
@@ -8349,13 +8418,20 @@ t_unit_shell_crash() {
       shell_crash "$(shell_pid)" && echo "rc 0" || echo "rc $?"' _ "$TMP/lib/bin/omabox" "$d" 2>&1 | tr '\n' ' '
   }
   check_eq "no new report, no crash line, the shell running: no crash" "rc 1 " "$(sc "42 (quickshell) S 1")"
+  # (#303: a folder counts once its report names the box shell's config; another Quickshell's does not.)
+  local cp='Config Path: /usr/share/omarchy/shell/shell.qml'
   mkdir "$d/home/.cache/quickshell/crashes/q1k4dmt"
+  check_eq "a report folder not written yet: no crash yet" "rc 1 " "$(sc "42 (quickshell) S 1")"
+  printf 'Config Path: /tmp/qt/shell.qml\n' > "$d/home/.cache/quickshell/crashes/q1k4dmt/report.txt"
+  check_eq "...another Quickshell's: no crash (#303)" "rc 1 " "$(sc "42 (quickshell) S 1")"
+  printf '%s\n' "$cp" > "$d/home/.cache/quickshell/crashes/q1k4dmt/report.txt"
   check_eq "a new report folder: crashed, its report named" "crashed $d/home/.cache/quickshell/crashes/q1k4dmt/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
   check_eq "...said with it" "warning: the shell crashed after starting (report: /r/report.txt; omabox log -b u shell)" \
     "$(bash -c 'source "$1"; NAME=u D=/nonexistent; shell_crash_text after "crashed /r/report.txt"' _ "$TMP/lib/bin/omabox")"
-  rmdir "$d/home/.cache/quickshell/crashes/q1k4dmt"; mkdir "$d/home/.cache/quickshell/crashes/a b"
+  rm -r "$d/home/.cache/quickshell/crashes/q1k4dmt"; mkdir "$d/home/.cache/quickshell/crashes/a b"
+  printf '%s\n' "$cp" > "$d/home/.cache/quickshell/crashes/a b/report.txt"
   check_eq "a folder named oddly (the box names it): crashed, no path" "crashed - rc 0 " "$(sc "42 (quickshell) S 1")"
-  rmdir "$d/home/.cache/quickshell/crashes/a b"
+  rm -r "$d/home/.cache/quickshell/crashes/a b"
   printf ' ERROR: Quickshell has crashed under pid 43\n' > "$d/home/shell.log"
   check_eq "only the log's crash line: crashed" "crashed - rc 0 " "$(sc "42 (quickshell) S 1")"
   check_eq "...said without a report" "warning: the shell crashed while starting (omabox log -b u shell)" \
@@ -8369,12 +8445,12 @@ t_unit_shell_crash() {
   # finding 255: a report of a process older than this start (its pid below shell.sh's mark) is an old
   # shell's, stopped as it loaded, not this start's crash.
   local m=$d/home/.cache/quickshell/crashes/m1
-  mkdir "$m"; printf 'Signal: Segmentation fault (11)\nCrashed process ID: 30\n' > "$m/report.txt"
+  mkdir "$m"; printf 'Signal: Segmentation fault (11)\nCrashed process ID: 30\n%s\n' "$cp" > "$m/report.txt"
   echo 40 > "$d/run/omabox-shell.mark"
   check_eq "a report of a process older than this start (below shell.sh's mark): no crash (finding 255)" "rc 1 " "$(sc "42 (quickshell) S 1")"
-  printf 'Crashed process ID: 41\n' > "$m/report.txt"
+  printf 'Crashed process ID: 41\n%s\n' "$cp" > "$m/report.txt"
   check_eq "...one of this start's (above it): crashed" "crashed $m/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
-  rm "$d/run/omabox-shell.mark"; printf 'Crashed process ID: 30\n' > "$m/report.txt"
+  rm "$d/run/omabox-shell.mark"; printf 'Crashed process ID: 30\n%s\n' "$cp" > "$m/report.txt"
   check_eq "...no mark (a box an older omabox started): every report counts, as before" "crashed $m/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
   rm -r "$m"
   # finding 248: its pid gone as a duplicate of a shell another start brought up meanwhile.
@@ -8478,6 +8554,51 @@ t_shell_crash() {
   check "restart-shell brings it back" ob restart-shell -b "$B"
   check "...running" shell_is running
   check_fails "...shot warns no more" grep -q shell <<<"$(ob shot -b "$B" -o "$TMP/back.png" 2>&1 >/dev/null)"
+  ob down "$B" >/dev/null
+}
+
+# #303 (finding 408): another Quickshell in the box (a project's own, crashed on purpose to test its
+# crash handling) is not the box's shell: its crash is not said as the shell's, and its dialog is left to
+# it. The box's shell killed outright (no report) and started again by its launcher is said, once; and
+# a `run` command killed by a signal is said in words, not by bash's job-control line.
+t_shell_other_crash() {
+  local B=$P-ocrash D H out rc qp dp sp i
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
+  D=$XDG_RUNTIME_DIR/omabox/$B H=$(ob path "$B")/home
+  ob run -b "$B" -- sh -c 'mkdir -p /tmp/qt && printf "import Quickshell\nShellRoot {}\n" > /tmp/qt/shell.qml'
+  ob run -b "$B" -q -d -- /usr/bin/quickshell -p /tmp/qt
+  qp=""; for i in $(seq 100); do
+    qp=$(ob run -b "$B" -- /usr/bin/quickshell list -j -p /tmp/qt --any-display 2>/dev/null | jq -r 'first(.[].pid) // empty')
+    [ -n "$qp" ] && grep -aq 'Configuration Loaded' "$H"/run-*.log 2>/dev/null && break
+    sleep 0.1
+  done
+  [ -n "$qp" ] || { no "a Quickshell of the test's own started" "$(cat "$H"/run-*.log 2>/dev/null | tail -n 5)"; ob down "$B" >/dev/null; return; }
+  sp=$(cat "$D/run/omabox-shell.pid")
+  ob windows -b "$B" >/dev/null 2>&1
+  shell_segv "$B" "$qp"
+  check "the test's Quickshell crashed: its report written" until_ok 10 bash -c "grep -qx 'Config Path: /tmp/qt/shell.qml' '$H'/.cache/quickshell/crashes/*/report.txt"
+  # shellcheck disable=SC2016 # jq's
+  check "...its dialog opens" until_ok 10 bash -c "'$CLI' windows -b '$B' --json 2>/dev/null | jq -e 'any(.[]; .class == \"org.quickshell\")'"
+  sleep 1.5   # (omabox's closer would have taken it by now: it did within ms)
+  dp=$(ob windows -b "$B" --json 2>/dev/null | jq -r 'first(.[] | select(.class == "org.quickshell") | .pid) // empty')
+  check "...and stays: not the box shell's to close (#303)" test -n "$dp"
+  check_fails "...shell.log says no dialog closed" grep -q "closed the shell's crash dialog" "$H/shell.log"
+  out=$(ob windows -b "$B" 2>&1 >/dev/null)
+  check_fails "...the next command says no shell crash (was: \"the shell crashed since the last command\")" grep -q "shell" <<<"$out"
+  check_match "...ls: the shell running, no crash counted" "^$B +headless +[^ ]+ +up +running " "$(ob ls | grep "^$B ")"
+  check_eq "...the shell untouched" "$sp" "$(cat "$D/run/omabox-shell.pid")"
+  [ -z "$dp" ] || ob run -b "$B" -- kill "$dp"
+  # The box's shell killed outright: no crash handler, no report; Omarchy's launcher starts it again.
+  ob run -b "$B" -- kill -KILL "$sp"
+  check "the shell killed (SIGKILL): its launcher starts it again" until_ok 15 bash -c "p=\$(cat '$D/run/omabox-shell.pid'); [ -n \"\$p\" ] && [ \"\$p\" != '$sp' ]"
+  out=$(ob windows -b "$B" 2>&1 >/dev/null)
+  check_match "...the next command says so (it said nothing)" \
+    "warning: the shell was killed by SIGKILL \(137\) since the last command and was started again( \(it is starting\))? \(omabox log -b $B shell\)" "$out"
+  check_fails "...once" grep -q "shell" <<<"$(ob windows -b "$B" 2>&1 >/dev/null)"
+  check "...the bar back" ob wait -b "$B" layer omarchy-bar
+  # A run whose command is killed: run's words and its status, not bash's "line N: PID Killed prlimit ...".
+  out=$(ob run -b "$B" -- sh -c 'kill -KILL $$' 2>&1); rc=$?
+  check_eq "run, its command killed: exit 137, said in words (was bash's job-control line)" "137 omabox: the command was killed by SIGKILL (137)" "$rc $out"
   ob down "$B" >/dev/null
 }
 
@@ -14369,10 +14490,10 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_brief t_link_out t_run_cwd t_clean t_check)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

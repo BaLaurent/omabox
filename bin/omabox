@@ -1423,12 +1423,15 @@ ns_hold_read() {
 # CMD"; the word "line" and the signal's are translated).
 ns_own_line() {
   [[ $1 =~ ^(nsenter|prlimit|env):\ . ]] && return 0
-  [[ $1 == "$0: "* ]] && [[ ${1#"$0: "} =~ ^[^\ ]+\ [0-9]+:\ +[0-9]+\ . ]]
+  ns_kill_line "$1"
 }
+ns_kill_line() { [[ $1 == "$0: "* ]] && [[ ${1#"$0: "} =~ ^[^\ ]+\ [0-9]+:\ +[0-9]+\ . ]]; }
 # What ns_held held, after a command that ended RC: on a box that went down meanwhile (its PID 1 can
 # outlive the command by a moment: up to 2 s), WORDS instead, or nothing when the caller says it (run);
 # else its own lines (ns_own_line; whole ones, at most 3, printable ASCII only), and how many bytes
-# of anything else were dropped. ns_said RC [WORDS]
+# of anything else were dropped. With NS_KILL_SAY (run's own command, #303), bash's line for a command
+# killed by a signal ("omabox: line 1867: 662938 Killed  prlimit --core=1: "$@"", its own script's
+# words) is said as run says a job's end: "the command was killed by SIGKILL (137)". ns_said RC [WORDS]
 ns_said() {
   [ -n "${NS_HELD:-}" ] || return 0
   if [ "$1" != 0 ]; then
@@ -1438,16 +1441,20 @@ ns_said() {
       sleep 0.2
     done
   fi
-  local LC_ALL=C l lines=() out="" n=0 kept=0 held=$NS_HELD
+  local LC_ALL=C l lines=() out="" n=0 kept=0 held=$NS_HELD killed=""
   # (A last line without its newline is not a whole one.)
   [[ $held == *$'\n'* ]] && mapfile -t lines <<<"${held%$'\n'*}"
   for l in "${lines[@]}"; do
     l=${l//[^[:print:]]/}
     if [ $n -lt 3 ] && [ ${#l} -le 400 ] && ns_own_line "$l"; then
+      if [ -n "${NS_KILL_SAY:-}" ] && [ "$1" -gt 128 ] && ns_kill_line "$l"; then
+        killed=1 n=$((n + 1)) kept=$((kept + ${#l} + 1)); continue
+      fi
       out+=$l$'\n' n=$((n + 1)) kept=$((kept + ${#l} + 1))
     fi
   done
   printf '%s' "$out" >&2
+  [ -z "$killed" ] || say "the command $(job_how "$1")"
   [ $((${#held} - kept)) -le 0 ] || say "dropped $((${#held} - kept)) bytes of other output on nsenter's stderr"
 }
 
@@ -2049,8 +2056,28 @@ wait_hyprland() {
 # report into a new folder under the box HOME's ~/.cache/quickshell/crashes and logs "Quickshell has
 # crashed" in shell.log (which shell.sh starts afresh); one within 10 s of its start is not restarted.
 # Those folders now, for shell_crash to tell a new one: SHELL_BEFORE, set before the shell starts.
+# Only the box shell's (#303, finding 408): every Quickshell in the box writes its reports there, a
+# project's own instance under test too, and that one's crash is not the shell's. A report names its
+# instance's config ("Config Path: DIR/shell.qml"), the box shell's DIR being the Omarchy tree's shell/;
+# not its pid ("Crashed process ID" is the child Quickshell's handler forks to dump, the shell itself
+# being exec'd again at its own pid). A folder whose report is not written yet is nobody's until it is.
+# The box writes them: no link, under the box HOME, a name on one line; one awk for them all.
 SHELL_BEFORE="" BAR_AT=0
-shell_crash_dirs() { ls -1 -- "$D/home/.cache/quickshell/crashes" 2>/dev/null || true; }
+shell_crash_dirs() {
+  local dir home want rep files=()
+  dir=$(readlink -e -- "$D/home/.cache/quickshell/crashes" 2>/dev/null) && home=$(readlink -e -- "$D/home") &&
+    [[ $dir == "$home"/* ]] || return 0
+  for rep in "$dir"/*; do
+    rep=${rep##*/}
+    [[ $rep != *$'\n'* ]] && [ ! -L "$dir/$rep" ] && [ ! -L "$dir/$rep/report.txt" ] && [ -f "$dir/$rep/report.txt" ] || continue
+    files+=("$dir/$rep/report.txt")
+  done
+  [ ${#files[@]} -gt 0 ] || return 0
+  want=$(meta omarchy); want=$(printf '%s' "${want:-/usr/share/omarchy}/shell" | tr -s /); want=${want%/}
+  awk -v want="$want" 'FNR == 1 { seen = 0 }
+    !seen && /^Config Path: / { seen = 1; c = substr($0, 14); gsub(/\/+/, "/", c); sub(/\/[^\/]*$/, "", c)
+      if (c == want) { n = FILENAME; sub(/\/report\.txt$/, "", n); sub(/.*\//, "", n); print n } }' "${files[@]}" 2>/dev/null || true
+}
 # The Omarchy shell's pid in the box (share/shell.sh writes it), or nothing.
 shell_pid() { local p; p=$(run_read omabox-shell.pid) && [[ $p =~ ^[0-9]+$ ]] && echo "$p"; }
 # Box pid PID is a process, and not one that exited and was not reaped yet.
@@ -2136,12 +2163,40 @@ shell_state() {
 # Its crashes since `up`: the report folders Quickshell's handler wrote (a crash past 10 s keeps its pid,
 # so only these tell it; a fresh box HOME has none, and a save keeps no .cache).
 shell_crashes() { shell_crash_dirs | grep -c . || true; }
+# Omarchy's launcher starting the shell again since shell.sh last started it (#303, finding 408): a
+# shell killed (SIGKILL: no crash handler, no report) or exiting non-zero is started again, a new pid,
+# and nothing else tells it. The launcher says each, "Omarchy shell exited with status N; relaunching.",
+# through the box's logger into shell.log, which shell.sh starts afresh and marks (omabox-shell.mark).
+# "MARK COUNT STATUS": that mark, how many such lines, the last one's status (- for none). A shell
+# stopped on purpose (`omarchy restart shell`, restart-shell) quits cleanly: no line.
+shell_relaunches() {
+  local mark f n=0 st=-
+  mark=$(run_read omabox-shell.mark) && [[ $mark =~ ^[0-9]+$ ]] || mark=0
+  if f=$(box_home_file shell.log); then
+    read -r n st < <(grep -aoE 'omarchy-shell: Omarchy shell exited with status [0-9]{1,3}; relaunching' "$f" 2>/dev/null |
+      awk '{ n++; s = $(NF - 1) } END { sub(/;$/, "", s); print n + 0, (s == "" ? "-" : s) }') || { n=0 st=-; }
+  fi
+  echo "$mark $n $st"
+}
+# What the next shell_note compares with, as things are now: after a command said it, or `up` and
+# `restart-shell` started the shell (what they said is not said again).
+shell_seen() {
+  shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true
+  shell_relaunches > "$D/shell-relaunches-seen" 2>/dev/null || true
+}
 # One line from shot, wait, windows, keys and click (#147): the shell gone, or crashed since the last
-# command said so (started again, but what the test sees changed).
+# command said so (started again, but what the test sees changed), or killed and started again by its
+# launcher (#303).
 shell_note() {
   [ "$(meta shell)" = true ] || return 0
-  local n seen state; n=$(shell_crashes); seen=$(cat "$D/shell-crashes-seen" 2>/dev/null) || seen=0
+  local n seen state rl old new=0 m c st om oc; n=$(shell_crashes); seen=$(cat "$D/shell-crashes-seen" 2>/dev/null) || seen=0
   [[ $seen =~ ^[0-9]+$ ]] || seen=0
+  rl=$(shell_relaunches); read -r m c st <<<"$rl"
+  # (None yet, a box an older omabox started: this one is the first look.)
+  old=$(head -c 100 "$D/shell-relaunches-seen" 2>/dev/null) || old=""; read -r om oc _ <<<"$old"
+  if [[ ${om:-} =~ ^[0-9]+$ && ${oc:-} =~ ^[0-9]+$ ]]; then
+    if [ "$m" = "$om" ]; then new=$((c - oc)); else new=$c; fi
+  fi
   state=$(shell_state)
   if [ "$state" = gone ]; then
     say "warning: box '$NAME' has no shell (gone$([ "$n" = 0 ] || echo " after $n crash(es)"); omabox log -b $NAME shell; omabox restart-shell -b $NAME)"
@@ -2149,8 +2204,12 @@ shell_note() {
     say "warning: the shell of box '$NAME' does not answer (hung: its bar is frozen; omabox log -b $NAME shell; omabox restart-shell -b $NAME)"
   elif [ "$n" -gt "$seen" ]; then
     say "warning: the shell crashed since the last command and was started again$([ "$state" = running ] || echo " (it is starting)") (omabox log -b $NAME shell)"
+  elif [ "$new" -gt 0 ]; then
+    local how="exited"; [[ $st =~ ^[0-9]+$ ]] && how=$(job_how "$st")
+    say "warning: the shell $how since the last command and was started again$([ "$state" = running ] || echo " (it is starting)") (omabox log -b $NAME shell)"
   fi
   echo "$n" > "$D/shell-crashes-seen" 2>/dev/null || true
+  echo "$rl" > "$D/shell-relaunches-seen" 2>/dev/null || true
 }
 # shell_crash's answer in words. shell_crash_text WHEN HOW
 shell_crash_text() {
@@ -4518,7 +4577,7 @@ cmd_up() {
   # The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
   local crashed=""; [ "$shell" != 1 ] || crashed=$(shell_watch) || true
   # Crashes said here are not said again by the next command (shell_note, #147).
-  shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true
+  shell_seen
   [ -n "$crashed" ] || plugin_check
   client_render_check
   # --audio (#226): its speaker the default output before up returns, so a recording or a sound right
@@ -5906,7 +5965,7 @@ cmd_run() {
     fi
     local rc=0
     run_mark_begin   # (a job it stops is no news: job_note)
-    box_exec "$@" || rc=$?
+    NS_KILL_SAY=1 box_exec "$@" || rc=$?
     run_mark_end
     touch "$D/used" 2>/dev/null || true
     run_gone $rc || rc=125
@@ -5956,7 +6015,7 @@ cmd_run() {
   run_link_notes run 1 "$@"   # (links at the top of the repo: its up said them)
   run_cwd_note run "$@"       # outside a repo: nothing of this dir in the box (#251)
   local rc=0
-  box_exec "$@" || rc=$?
+  NS_KILL_SAY=1 box_exec "$@" || rc=$?
   run_gone $rc || rc=125
   return $rc
 }
@@ -12288,9 +12347,9 @@ cmd_output() {
   fi
   # Cycles: gone for --for (or, without it, gaps from 50 ms to 2 s in turn: one of them found the crash
   # in #146), back, a second to rebuild. The first shell crash ends them: that is what they look for.
-  local i g n0 n sh=0 screen
+  local i g n0 n sh=0 screen before
   [ "$(meta shell)" = true ] && sh=1
-  n0=$(shell_crashes)
+  before=$(shell_crash_dirs); n0=$(grep -c . <<<"$before" || true)
   for ((i = 1; i <= ${cycles:-1}; i++)); do
     g=${gap:-${OUTPUT_GAPS[(i - 1) % ${#OUTPUT_GAPS[@]}]}}
     output_drop "$out"
@@ -12301,9 +12360,9 @@ cmd_output() {
     n=0; [ $sh = 0 ] || n=$(shell_crashes)
     if [ "$n" -gt "$n0" ]; then
       echo "cycle $i/${cycles:-1}: gone for $(ms_s "$g"), back as $screen; shell crashed"
-      echo "$n" > "$D/shell-crashes-seen" 2>/dev/null || true
-      local new; new=$(find "$D/home/.cache/quickshell/crashes" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %f\n' 2>/dev/null | sort -rn | head -n 1) || true
-      new=${new#* }
+      shell_seen
+      # (The shell's own report: not another Quickshell's in the box, #303.)
+      local new; new=$(comm -13 <(sort <<<"$before") <(shell_crash_dirs | sort) | tail -n 1) || new=""
       [[ $new =~ ^[A-Za-z0-9_.-]+$ ]] && new="report: $D/home/.cache/quickshell/crashes/$new/report.txt; " || new=""
       die "output: the shell crashed in cycle $i (${new}omabox log -b $NAME shell)"
     fi
@@ -13350,7 +13409,7 @@ cmd_restart_shell() {
   wait_ready 1
   # A shell that crashed just after its bar came is no restart (#126): said with its report, exit 1.
   local crashed=""; crashed=$(shell_watch) || crashed=""
-  shell_crashes > "$D/shell-crashes-seen" 2>/dev/null || true   # said here, not again (shell_note, #147)
+  shell_seen   # said here, not again (shell_note, #147)
   if [ -n "$crashed" ]; then say "$crashed"; exit 1; fi
   say "shell restarted in box '$NAME'"
   plugin_check
