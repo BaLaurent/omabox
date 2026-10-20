@@ -112,6 +112,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   AccessKit before accesskit_unix 0.22 waits for that property, so it has no tree there. libatspi's
   warning about such an app's missing cache, which `tree` drops, is dropped under libatspi's new log
   name too.
+- **A plugin that loaded is no longer said to have a warning on Quickshell 0.3.2.** That version
+  warns about every plugin folder outside the shell's config folder, as all of Omarchy's are, and
+  `up` and `restart-shell` printed it as each plugin's own warning ("plugin ID loaded, with a
+  warning in the shell log: Module path ... is outside of the config folder"). That message is left
+  out now; any other line naming the plugin still shows.
 
 ## 0.7.0 — 2026-10-16
 

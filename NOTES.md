@@ -7705,6 +7705,19 @@ from them.
     instead of its line step. QTBUG-112432 still holds: the device is still the seat's touchpad and
     a WheelHandler at its default acceptedDevices still takes nothing. `help scroll` says it; the
     checks take 0 or 15. Tests: t_pointer.
+372. **Quickshell 0.3.2 warns about every Omarchy plugin dir: not the plugin's warning**
+    (2026-10-20). With Quickshell 0.3.2.r7 (from 0.3.1) the shell logs, for each plugin under
+    `~/.config/omarchy/plugins`, `WARN quickshell.qmlscanner: Module path "…/plugins/ID" is outside
+    of the config folder.` (Omarchy's shell runs from /usr/share/omarchy/shell; its plugins live
+    in the user's config), and the plugin loads as before. `up` and `restart-shell` read any shell
+    log line naming a plugin as its warning, so every mounted plugin that loaded came out as
+    "plugin ID loaded, with a warning in the shell log: Module path …" (t_plugin_check's good
+    plugin, t_plugin_link's fixed one), and `ls --json` gave it as the plugin's `log`. The lines a
+    plugin's state reads (now `shell_warnings`) leave that one message out; any other qmlscanner
+    line still counts (0.3.2 also says a first-party plugin's dir, `/plugins/image-picker`, has
+    characters a module name cannot: it names no mounted plugin). Not a concurrent change on the
+    host: the box's own shell log, the string is in /usr/bin/quickshell. Tests: t_unit_shell_warnings,
+    t_plugin_check, t_plugin_link.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
