@@ -583,8 +583,10 @@ with `--keep wallpaper` or after a theme set in the box.
   (SIGTERM to the session, what it forked included; SIGKILL after 5 s), waits until their windows are
   gone, then starts CMD (`--wait` as usual). Only those: an app started another way (a bind, `run --
   setsid ...`, D-Bus activation) is not touched, even when the job only handed it its arguments (a
-  single-instance app already running): stop that one yourself. No earlier job (or one that
-  exited): it just starts, and says so.
+  single-instance app already running): stop that one yourself. Nor a job of the same program with
+  other arguments (`--demo details`, then `--replace -- ./app --demo table`): it stays beside the new
+  one, and `--replace` names it with its pid (`omabox run -- kill PID` stops it). No earlier job (or
+  one that exited): it just starts, and says so.
 
 ## Network
 

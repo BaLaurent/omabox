@@ -604,7 +604,8 @@ peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box
 --print-log prints the log's path on stdout (first, before --wait's line). \`run -d --replace\`
 first stops what \`run -d\` started in that box with the same command and arguments (SIGTERM to its
 session, SIGKILL after 5 s) and waits for its windows to go: a rebuilt app in one step. Nothing
-else in the box is touched: an app started some other way stays. A \`run -d --wait\` whose command
+else in the box is touched: an app started some other way stays, and so does a job of the same
+program with other arguments (named, with its pid). A \`run -d --wait\` whose command
 ended before the screen settled, leaving nothing running, says so with its exit status and its
 log's last lines, and exits with that status (124 when it was 0: the screen is still the question).
 @ up run
@@ -5171,6 +5172,13 @@ job_procs() {
     END { if (!reused) printf "%s", out }'
 }
 
+# A job's program, for --replace to name a job of it run with other arguments (#255): a path resolved
+# against this directory, the box's working dir when the box has it (lexically: ./build/app and
+# build/app are one program); a bare name as it is, which the box's PATH resolves alike. job_exe ARGV0
+job_exe() {
+  case $1 in */*) realpath -ms -- "$1" 2>/dev/null || printf '%s\n' "$1" ;; *) printf '%s\n' "$1" ;; esac
+}
+
 # After a launch: the record of job PID (in the box), unless it is gone already. job_record PID LOG ARGV...
 job_record() {
   local pid=$1 log=$2 procs start; shift 2
@@ -5178,8 +5186,8 @@ job_record() {
   [ -n "$procs" ] || return 0
   start=$(awk -v pid="$pid" '$2 == pid { print $4 }' <<<"$procs")
   mkdir -p "$D/jobs"
-  jq -nc --arg pid "$pid" --arg start "${start:--}" --arg log "$log" \
-    '{pid: $pid, start: $start, log: $log, argv: $ARGS.positional}' --args -- "$@" > "$D/jobs/$pid" || true
+  jq -nc --arg pid "$pid" --arg start "${start:--}" --arg log "$log" --arg exe "$(job_exe "$1")" \
+    '{pid: $pid, start: $start, log: $log, exe: $exe, argv: $ARGS.positional}' --args -- "$@" > "$D/jobs/$pid" || true
 }
 
 # The processes of the jobs recorded in FILES, as "HOST_PID BOX_PID" lines; a record whose job has
@@ -5191,6 +5199,23 @@ job_live() {
     local p; p=$(job_procs "$pid" "$start" <<<"$procs")
     if [ -n "$p" ]; then echo "$p"; else rm -f "$f"; fi
   done
+}
+
+# The live `run -d` jobs of ARGV's program (job_exe; argv[0] itself in a record made before it had
+# one), as "ARGV0 (pid PID, ARGS)" lines by pid. job_others ARGV...
+job_others() {
+  local exe f pid out=() line; exe=$(job_exe "$1")
+  for f in "$D"/jobs/*; do
+    [ -f "$f" ] || continue
+    jq -e --arg exe "$exe" --arg a0 "$1" 'if .exe then .exe == $exe else .argv[0] == $a0 or .argv[0] == $exe end' "$f" >/dev/null 2>&1 || continue
+    line=$(job_live "$f") || line=""
+    [ -n "$line" ] || continue
+    line=$(jq -r '"\(.argv[0]) (pid \(.pid), \(if (.argv | length) > 1 then .argv[1:] | join(" ") else "no arguments" end))"' "$f" 2>/dev/null) || continue
+    pid=$(jq -r .pid "$f" 2>/dev/null) || pid=0
+    out+=("$pid"$'\t'"$line")
+  done
+  [ ${#out[@]} -gt 0 ] || return 0
+  printf '%s\n' "${out[@]}" | sort -n | cut -f2-
 }
 
 # run -d --replace (issue #29): stop the jobs `run -d` started in this box with this command (the same
@@ -5205,7 +5230,16 @@ job_replace() {
   done
   procs=""; [ ${#recs[@]} = 0 ] || procs=$(job_live "${recs[@]}")
   if [ -z "$procs" ]; then
-    [ "$quiet" = 1 ] || say "--replace: no earlier job of this command in box '$NAME'"
+    # A job of the same program with other arguments still runs (#255): named, as it would otherwise
+    # stay up beside the new one, and said under -q too. The contract stays the same words.
+    local others; others=$(job_others "$@") || others=""
+    if [ -n "$others" ]; then
+      local verb="still runs: stop it, or --replace with its arguments"
+      [ "$(wc -l <<<"$others")" = 1 ] || verb="still run: stop them, or --replace with the arguments of one"
+      say "--replace: no earlier job with these arguments; $(awk 'NR > 1 { printf ", " } { printf "%s", $0 }' <<<"$others") $verb"
+    else
+      [ "$quiet" = 1 ] || say "--replace: no earlier job of this command in box '$NAME'"
+    fi
     return 0
   fi
   # Its windows, to see them go (Hyprland's pids are the box's).

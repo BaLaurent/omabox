@@ -125,6 +125,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   HOME (`~/.cache/omabox/BOX`) stayed behind, `down` printed only rm's "Permission denied", and the
   next box under that name started with its leftovers. A HOME that still cannot be removed is now
   said on stderr, by `down` and by the clean-up at each `up`.
+- **`run -d --replace` with other arguments names the job it leaves running.** `--replace` stops
+  only the job started with the same command and arguments, so relaunching `./build/app --demo
+  table` after `./build/app --demo details` left both running, while the note said "no earlier job
+  of this command". It now says which job of that program still runs and how to deal with it:
+  `--replace: no earlier job with these arguments; ./build/app (pid 115, --demo details) still runs:
+  stop it, or --replace with its arguments`. The skill's line says "the same command and arguments".
 
 ## 0.7.0 — 2026-10-16
 

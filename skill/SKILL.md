@@ -55,7 +55,7 @@ ref: Project instructions, in detail.
 ```bash
 omabox up                                  # headless box, 1920x1080; waits until the bar is drawn
 omabox run -d --wait -- ./build/src/myapp  # launch, detached (log path printed); returns once drawn
-omabox run -d --replace --wait -- ./myapp  # after a rebuild: replaces the one run -d started
+omabox run -d --replace --wait -- ./myapp  # after a rebuild: replaces the earlier job with the same command and arguments
 omabox shot                                # prints a PNG path: Read it to look
 omabox windows                             # address, workspace, on screen or covered
 omabox shot --window myapp                 # one window's own pixels, even covered or elsewhere
@@ -182,7 +182,7 @@ do not report it as tested. (`systemctl --user`: `omabox up --systemd`.) On NVID
 Say "in an omabox box (Omarchy VERSION, Hyprland VERSION, WxH and any `--monitor`s, theme NAME)"
 (`ls --json`: `omarchy_version`, `hyprland_version`; null: `omabox hyprctl version`) and your
 project's commit. Layout, focus, input routing, the launcher, theme switches,
-notifications, the tray and the keyring were tested for real; real monitors, the system bus,
-devices, the installed package and the user's HOME were not: say so. Never "tested on the desktop"
+notifications, the tray and the keyring were tested for real; what a box lacks (above) and the
+installed package were not: say so. Never "tested on the desktop"
 for a box result. A box idle for 2h goes down by itself (`up --idle 0` keeps one). Quirks: `NOTES.md`
 (`readlink -f $(command -v omabox)` → `../NOTES.md`).

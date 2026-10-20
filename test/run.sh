@@ -3569,6 +3569,33 @@ t_unit_run_job() {
   check "...a signal's: 128+N" until_ok 5 grep -qx 143 "$TMP/rj2.exit"
 }
 
+# run -d --replace with other arguments (#255): a job of the same program is named, by its resolved
+# path (a record from before it had one: by its argv[0]); one that ended or of another program is not.
+# Records in a dir of their own; job_live stubbed (a job is live while its record says "live").
+t_unit_replace_others() {
+  local d=$TMP/ro
+  mkdir -p "$d/r/jobs" "$d/build"; d=$(cd "$d" && pwd -P)
+  check_eq "job_exe: ./build/app and build/app are one program" "$d/build/app $d/build/app qml" \
+    "$(cd "$d" && lib job_exe ./build/app | tr '\n' ' '; cd "$d" && lib job_exe build/app | tr '\n' ' '; lib job_exe qml)"
+  # rec PID LIVE EXE ARGV...: a job record (EXE - for none, as before #255)
+  rec() { local pid=$1 live=$2 exe=$3; shift 3
+    jq -nc --arg pid "$pid" --arg live "$live" --arg exe "$exe" '{pid: $pid, start: "1", log: "l", live: $live, argv: $ARGS.positional}
+      + (if $exe == "-" then {} else {exe: $exe} end)' --args -- "$@" > "$d/r/jobs/$pid"; }
+  rec 115 live "$d/build/app" ./build/app --demo details
+  rec 120 dead "$d/build/app" ./build/app --demo old
+  rec 130 live qml qml other.qml
+  rec 140 live - ./build/app
+  # others DIR ARGV...: job_others for ARGV run from DIR
+  others() { local wd=$1; shift
+    (cd "$wd" && D="$d/r" bash -c 'source "$1"; shift; job_live() { jq -e ".live == \"live\"" "$1" >/dev/null && echo "1 $(jq -r .pid "$1")"; }; job_others "$@"' _ "$TMP/lib/bin/omabox" "$@"); }
+  check_eq "--replace with other arguments: the live job of the program named, the ended one not" \
+    "./build/app (pid 115, --demo details)"$'\n'"./build/app (pid 140, no arguments)" "$(others "$d" ./build/app --demo table)"
+  check_eq "...the same program by another path to it (a record without its path: by the same words only)" \
+    "./build/app (pid 115, --demo details)" "$(others "$d/build" ./app --x)"
+  check_eq "...a bare name by its name" "qml (pid 130, other.qml)" "$(others "$d" qml main.qml)"
+  check_eq "...another program: none" "" "$(others "$d" ./build/other --demo details)"
+}
+
 t_unit_cli() {
   local dn0; dn0=$(cd "$ROOT" && lib default_name)
   check_match "default_name gives a name (#110: compared below)" '^[A-Za-z0-9]' "$dn0"
@@ -12460,14 +12487,21 @@ t_replace() {
   ob run -b "$B" -d -q -- sleep 601
   ob run -b "$B" -d -q --replace -- sleep 601
   check_eq "...one sleep 601 not run -d's, one new: both there" 2 "$(ob run -b "$B" -- pgrep -cxf 'sleep 601')"
-  # Nothing to replace: said; a job that ended: its record dropped
+  # Other arguments (#255): not replaced, as before, but the job of the same program still running named
   err=$(ob run -b "$B" -d --replace -- sleep 602 2>&1 >/dev/null)
+  check_match "other arguments: the earlier job of the program named" \
+    "no earlier job with these arguments; sleep \(pid [0-9]+, 601\) still runs: stop it, or --replace with its arguments" "$err"
+  old=$(sed -n 's/.*sleep (pid \([0-9]*\),.*/\1/p' <<<"$err")
+  check "...and left running ($old), beside the new one" test -n "$old" -a "$(ob run -b "$B" -- sh -c "kill -0 $old && pgrep -cxf 'sleep 602'")" = 1
+  # Nothing to replace: said; a job that ended: its record dropped
+  err=$(ob run -b "$B" -d --replace -- env sleep 609 2>&1 >/dev/null)
   check_match "no earlier job: said" "no earlier job of this command" "$err"
   ob run -b "$B" -d -q -- sh -c 'sleep 0.3'
   until_ok 5 bash -c "! '$CLI' run -b '$B' -- pgrep -fx '(sh -c )?sleep 0.3'" >/dev/null
   old=$(grep -l '"sleep 0.3"' "$D"/jobs/*)
   err=$(ob run -b "$B" -d --replace -- sh -c 'sleep 0.3' 2>&1 >/dev/null)
-  check_match "a job that exited: nothing to replace" "no earlier job of this command" "$err"
+  check_match "a job that exited: nothing to replace" "no earlier job" "$err"
+  check_fails "...nor named" grep -q 'sleep 0.3' <<<"$err"
   check "...its record dropped (${old##*/})" test -n "$old" -a ! -e "$old"
   # A job that ignores SIGTERM: killed after 5 s
   ob run -b "$B" -d -q -- sh -c 'trap "" TERM; sleep 603'
@@ -12823,7 +12857,7 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)
 

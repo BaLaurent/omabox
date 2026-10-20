@@ -7757,6 +7757,18 @@ from them.
     Omarchy's to scope (only lockers under the caller's Hyprland instance); omabox only says it:
     skill/reference.md, Mounts, HOME and the session. No `ls`/`up` warning (decided).
 
+376. **`run -d --replace` names a job of the same program with other arguments** (2026-10-20,
+    #255). `--replace` matches a job by its whole command line (finding 110), so `./build/app --demo
+    details` then `--replace -- ./build/app --demo table` left the first one running beside the new
+    one, and the note "no earlier job of this command" read as "nothing was running". The contract
+    stays (matching by program instead would stop a second instance on purpose); when nothing matches
+    and a live `run -d` job of the same program runs, the note names it: `no earlier job with these
+    arguments; ./build/app (pid 115, --demo details) still runs: stop it, or --replace with its
+    arguments`, under -q too. A job record now keeps `exe`, argv[0] resolved lexically against the
+    caller's directory (`./build/app` and `build/app` are one program; a bare name stays a name);
+    a record from before has only argv[0], compared as written. In a box: `sleep 601` then
+    `--replace -- sleep 602` names the first (t_replace; t_unit_replace_others).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
