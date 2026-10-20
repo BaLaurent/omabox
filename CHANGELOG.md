@@ -16,6 +16,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   path for an agent's own file tools, in place of `$(omabox path)/home` inside a command.
 - The skill's reference has a section for subagents in an isolated worktree: five rules that keep
   every omabox call one the worktree check lets through.
+- **`omabox record --for 5s`** records the screen for that long with no action: something that
+  moves by itself (a panel cycling on a timer) no longer needs a dummy action that moves the
+  pointer. The video is that long, a frame or two more
+  ([#259](https://github.com/diogochaves/omabox/issues/259)).
+- **`omabox record hold 2s`**, between `record start` and `record stop`, is a pause in a scripted
+  take: it returns once the video has 2 s more from when it was called, measured in the video's own
+  clock (its frames' times), so a slow box or a slow script never shortens the pause the viewer
+  sees; it prints the span ("held 4.210s to 6.210s"). With nothing recording it exits 2, naming
+  `record start`. `record mark TEXT --hold 2s` marks, then holds from the mark. The skill names
+  both as the way to let time pass in a recording
+  ([#280](https://github.com/diogochaves/omabox/issues/280)).
 
 ### Changed
 
@@ -24,6 +35,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `logger -t omarchy-shell` lines have the same stamp. Timing what a shell plugin does (a retry's
   backoff) no longer takes `quickshell log --log-times` by hand; `--grep` and `-f` work as before
   ([#276](https://github.com/diogochaves/omabox/issues/276)).
+- `record start`, `stop`, `status` and `sheet` refuse `--hold` (exit 2), which they ignored: it
+  goes with `-- ACTION` or `mark`.
+
+### Fixed
+
+- A jailed agent's one-action `record -- ACTION` (and `--for`) gives `--show-input`, `--captions`
+  and `--cut-idle` to its stop, where they belong; its start refused them.
 
 ### Deprecated
 

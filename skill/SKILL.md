@@ -54,7 +54,7 @@ ref: For subagents in an isolated worktree. ref: Project instructions, in detail
 ```bash
 omabox up                                  # headless box, 1920x1080; waits until the bar is drawn
 omabox run -d --wait -- ./build/src/myapp  # launch, detached (log path printed); returns once drawn
-omabox run -d --replace --wait -- ./myapp  # after a rebuild: replaces the earlier job with the same command and arguments
+omabox run -d --replace --wait -- ./myapp  # after a rebuild: replaces its earlier job (same command and args)
 omabox shot                                # prints a PNG path: Read it to look
 omabox windows                             # address, workspace, on screen or covered
 omabox shot --window myapp                 # one window's own pixels, even covered or elsewhere
@@ -88,8 +88,9 @@ ref: Screen size and rendering cost.
 5. **Stop when a shot shows the goal.** Report what a box cannot show (below).
 
 No `sleep` (nor `wait until -- false`): `--wait`, `omabox wait`, `wait change` for a later redraw
-(0 yes, 124 not in time, 1 cannot tell). Never send a wait to `/dev/null`. An animation that never
-stops: the 124 names it, `--ignore "X,Y WxH"`. ref: Waiting, in detail.
+(0 yes, 124 not in time, 1 cannot tell); in a video `record hold 2s`, `record --for 5s`. Never
+send a wait to `/dev/null`. An animation that never stops: the 124 names it, `--ignore "X,Y WxH"`.
+ref: Waiting, in detail.
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
 discard it) click with `--in THAT.png X Y`, never your own arithmetic. A shot bigger than the model
 sees is scaled down for it, and some models read points in that smaller image (Haiku 4.5: 0.76x):
@@ -149,7 +150,7 @@ Read-only in it: the repo (same path), `--ro-bind`, `--plugin` and `--theme-dir`
 toolchains, fonts; nothing else of their HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret
 stores or the runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`;
 `omabox path --home` on the host). The box's /run/user/$UID is `omabox path --run` on the host; the
-host's own is the real session's: never read app state there. Private session bus and keyring; no system bus or devices; audio: `up --audio`; `/sys`: the host's.
+host's own is the real session's: never read app state there. Private session bus and keyring; audio: `up --audio`; `/sys`: the host's.
 ref: Mounts, HOME and the session.
 
 ## Showing the user

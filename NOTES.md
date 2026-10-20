@@ -7914,6 +7914,36 @@ from them.
     (a Quickshell line timed to the ms in `log shell`, `--grep` keeping only matches, plugin states
     read from timed lines), t_dbus_user_app (the logger line timed), t_omarchy_tree, t_shell_crash,
     t_shell_restart_dup, t_omarchy_restart, t_quickshell; t_unit_shell_warnings (timed lines).
+383. **Time in a recording: `record --for` and `record hold`** (2026-10-20, #259, #280; one design).
+    The skill forbids `sleep`, so a recording of something that moves by itself took a dummy action
+    (`record --hold 5s -- pointer -- move 5 5`: the pointer moved, the intent hidden), and a
+    scripted take's pauses were `wait still --quiet 1500ms --timeout 4s || true`, which runs to its
+    timeout under a clock or a spinner and returns at once on a still screen. Now `record hold
+    DURATION` (between start and stop) returns once the video has DURATION from its call (from the
+    first frame, if that came later), measured in the video's own clock: the recording's
+    first-frame reader (finding 306) no longer hands the rest of wf-recorder's WAYLAND_DEBUG lines
+    to `grep -v`, but to an awk that drops them the same way and writes each frame's `ready` stamp
+    over `last-frame` beside `first-frame`; the hold sleeps on the host until 50 ms before its
+    wall-clock end (in steps of 30 s, touching the box's use, so a long hold is not idle), then
+    polls `last-frame` in the box every 10 ms until every wf-recorder of the recording (each output
+    of `--monitor all`) has a frame stamped at or past the end, in its monotonic clock through the
+    first frame's two readings. So a box slow to give frames never shortens a pause, and a `stop`
+    right after a hold keeps its frames: with wf-recorder SIGSTOPped for 1.5 s, a 500ms hold
+    returned after 1.47 s, and the video reached the hold's end. It prints the span ("held 0.550s
+    to 2.550s"); 5 s past the end with no such frame it fails (exit 1, the recording goes on); with
+    nothing recording, exit 2 naming `record start`. `record mark TEXT --hold D` is the mark, then
+    the hold from the mark's time (--hold keeps its 60 s cap; `hold` and `--for` take up to 60m,
+    durations as ms_duration reads them, a bare number seconds). `record --for DURATION` is start, a
+    quiet hold from the first frame, stop (refused with an action, a sub-command or --hold, exit 2):
+    `--for 3s` gave 3.033 s of video (the stop's one frame more), 1s of a two-monitor layout 1.03 s,
+    so no trim was added. A jailed agent's omabox runs `--for` itself as start, `hold`, stop (the
+    broker refuses `--for` from a jail, as it refuses an action); its one-shot now gives the polish
+    options to stop, not start, which refused them. `record start/stop/status/sheet --hold`, ignored
+    until now, is refused. Real box (Omarchy 4.0.6, Hyprland 0.56.2; holds on the AMD iGPU):
+    t_record_hold (exit 2 with nothing recording; `--for 2s` 2.03 s; marks around a 2 s hold 2.08 s
+    apart; `mark --hold` from the mark's time; the frozen recorder above), and t_scale,
+    t_scale_nvidia (NVIDIA), t_record_layout, t_record_input, t_audio and t_jail_record unchanged by
+    the new frame reader; t_unit_record (the refusals, the relay's `hold` and `--for`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

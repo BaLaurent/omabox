@@ -100,9 +100,11 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
   omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [--glide DURATION]
-                | mark TEXT | stop [SHEET] [POLISH] | status)   a video of the screen
+                | mark TEXT [--hold DURATION] | hold DURATION | stop [SHEET] [POLISH] | status)   a video of the screen
   omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--hold 1s] [--no-pointer] [--audio] [--glide DURATION]
                 [SHEET] [POLISH] -- ACTION...   one action, recorded
+  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [SHEET] [POLISH]
+                --for DURATION   the screen for that long, no action
   omabox record [-b NAME] sheet VIDEO [-o PNG] [--frames 15 | --every DURATION] [--fit N]   a contact sheet of a video
               SHEET: --sheet [--frames 15 | --every DURATION] [--fit N]   the recording's contact sheet, FILE.sheet.png
               POLISH: [--show-input] [--captions] [--cut-idle [1s]]   clicks, pointer, keys and marks drawn in; still stretches cut
@@ -409,6 +411,14 @@ text) and FILE.vtt (captions, each mark until the next), and says where. Caption
 demo.mp4 -vf subtitles=demo.vtt out.mp4\` (players load demo.vtt beside demo.mp4 by themselves); a cut
 at two marks' ms: \`ffmpeg -ss 4.200 -to 9.850 -i demo.mp4 -c:v libx264 cut.mp4\`. A script of omabox
 calls and sleeps runs longer than its sleeps (each call takes its time): marks show where it drifts.
+Time in a recording, never a sleep: \`record --for 5s\` records the screen for 5 s with no action
+(start, a hold, stop: something that moves by itself). In a take, \`record hold 2s\` (between start and
+stop) returns once the video has 2 s more from when it was called, in the video's own clock (its
+frames' times, not the wall clock): a box slow to give frames, or a script slow to call, never
+shortens the pause the viewer sees (the time before the call is in the video too); it says the span
+("held 4.210s to 6.210s"). \`record mark TEXT --hold 2s\` is the mark, then that hold from it (60s at
+most; --for and hold 60m). A bare number is seconds. \`wait still\` is no hold: it returns at once
+on a still screen and runs to its timeout under a clock or a spinner.
 \`record stop --sheet\` (or \`record --sheet -- ACTION\`) adds FILE.sheet.png, and \`record sheet VIDEO\` makes
 one of any video (ffmpeg reads it in the box: a box must be up): a contact sheet to read instead of
 watching, --frames N (15) from the first to the last or one each --every DURATION, each labelled with
@@ -6213,8 +6223,10 @@ calib_verdict() {
 # the box (--monitor all, #225: a wf-recorder an output, "PID,PID... OUTPUT,OUTPUT...", composed at
 # stop by record_compose from $D/record.layout). Marks (#176, finding 306) go to $D/record.marks ("WALL_US TEXT", one a line) and are put in
 # the video's clock at `stop`, from the first frame's time (record_first_us).
-# record [-b NAME] start [-o FILE] [--monitor NAME|all] [--fps N] | mark TEXT | stop [SHEET] | status
+# record [-b NAME] start [-o FILE] [--monitor NAME|all] [--fps N] | mark TEXT [--hold DURATION] | hold DURATION
+#   | stop [SHEET] | status
 # record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps N] [--hold DURATION] [SHEET] -- ACTION...
+# record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps N] [SHEET] --for DURATION
 # record [-b NAME] sheet VIDEO [-o PNG] [--frames N | --every DURATION] [--fit N]
 REC_DIR=/home/sbx/.cache/omabox-record
 # The largest video omabox copies out of a box or into one (#224): 16 GiB, an hour of 4K at 36 Mbit/s
@@ -6235,8 +6247,8 @@ REC_TAGS=(-pix_fmt yuv420p -color_range tv -colorspace bt709 -color_primaries bt
 # The sound (#226): AAC, as an MP4 carries it for every player.
 REC_AAC=(-c:a aac -b:a 192k)
 cmd_record() {
-  local name="" sub="" out="" monitor="" fps=30 hold=1000 ract=() nopointer=0 text=() video="" audio=0
-  local sheet=0 frames="" every="" fit="" w glide="" show=0 caps=0 cut="" as="" tofd="" mfd="" vfd="" fromfd="" mfromfd="" sfile=0
+  local name="" sub="" out="" monitor="" fps=30 hold=1000 holdset=0 ract=() nopointer=0 text=() video="" audio=0
+  local forms="" hdur="" sheet=0 frames="" every="" fit="" w glide="" show=0 caps=0 cut="" as="" tofd="" mfd="" vfd="" fromfd="" mfromfd="" sfile=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
@@ -6264,7 +6276,10 @@ cmd_record() {
           cut=$(ms_duration "$2") && [ "$cut" -ge 100 ] && [ "$cut" -le 600000 ] || die "record: --cut-idle takes a duration from 100ms to 10m, like 1s, got $2"; shift
         fi ;;
       --fps) optarg "$@"; fps=$2; shift ;;
-      --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "record: --hold takes a duration up to 60s, like 500ms or 2s, got $2"; shift ;;
+      --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "record: --hold takes a duration up to 60s, like 500ms or 2s, got $2"; holdset=1; shift ;;
+      # --for DURATION (#259): the screen for that long, no action (start, a hold, stop).
+      --for) optarg "$@"; forms=$(ms_duration "$2") && [ "$forms" -le 3600000 ] ||
+        { say "record: --for takes a duration up to 60m, like 5s or 1.5m (a bare number is seconds), got $2"; exit 2; }; shift ;;
       --sheet) sheet=1 ;;
       --frames) optarg "$@"; [[ $2 =~ ^[0-9]{1,3}$ ]] && [ "$2" -ge 1 ] && [ "$2" -le 100 ] || die "record: --frames is 1 to 100, got $2"
         frames=$2 sheet=1; shift ;;
@@ -6277,24 +6292,37 @@ cmd_record() {
       *)
         if [ "$sub" = mark ]; then text+=("$1")
         elif [ "$sub" = sheet ] && [ -z "$video" ]; then video=$1
+        elif [ "$sub" = hold ] && [ -z "$hdur" ]; then
+          hdur=$(ms_duration "$1") && [ "$hdur" -le 3600000 ] ||
+            { say "record hold: a duration up to 60m, like 2s or 500ms (a bare number is seconds), got $1"; exit 2; }
         elif [ -z "$sub" ]; then
-          case $1 in start|stop|status|mark|sheet) sub=$1 ;; *) die "record: start, stop, status, mark, sheet, or -- ACTION (an omabox command), got $1" ;; esac
+          case $1 in start|stop|status|mark|sheet|hold) sub=$1 ;; *) die "record: start, stop, status, mark, hold, sheet, -- ACTION (an omabox command) or --for DURATION, got $1" ;; esac
         else die "record $sub: unexpected $1"; fi ;;
     esac
     shift
   done
   [[ $fps =~ ^[0-9]+$ ]] && [ "$fps" -ge 1 ] && [ "$fps" -le 120 ] || die "record: --fps is 1 to 120, got $fps"
-  if [ ${#ract[@]} -gt 0 ]; then
+  if [ -n "$forms" ]; then
+    [ ${#ract[@]} = 0 ] || { say "record: --for DURATION or -- ACTION, not both (after an action: --hold DURATION)"; exit 2; }
+    [ -z "$sub" ] || { say "record: --for records for that long (start, a hold, stop): not with $sub (inside a take: record hold DURATION)"; exit 2; }
+    [ $holdset = 0 ] || { say "record: --hold goes with -- ACTION or mark (--for is the whole length)"; exit 2; }
+  elif [ ${#ract[@]} -gt 0 ]; then
     [ -z "$sub" ] || die "record: -- ACTION records one action (start, recording, stop): not with $sub"
     record_action_check "${ract[@]}"
   else
-    [ -n "$sub" ] || die "record: start, stop, status, mark, sheet, or -- ACTION (omabox help record)"
+    [ -n "$sub" ] || die "record: start, stop, status, mark, hold, sheet, -- ACTION or --for DURATION (omabox help record)"
   fi
-  case $sub in stop|status|mark|sheet) [ $nopointer = 0 ] || die "record $sub: --no-pointer goes with start or -- ACTION" ;; esac
-  case $sub in stop|status|mark|sheet) [ $audio = 0 ] || die "record $sub: --audio goes with start or -- ACTION" ;; esac
-  case $sub in stop|status|mark|sheet) [ -z "$glide" ] || die "record $sub: --glide goes with start or -- ACTION" ;; esac
-  case $sub in start|status|mark|sheet) [ $show = 0 ] && [ $caps = 0 ] && [ -z "$cut" ] || die "record $sub: --show-input, --captions and --cut-idle go with stop or -- ACTION" ;; esac
-  case $sub in start|status|mark) [ $sheet = 0 ] || die "record $sub: --sheet, --frames, --every and --fit go with stop, sheet or -- ACTION" ;; esac
+  # --hold: after the action, or after a mark (#280); a hold of its own is record hold DURATION.
+  case $sub in start|stop|status|sheet|hold) [ $holdset = 0 ] || { say "record $sub: --hold goes with -- ACTION or mark (between steps: record hold DURATION)"; exit 2; } ;; esac
+  if [ "$sub" = hold ]; then
+    [ -n "$hdur" ] || { say "record hold: how long, like: omabox record hold 2s"; exit 2; }
+    [ -z "$out$monitor" ] || { say "record hold: -o and --monitor go with start"; exit 2; }
+  fi
+  case $sub in stop|status|mark|sheet|hold) [ $nopointer = 0 ] || die "record $sub: --no-pointer goes with start, -- ACTION or --for" ;; esac
+  case $sub in stop|status|mark|sheet|hold) [ $audio = 0 ] || die "record $sub: --audio goes with start, -- ACTION or --for" ;; esac
+  case $sub in stop|status|mark|sheet|hold) [ -z "$glide" ] || die "record $sub: --glide goes with start, -- ACTION or --for" ;; esac
+  case $sub in start|status|mark|sheet|hold) [ $show = 0 ] && [ $caps = 0 ] && [ -z "$cut" ] || die "record $sub: --show-input, --captions and --cut-idle go with stop, -- ACTION or --for" ;; esac
+  case $sub in start|status|mark|hold) [ $sheet = 0 ] || die "record $sub: --sheet, --frames, --every and --fit go with stop, sheet, -- ACTION or --for" ;; esac
   [ -z "$frames" ] || [ -z "$every" ] || die "record: --frames or --every, not both"
   case $sub in
     mark) [ ${#text[@]} -gt 0 ] || die "record mark: the mark's text, like: omabox record mark \"scene 2\""
@@ -6336,6 +6364,7 @@ cmd_record() {
   # start, the action, stop, so the action goes through the broker as any command does).
   if in_jail; then
     [ ${#ract[@]} = 0 ] || die "record -- ACTION: a jailed agent's own omabox runs it (start, the action, stop), never the broker"
+    [ -z "$forms" ] || die "record --for: a jailed agent's own omabox runs it (start, a hold, stop), never the broker"
     [ -z "$out" ] || die "record: a jailed agent's -o is resolved by its own omabox, never at a path here"
     case $sub in
       start) [ -n "$as" ] || die "record start: a jailed agent's video is named by its own omabox (--as), never opened here" ;;
@@ -6351,7 +6380,9 @@ cmd_record() {
   select_box "$name"; need_box
   case $sub in
     status) record_status "$sfile"; return ;;
-    mark) record_mark "${text[*]}"; return ;;
+    mark) record_mark "${text[*]}"
+      [ $holdset = 0 ] || record_hold "$hold" "$CALL_US"; return ;;
+    hold) record_hold "$hdur" "$CALL_US"; return ;;
     sheet) record_sheet_file "$video" "$out" "$frames" "$every" "$fit" "$fromfd" "$mfromfd" "$tofd" "$as"; return ;;
     stop) [ -z "$out$monitor" ] || die "record stop: -o and --monitor go with start"
       record_stop "$sheet" "$frames" "$every" "$fit" "$show" "$caps" "$cut" "$tofd" "$mfd" "$vfd" "$as"; return ;;
@@ -6361,8 +6392,14 @@ cmd_record() {
   # Once it records, the pointer stays hidden until `record stop` (finding 320): a recording that goes
   # on past this omabox, and one whose action a Ctrl-C ends (the recording is kept, so is the hold).
   trap - EXIT INT TERM HUP
-  [ ${#ract[@]} -gt 0 ] || return 0
   local rc=0
+  # --for (#259): the hold from its first frame, in the video's clock; stopped whatever it says.
+  if [ -n "$forms" ]; then
+    record_hold "$forms" "$CALL_US" quiet || rc=$?
+    record_stop "$sheet" "$frames" "$every" "$fit" "$show" "$caps" "$cut" || return $?
+    return $rc
+  fi
+  [ ${#ract[@]} -gt 0 ] || return 0
   "$0" -b "$NAME" "${ract[@]}" >&2 || rc=$?
   sleep "$(awk -v ms="$hold" 'BEGIN { printf "%.3f", ms / 1000 }')"
   record_stop "$sheet" "$frames" "$every" "$fit" "$show" "$caps" "$cut" || return $?
@@ -6553,28 +6590,36 @@ record_start() {
   # among them: that stamp, in µs, then the wall clock, the monotonic one and the wall clock again
   # (perl's, a part of Omarchy; the two wall readings around the monotonic one), go to first-frame,
   # so a mark's wall-clock time becomes the video's (and the layout's recordings, in one clock, are
-  # put in step by them, #225). The rest of the debug lines are dropped (grep); wf-recorder's own
-  # lines go on to its log.
+  # put in step by them, #225). The rest of the debug lines are dropped (awk); wf-recorder's own
+  # lines go on to its log. Each later frame's stamp (µs, monotonic) is written over last-frame, the
+  # latest frame the video has, for `record hold` (#280) to measure in the video's own clock.
   # shellcheck disable=SC2016 # the inner bash's
   # (The pids, a line each on fd 3, the only fd it is given; read here up to 4 KiB.)
   mapfile -t pids < <(BOX_KEEP=3 box_sys /usr/bin/bash -c '
     first() {
-      local d=$1 l re="zwlr_screencopy_frame_v1[@#][0-9]+[.]ready[(]([0-9]+), ([0-9]+), ([0-9]+)[)]"
+      local d=$1 l us re="zwlr_screencopy_frame_v1[@#][0-9]+[.]ready[(]([0-9]+), ([0-9]+), ([0-9]+)[)]"
       while IFS= read -r l; do
         if [[ $l =~ $re ]]; then
-          { echo -n "$(( ((BASH_REMATCH[1] << 32) + BASH_REMATCH[2]) * 1000000 + BASH_REMATCH[3] / 1000 )) "
+          us=$(( ((BASH_REMATCH[1] << 32) + BASH_REMATCH[2]) * 1000000 + BASH_REMATCH[3] / 1000 ))
+          { echo -n "$us "
             perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC,CLOCK_REALTIME -e "my @t = map { int(1e6 * clock_gettime(\$_)) } (CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_REALTIME); print qq(@t\n)"
           } > "$d/first-frame.part" && mv -f "$d/first-frame.part" "$d/first-frame"
+          echo "$us" > "$d/last-frame"
           break
         fi
         [[ $l == "["* ]] || printf "%s\n" "$l"
       done
-      exec grep -v --line-buffered "^\["
+      exec awk -v f="$d/last-frame" "
+        /^\\[/ { if (match(\$0, /zwlr_screencopy_frame_v1[@#][0-9]+[.]ready[(][0-9]+, [0-9]+, [0-9]+[)]/)) {
+            s = substr(\$0, RSTART, RLENGTH); sub(/.*ready[(]/, \"\", s); split(s, a, /[,)] ?/)
+            printf \"%.0f\\n\", (a[1] * 4294967296 + a[2]) * 1000000 + int(a[3] / 1000) > f; close(f) }
+          next }
+        { print; fflush() }"
     }
     while [ $# -ge 2 ]; do
       d=$1 o=$2; shift 2
       case $d in */m[0-9]*) rm -rf "$d" ;; esac
-      mkdir -p "$d" && rm -f "$d"/raw.mkv "$d"/out.mp4 "$d"/first-frame || exit 125
+      mkdir -p "$d" && rm -f "$d"/raw.mkv "$d"/out.mp4 "$d"/first-frame "$d"/last-frame || exit 125
       (exec >"$d/wf-recorder.log" 2>&1 3>&-; trap - INT QUIT; export WAYLAND_DEBUG=client
         exec setsid -- wf-recorder -y -D -o "$o" -c libx264 -x yuvj420p -p preset=ultrafast -p crf=14 -f "$d/raw.mkv" 2> >(first "$d")) &
       echo "$!" >&3
@@ -6741,6 +6786,71 @@ record_mark() {
   else echo "before the first frame: $mtext"; fi
 }
 
+# A hold in the recording (#280, and `record --for`'s, #259): returns once the video has DURATION_MS
+# from FROM_US (the wall-clock time it was called; the first frame, if later) on, in its own clock:
+# when each wf-recorder's latest frame (last-frame, its screencopy stamp) is at or past that time, so
+# a box slow to give frames, or omabox's own start, never shortens it. Asleep on the host until 50 ms
+# before it ends by the wall clock (touching the box's use every 30 s, a long hold is not idle), then
+# polled in the box every 10 ms; 5 s past that end without the frames, it fails (the recording goes
+# on). With QUIET, nothing printed; else the hold's span in the video, as `record mark` says a time.
+# record_hold DURATION_MS FROM_US [QUIET]
+record_hold() {
+  local dur=$1 from=$2 quiet=${3:-} first m w i n=0 end firsts=() dirs=() args=() rc=0 left
+  if ! record_running; then
+    [ ! -f "$D/record" ] || { say "record hold: box '$NAME''s recording stopped by itself (omabox record stop keeps what it has)"; return 1; }
+    say "record hold: box '$NAME' is not recording (omabox record start, then hold between the steps of the take)"; exit 2
+  fi
+  ! in_jail || [ -f "$D/record.as" ] || { say "record hold: box '$NAME''s recording was started outside the jail: its holds are made there"; exit 2; }
+  # Its first frame (start waits only 0.5 s for wf-recorder): 5 s at most.
+  end=$((SECONDS + 5))
+  until first=$(record_first_us); do
+    [ $SECONDS -lt $end ] || { say "record hold: no frame came from box '$NAME''s recording in 5 s"; return 1; }
+    sleep 0.1
+  done
+  [ "$from" -ge "$first" ] || from=$first
+  end=$((from + dur * 1000))
+  # Each wf-recorder's target in its own (monotonic) clock: its first frame's stamp, plus the hold's end
+  # after that frame's wall-clock time. A monitor of the layout with no frame yet is not waited for.
+  mapfile -t firsts < <(record_firsts)
+  mapfile -t dirs < <(rec_dirs)
+  for i in "${!dirs[@]}"; do
+    read -r m w <<<"${firsts[i]:--}"
+    [ "$m" != - ] || continue
+    args+=("${dirs[i]}" $((m + end - w))); n=$((n + 1))
+  done
+  [ "$n" -gt 0 ] || { say "record hold: no frame came from box '$NAME''s recording"; return 1; }
+  # The wall-clock part on the host, in steps of 30 s at most, each touching the box's use.
+  while left=$((end - 50000 - ${EPOCHREALTIME//[!0-9]/})); [ "$left" -gt 0 ]; do
+    [ "$left" -le 30000000 ] || left=30000000
+    sleep "$((left / 1000000)).$(printf '%06d' $((left % 1000000)))"
+    touch "$D/used" 2>/dev/null || true
+    record_running || { say "record hold: box '$NAME''s recording stopped by itself (omabox record stop keeps what it has)"; return 1; }
+  done
+  # (Under timeout: last-frame is the box's file, which its processes could make a FIFO.)
+  left=$(( (end + 5000000 - ${EPOCHREALTIME//[!0-9]/}) / 1000000 + 3 ))
+  # shellcheck disable=SC2016 # the inner bash's
+  box_sys /usr/bin/timeout -k 1 "$left" /usr/bin/bash -c 'dl=$1 a=("${@:2}")
+    while :; do
+      ok=1
+      for ((i = 0; i < ${#a[@]}; i += 2)); do
+        v=""; read -r -n 20 v < "${a[i]}/last-frame" 2>/dev/null || v=""
+        [[ $v =~ ^[0-9]{1,17}$ ]] && [ "$v" -ge "${a[i + 1]}" ] || { ok=0; break; }
+      done
+      [ $ok = 0 ] || exit 0
+      [ "${EPOCHREALTIME//[!0-9]/}" -lt "$dl" ] || exit 3
+      sleep 0.01
+    done' omabox-record $((end + 5000000)) "${args[@]}" 2>/dev/null || rc=$?
+  if [ $rc != 0 ]; then
+    if ! record_running; then say "record hold: box '$NAME''s recording stopped by itself (omabox record stop keeps what it has)"
+    else say "record hold: box '$NAME''s recording gave no frame past the hold's end 5 s after it (the recording goes on)"; fi
+    return 1
+  fi
+  [ -n "$quiet" ] && return 0
+  local a=$(( (from - first + 500) / 1000 )) b
+  b=$((a + dur))
+  printf 'held %d.%03ds to %d.%03ds\n' $((a / 1000)) $((a % 1000)) $((b / 1000)) $((b % 1000))
+}
+
 # record_stop SHEET FRAMES EVERY_MS FIT SHOW CAPTIONS CUT_MS [TOFD MARKSFD VTTFD AS]: the video, its
 # marks beside it, and with SHEET its contact sheet; SHOW 1 the input drawn into it, CAPTIONS 1 the
 # marks, CUT_MS its still stretches cut to that (#176). With the fds (a jailed caller's, #224): the
@@ -6874,7 +6984,7 @@ record_stop() {
     rm -rf -- "$tmpd"
   else record_marks "$marks" "$first" "$dur" "$base" "$REC_CUTS"; fi
   [ "$sheet" = 0 ] || sp=$(record_sheet "$REC_DIR/out.mp4" "$base.marks.tsv" "$base.sheet.png" "$frames" "$every" "$fit") || sp=""
-  local rmd=("$REC_DIR/raw.mkv" "$REC_DIR/out.mp4" "$REC_DIR/first-frame" "$REC_DIR/overlay.ass" "$REC_DIR/cut.mp4")
+  local rmd=("$REC_DIR/raw.mkv" "$REC_DIR/out.mp4" "$REC_DIR/first-frame" "$REC_DIR/last-frame" "$REC_DIR/overlay.ass" "$REC_DIR/cut.mp4")
   [ -z "$REC_AFILT" ] || rmd+=("$REC_DIR/audio.mka" "$REC_DIR/audio.log")
   [ "$REC_N" = 1 ] || mapfile -t -O "${#rmd[@]}" rmd < <(rec_dirs)
   box_sys /usr/bin/rm -rf -- "${rmd[@]}" 2>/dev/null || true
@@ -13865,7 +13975,7 @@ jail_place() {
 # `sheet` of the video it wrote. status, mark and what the broker refuses anyway go as they are.
 # relay_record RELAY ENV... -- ARGS
 relay_record() {
-  local relay=$1 env=() all=() pre=() rest=() name="" sub="" out="" video="" sheet=0 sargs=() ract=() hold=1000 dash=0; shift
+  local relay=$1 env=() all=() pre=() rest=() name="" sub="" out="" video="" sheet=0 sargs=() ract=() hold=1000 holdset=0 dash=0 forv="" pol=() unpol=(); shift
   while [ "$1" != -- ]; do env+=("$1"); shift; done; shift
   # The caller's default --fit for a sheet (#188): the broker gets nothing of its environment but what is sent.
   [ -z "${OMABOX_SHOT_FIT:-}" ] || env+=(--env "SHOT_FIT=$OMABOX_SHOT_FIT")
@@ -13874,23 +13984,33 @@ relay_record() {
     case $1 in
       -b|--box) optarg "$@"; name=$2; pre=("$1" "$2"); shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
-      --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "record: --hold takes a duration up to 60s, like 500ms or 2s, got $2"; shift ;;
+      --hold) optarg "$@"; hold=$(ms_duration "$2") && [ "$hold" -le 60000 ] || die "record: --hold takes a duration up to 60s, like 500ms or 2s, got $2"; holdset=1; shift ;;
+      --for) optarg "$@"; forv=$2; shift ;;
+      # The polish (stop's): on a one-shot, given to its stop, not its start.
+      --show-input|--captions) pol+=("$1"); rest+=("$1") ;;
+      --cut-idle) pol+=("$1"); rest+=("$1")
+        if [ $# -ge 2 ] && [[ $2 =~ ^[0-9]{1,6}(\.[0-9]{1,3})?(ms|s|m)?$ ]]; then pol+=("$2"); rest+=("$2"); shift; fi ;;
       --sheet) sheet=1 ;;
       --frames|--every|--fit) optarg "$@"; sheet=1 sargs+=("$1" "$2"); shift ;;
-      --monitor|--fps) optarg "$@"; rest+=("$1" "$2"); shift ;;
+      --monitor|--fps) optarg "$@"; rest+=("$1" "$2"); unpol+=("$1" "$2"); shift ;;
       --to-fd|--marks-fd|--vtt-fd|--from-fd|--marks-from-fd|--as|--file) die "record: $1 is omabox's own, between a jailed agent's omabox and the broker" ;;
       --) dash=1; shift; ract=("$@"); break ;;
-      -*) rest+=("$1") ;;
-      *) if [ -z "$sub" ]; then sub=$1; rest+=("$1")
+      -*) rest+=("$1"); unpol+=("$1") ;;
+      *) if [ -z "$sub" ]; then sub=$1; rest+=("$1"); unpol+=("$1")
          elif [ "$sub" = sheet ] && [ -z "$video" ]; then video=$1
-         else rest+=("$1"); fi ;;
+         else rest+=("$1"); unpol+=("$1"); fi ;;
     esac
     shift
   done
   local call=("$relay" call "$BROKER_SOCK")
+  # --for (#259) runs here as start, a hold, stop; with anything it does not go with, the broker says why.
+  if [ -n "$forv" ]; then [ -z "$sub" ] && [ $dash = 0 ] && [ $holdset = 0 ] || exec "${call[@]}" "${env[@]}" -- record "${all[@]}"
+    local fms; fms=$(ms_duration "$forv") && [ "$fms" -le 3600000 ] ||
+      { say "record: --for takes a duration up to 60m, like 5s or 1.5m (a bare number is seconds), got $forv"; exit 2; }
+  fi
   case $sub in
     start|stop|sheet) [ $dash = 0 ] || exec "${call[@]}" "${env[@]}" -- record "${all[@]}" ;;
-    "") [ $dash = 1 ] || exec "${call[@]}" "${env[@]}" -- record "${all[@]}" ;;
+    "") [ $dash = 1 ] || [ -n "$forv" ] || exec "${call[@]}" "${env[@]}" -- record "${all[@]}" ;;
     *) exec "${call[@]}" "${env[@]}" -- record "${all[@]}" ;;
   esac
   select_box "$name"
@@ -13906,12 +14026,19 @@ relay_record() {
       rm -f -- "$tmp"
       exec "${call[@]}" "${env[@]}" -- record "${pre[@]}" "${rest[@]}" --as "$out" ;;
     "")
-      # One action, checked as cmd_record does before anything starts; each step through this omabox.
-      record_action_check "${ract[@]}"
+      # One action (or --for's hold), checked as cmd_record does before anything starts; each step
+      # through this omabox.
+      [ -n "$forv" ] || record_action_check "${ract[@]}"
       local st=() so=()
       [ -z "$out" ] || st=(-o "$out")
       [ $sheet = 0 ] || so=(--sheet "${sargs[@]}")
+      so+=(${pol[@]+"${pol[@]}"}); rest=(${unpol[@]+"${unpol[@]}"})
       "$0" record "${pre[@]}" start "${rest[@]}" "${st[@]}" || exit $?
+      if [ -n "$forv" ]; then
+        "$0" record "${pre[@]}" hold "$forv" >/dev/null || rc=$?
+        "$0" record "${pre[@]}" stop "${so[@]}" || exit $?
+        exit $rc
+      fi
       "$0" "${pre[@]}" "${ract[@]}" >&2 || rc=$?
       sleep "$(awk -v ms="$hold" 'BEGIN { printf "%.3f", ms / 1000 }')"
       "$0" record "${pre[@]}" stop "${so[@]}" || exit $?

@@ -411,7 +411,7 @@ with `--keep wallpaper` or after a theme set in the box.
 - `omabox wait [--timeout 10s] [--json] COND`, one condition per call (chain with `&&`): `still
   [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]`, `change [-g GEOM |
   --window SEL] [--ignore GEOM]...`, `window SEL [--gone | --focused]`, `layer NAMESPACE [--gone]`
-  (`omarchy-menu`, `omarchy-notifications`, ...), `cmd -- CMD` (exit 0 inside the box). Options go
+  (`omarchy-menu`, `omarchy-notifications`, ...), `until -- CMD` (exit 0 inside the box). Options go
   before or after COND. `window SEL` is satisfied by any window SEL matches, and the line
   names them all (`--focused`: when one of them has focus); only commands acting on one window
   refuse a SEL that matches several.
@@ -419,6 +419,13 @@ with `--keep wallpaper` or after a theme set in the box.
   change --window APP` (satisfied at the first change there; the window must be on screen), then
   `omabox wait still` for it to finish. Never `wait until -- false` (or `-- true`) as a sleep: the first
   is a fixed wait ending in 124, the second no wait at all.
+- Time that is part of a video is the only time you let pass, and never with a sleep: `omabox record
+  -o cycle.mp4 --for 5s` records the screen for 5 s with no action (a panel cycling on a timer: no
+  dummy action, the pointer left where it is); in a take, `omabox record hold 2s` between `record
+  start` and `record stop` gives the viewer 2 s to read the screen, measured in the video's own clock
+  (its frames' times), so a slow box or a slow script never shortens it. `record mark "scene 2" --hold
+  2s` marks, then holds from the mark. `wait still` is no hold: it returns at once on a still screen
+  and runs to its timeout under a clock or a spinner.
 - `keys`, `click`, `scroll`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s]
   [-g GEOM] [--ignore GEOM]... [--json]`: the screen before the action, a change within `--start` (5 s
   for `run -d`), then `--quiet` with none. `-g` watches only that part of the screen.
@@ -847,10 +854,12 @@ most people will. Then:
   stop --sheet` (or `record sheet demo.mp4 [--frames N | --every 2s] [--fit N]`) prints a contact
   sheet, demo.sheet.png, frames labelled with their times: Read it, fix the script, record again.
   `omabox record mark "scene 2"` just before each scene notes it in the video's own clock (ms from
-  the first frame, exact to a few ms); `stop` writes demo.marks.tsv and demo.vtt (captions: `ffmpeg
+  the first frame, exact to a few ms); `record hold 2s` holds the picture for the viewer, 2 s of the
+  video whatever the script's own time (`record mark "scene 2" --hold 2s`: both; `record -o
+  cycle.mp4 --for 5s`: 5 s of the screen, no action); `stop` writes demo.marks.tsv and demo.vtt (captions: `ffmpeg
   -i demo.mp4 -vf subtitles=demo.vtt out.mp4`; a cut: `ffmpeg -ss A -to B` with two marks' times), and
   the sheet shows each mark under the frame after it. A script's omabox calls take time of their own:
-  the marks show how far the scenes drift from its sleeps. For people watching it: `record start
+  the marks show how far the scenes drift; holds, not sleeps, make its pauses. For people watching it: `record start
   --glide 600ms` (click, pointer and drag glide there while it records), then `record stop
   --show-input --captions --cut-idle` (clicks, pointer and keys drawn in as peek shows them, --pass as
   `*`; the marks as captions; every still stretch cut to 1 s, marks moved with it). Sound (an `up --audio` box): `record start

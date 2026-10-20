@@ -564,21 +564,38 @@ t_unit_rec_ff() {
 }
 t_unit_record() {
   # Refused before any box is looked at (finding 297).
-  check_match "record alone: what it takes" "start, stop, status, mark, sheet, or -- ACTION" "$(ob record 2>&1)"
+  check_match "record alone: what it takes" "start, stop, status, mark, hold, sheet, -- ACTION or --for DURATION" "$(ob record 2>&1)"
   check_match "...--fps 0 refused" "--fps is 1 to 120, got 0" "$(ob record start --fps 0 2>&1)"
   check_match "...an action that does not act" "an omabox command that acts .*got shot" "$(ob record -- shot 2>&1)"
   check_match "...an action naming another box" "the action runs on the recorded box \(no -b\)" "$(ob record -- keys -b x Return 2>&1)"
   check_match "...an action with start" "records one action .*not with start" "$(ob record start -- keys Return 2>&1)"
   check_match "...--hold past 60s" "--hold takes a duration up to 60s" "$(ob record --hold 2m -- keys Return 2>&1)"
-  check_match "...an unknown word" "start, stop, status, mark, sheet, or -- ACTION .*got go" "$(ob record go 2>&1)"
-  check_match "...stop --no-pointer (#228)" "record stop: --no-pointer goes with start or -- ACTION" "$(ob record stop --no-pointer 2>&1)"
+  check_match "...an unknown word" "start, stop, status, mark, hold, sheet, -- ACTION \(an omabox command\) or --for DURATION, got go" "$(ob record go 2>&1)"
+  # Time in a recording (#259, #280): --for and hold, refused with exit 2 before any box is looked at.
+  rx() { local o rc=0; o=$(ob record "$@" 2>&1) || rc=$?; echo "$rc $o"; }
+  check_match "record --for 0: refused, exit 2" "^2 omabox: record: --for takes a duration up to 60m, like 5s or 1.5m \(a bare number is seconds\), got 0$" "$(rx --for 0)"
+  check_match "...--for 61m" "^2 .*--for takes a duration up to 60m.*got 61m$" "$(rx --for 61m)"
+  check_match "...--for with an action" "^2 .*--for DURATION or -- ACTION, not both" "$(rx --for 5s -- keys a)"
+  check_match "...--for with start" "^2 .*not with start \(inside a take: record hold DURATION\)" "$(rx start --for 5s)"
+  check_match "...--for with --hold" "^2 .*--hold goes with -- ACTION or mark \(--for is the whole length\)" "$(rx --for 5s --hold 1s)"
+  check_match "...--for with --as (omabox's own, a stop's)" "--as goes with start, stop or sheet" "$(rx --for 5s --as /x.mp4)"
+  check_match "record hold without a duration: exit 2" "^2 omabox: record hold: how long, like: omabox record hold 2s$" "$(rx hold)"
+  check_match "...a duration it cannot read" "^2 .*record hold: a duration up to 60m, like 2s or 500ms \(a bare number is seconds\), got 2x$" "$(rx hold 2x)"
+  check_match "...two" "record hold: unexpected 3s" "$(rx hold 2s 3s)"
+  check_match "...with -o" "^2 .*record hold: -o and --monitor go with start" "$(rx hold 2s -o x.mp4)"
+  check_match "...with --sheet" "record hold: --sheet, --frames, --every and --fit go with stop, sheet, -- ACTION or --for" "$(rx hold 2s --sheet)"
+  check_match "...with --no-pointer" "record hold: --no-pointer goes with start, -- ACTION or --for" "$(rx hold 2s --no-pointer)"
+  check_match "record start --hold: refused (it was ignored), exit 2" "^2 .*record start: --hold goes with -- ACTION or mark \(between steps: record hold DURATION\)" "$(rx start --hold 2s)"
+  check_match "record mark --hold past 60s" "--hold takes a duration up to 60s" "$(rx mark x --hold 2m)"
+  check_eq "...a bare number of seconds read as such (ms_duration)" "1500 90000" "$(lib ms_duration 1.5) $(lib ms_duration 1.5m)"
+  check_match "...stop --no-pointer (#228)" "record stop: --no-pointer goes with start, -- ACTION or --for" "$(ob record stop --no-pointer 2>&1)"
   check_match "...status --no-pointer" "record status: --no-pointer goes with start" "$(ob record status --no-pointer 2>&1)"
-  check_match "...mark --audio (#226)" "record mark: --audio goes with start or -- ACTION" "$(ob record mark --audio x 2>&1)"
+  check_match "...mark --audio (#226)" "record mark: --audio goes with start, -- ACTION or --for" "$(ob record mark --audio x 2>&1)"
   check_match "audio SECONDS 0 refused" "audio: SECONDS is 0.1 to 600, got 0" "$(ob audio 0 2>&1)"
   # Marks and contact sheets (#176, finding 306).
   check_match "record mark without its text" "record mark: the mark's text" "$(ob record mark 2>&1)"
   check_match "...mark --no-pointer" "record mark: --no-pointer goes with start" "$(ob record mark --no-pointer x 2>&1)"
-  check_match "...start --sheet" "record start: --sheet, --frames, --every and --fit go with stop, sheet or -- ACTION" "$(ob record start --sheet 2>&1)"
+  check_match "...start --sheet" "record start: --sheet, --frames, --every and --fit go with stop, sheet, -- ACTION or --for" "$(ob record start --sheet 2>&1)"
   check_match "...--frames and --every" "--frames or --every, not both" "$(ob record stop --frames 3 --every 1s 2>&1)"
   check_match "...--frames 0" "--frames is 1 to 100, got 0" "$(ob record stop --frames 0 2>&1)"
   check_match "...--fit 50" "--fit is 0 \(off\) or the sheet's longest side in pixels \(100-99999\), got 50" "$(ob record stop --fit 50 2>&1)"
@@ -616,6 +633,7 @@ t_unit_record() {
   check_match "...sheet's video fd write-only" "fd 3 is not open for reading" "$(jr sheet --from-fd 3 --to-fd 4 --as "$rj/s.png" 3>"$rj/w" 4<>"$rj/f")"
   check_match "...sheet's fds with -o" "without -o" "$(jr sheet --from-fd 3 --to-fd 4 --as "$rj/s.png" -o "$rj/o.png" 3<"$rj/r" 4<>"$rj/f")"
   check_match "...status --file only" "--file goes with status" "$(jr mark --file x)"
+  check_match "...--for (the jail's omabox runs start, a hold, stop)" "record --for: a jailed agent's own omabox runs it" "$(jr --for 2s)"
   check_eq "...the host file named never touched" HOSTVIDEO "$(cat "$rj/host.mp4")"
   check_match "shot --to-fd: a read-only fd refused too (fd_file)" "shot: fd 3 is not open for writing" "$(OMABOX_JAIL='{}' "$CLI" shot --to-fd 3 --as "$rj/s.png" 3<"$rj/f" 2>&1)"
   check_match "a jailed agent's omabox keeps the broker's own options to itself" "--to-fd is omabox's own" \
@@ -626,6 +644,10 @@ t_unit_record() {
   check_match "relay_record start -b NAME: the broker gets -b NAME" "|record|-b|other|start|--as|$rj/b.mp4|" \
     "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other start -o $rj/b.mp4" 2>/dev/null)"
   check_match "...stop" "|record|-b|other|stop|--to-fd|3|" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other stop" 2>/dev/null)"
+  check_match "...hold goes as it is" "|record|-b|other|hold|2s|$" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other hold 2s" 2>/dev/null)"
+  check_match "...--for with what it does not go with: the broker says why" "|record|start|--for|2s|$" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- start --for 2s" 2>/dev/null)"
+  local rfo rfr=0; rfo=$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- --for 2x" 2>&1) || rfr=$?
+  check_match "...--for unreadable: refused here, exit 2" "^2 .*--for takes a duration up to 60m" "$rfr $rfo"
   : > "$rj/b.mp4"
   check_match "...sheet" "|record|-b|other|sheet|--frames|2|--from-fd|3|" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other sheet $rj/b.mp4 --frames 2" 2>/dev/null)"
   # record_marks: wall-clock µs to ms from the first frame (in order; one before it at 0), the
@@ -659,9 +681,9 @@ t_unit_record() {
   check_eq "...no monitor: nothing" "" "$(lib record_layout <<<'[]')"
   # The rest of #176 (finding 319): --show-input, --captions and --cut-idle with stop, --glide with
   # start; record_overlay draws rec_input's lines; record_marks shifts marks by the cuts; glide_to.
-  check_match "record start --show-input refused" "record start: --show-input, --captions and --cut-idle go with stop or -- ACTION" "$(ob record start --show-input 2>&1)"
+  check_match "record start --show-input refused" "record start: --show-input, --captions and --cut-idle go with stop, -- ACTION or --for" "$(ob record start --show-input 2>&1)"
   check_match "...start --cut-idle" "record start: --show-input, --captions and --cut-idle go with stop" "$(ob record start --cut-idle 2>&1)"
-  check_match "...stop --glide" "record stop: --glide goes with start or -- ACTION" "$(ob record stop --glide 1s 2>&1)"
+  check_match "...stop --glide" "record stop: --glide goes with start, -- ACTION or --for" "$(ob record stop --glide 1s 2>&1)"
   check_match "...--glide 20s" "record: --glide takes a duration up to 10s" "$(ob record start --glide 20s 2>&1)"
   check_match "...--cut-idle 50ms" "record: --cut-idle takes a duration from 100ms to 10m, like 1s, got 50ms" "$(ob record stop --cut-idle 50ms 2>&1)"
   check_match "click --steps and --glide" "click: --steps or --glide, not both" "$(ob click --steps 5 --glide 1s 10 10 2>&1)"
@@ -8960,6 +8982,43 @@ ri_accent() { awk -v c="$1" 'BEGIN { split(c, a, " "); exit !(a[1] > 195 && a[2]
 ri_frame() { ffmpeg -v error -y -ss "$2" -i "$1" -frames:v 1 -update 1 "$3" 2>/dev/null; }
 # A mark's ms in a recording's marks.tsv, by its text. ri_ms TSV TEXT
 ri_ms() { awk -F '\t' -v t="$2" '$3 == t { print $1; exit }' "$1"; }
+# Time in a recording (#259, #280): `record --for` is that long a video, no action; `record hold` in a
+# take puts DURATION into the video between two marks, and, the recorder frozen (no frames for 1.5 s,
+# a box slow to give them), waits for the frames past its end, so a stop right after it keeps them.
+t_record_hold() {
+  local n; n=$(gpu_node other)
+  [ -n "$n" ] || { skip "record --for and record hold" "no render node here but NVIDIA's"; return; }
+  if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --for and record hold" "no wf-recorder or ffmpeg here"; return; fi
+  local B=$P-rh v=$TMP/$P-rh-for.mp4 w=$TMP/$P-rh-take.mp4 out rc=0 t0 t1 a b c h e d
+  env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up for record hold" "failed"; return; }
+  out=$(ob record -b "$B" hold 1s 2>&1) || rc=$?
+  check_match "record hold with nothing recording: exit 2, naming record start" "^2 omabox: record hold: box '$B' is not recording \(omabox record start" "$rc $out"
+  check_eq "record --for 2s prints the file" "$v" "$(ob record -b "$B" -o "$v" --for 2s 2>/dev/null)"
+  d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$v" 2>/dev/null) || d=0
+  check "...2 s of video, the stop's frame or two more (${d:-none} s)" awk -v d="$d" 'BEGIN { exit !(d >= 1.99 && d <= 2.25) }'
+  check_eq "...and it stopped" "box '$B': not recording" "$(ob record -b "$B" status)"
+  ob record -b "$B" start -o "$w" >/dev/null 2>&1 || { no "record start for record hold" "failed"; ob down "$B" >/dev/null 2>&1; return; }
+  ob record -b "$B" mark a >/dev/null 2>&1
+  h=$(ob record -b "$B" hold 2s 2>&1)
+  ob record -b "$B" mark b >/dev/null 2>&1
+  out=$(ob record -b "$B" mark c --hold 500ms 2>&1)
+  check_match "record hold prints its span in the video" "^held [0-9]+\.[0-9]{3}s to [0-9]+\.[0-9]{3}s$" "$h"
+  check_match "record mark TEXT --hold: the mark, then a hold from its time" "^([0-9]+\.[0-9]{3})s c held ([0-9]+\.[0-9]{3})s to " "$(paste -sd ' ' <<<"$out")"
+  check_eq "...the same time" "${BASH_REMATCH[1]:-x}" "${BASH_REMATCH[2]:-y}"
+  # shellcheck disable=SC2016 # the box's sh's
+  ob run -b "$B" -d -- sh -c 'p=$(pgrep -x wf-recorder); kill -STOP $p; sleep 1.5; kill -CONT $p' >/dev/null 2>&1
+  t0=$EPOCHREALTIME; e=$(ob record -b "$B" hold 500ms 2>&1); t1=$EPOCHREALTIME
+  ob record -b "$B" stop >/dev/null 2>&1
+  a=$(ri_ms "${w%.mp4}.marks.tsv" a); b=$(ri_ms "${w%.mp4}.marks.tsv" b)
+  check "...a 2 s hold between two marks: 2 to 2.4 s apart in the video (${a:-none} to ${b:-none} ms)" test $((${b:-0} - ${a:-0})) -ge 2000 -a $((${b:-0} - ${a:-0})) -le 2400
+  c=$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.2f", b - a }')
+  check "a 500ms hold while the recorder gives no frame for 1.5 s: waits for its frames (${c} s; $e)" awk -v c="$c" 'BEGIN { exit !(c >= 1.0 && c <= 4) }'
+  d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$w" 2>/dev/null) || d=0
+  [[ $e =~ to\ ([0-9.]+)s$ ]] || true
+  check "...a stop right after it keeps them: the video ($d s) reaches the hold's end (${BASH_REMATCH[1]:-none} s)" \
+    awk -v d="$d" -v h="${BASH_REMATCH[1]:-99}" 'BEGIN { exit !(d >= h - 0.034) }'
+  ob down "$B" >/dev/null 2>&1 || true
+}
 record_input_on() {
   local n=$1 B=$2 D v1=$TMP/$2-input.mp4 v2=$TMP/$2-glide.mp4 v3=$TMP/$2-cut.mp4 out m1 m2 c
   if ! command -v wf-recorder >/dev/null || ! command -v ffmpeg >/dev/null; then skip "record --show-input" "no wf-recorder or ffmpeg here"; return; fi
@@ -9125,7 +9184,7 @@ t_audio() {
   audio_take_on "$B" ""
   ob monitor -b "$B" add 1280x720,right >/dev/null 2>&1
   audio_take_on "$B" all
-  check_match "record stop --audio refused" "record stop: --audio goes with start or -- ACTION" "$(ob record -b "$B" stop --audio 2>&1)"
+  check_match "record stop --audio refused" "record stop: --audio goes with start, -- ACTION or --for" "$(ob record -b "$B" stop --audio 2>&1)"
   ob down "$B" >/dev/null
 }
 # audio_take_on BOX MONITOR: one take of t_audio's paced tone and red terminal, recorded with --audio
@@ -13082,7 +13141,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
