@@ -8456,6 +8456,25 @@ from them.
     ended job's record until its end is noted, then drops it; job_record records a job gone already,
     and one before its setsid by its start); t_unit_cli (job_procs: the leader before its setsid).
 
+406. **The job-ended warning fired for jobs the agent had stopped itself with `omabox run -- pkill`**
+    (2026-10-20, #300). One agent's loop of start, probe, stop got finding 399's warning a dozen
+    times, often on an unrelated command; it added `grep -v warning` everywhere, and the log path in
+    the line then broke a `grep -o '/run/[^)]*log'` capture of its own. A SIGTERM sent through
+    `omabox run` in the same box is no news. **Fix**: `omabox run` in a box up marks its time in
+    `$D/runs` (host-only; `o.PID.START` while it runs, PID the omabox's, renamed `c.START.END` when it
+    returns, ms), and `job_note` does not say a job that ended by SIGTERM, SIGINT or SIGKILL (143, 130,
+    137) while one ran or up to 2 s after one ended (an app slow to quit on SIGTERM under load; the
+    issue asked about a second); it is noted all the same. Exits and crashes (SIGSEGV, SIGABRT) are
+    said as before, and so is a kill with no `run` around it. An `o.` mark counts only while its
+    omabox lives (one killed outright leaves its mark: ignored, then dropped). Marks are names read
+    with builtins; each `run`'s end drops those that ended 10 s before it began (its own `job_note`
+    had every end they could cover by then). *Off*: a job killed by something else in the box during
+    an agent's `omabox run` (another agent's `pkill`, the OOM killer) is not said either; `run -d --
+    pkill` is not a stop through `run`. Tests: t_unit_job_note (killed during a run or 2 s after: not
+    said; an exit then and a kill 3 s after: said; during a run still going: not said; a run whose
+    omabox is gone: said; run marks open, then closed, old and dead ones dropped); t_replace (`run --
+    pkill -xf 'sleep 611'`: the next command says nothing; a job killing itself 3 s in: said).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

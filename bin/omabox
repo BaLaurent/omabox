@@ -725,7 +725,9 @@ status (124 when it was 0: the screen is still the question); one killed or fail
 screen settled on something else (a window closing) is unsatisfied, said the same way. A job that ends later, within its
 first 30 s, with a status other than 0 (a server that dies a second in) is said once by the box's
 next command, whatever it is: "warning: run -d job CMD (pid N) exited with status 1 after 2.1s,
-since the last command (omabox log -b NAME run)". Not one --replace stopped, nor one already said.
+since the last command (omabox log -b NAME run)". Not one --replace stopped, one killed (SIGTERM,
+SIGINT, SIGKILL) while an \`omabox run\` ran in the box or just after (\`omabox run -- pkill APP\`),
+nor one already said.
 @ up run
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
@@ -5699,6 +5701,9 @@ job_note() {
     [ -n "$st" ] || [ $(( now / 1000 - ${end/./} )) -ge 2000 ] || continue
     job_noted "$n"
     [ "$st" != 0 ] || continue
+    # Stopped by the agent itself (#300, finding 406): killed while an `omabox run` ran in the box
+    # (`omabox run -- pkill APP`), or just after. An exit or a crash is still said.
+    case $st in 130|137|143) ! job_run_stopped "${end/./}" || continue ;; esac
     # What it was: its record ($D/jobs, the host's), kept until now (finding 405). Found by its log's
     # name (a D spelled otherwise by another caller is the same box), each record a line read on its
     # own: one being written or removed meanwhile does not lose the others. A leader that exited
@@ -5716,6 +5721,40 @@ job_note() {
     if [ "run-$ns.log" = "$newest" ]; then where="omabox log -b $NAME run"; else where="log: $D/home/run-$ns.log"; fi
     say "warning: run -d job ${words:-(its words were not kept)}${pid:+ (pid $pid)} $(job_how "$st") after $((ms / 1000)).$((ms % 1000 / 100))s, since the last command ($where)"
   done
+}
+
+# `omabox run` in a box up, timed for job_note (#300, finding 406): a run -d job killed (SIGTERM,
+# SIGINT, SIGKILL) while one ran, or within JOB_RUN_GRACE_MS of its end, was stopped by the agent
+# itself (`omabox run -- pkill APP`): no news. $D/runs (host-only) holds o.PID.START while one runs
+# (PID the omabox's) and c.START.END once it ended, in ms: names only, read with builtins.
+JOB_RUN_GRACE_MS=2000 RUN_MARK=""
+run_mark_begin() {
+  RUN_MARK=$(( ${EPOCHREALTIME/[.,]/} / 1000 ))
+  { mkdir -p "$D/runs" && : > "$D/runs/o.$$.$RUN_MARK"; } 2>/dev/null || RUN_MARK=""
+}
+run_mark_end() {
+  [ -n "$RUN_MARK" ] || return 0
+  local f now=$(( ${EPOCHREALTIME/[.,]/} / 1000 ))
+  mv -f -- "$D/runs/o.$$.$RUN_MARK" "$D/runs/c.$RUN_MARK.$now" 2>/dev/null || true
+  # Dropped: a run that ended 10 s before this one began (every end it covers was there for this
+  # one's job_note, but one not yet written: up to 2 s), and one whose omabox is gone (killed outright).
+  for f in "$D"/runs/*; do
+    if [[ ${f##*/} =~ ^c\.[0-9]+\.([0-9]+)$ ]]; then [ "${BASH_REMATCH[1]}" -ge $((RUN_MARK - 10000)) ] || rm -f -- "$f"
+    elif [[ ${f##*/} =~ ^o\.([0-9]+)\.[0-9]+$ ]]; then [ -d "/proc/${BASH_REMATCH[1]}" ] || rm -f -- "$f"; fi
+  done
+}
+# Whether a job that ended at END (ms) did so while an `omabox run` ran in the box, or within
+# JOB_RUN_GRACE_MS of one's end. job_run_stopped END
+job_run_stopped() {
+  local f
+  for f in "$D"/runs/*; do
+    if [[ ${f##*/} =~ ^c\.([0-9]+)\.([0-9]+)$ ]]; then
+      [ "${BASH_REMATCH[1]}" -le "$1" ] && [ "$1" -le $((BASH_REMATCH[2] + JOB_RUN_GRACE_MS)) ] && return 0
+    elif [[ ${f##*/} =~ ^o\.([0-9]+)\.([0-9]+)$ ]]; then
+      [ "${BASH_REMATCH[2]}" -le "$1" ] && [ -d "/proc/${BASH_REMATCH[1]}" ] && return 0
+    fi
+  done
+  return 1
 }
 
 # A throwaway whose `up` failed: its logs, copied out of the box dir its `down` removes (finding 167),
@@ -5851,7 +5890,9 @@ cmd_run() {
       return $rc
     fi
     local rc=0
+    run_mark_begin   # (a job it stops is no news: job_note)
     box_exec "$@" || rc=$?
+    run_mark_end
     touch "$D/used" 2>/dev/null || true
     run_gone $rc || rc=125
     return $rc

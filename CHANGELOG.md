@@ -28,6 +28,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   command touched the job records at the same moment. A job's record is now always kept until its
   end has been said, so the warning names the command and its pid.
 
+- **The warning about a `run -d` job that ended fired for jobs you stopped yourself**
+  ([#300](https://github.com/diogochaves/omabox/issues/300)): after `omabox run -- pkill APP`, the
+  next command said the job "was killed by SIGTERM". A job killed (SIGTERM, SIGINT or SIGKILL) while
+  an `omabox run` ran in its box, or within 2 s of one ending, is no longer said; exits and crashes
+  still are.
+
 ## 0.9.1 — 2026-10-20
 
 The release candidate for 1.0 (planned for 2026-10-24). The skill's core is about half its size,

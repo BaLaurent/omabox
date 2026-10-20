@@ -310,7 +310,7 @@ with `--keep wallpaper` or after a theme set in the box.
 | After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
 | `run -d` (`--wait` or not): "the command exited with status N … left nothing running" | It ended at once, or before drawing: read the log lines it printed (a file under `/tmp` or HOME the box does not have is named), fix that, run it again. No shot. |
-| "warning: run -d job CMD (pid N) exited with status N after 2.1s, since the last command" | A `run -d` job ended within its first 30 s, after `run -d` had said "started" (a server dying a second in): read its log (`omabox log run`, or the path given), fix it, start it again. Said once, by whatever command came next. |
+| "warning: run -d job CMD (pid N) exited with status N after 2.1s, since the last command" | A `run -d` job ended within its first 30 s, after `run -d` had said "started" (a server dying a second in): read its log (`omabox log run`, or the path given), fix it, start it again. Said once, by whatever command came next; not for a job you killed with `omabox run -- pkill`/`kill`. |
 | `click --wait` 124 on a checkbox or small toggle | A change under the cursor (from ~16 px above and left of the click to ~48 px below and right) is ignored as the cursor: shot, do not click again. |
 | `unsatisfied: still changing` (124) | Something never stops moving (a spinner, a glow): the line names the region; `--ignore "X,Y WxH"` it, or `-g` the part under test. |
 | Context filling up with screenshots | Text checks first (`windows`, `wait`, `events`, `log --grep`); `shot --window`, `-g`, `--fit 1280`. |
@@ -760,7 +760,7 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   and `run -d` exits with its status: a server whose port is taken shows here, not as "started". One
   that ends later in its first 30 s with a status other than 0 is a warning on the box's next
   command, once (`run -d job CMD (pid N) exited with status 1 after 2.1s, since the last
-  command`). A `run -d --wait` whose
+  command`); not one you killed yourself with `omabox run -- pkill`/`kill`. A `run -d --wait` whose
   job died by the time the screen settled (on something else) is `unsatisfied`, said the same way,
   and exits with the job's status. `run -d --replace -- CMD` stops the jobs `run -d` started in the box with the same
   command and arguments (SIGTERM to the session, what it forked included; SIGKILL after 5 s), waits until their windows are
