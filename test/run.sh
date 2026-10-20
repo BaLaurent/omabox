@@ -13858,6 +13858,22 @@ t_replace() {
   err=$(ob run -b "$B" -d -q --wait --start 1s -- sleep 605 2>&1 >/dev/null); rc=$?
   check_eq "a command still running that draws nothing: 124" 124 "$rc"
   check_match "...started all the same, as before" "the command was started all the same \(124 is about the screen\)" "$err"
+  # #297, finding 404: a job dead at once while another window closed: the screen settled on that,
+  # and it said satisfied. Now unsatisfied, its end said, its status the exit's; a one-shot that
+  # closes it and exits 0 is satisfied, as before.
+  ob run -b "$B" -d -q -- foot -T K sh -c 'sleep 600'
+  ob wait -b "$B" window 'title:^K$' >/dev/null
+  out=$(ob run -b "$B" -d -q --wait -- sh -c 'pkill -f "^foot -T K "; echo gone >&2; exit 3' 2>"$TMP/rep.err"); rc=$?; err=$(cat "$TMP/rep.err")
+  check_eq "run -d --wait of a job that died as another window closed: its status (3)" 3 "$rc"
+  check_match "...unsatisfied: not its screen" "^unsatisfied: .*the command had ended by then: not its screen" "$out"
+  check_match "...its end and log said" "the command exited with status 3 before the screen settled, and left nothing running.*"$'\n'"  gone" "$err"
+  # (foot K's own end, killed, is said: it was a run -d job too)
+  check_eq "...not said again by the next command" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job sh -c pkill')"
+  ob run -b "$B" -d -q -- foot -T K sh -c 'sleep 600'
+  ob wait -b "$B" window 'title:^K$' >/dev/null
+  out=$(ob run -b "$B" -d -q --wait -- pkill -f "^foot -T K " 2>/dev/null); rc=$?
+  check_match "...a one-shot that closes it and exits 0: satisfied" "^0 satisfied: " "$rc $out"
+  ob windows -b "$B" >/dev/null 2>&1
   # A missing command still says so in its log
   out=$(ob run -b "$B" -d -q --print-log -- omabox-no-such-command)
   check "a missing command: said in its log" until_ok 5 grep -q 'setsid: failed to execute omabox-no-such-command' "$out"

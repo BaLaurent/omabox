@@ -14,6 +14,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   happens under load. PipeWire's clients in a box no longer load that module, so the limit stays
   unlimited.
 
+- **`run -d --wait` said `satisfied` for a command that had already died**
+  ([#297](https://github.com/diogochaves/omabox/issues/297)), when something else on the screen
+  settled meanwhile (the last app's window closing, another agent's window), and its end only came
+  as a warning on the next command. Now a command killed or ended with a status other than 0 by the
+  time the screen settles makes the answer `unsatisfied`, says its end and its log's last lines, and
+  exits with its status. One that ends with 0 having changed the screen stays satisfied.
+
 - **A `run -d` job's warning said "its words were not kept" for ordinary jobs**
   ([#298](https://github.com/diogochaves/omabox/issues/298)). The next command's warning about a
   job that ended lost what the job was when it died at once, when the box was slow to make it a

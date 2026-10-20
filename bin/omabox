@@ -721,7 +721,8 @@ program with other arguments (named, with its pid). A \`run -d\` whose command e
 0.3 s, leaving nothing running (a server on a port already taken), says so instead of started, with
 its exit status and its log's last lines, and exits with that status. A \`run -d --wait\` whose
 command ended before the screen settled, leaving nothing running, says so too, and exits with that
-status (124 when it was 0: the screen is still the question). A job that ends later, within its
+status (124 when it was 0: the screen is still the question); one killed or failed by the time the
+screen settled on something else (a window closing) is unsatisfied, said the same way. A job that ends later, within its
 first 30 s, with a status other than 0 (a server that dies a second in) is said once by the box's
 next command, whatever it is: "warning: run -d job CMD (pid N) exited with status 1 after 2.1s,
 since the last command (omabox log -b NAME run)". Not one --replace stopped, nor one already said.
@@ -5629,6 +5630,19 @@ job_ended() {
   [ ${#miss[@]} = 0 ] || say "its arguments name host paths box '$NAME' does not have: ${miss[*]} (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME)"
   if [ -n "$tail" ]; then say "its log ends (omabox log -b $NAME run):"; printf '%s\n' "$tail" >&2
   else say "its log is empty"; fi
+}
+
+# run -d --wait's job PID (#297, finding 404): whether it has died, killed or with a status other than
+# 0 (its waiter's status file, read here in $D/run), nothing of its session left. A 0 is no death: a
+# one-shot (notify-send, a dispatch) changes the screen and ends with 0. No status file: it runs (the
+# leader's end writes one at once), and that costs a stat. job_failed PID
+job_failed() {
+  local f log st
+  [[ ${1:-} =~ ^[0-9]+$ ]] && f=$D/jobs/$1 && [ -f "$f" ] || return 1
+  log=$(jq -r .log "$f" 2>/dev/null) && [[ ${log##*/} =~ ^run-([0-9]{1,19})\.log$ ]] || return 1
+  st=$(run_read "omabox.run-${BASH_REMATCH[1]}.exit" | head -c 64) || st=""
+  [[ $st =~ ^[0-9]+$ ]] && [ "$st" != 0 ] || return 1
+  [ -z "$(job_live "$f")" ]
 }
 
 # A job's end in words, from its exit status (bash's: 128+N for signal N; empty when not kept).
@@ -10737,6 +10751,12 @@ settle_end() {
       fi ;;
     *) msg=$reason ;;
   esac
+  # run -d --wait (#297, finding 404): a screen that settled after the job had died (killed, or a
+  # status other than 0, nothing of it left) settled on something else: the last app's window
+  # closing, another agent's. Unsatisfied, so run -d says the job's end and its log as for a 124.
+  if [ "$res" = satisfied ] && [ "$SETTLE_FACTS" = run ] && job_failed "$SETTLE_FPID"; then
+    res=unsatisfied msg+="; the command had ended by then: not its screen"
+  fi
   # An action's --wait (#274): what changed on the desktop since just before the input, appended; on a
   # 124, where the input went first, and that nothing changed when nothing did. Not on unknown (the box
   # may be hung: no more seconds on it). changes is null when the desktop could not be read.

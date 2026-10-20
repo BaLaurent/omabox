@@ -760,7 +760,9 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   and `run -d` exits with its status: a server whose port is taken shows here, not as "started". One
   that ends later in its first 30 s with a status other than 0 is a warning on the box's next
   command, once (`run -d job CMD (pid N) exited with status 1 after 2.1s, since the last
-  command`). `run -d --replace -- CMD` stops the jobs `run -d` started in the box with the same
+  command`). A `run -d --wait` whose
+  job died by the time the screen settled (on something else) is `unsatisfied`, said the same way,
+  and exits with the job's status. `run -d --replace -- CMD` stops the jobs `run -d` started in the box with the same
   command and arguments (SIGTERM to the session, what it forked included; SIGKILL after 5 s), waits until their windows are
   gone, then starts CMD (`--wait` as usual). Only those: an app started another way (a bind, `run --
   setsid ...`, D-Bus activation) is not touched, even when the job only handed it its arguments (a

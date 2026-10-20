@@ -8412,6 +8412,26 @@ from them.
     shell's RLIMIT_RTTIME holds unlimited once its PipeWire service has tried to connect; it read
     0/0 before).
 
+404. **`run -d --wait` said satisfied for a job that had died at once, when something else on screen
+    settled** (2026-10-20, #297). Seen twice: a Qt app started right after `omabox run -- pkill` of
+    the last one (the closing window was the awaited change) and a binary given a host path the box
+    lacks, in a box another agent was using (its window). The job's end (SIGABRT at 0.0 s, exit 255
+    at 0.1 s) only came on the next command, as finding 399's warning. `--wait` watches the whole
+    screen, and `job_ended` (#215) was asked only on a 124. Reproduced: a foot window open, `run -d
+    --wait -- sh -c 'pkill -f "^foot -T K "; exit 3'` said `satisfied: settled after 0.81s ...;
+    window closed: foot "K"`, exit 0. *Decided*: the liveness check, not counting only the job's own
+    windows: a job that never opens one (a server, a one-shot) would have nothing to settle on, and
+    the job's state is what the agent needs. **Fix**: when the screen settles under `run -d --wait`,
+    `job_failed` reads the job's status file ($D/run, one stat while it runs); a job killed or ended
+    with a status other than 0, nothing of its session left, turns the answer to `unsatisfied: settled
+    after 0.48s (...); the command had ended by then: not its screen; ...` and run -d says its end,
+    the host paths it lacked and its log's tail, and exits with its status, as for a 124. A 0 stays
+    satisfied: a one-shot (`notify-send`, a dispatch, a `pkill` of a window) changes the screen and
+    ends with 0. **Checked** in a box: the reproduction above now exits 3 with the job's end and log;
+    `kill -ABRT $$` 134; `--json` gives `result: unsatisfied`. Tests: t_replace (a job dead as
+    another window closed: 3, unsatisfied, its end and log, not said again by the next command; a
+    one-shot that closes it and exits 0: satisfied).
+
 405. **A `run -d` job's warning said "its words were not kept" for ordinary jobs** (2026-10-20,
     #298). Finding 399's warning names the job from its record (`$D/jobs/PID`), and the record went
     missing in four ways. (1) `job_record` wrote none for a job gone before it looked: the SIGABRT at
