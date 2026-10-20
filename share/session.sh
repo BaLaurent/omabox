@@ -73,6 +73,13 @@ if [ ! -e "$HOME/.local/share/keyrings/login.keyring" ]; then
 fi
 without_host_fd gnome-keyring-daemon --daemonize --components=secrets > "$HOME/keyring.log" 2>&1
 
+# PipeWire's clients without module-rt (finding 401): in a box it set their RLIMIT_RTTIME to 0 (the
+# Realtime portal's answer with no RealtimeKit to ask), and the kernel then SIGKILLed the shell now and
+# then under load. Written each start, over whatever a save or --seed left at its name.
+mkdir -p "$HOME/.config/pipewire/client.conf.d"
+rm -f "$HOME/.config/pipewire/client.conf.d/90-omabox.conf"
+cp /opt/omabox/share/pipewire-client.conf "$HOME/.config/pipewire/client.conf.d/90-omabox.conf"
+
 # `up --audio` (#226): the box's own PipeWire, WirePlumber and pipewire-pulse, on its own runtime dir
 # (the host's sockets are never in a box, and a box has no /dev/snd). The only output is a null sink,
 # omabox-speaker, whose monitor `record --audio` and `omabox audio` read; the only input a silent

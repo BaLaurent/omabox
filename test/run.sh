@@ -8962,6 +8962,13 @@ t_omarchy_restart() {
   one_shell() { [ "$(ob run -b "$B" -- pgrep -cx quickshell)" = 1 ] && ob run -b "$B" -- omarchy-shell shell ping >/dev/null 2>&1; }
   check_eq "up runs the shell under omarchy-launch-shell, as Omarchy does (#151)" "1 1" \
     "$(ob run -b "$B" -- pgrep -cf '[o]marchy-launch-shell') $(ob run -b "$B" -- pgrep -cx quickshell)"
+  # Finding 401: PipeWire's module-rt set the shell's RLIMIT_RTTIME to 0 (the Realtime portal's answer in
+  # a box, with no RealtimeKit), and the kernel SIGKILLed it now and then under load. Once the shell's
+  # PipeWire service has tried to connect (module-rt has loaded), the limit holds unlimited.
+  # shellcheck disable=SC2329 # called through check
+  rttime_unlimited() { [ "$(ob run -b "$B" -- sh -c 'awk "/^Max realtime timeout/ {print \$4 \$5}" "/proc/$(pgrep -xo quickshell)/limits"')" = unlimitedunlimited ]; }
+  check "the shell's PipeWire service started" until_ok 10 grep -aq 'service\.pipewire' "$(ob path "$B")/home/shell.log"
+  check "...and left the shell's RLIMIT_RTTIME unlimited (finding 401)" holds 2 rttime_unlimited
   check "omarchy-restart-shell succeeds in a box" timeout 30 "$CLI" run -b "$B" -- omarchy-restart-shell
   check "...one shell, answering" until_ok 5 one_shell
   check_eq "...its pid where omabox restart-shell looks" "$(ob run -b "$B" -- pgrep -x quickshell)" "$(ob run -b "$B" -- sh -c 'cat "$XDG_RUNTIME_DIR/omabox-shell.pid"')"

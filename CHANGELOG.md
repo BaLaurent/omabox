@@ -3,6 +3,17 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **A box's shell was now and then killed as it started, under load** (`the shell exited after
+  starting`; its log: `exited with status 137`). PipeWire, asking a box's portal for realtime limits
+  it cannot give (a box has no RealtimeKit), set the shell's realtime time limit to zero, and the
+  kernel kills such a process the moment a thread of it is boosted to a realtime priority, which
+  happens under load. PipeWire's clients in a box no longer load that module, so the limit stays
+  unlimited.
+
 ## 0.9.1 — 2026-10-20
 
 The release candidate for 1.0 (planned for 2026-10-24). The skill's core is about half its size,

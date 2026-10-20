@@ -8383,6 +8383,35 @@ from them.
     shots identical with "Friday 12:00"; three t_check in parallel, 147/0 each. Tests: t_clean (the
     shell's defaults in a clean box are its shell.json; with `--keep clock` Omarchy's own).
 
+401. **The kernel SIGKILLed a box's shell now and then under load: PipeWire had set its
+    RLIMIT_RTTIME to 0** (2026-10-20, #222's load flakes). Three full suites in four failed one `up`
+    each (t_theme, t_widget, t_throwaway): `the shell exited after starting`, its launcher's
+    `Omarchy shell exited with status 137; relaunching` 0.85-1.5 s after the shell started, 0.2-0.5
+    s after its line `Failed to connect pipewire context`; no OOM, no second shell.sh (one exec in
+    hyprland.log, shell.log not started afresh). **No process sent it**: with a kill tracer
+    (LD_PRELOAD) in every box and on the suite's host side, 15 runs of the tests that ran beside the
+    failures (and ~900 more starts under load) caught one: a t_check box's shell SIGKILLed 0.2 s
+    after PipeWire set the limit below, no kill call to it in the box or on the host. **Why**: a box
+    has no system bus, so the Realtime portal on its bus reaches no RealtimeKit and answers
+    `RTTimeUSecMax` 0; PipeWire's module-rt, loaded in every client context (the shell's PipeWire
+    service, the Hyprland portal), takes that as the limit and sets the process's `RLIMIT_RTTIME` to
+    0/0 (traced with a backtrace; children such as the clipboard's wl-paste inherit it). On a desk
+    it is RealtimeKit's 200000. A process with that limit is SIGKILLed by the kernel's RT watchdog
+    the first tick one of its threads runs at a realtime priority, and an unprivileged thread gets
+    one without asking: this kernel has PREEMPT_RCU with RCU_BOOST (500 ms), so a thread preempted
+    inside an RCU read-side section for that long is boosted to SCHED_FIFO 1 (rcub/0 woke ~2.6 times
+    a second under the suite's load). Reproduced outside any box: 12 processes with RTTIME 0/0
+    reading /proc/self/maps beside 250 busy loops on one CPU, 3 SIGKILLed in 45 s; the same 12 with
+    the limit left alone, none. **Fix**: share/session.sh writes
+    `~/.config/pipewire/client.conf.d/90-omabox.conf` (share/pipewire-client.conf, `module.rt =
+    false`) in every box's HOME at each start: module-rt cannot give a box realtime anyway (no
+    RealtimeKit, no RLIMIT_RTPRIO), and without it the limit stays unlimited. (`module.rt.args` with
+    the portal and RealtimeKit off did not take in a client.conf.d drop-in.) `up --audio`'s daemons
+    were unlimited already (their configs turn the portal off). A JACK client (jack.conf, whose
+    module-rt has no `module.rt` condition) would still get 0/0. Tests: t_omarchy_restart (the
+    shell's RLIMIT_RTTIME holds unlimited once its PipeWire service has tried to connect; it read
+    0/0 before).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
