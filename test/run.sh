@@ -5045,7 +5045,7 @@ print(*r)' 2>&1)"
   check_match "...unless it cannot" "cannot make the directory" "$(ob shot -b "$B" -o "/proc/nope/x.png" 2>&1)"
   check "keys takes -b after the tokens" ob keys Escape -b "$B"
   check_match "ls shows idle against the limit" "$B .* [0-9]+m/2h" "$(ob ls)"
-  check "ls --json has idle, allow, bar, systemd" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\") | has(\"idle\") and has(\"allow\") and has(\"bar\") and has(\"systemd\")'"
+  check "ls --json has idle, allowed, bar, systemd" bash -c "'$CLI' ls --json | jq -e '.[] | select(.name == \"$B\") | has(\"idle\") and has(\"allowed\") and has(\"bar\") and has(\"systemd\")'"
   # a stub CLI in the box HOME's ~/.local/bin wins in run too (as in the session, finding 57)
   printf '#!/bin/sh\necho stub\n' > "$D/home/.local/bin/gh"; chmod +x "$D/home/.local/bin/gh"
   check_eq "run finds the ~/.local/bin stub first" /home/sbx/.local/bin/gh "$(ob run -b "$B" -- sh -c 'command -v gh')"
