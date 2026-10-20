@@ -33,8 +33,8 @@
 # network tests run throwaway HTTP servers on free ports they find, and t_connected makes one
 # connection from a box to its gateway, the router.
 # A test that runs no check fails, and so does a full run with fewer checks than MIN_CHECKS.
-# Each run keeps a folder (the last 5 runs are kept) in ~/.local/state/omabox/test/: its provenance
-# and, for a test's first failure, what its boxes showed then (screen, windows, focus, pointer,
+# Each run keeps a folder in ~/.local/state/omabox/test/ (the newest 5 runs that passed are kept,
+# and the newest 10 with a failure: prune_runs): its provenance and, for a test's first failure, what its boxes showed then (screen, windows, focus, pointer,
 # devices, logs) and every failure's full output.
 set -uo pipefail
 # The guard tests point HOME at a temp dir; these would still lead them to the real settings.
@@ -148,8 +148,27 @@ no() {
     local h=$HELD; HELD=""; skip "$1" "held by your peek at $h: a box you watch is in use (not reaped, it gets marks)"; HELD=$h; return
   fi
   notes; fail=$((fail + 1)); failed+=("$CUR: $1"); printf '  \e[31mFAIL\e[0m %s\n' "$1"
-  [ -n "${2:-}" ] && printf '       %s\n' "${2:0:300}"
+  [ -n "${2:-}" ] && printf '       %s\n' "$(clip_out "$2")"
   evidence "$1" "${2:-}"
+}
+# clip_out TEXT: a failure's output as no() prints it, whole up to 300 characters, else its first 100
+# and its last 200: the reason is often at the end, after a command's notes (#285: an `up` that
+# failed after its "box ... up" line said nothing more). evidence keeps it whole.
+clip_out() {
+  local s=$1
+  if [ ${#s} -le 300 ]; then printf '%s' "$s"
+  else printf '%s [... %d characters ...] %s' "${s:0:100}" $((${#s} - 300)) "${s: -200}"; fi
+}
+# prune_runs DIR: the suite's run folders there but the newest 5 that passed and the newest 10 with a
+# failure (a test's failures.txt in it) removed, so a full run's evidence outlives the passing runs
+# after it (#285); a run still going (another agent's) is never removed, and counts.
+prune_runs() {
+  local d np=0 nf=0
+  for d in $(find "$1" -mindepth 1 -maxdepth 1 -type d -name '*-t[0-9]*' | sort -r); do
+    if compgen -G "$d/*/failures.txt" >/dev/null; then nf=$((nf + 1)); [ $nf -gt 10 ] || continue
+    else np=$((np + 1)); [ $np -gt 5 ] || continue; fi
+    kill -0 "${d##*-t}" 2>/dev/null || rm -rf "$d"
+  done
 }
 # What a failed test left, for reading after the run: every failure's whole output, and at its first
 # failure, while its boxes are still up, each live $P-* box's screen, windows, layers, focus, pointer,
@@ -2708,6 +2727,28 @@ EOF
   local later; later=$(date -d '+1 hour' +%s)
   ev 2 "@$later"
   check_eq "...but not over a test's use of the box meanwhile (finding 237)" "$later" "$(stat -c %Y "$r/rt/omabox/$P-ev/used")"
+  # #285: a long output's end is printed, where the reason is.
+  local long; long="box up$(printf 'n%.0s' {1..400})the reason"
+  check_eq "a short output is printed whole" "box up: fine" "$(clip_out "box up: fine")"
+  check_match "a long one: its first 100 characters, what is cut, and its last 200 (#285)" \
+    "^box upn{94} \[\.\.\. 116 characters \.\.\.\] n{190}the reason$" "$(clip_out "$long")"
+  check_match "...as no() prints it" "nthe reason$" "$(evidence() { :; }; HELD="" no "a check" "$long" 2>&1 | tail -1)"
+  # Pruning: runs past the newest 5 passing and 10 failing go, a live one stays (pids past pid_max are
+  # dead; this shell's own is live).
+  local pr=$r/runs i n kept
+  for i in $(seq -w 1 20); do
+    n=$pr/202610${i}-000000-t$((9000000 + 10#$i)); mkdir -p "$n"
+    [ $((10#$i % 3)) != 0 ] || { mkdir "$n/t_a"; echo x > "$n/t_a/failures.txt"; }
+  done
+  mkdir -p "$pr/20261001-000000-t$$" "$pr/other"
+  prune_runs "$pr"
+  kept=$(cd "$pr" && echo *)
+  check_eq "pruning keeps the newest 5 passing runs and every failed one up to 10, a live run, and what is not a run's" \
+    "20261001-000000-t$$ 20261003-000000-t9000003 20261006-000000-t9000006 20261009-000000-t9000009 20261012-000000-t9000012 20261014-000000-t9000014 20261015-000000-t9000015 20261016-000000-t9000016 20261017-000000-t9000017 20261018-000000-t9000018 20261019-000000-t9000019 20261020-000000-t9000020 other" "$kept"
+  for i in $(seq -w 21 32); do n=$pr/202611${i}-000000-t$((9000000 + 10#$i)); mkdir -p "$n/t_a"; echo x > "$n/t_a/failures.txt"; done
+  prune_runs "$pr"
+  check_eq "...and only the newest 10 failed ones" "10 5" \
+    "$(cd "$pr" && find . -mindepth 2 -name failures.txt | wc -l) $(for n in "$pr"/2026*-t9*; do [ -e "$n/t_a" ] || echo "$n"; done | wc -l)"
 }
 
 # The leak detector's reading of events (finding 80), on lines as the watcher logs them (the
@@ -13815,11 +13856,9 @@ main() {
   # (A special one, special:NAME, is shown over the focused monitor's workspace.)
   HWS=$("$CLI" config workspace 2>/dev/null) || HWS=9
   ! hostctl -j monitors | jq -e --arg w "$HWS" '.[] | select(.focused) | select(.activeWorkspace.name == $w or .specialWorkspace.name == $w)' >/dev/null || HWS=
-  # The run's folder, and the last 5 runs' (a run still going, another agent's, is never removed).
+  # The run's folder, and the newest runs' (prune_runs).
   (umask 077; mkdir -p "$EVID")
-  local _d; for _d in $(find "${EVID%/*}" -mindepth 1 -maxdepth 1 -type d -name '*-t[0-9]*' | sort -r | tail -n +6); do
-    kill -0 "${_d##*-t}" 2>/dev/null || rm -rf "$_d"
-  done
+  prune_runs "${EVID%/*}"
   provenance > "$EVID/provenance"
   echo "provenance: $(cat "$EVID/provenance")"
   # The host's event socket, listened to for the whole run (finding 80).

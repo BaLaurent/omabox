@@ -8156,6 +8156,18 @@ from them.
     bus wakes it. Docs only, no behaviour change. Tests: t_unit_tree_layer (help tree --long and the
     reference name it; the old wording is gone).
 
+393. **A suite failure's message keeps its end, and failed runs' evidence outlives passing runs**
+    (2026-10-20, #285). One full-suite failure (t_isolated's `up --net isolated --allow`) could not
+    be explained: `no()` printed the first 300 characters of the output, which ended in `up`'s own
+    "box ... up" line, so the reason after it was cut; and the run folder holding the whole message
+    (`failures.txt`) was gone within the hour, since the suite kept the newest 5 runs whatever they
+    held and agents' passing runs followed. 0 repeats in 91 tries since. Now `clip_out` prints an
+    output past 300 characters as its first 100, `[... N characters ...]` and its last 200, and
+    `prune_runs` keeps the newest 5 runs that passed and the newest 10 with a failure (a run folder
+    with a test's `failures.txt`); a run still going is never removed, as before. Tests: t_unit_evidence (a short output whole, a long one's head, cut count and tail, through
+    no(); 20 runs pruned to 5 passing, the failed ones and a live one, then only the newest 10
+    failed).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

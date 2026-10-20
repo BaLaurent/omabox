@@ -100,6 +100,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   waits only for a property those versions dropped, so it never joins the accessibility bus, and
   nothing `tree` sets helps; they no longer say `tree` turns it on
   ([#282](https://github.com/diogochaves/omabox/issues/282)).
+- `test/run.sh` prints a long failure's first 100 and last 200 characters, where it printed its
+  first 300 and lost the reason at the end, and keeps the newest 10 runs with a failure besides the
+  newest 5 that passed: runs that pass no longer prune a failed run's evidence
+  ([#285](https://github.com/diogochaves/omabox/issues/285)).
 
 ### Fixed
 
