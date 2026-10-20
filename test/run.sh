@@ -4098,7 +4098,7 @@ t_unit_job_note() {
   check_match "long words cut to 60" "job a{59}… \(pid 119\)" "$(jn_note)"
   ln -s /etc/passwd "$d/run/omabox.run-1$(printf '%018d' 0).exit"
   check_eq "a link at a status file's name: not read" "" "$(jn_note)"
-  rm "$d/jobs-noted"; job 3 100 1 120 dead ./y >/dev/null
+  rm "$d/jobs-noted"; jn_job 3 100 1 120 dead ./y >/dev/null
   check_eq "a box from an older omabox (no jobs-noted): what is there taken as dealt with" "" "$(jn_note)"
   check "...and noted" grep -q . "$d/jobs-noted"
   jn_job 2 100 1 121 dead ./z >/dev/null
@@ -8236,19 +8236,19 @@ t_unit_shell_crash() {
   mkdir "$d/home/.cache/quickshell/crashes/q1k4dmt"
   check_eq "a new report folder: crashed, its report named" "crashed $d/home/.cache/quickshell/crashes/q1k4dmt/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
   check_eq "...said with it" "warning: the shell crashed after starting (report: /r/report.txt; omabox log -b u shell)" \
-    "$(bash -c 'source "$1"; NAME=u; shell_crash_text after "crashed /r/report.txt"' _ "$TMP/lib/bin/omabox")"
+    "$(bash -c 'source "$1"; NAME=u D=/nonexistent; shell_crash_text after "crashed /r/report.txt"' _ "$TMP/lib/bin/omabox")"
   rmdir "$d/home/.cache/quickshell/crashes/q1k4dmt"; mkdir "$d/home/.cache/quickshell/crashes/a b"
   check_eq "a folder named oddly (the box names it): crashed, no path" "crashed - rc 0 " "$(sc "42 (quickshell) S 1")"
   rmdir "$d/home/.cache/quickshell/crashes/a b"
   printf ' ERROR: Quickshell has crashed under pid 43\n' > "$d/home/shell.log"
   check_eq "only the log's crash line: crashed" "crashed - rc 0 " "$(sc "42 (quickshell) S 1")"
   check_eq "...said without a report" "warning: the shell crashed while starting (omabox log -b u shell)" \
-    "$(bash -c 'source "$1"; NAME=u; shell_crash_text while "crashed -"' _ "$TMP/lib/bin/omabox")"
+    "$(bash -c 'source "$1"; NAME=u D=/nonexistent; shell_crash_text while "crashed -"' _ "$TMP/lib/bin/omabox")"
   : > "$d/home/shell.log"
   check_eq "its pid gone: exited" "exited rc 0 " "$(sc "")"
   check_eq "...or a zombie" "exited rc 0 " "$(sc "42 (quickshell) Z 1")"
   check_eq "...said as exited" "warning: the shell exited after starting (omabox log -b u shell)" \
-    "$(bash -c 'source "$1"; NAME=u; shell_crash_text after exited' _ "$TMP/lib/bin/omabox")"
+    "$(bash -c 'source "$1"; NAME=u D=/nonexistent; shell_crash_text after exited' _ "$TMP/lib/bin/omabox")"
   check_eq "the report folders before a restart are not a crash" "rc 1 " "$(sc "42 (quickshell) S 1")"
   # finding 255: a report of a process older than this start (its pid below shell.sh's mark) is an old
   # shell's, stopped as it loaded, not this start's crash.
