@@ -4101,6 +4101,15 @@ cmd_up() {
   sweep_homes
   seed_home
   for p in "${seeds[@]}"; do seed_copy_in "${p%%$'\t'*}" "${p#*$'\t'}"; done
+  # A clean box's shell.json is also the defaults its shell reads (finding 400): the shell loads
+  # Omarchy's defaults and the user's file each on its own, and when the defaults came first, the
+  # frozen clock (an inline setting of the same layout) could be lost while the bar was being built,
+  # leaving the real time in one start in six under load. Both alike, either order draws the same bar.
+  rm -f -- "${D:?}/shell-defaults.json"
+  if [ "$CLEAN" = 1 ] && ! clean_has clock && [ -f "${omarchy:-/usr/share/omarchy}/config/omarchy/shell.json" ]; then
+    cp -- "$D/home/.config/omarchy/shell.json" "$D/shell-defaults.json" 2>/dev/null ||
+      say "up --clean: could not copy the box's shell.json as its shell's defaults: its clock may show the real time"
+  fi
   seed_fonts "$D/home"   # (after the seeds: one into its folder keeps the box's own)
   SHELL_BEFORE=$(shell_crash_dirs)   # (none in a fresh HOME, nor in a save: it keeps no .cache)
   # Read again as late as possible: a change made while this box was being set up (the widget's
@@ -4287,6 +4296,9 @@ cmd_up() {
     [[ " ${LINKED_PLUGINS[*]} " == *" ${p%%$'\t'*} "* ]] || args+=(--ro-bind "${p#*$'\t'}" "/home/sbx/.config/omarchy/plugins/${p%%$'\t'*}")
   done
   for p in "${overlays[@]}"; do args+=(--overlay-src "$p" --tmp-overlay "$p"); done
+  # A clean box's shell.json as its shell's defaults too (finding 400; after the overlays, which
+  # would hide it).
+  [ ! -f "$D/shell-defaults.json" ] || args+=(--ro-bind "$D/shell-defaults.json" "${omarchy:-/usr/share/omarchy}/config/omarchy/shell.json")
   # Last, so nothing is mounted over them: what a jailed caller's jail hides in its folders (#210),
   # with the box's PID 1 held on fd 4 (the go pipe) until jail_verify has seen them made.
   [ ${#cover_srcs[@]} = 0 ] || args+=("${covers[@]}" --block-fd 4)

@@ -6272,6 +6272,10 @@ t_clean() {
   check_match "...one outside the region: said, left out" '--ignore "900,0 10x10" has nothing in the shot' "$out"
   check_eq "...the clock's format is a literal" "'Friday 12:00'" \
     "$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' "$H/.config/omarchy/shell.json")"
+  # Finding 400: the shell reads Omarchy's defaults and the user's file each on its own; when the
+  # defaults came first under load, the bar was built from them and the frozen format was lost.
+  check_eq "...and the shell's defaults are the box's shell.json, so either may load first" "same" \
+    "$(ob run -b "$B" -- cat /usr/share/omarchy/config/omarchy/shell.json 2>&1 | cmp -s - "$H/.config/omarchy/shell.json" && echo same || echo differ)"
   out=$(ob run -b "$B" -- date +%s 2>&1)
   check "...and the box's processes on the real clock (the bar's text alone is frozen)" test "$(( $(date +%s) - ${out:-0} ))" -lt 30
   check_eq "...animations off" false "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"
@@ -6290,6 +6294,8 @@ t_clean() {
   check_eq "...so check point looks for no holes on its screen" "holes off: --keep wallpaper" "$(grep '^holes' "$TMP/clnp/kept.point" 2>&1)"
   check_eq "...--keep clock: the bar's clock keeps Omarchy's format" "dddd HH:mm" \
     "$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' "$(ob path -b "$K")/home/.config/omarchy/shell.json")"
+  check_eq "...and the shell's defaults are Omarchy's own" "same" \
+    "$(ob run -b "$K" -- cat /usr/share/omarchy/config/omarchy/shell.json 2>&1 | cmp -s - /usr/share/omarchy/config/omarchy/shell.json && echo same || echo differ)"
   check_eq "...its network and keep list" '["connected",["animations","wallpaper","pointer","clock","locale"]]' \
     "$(ob ls --json | jq -c --arg n "$K" '.[] | select(.name == $n) | [.net, .clean.keep]')"
   out=$(readlink -f /etc/localtime 2>/dev/null) || out=""

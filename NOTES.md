@@ -8355,6 +8355,33 @@ from them.
     noted, launcher, unwritten file, a link at the name, an older box); t_replace (`sh -c 'sleep 1;
     exit 3'`: the next `windows` says it, the one after does not; a job --replace stopped is not
     said; the ended-job check drains its line).
+400. **`up --clean`'s frozen clock was lost in one start in six under load** (2026-10-20, #222's
+    load flakes; the cause is Omarchy's shell). The full suite's t_check read `check: 2 of 6 same, 2
+    changed (1 as another)`: the bar's checkpoint `desk` changed at 913,8 93x11 and `screen` with it,
+    seconds later. Not a shot taken too early: the bar showed "Tuesday 11:15", the real time in
+    Omarchy's default format, for the whole run, while the box's shell.json still had the literal
+    `'Friday 12:00'`. Reproduced: 12 CPU busy loops and three `check run --approve --runs 6` of a
+    scenario shooting the bar twice 3 s apart, 3 of 18 boxes showed the real time in both shots
+    (finding 361's "the bar's checkpoint changed by one region on the check right after --approve, in
+    1 of 3 runs" was this). **Why**: shell.qml loads Omarchy's defaults
+    (`$OMARCHY_PATH/config/omarchy/shell.json`) and the user's file through two FileViews, each
+    applying the config as it arrives. When the defaults come first the bar is built from them (the
+    clock with `dddd HH:mm`); the user's file then differs only in the clock's inline settings, so
+    Bar.qml takes `applySettingsDelta`, which patches the layout array in place and sets `settings` on
+    the widget only if it exists. A slot's `moduleSettings` is bound to its Repeater `entry`, which the
+    in-place patch does not change, and a widget being created gets it from `injectProps` (by
+    `Qt.callLater` on `activeItemChanged`): a delta that lands before the widget exists, or between
+    its creation and that call, is overwritten with the defaults' format, until the shell restarts.
+    Under load the bar takes longer to build and the window is hit. **Fix**: in a clean box (unless
+    `--keep clock`) the box's shell.json, as seeded (after `--seed`s), is copied to the box dir as
+    `shell-defaults.json` and bound read-only over the defaults' path in the box (after `--overlay`s,
+    which would hide it), so both FileViews read the same config and either order builds the same bar.
+    Only Omarchy's `omarchy-shell-config` reads that file otherwise, when the user's shell.json is
+    missing: in a clean box it then gives the clean box's bar. Other boxes keep Omarchy's defaults (a
+    box made from a desk whose bar has the defaults' widgets but other inline settings could lose them
+    the same way; not seen). **Checked** under the same load: 24 runs of the scenario, all 24 bar
+    shots identical with "Friday 12:00"; three t_check in parallel, 147/0 each. Tests: t_clean (the
+    shell's defaults in a clean box are its shell.json; with `--keep clock` Omarchy's own).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

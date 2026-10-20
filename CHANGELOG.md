@@ -47,6 +47,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   was dropped. A text question (a label, a checked box, a field's text) now goes to `tree --find`
   before a shot ([#270](https://github.com/diogochaves/omabox/issues/270)).
 
+### Fixed
+
+- **`up --clean`'s bar clock showed the real time in about one start in six under load**, so
+  `omabox check` read the bar as changed with nothing changed. Omarchy's shell reads its defaults
+  and the user's shell.json each on its own, and when the defaults came first the frozen "Friday
+  12:00" was lost while the bar was being built. In a clean box the shell's defaults are now the
+  box's own shell.json, so either order draws the same bar.
+
 ## 0.9.0 — 2026-10-20
 
 The last release before 1.0. `omabox help CMD` is short, the command's lines and options
