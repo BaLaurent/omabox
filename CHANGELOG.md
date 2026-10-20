@@ -3,6 +3,24 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Added
+
+- **`omabox wait until -- CMD`**: the new name of `wait cmd`, waiting until a command run in the
+  box exits 0 (the same flags, exit codes and `--json`, whose `condition` is `until`). Claude Code
+  refuses any call holding `wait cmd` from a subagent working in its own git worktree, since it
+  reads the word as a shell; `wait until` passes
+  ([#272](https://github.com/diogochaves/omabox/issues/272)).
+- **`omabox path --home`** prints the box's HOME (`/home/sbx` inside) as the host sees it, a plain
+  path for an agent's own file tools, in place of `$(omabox path)/home` inside a command.
+- The skill's reference has a section for subagents in an isolated worktree: five rules that keep
+  every omabox call one the worktree check lets through.
+
+### Deprecated
+
+- `omabox wait cmd` still works, with a warning naming `wait until`; 1.0 refuses it.
+
 ## 0.8.0 — 2026-10-20
 
 Visual checks: `omabox check` compares an app's or a plugin's look with a baseline, in an `up

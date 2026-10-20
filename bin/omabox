@@ -132,7 +132,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
          COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]
                | change [-g GEOM | --window SEL] [--ignore GEOM]...
-               | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | cmd -- CMD [ARG...]
+               | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | until -- CMD [ARG...]
   omabox hyprctl [-b NAME] ARGS...
   omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
   omabox peek [-b NAME] [--monitor NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
@@ -158,8 +158,8 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
   omabox events [-b NAME] --mark [MARK]                  from here: prints the offset, keeps MARK for --since
   omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]
-  omabox path [NAME | -b NAME] [--logs | --run]          the box dir (HOME is <dir>/home); --logs: each log's file;
-                                                         --run: the box's /run/user/\$UID (<dir>/run)
+  omabox path [NAME | -b NAME] [--home | --run | --logs] the box dir; --home: its /home/sbx (<dir>/home);
+                                                         --run: its /run/user/\$UID (<dir>/run); --logs: each log's file
   omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)
   omabox ls [--json]
   omabox which PID                                       the box a host process is in, or "not in a box" (exit 1)
@@ -187,8 +187,9 @@ started from its repo, said once: \`down\` too, so \`omabox down\` there takes t
 \`down\` whose name has no box, while the session has boxes up started elsewhere, names each with the
 \`down -b\` that takes it, and exits 1.
 @ path
-From the host, the box's HOME (/home/sbx in it) is <dir>/home and its /run/user/\$UID (its
-XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, \`omabox path --run\`. The host's own
+From the host, the box's HOME (/home/sbx in it) is <dir>/home, \`omabox path --home\`, and its
+/run/user/\$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, \`omabox path
+--run\`. An agent reads and writes box files with its own file tools on the path --home prints. The host's own
 /run/user/\$UID is the real session's: never read a box app's state there.
 @ run
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
@@ -519,7 +520,7 @@ scaled or cropped one says so, for \`click --in\`). --wait ignores the cursor al
 \`wait still\`: nothing on screen changed for --quiet; a caret blinking in place (4 px thin, 40 long at
 most) and the cursor do not count, and are said (--strict counts them). \`wait change\`: the first
 change there, for an app that redraws later, by itself (a sync, a timer): then \`wait still\`; never
-\`wait cmd -- false\` as a sleep. \`keys\`, \`click\`, \`scroll\`,
+\`wait until -- false\` as a sleep. \`keys\`, \`click\`, \`scroll\`,
 \`drag\` and \`run -d\` take --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore
 GEOM]... [--json]: a change within --start (5s for run -d), then quiet. --ignore "X,Y WxH" (up to 16)
 leaves out an animation that never stops (a spinner, a glow); a 124 "still changing" names it when
@@ -529,6 +530,10 @@ with --window too.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations: 300ms, 2s, 1m; --timeout at most 10m. Waiting counts as using the box.
+@ wait
+\`wait until -- CMD\`: until CMD, run in the box, exits 0 (tried every 100 ms): a server answering
+(\`curl -fsS http://127.0.0.1:PORT/\`), a file written, a process gone (\`sh -c '! pgrep -x NAME'\`).
+\`wait cmd\`, its name up to 0.8.0, still works with a warning; 1.0 refuses it.
 @ up run
 \$OMABOX_READY_TIMEOUT: seconds \`up\` waits for Hyprland and the shell (default 30).
 @ reload
@@ -9829,7 +9834,7 @@ mask_arg() {
 # shellcheck disable=SC2016 # jq, not shell
 WIN_DESC_JQ='def n: "\(.address) \(.class) \(.title | tojson)";
   def d: "\(.address) \(.class) \(.title | tojson) at \(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])" + (if .active then ", focused" else "" end);'
-# The polled conditions (wait window, layer, cmd): a probe prints "yes DETAIL" or "no DETAIL"; exit 2
+# The polled conditions (wait window, layer, until): a probe prints "yes DETAIL" or "no DETAIL"; exit 2
 # is a selector that can never be answered (a bad regex), anything else the box not answering.
 # `wait window SEL` asks whether a window like that is there (or focused): any of several matching
 # windows answers it, and all of them are named (issue #37). Only commands that act on one window
@@ -9875,7 +9880,8 @@ layer_probe() {
   if [ "$want" = gone ]; then if [ -z "$l" ]; then echo yes; else echo no; fi
   elif [ -n "$l" ]; then echo "yes at $l"; else echo no; fi
 }
-# One try of `wait cmd`: the command in the box, cut off at the time left.
+# One try of `wait until` (and `wait cmd`, its old name): the command in the box, cut off at the time
+# left. Two names so --json's condition is the one the caller wrote.
 # shellcheck disable=SC2329 # called through poll_until
 cmd_probe() {
   local left=$((POLL_TMO - ($(date +%s%3N) - POLL_T0))) rc=0
@@ -9883,6 +9889,8 @@ cmd_probe() {
   box_exec /usr/bin/timeout -k 1 "$(awk -v m="$left" 'BEGIN { printf "%.3f", (m < 100 ? 100 : m) / 1000 }')" "$@" >/dev/null 2>&1 || rc=$?
   if [ "$rc" = 0 ]; then echo yes; else echo "no exit $rc"; fi
 }
+# shellcheck disable=SC2329 # called through poll_until
+until_probe() { cmd_probe "$@"; }
 
 # Poll PROBE every 100 ms until it says yes NEED times in a row (2 for a window or layer: one caught
 # mid-map or mid-close is not an answer), or the deadline. YES and NO are the condition in words.
@@ -9933,7 +9941,8 @@ cmd_wait() {
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       --gone) want=gone ;;
       --focused) want=focused ;;
-      --) shift; [ "$cond" = cmd ] || die "wait: -- goes with cmd (omabox wait cmd -- CMD ...)"; run=("$@"); break ;;
+      --) shift; [ "$cond" = until ] || [ "$cond" = cmd ] || die "wait: -- goes with until (omabox wait until -- CMD ...)"
+        run=("$@"); break ;;
       -*) die "wait: unknown option $1" ;;
       *) if [ -z "$cond" ]; then cond=$1
          elif [ "$cond" = window ]; then sels+=("$1")
@@ -9942,6 +9951,9 @@ cmd_wait() {
     esac
     shift
   done
+  # `wait cmd` was until's name up to 0.8.0 (#272): Claude Code refuses it in a worktree-isolated
+  # subagent (the word cmd reads as a shell). Accepted with a warning in 0.9, refused in 1.0.
+  [ "$cond" != cmd ] || say "warning: wait cmd is now wait until (the same flags); write wait until -- CMD (wait cmd will be refused in 1.0)"
   case $cond in
     still|change)
       [ -z "$want" ] || die "wait: --gone and --focused go with window or layer"
@@ -9951,10 +9963,10 @@ cmd_wait() {
     layer) [ -n "$ns" ] || die "wait layer: which layer? its namespace (omabox hyprctl layers): omarchy-menu, ..."
       [ "$want" != focused ] || die "wait layer: --gone or nothing"
       [ ${#sels[@]} = 0 ] && [ -z "$geom$quiet" ] && [ $strict = 0 ] && [ ${#masks[@]} = 0 ] || die "wait layer: only --gone" ;;
-    cmd) [ ${#run[@]} -gt 0 ] || die "wait cmd: nothing to run (omabox wait cmd -- CMD ...)"
-      [ ${#masks[@]} = 0 ] || die "wait cmd: --ignore goes with still and change" ;;
-    "") die "wait: for what? still, change, window SEL, layer NAMESPACE or cmd -- CMD (omabox help)" ;;
-    *) die "wait: unknown condition $cond (still, change, window, layer, cmd)" ;;
+    until|cmd) [ ${#run[@]} -gt 0 ] || die "wait $cond: nothing to run (omabox wait until -- CMD ...)"
+      [ ${#masks[@]} = 0 ] || die "wait $cond: --ignore goes with still and change" ;;
+    "") die "wait: for what? still, change, window SEL, layer NAMESPACE or until -- CMD (omabox help)" ;;
+    *) die "wait: unknown condition $cond (still, change, window, layer, until)" ;;
   esac
   [ "$cond" != change ] || [ -z "$quiet" ] || die "wait change: no --quiet (that is still's)"
   select_box "$name"; need_box; shell_note
@@ -9969,6 +9981,7 @@ cmd_wait() {
     layer)
       if [ "$want" = gone ]; then poll_until "layer $ns gone" "layer $ns still there" 2 "$tmo" "$json" layer_probe gone "$ns"
       else poll_until "layer $ns" "no layer $ns" 2 "$tmo" "$json" layer_probe present "$ns"; fi ;;
+    until) poll_until "command succeeded" "command still failing" 1 "$tmo" "$json" until_probe "${run[@]}" ;;
     cmd) poll_until "cmd" "cmd still failing" 1 "$tmo" "$json" cmd_probe "${run[@]}" ;;
     still|change)
       local args=(--timeout "$tmo" "${masks[@]}") region="" p
@@ -12605,14 +12618,17 @@ cmd_env() {
 }
 
 cmd_path() {
-  local name="" logs=0 rundir=0 a args=()
-  for a; do case $a in --logs) logs=1 ;; --run) rundir=1 ;; *) args+=("$a") ;; esac; done
-  [ $((logs + rundir)) -le 1 ] || die "path: --logs or --run, not both"
+  local name="" logs=0 rundir=0 home=0 a args=()
+  for a; do case $a in --logs) logs=1 ;; --run) rundir=1 ;; --home) home=1 ;; *) args+=("$a") ;; esac; done
+  [ $((logs + rundir + home)) -le 1 ] || die "path: one of --home, --run and --logs"
   name=$(name_arg path "${args[@]}") || exit 1
   select_box "$name"
   # Seeding a box's HOME through its path is using it.
   if box_alive; then touch "$D/used" 2>/dev/null || true; take_over || need_box; fi
-  [ $((logs + rundir)) = 1 ] || { echo "$D"; return 0; }
+  [ $((logs + rundir + home)) = 1 ] || { echo "$D"; return 0; }
+  # --home (#272): the box's /home/sbx on the host, a literal path for an agent's own file tools
+  # (Read, Write, Edit), where `$(omabox path)/home` inside a command is refused in a worktree.
+  [ $home = 0 ] || { [ -d "$D" ] || need_box; echo "$D/home"; return 0; }
   # --run (#208): the box's runtime dir, its /run/user/$UID, as the host sees it. The host's own
   # /run/user/$UID is the real session's: an app's state read there is the desktop's, not the box's.
   [ $rundir = 0 ] || { [ -d "$D" ] || need_box; echo "$D/run"; return 0; }

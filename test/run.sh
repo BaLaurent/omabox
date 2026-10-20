@@ -4320,12 +4320,12 @@ t_main() {
   # What the box's Hyprland starts (the bar, binds, terminals) has omabox's stand-ins ahead of
   # Omarchy's bin, which Omarchy's envs.lua puts first (finding 149).
   ob hyprctl -b "$B" dispatch "hl.dsp.exec_cmd('sh -c \"command -v omarchy-version > ~/t149\"')" >/dev/null
-  ob wait -b "$B" --timeout 5s cmd -- test -s /home/sbx/t149 >/dev/null
+  ob wait -b "$B" --timeout 5s until -- test -s /home/sbx/t149 >/dev/null
   check_eq "a bind's omarchy-version is omabox's stand-in" /opt/omabox/share/bin/omarchy-version "$(ob run -b "$B" -- cat /home/sbx/t149)"
   # The theme's light or dark mode in the box's dconf (finding 148), for portal dialogs, GTK and Qt.
   local mode; mode=$(ob run -b "$B" -- sh -c 'omarchy-theme-color --file ~/.local/state/omarchy/current/theme/colors.toml mode')
   [ "$mode" = light ] || mode=dark
-  ob wait -b "$B" --timeout 5s cmd -- sh -c "gsettings get org.gnome.desktop.interface color-scheme | grep -q prefer-$mode" >/dev/null
+  ob wait -b "$B" --timeout 5s until -- sh -c "gsettings get org.gnome.desktop.interface color-scheme | grep -q prefer-$mode" >/dev/null
   check_eq "dconf has the theme's colour mode" "'prefer-$mode'" "$(ob run -b "$B" -- gsettings get org.gnome.desktop.interface color-scheme)"
   check "up on a running box is a no-op" ob up "$B"
   # From another user namespace (a sandbox's, the suite's --installed): unknown, the list not refused (#87).
@@ -10752,7 +10752,7 @@ t_lock() {
   ob keys -b "$B" super+escape >/dev/null
   check "SUPER+ESCAPE opens the system menu" ob wait -b "$B" --timeout 5s layer omarchy-menu
   ob keys -b "$B" -t Lock Return >/dev/null
-  check "its Lock takes a session lock" ob wait -b "$B" --timeout 5s cmd -- omarchy-hyprland-session-locked
+  check "its Lock takes a session lock" ob wait -b "$B" --timeout 5s until -- omarchy-hyprland-session-locked
   ob wait -b "$B" --timeout 5s still --quiet 300ms >/dev/null
   OMABOX_T_PW=wrong-pw ob keys -b "$B" --pass OMABOX_T_PW Return >/dev/null
   ob wait -b "$B" --timeout 5s still --quiet 300ms >/dev/null
@@ -10760,11 +10760,11 @@ t_lock() {
   check_match "...the lock asked the test's PAM config" 'with config "omarchy-lock-password" in dir "/opt/omabox-lockpam"' "$(ob log -b "$B" shell -n all)"
   ob wait -b "$B" --timeout 10s still --quiet 1s >/dev/null
   OMABOX_T_PW=omabox-lock-pw ob keys -b "$B" --pass OMABOX_T_PW Return >/dev/null
-  check "the right password unlocks it" ob wait -b "$B" --timeout 10s cmd -- sh -c '! omarchy-hyprland-session-locked'
+  check "the right password unlocks it" ob wait -b "$B" --timeout 10s until -- sh -c '! omarchy-hyprland-session-locked'
   check_eq "...the window from before is focused again" "$addr" "$(ob hyprctl -b "$B" -j activewindow | jq -r .address)"
   check_eq "...and got none of the keys typed while locked" "" "$(ob run -b "$B" -- cat /home/sbx/typed 2>&1)"
   ob keys -b "$B" -t unlocked Return >/dev/null
-  check "...though it gets them now (the check above can see a leak)" ob wait -b "$B" --timeout 5s cmd -- grep -qx unlocked /home/sbx/typed
+  check "...though it gets them now (the check above can see a leak)" ob wait -b "$B" --timeout 5s until -- grep -qx unlocked /home/sbx/typed
   ob down "$B" >/dev/null
 }
 
@@ -12437,7 +12437,20 @@ t_unit_wait() {
   check_match "wait for nothing: says what it can wait for" "still, change, window" "$(ob wait -b "$P-x" 2>&1)"
   check_match "an unknown condition refused" "unknown condition" "$(ob wait -b "$P-x" soon 2>&1)"
   check_match "--gone is for window and layer" "go with window or layer" "$(ob wait -b "$P-x" still --gone 2>&1)"
-  check_match "cmd needs a command" "nothing to run" "$(ob wait -b "$P-x" cmd -- 2>&1)"
+  check_match "until needs a command" "nothing to run" "$(ob wait -b "$P-x" until -- 2>&1)"
+  # #272: `wait until` is the name; `wait cmd` (refused by Claude Code's worktree check) is read the
+  # same, warned, until 1.0.
+  check_match "-- goes with until" "-- goes with until" "$(ob wait -b "$P-x" still -- true 2>&1)"
+  check_match "...wait cmd -- CMD: warned, naming wait until" "^omabox: warning: wait cmd is now wait until .*refused in 1\.0" \
+    "$(ob wait -b "$P-x" cmd -- true 2>&1 | head -n 1)"
+  check_match "...and then read as until (no box here)" "no box '$P-x'" "$(ob wait -b "$P-x" cmd -- true 2>&1)"
+  check_eq "...wait until is not warned" "" "$(ob wait -b "$P-x" until -- true 2>&1 | grep warning)"
+  check_eq "...the same refusals: cmd" "omabox: wait cmd: --ignore goes with still and change" \
+    "$(ob wait -b "$P-x" cmd --ignore "1,1 5x5" -- true 2>&1 | grep -v warning)"
+  check_eq "...until" "omabox: wait until: --ignore goes with still and change" \
+    "$(ob wait -b "$P-x" until --ignore "1,1 5x5" -- true 2>&1)"
+  check_match "...help says until" "until -- CMD \[ARG\.\.\.\]" "$(ob help wait 2>&1)"
+  check_match "path: one of --home, --run, --logs" "one of --home, --run and --logs" "$(ob path -b "$P-x" --home --logs 2>&1)"
   check_match "--quiet without --wait refused" "go with --wait" "$(ob keys -b "$P-x" --quiet 1s a 2>&1)"
   check_match "run --wait needs -d" "goes with -d" "$(ob run -b "$P-x" --wait -- true 2>&1)"
   # --ignore and -g (#131, finding 208)
@@ -12590,12 +12603,17 @@ t_wait() {
   check_match "...named, with how many match" 'foot "[AR]" .*, focused \(1 of 2 matching\)$' "$(jq -r .detail <<<"$out")"
   check_eq "...--gone: 124 while they are there" 124 "$(ob wait -b "$B" --timeout 500ms window foot --gone >/dev/null; echo $?)"
   check_eq "...an action on one window still refuses several: exit 2" 2 "$(ob shot -b "$B" -w foot >/dev/null 2>&1; echo $?)"
-  # cmd: a condition inside the box, here one that becomes true a second later
+  # until (#272; cmd up to 0.8.0): a condition inside the box, here one that becomes true a second later
   ob run -b "$B" -d -- sh -c 'sleep 1; touch /tmp/late' >/dev/null 2>&1
-  out=$(ob wait -b "$B" cmd -- test -e /tmp/late); rc=$?
-  check_eq "wait cmd: 0 once it succeeds" 0 "$rc"
-  check_match "...after it did" "^satisfied: cmd after (0\.[5-9]|[1-9])" "$out"
-  check_eq "wait cmd that keeps failing: 124" 124 "$(ob wait -b "$B" --timeout 500ms cmd -- false >/dev/null; echo $?)"
+  out=$(ob wait -b "$B" until -- test -e /tmp/late); rc=$?
+  check_eq "wait until: 0 once it succeeds" 0 "$rc"
+  check_match "...after it did" "^satisfied: command succeeded after (0\.[5-9]|[1-9])" "$out"
+  check_eq "wait until that keeps failing: 124" 124 "$(ob wait -b "$B" --timeout 500ms until -- false >/dev/null; echo $?)"
+  out=$(ob wait -b "$B" --timeout 500ms --json until -- false); rc=$?
+  check_eq "...--json: condition until, exit 124" "unsatisfied until exit 1 124" "$(jq -r '"\(.result) \(.condition) \(.detail)"' <<<"$out") $rc"
+  out=$(ob wait -b "$B" --json cmd -- test -e /tmp/late 2>"$TMP/wait-cmd.err"); rc=$?
+  check_eq "wait cmd, its old name: the same, its --json condition still cmd" "0 satisfied cmd" "$rc $(jq -r '"\(.result) \(.condition)"' <<<"$out")"
+  check_match "...warned on stderr" "^omabox: warning: wait cmd is now wait until" "$(cat "$TMP/wait-cmd.err")"
   # A steady animation (#131, finding 208): one cell that never stops changing. The 124 names it as an
   # --ignore; --ignore'd, wait still and keys --wait are satisfied; -g watches elsewhere.
   ob run -b "$B" -- pkill -x foot >/dev/null
@@ -12879,6 +12897,10 @@ t_inspect() {
   ob run -b "$B" -- sh -c 'echo omabox-run-$$ > "$XDG_RUNTIME_DIR/omabox-208"' >/dev/null 2>&1
   check_match "...a file the box wrote to \$XDG_RUNTIME_DIR is there" '^omabox-run-[0-9]+$' "$(cat "$(ob path -b "$B" --run)/omabox-208" 2>&1)"
   check_fails "path --logs --run: one or the other" ob path -b "$B" --logs --run
+  # path --home (#272): the box's /home/sbx on the host, a literal path for an agent's file tools.
+  check_eq "path --home: <dir>/home" "$(ob path -b "$B")/home" "$(ob path -b "$B" --home)"
+  ob run -b "$B" -- sh -c 'echo omabox-home-$$ > /home/sbx/omabox-272' >/dev/null 2>&1
+  check_match "...a file the box wrote to /home/sbx is there" '^omabox-home-[0-9]+$' "$(cat "$(ob path -b "$B" --home)/omabox-272" 2>&1)"
   ob run -b "$B" -d -- sh -c 'echo omabox-log-1; sleep 1.5; echo omabox-log-2; sleep 600' >/dev/null 2>&1
   check "log run: the latest run -d's" until_ok 5 bash -c "'$CLI' log -b '$B' run | grep -qx omabox-log-1"
   ob log -b "$B" -f -n all run keyring > "$TMP/log.f" 2>&1 & local lf=$!

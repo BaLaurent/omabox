@@ -7868,6 +7868,30 @@ from them.
     said, `--no-seed fonts`, `--clean`, `--keep fonts`, the box's own folder kept, a save's link
     replaced, a refused folder, a file, the jail), t_unit_check (`--keep fonts`, `clean_text`).
 
+381. **`wait until` replaces `wait cmd`; `path --home`** (2026-10-20, #272). Subagents in their own
+    git worktree (Claude Code's isolation) had 36 omabox calls refused in 46 threads (10-09..10-16).
+    The worktree check does not refuse compound commands as such: it refuses words it reads as a
+    shell or a builtin that runs text in an unknown program's arguments (`cmd`, `bash`, `source`,
+    `enable`, `nice -n`), shell text it cannot follow (a pipe into an unknown program in `sh -c`,
+    `$(( ))`, a heredoc with `cd`), and anything leaving the worktree. `omabox wait cmd -- ANYTHING`
+    was refused even alone (19 of 19, half of all refusals); a probe subagent got `wait until --
+    true`, `wait until -- sh -c '! pgrep -x X'`, `omabox path --home` and `help cmd` through. Now
+    `until` is the condition's name (help, skill, reference, README); `cmd` is read the same, with
+    "warning: wait cmd is now wait until ... (wait cmd will be refused in 1.0)" on stderr (Diogo's
+    rule for renames: old form warned one release). `--json`'s `condition` is the name the caller
+    wrote (`until`, or `cmd` as before), through a second probe name; until's lines say "command
+    succeeded" / "command still failing". `path --home` prints `<dir>/home`, as `--run` prints
+    `<dir>/run`: a literal path for the agent's Read/Write/Edit, instead of `$(omabox path)/home`
+    in a command (`$(omabox path)` alone passed; what came with it did not). The reference's "For
+    subagents in an isolated worktree" holds the five rules (until; several steps as a script in the
+    box HOME run by path; box files through `path --home`; literal arguments; stay in the worktree,
+    `scroll --source`, not `pointer -- source`), for the subagent brief to reuse; SKILL.md points to
+    it. Not built (each 1-5 cases, each with a plain form already): `omabox cat` (`run -- cat` passes),
+    `wait process`, `gdb --app`, `run --script`. Real box (Omarchy 4.0.6, Hyprland 0.56.2): t_wait
+    (until: 0, 124, `--json`; cmd: same result, condition `cmd`, warned), t_inspect (`path --home`,
+    a file the box wrote in /home/sbx read there); t_unit_wait (the warning, the same refusals for
+    both names, `path` taking one of --home/--run/--logs).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

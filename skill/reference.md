@@ -15,18 +15,35 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
 - A box starts with a fresh HOME: apps start as on first run. A server in a default box also holds
   its port on the user's 127.0.0.1 (their own dev server on it then fails to start), and a probe there
   can reach theirs or another box's (only one box gets a port on the host; `omabox ports` says which
-  holds it): check your server from inside the box (`omabox wait cmd -- curl -fsS
+  holds it): check your server from inside the box (`omabox wait until -- curl -fsS
   http://127.0.0.1:PORT/`). A server that fails with "address in use" on a port nothing in the box
   uses: the host or another box holds it (`omabox ports` names it); use another port. An isolated
   box's ports are its own; two of them can use the same one.
 - Names: the repo's directory plus your session's id (`myrepo-5cc72cdc` in a Claude Code or Codex
   session); in a git worktree, the worktree's folder, so a worktree agent has its own box with no
   `-b`. A box goes down when your agent exits, not on `/clear` or `/resume`. `-b NAME` also goes
-  before the command (`omabox -b box-3 shot`). In a worktree-isolated Claude Code subagent compound
-  commands (`wait cmd --`, `hyprctl eval`, `$(…)`, `$B` aliases) are refused: one literal `omabox -b
-  NAME …` per Bash call, or a script file.
+  before the command (`omabox -b box-3 shot`). In a worktree-isolated Claude Code subagent: "For
+  subagents in an isolated worktree" below.
 - `omabox help CMD` (or `omabox CMD --help`): one command's flags and notes; `omabox help`: every
   command (long: for an overview only).
+
+## For subagents in an isolated worktree
+
+Claude Code checks each Bash call of a worktree-isolated subagent and refuses what it cannot follow:
+a word it reads as a shell (`wait cmd`), shell text it cannot see through (`$(…)` with more after it,
+a pipe into another program, a heredoc with `cd`), anything leaving the worktree. Each refusal costs
+a turn. Five rules keep every omabox call plain:
+- **A state: `omabox wait until -- CMD`** (never `wait cmd`, refused even alone); the screen: `wait
+  still`, `wait change` or the action's `--wait`, never a sleep.
+- **Several shell steps in the box: a script in the box HOME.** Write it with your file tool at the
+  path `omabox path --home` printed, then `omabox -b NAME run -- sh /home/sbx/F.sh`. A host script:
+  `omabox run -- python3 - < FILE`, alone in its call.
+- **Box files from the host: `omabox path --home` once**, then Read, Write and Edit on that literal
+  path (`/home/sbx/X` in the box is `<that path>/X`); never `$(omabox path)` inside a command.
+- **Every argument literal**: no `$VAR`, no `$(…)`; look the value up first (`omabox run -- pgrep -x
+  APP`), then type it (`--pid 1809`).
+- **Stay in your worktree**: no `cd` out of it, no git on another checkout (absolute paths instead);
+  scroll with `omabox scroll … --source wheel`, not `pointer -- source`.
 
 ## Shots
 
@@ -112,7 +129,7 @@ coordinates, its tree then only the elements touching that part; nothing: the sc
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-H=$(omabox path)/home                                 # the box HOME, /home/sbx inside
+H=$(omabox path --home)                               # the box HOME, /home/sbx inside
 cp -r tests/fixtures/library "$H/library"             # data the app reads, before it starts
 omabox run -- touch -d "9 months ago" /home/sbx/library/old.txt   # relative to now: "9 months ago" each run
 omabox check point bar -g "1700,0 220x26"            # the widget, before anything runs
@@ -400,7 +417,7 @@ with `--keep wallpaper` or after a theme set in the box.
   refuse a SEL that matches several.
 - An app that redraws later, by itself (after a server sync, a timer): `omabox wait --timeout 30s
   change --window APP` (satisfied at the first change there; the window must be on screen), then
-  `omabox wait still` for it to finish. Never `wait cmd -- false` (or `-- true`) as a sleep: the first
+  `omabox wait still` for it to finish. Never `wait until -- false` (or `-- true`) as a sleep: the first
   is a fixed wait ending in 124, the second no wait at all.
 - `keys`, `click`, `scroll`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s]
   [-g GEOM] [--ignore GEOM]... [--json]`: the screen before the action, a change within `--start` (5 s
@@ -527,7 +544,7 @@ with `--keep wallpaper` or after a theme set in the box.
   leaves your bar as it is (layout, `shell.toml`'s sizes and fonts): add `--stock-bar` for Omarchy's. An unknown NAME is refused
   before anything is made; with `--from SAVE` it wins over the save's look; `up` again with another
   is refused (box.json and `ls --json` have `theme`).
-- The box HOME is `omabox path` → `<dir>/home`, readable and writable from the host: put outputs there
+- The box HOME is `omabox path --home` (`<dir>/home`), readable and writable from the host: put outputs there
   or in `/tmp` inside, and seed a widget's data files (a usage record, a store) there while the box runs.
   Inside the box it is `/home/sbx`, which does not exist on the host: a path under it passed to a
   service running on the host (a download dir sent to a local server) fails there. Use a path both
@@ -617,7 +634,7 @@ with `--keep wallpaper` or after a theme set in the box.
   the host (this box; this box but reset, for a server on `::1` only; several boxes, any of which
   may have it, naming those on `::1` only that would reset; a host process; nothing yet; an
   isolated box's servers are not forwarded). Check a server you started from
-  inside its box (`omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/`), never from the host.
+  inside its box (`omabox wait until -- curl -fsS http://127.0.0.1:PORT/`), never from the host.
   Inside a box the host's LAN address is the box itself. A connected box started inside a box has
   no network.
 - An app that judges its network by where a peer comes from (a BitTorrent client reads
@@ -751,7 +768,7 @@ most people will. Then:
 - **Settings and placement**, through the box's shell (the IPC list above): `omarchy-shell shell
   setBarWidget ID KEY VALUE_JSON '{}'` (kept in the widget's entry in the bar layout),
   `moveBarWidget ID '{"section":"left","after":"omarchy.clock"}'`, `setPluginEnabled ID false`. Or
-  edit the box's `$(omabox path)/home/.config/omarchy/shell.json`: its shell applies it at once.
+  edit `.config/omarchy/shell.json` under `omabox path --home`: the box's shell applies it at once.
 - **Against the user's real desk** (a bar plugin hosting other widgets, plugins reading their own
   files beside `shell.json`, a bug that shows only with everything loaded): `omabox up --desk-shell
   [--plugin PATH]` mounts every plugin in `~/.config/omarchy/plugins` (read-only; the `--plugin` of
@@ -764,7 +781,7 @@ most people will. Then:
   copies it into the box HOME before the shell starts (no second shell start, no wrong state in between).
 - **A vertical or bottom bar**: `"bar": {"position": "left"}` (`right`, `bottom`) in that file.
 - **Data states** (missing tool, signed out, empty, malformed output, slow, failing): a stub CLI
-  in `$(omabox path)/home/.local/bin` (ahead of yours on the box's PATH, the bar's included; not for
+  in `.local/bin` under `omabox path --home` (ahead of yours on the box's PATH, the bar's included; not for
   `omarchy-*` commands, whose bin comes first for the bar), offline with
   `--net isolated`.
 - **Theme**: `omabox run -- omarchy-theme-set NAME` (names: `omabox run -- omarchy-theme-list`),
@@ -774,7 +791,7 @@ most people will. Then:
 - **Processes it starts** (servers, helpers): look before `omabox down`, which kills everything in
   the box and so hides a leak. After stopping them, after `restart-shell` and after
   `omabox run -- omarchy plugin disable ID`: `omabox run -- ps -eo pid,pgid,stat,args --forest`.
-  A server it starts is up when `omabox wait cmd -- curl -fsS http://127.0.0.1:PORT/` exits 0.
+  A server it starts is up when `omabox wait until -- curl -fsS http://127.0.0.1:PORT/` exits 0.
 - **The install path** (how users get it): from the checkout (mounted: the repo you ran `up` from,
   or `--ro-bind DIR`), `omabox run -- omarchy plugin add /abs/checkout --yes --enable`. It clones the
   committed HEAD (not your uncommitted edits) into the box HOME, validates it and places the widget
@@ -787,9 +804,9 @@ most people will. Then:
 ## Testing an app as a desktop app
 
 - **From the launcher** (desktop entry, icon, app id): put `myapp.desktop` in
-  `$(omabox path)/home/.local/share/applications/`, its icon in
-  `.../home/.local/share/icons/hicolor/SIZE/apps/`, and, when `Exec` names a command, a wrapper of
-  that name in `.../home/.local/bin` that runs your build. The launcher sees new entries without a
+  `.local/share/applications/` under `omabox path --home`, its icon in
+  `.local/share/icons/hicolor/SIZE/apps/`, and, when `Exec` names a command, a wrapper of
+  that name in `.local/bin` there that runs your build. The launcher sees new entries without a
   restart. `omabox keys --wait super+alt+space`, `omabox keys --wait -t myapp`, a shot, `omabox keys
   Return`, `omabox wait window myapp`; `omabox windows --json` has the class to compare with the
   entry's name (`StartupWMClass`), and `omabox log apps` what the launcher ran. A launcher start goes
@@ -860,7 +877,7 @@ most people will. Then:
 - Hardware-driven UI (volume, brightness, battery) has no hardware in a box: drive the shell part
   through its own command or IPC, e.g. the OSD with `omabox run -- omarchy-osd -i volume-high -p 40`,
   then `omabox shot`. When the changed script itself calls `wpctl` or `brightnessctl`, a stub of that
-  name in `$(omabox path)/home/.local/bin` answers it.
+  name in `.local/bin` under `omabox path --home` answers it.
 - Edits to the tree: `omabox restart-shell` (the shell; `keepLoaded` plugins, such as the OSD,
   notifications, the menu and the lock, keep their old code until then) or `omabox hyprctl reload`
   (the config).
@@ -868,7 +885,7 @@ most people will. Then:
 ## Testing the lock screen
 
 The shell's lock runs in a box: the system menu's Lock (or `omabox run -- omarchy-system-lock`)
-takes a real session lock (`omabox wait cmd -- omarchy-hyprland-session-locked`), keys go to the lock
+takes a real session lock (`omabox wait until -- omarchy-hyprland-session-locked`), keys go to the lock
 and not the window under it, a wrong password is refused. What a box cannot do is accept a real
 password: it cannot read `/etc/shadow`, so PAM fails every password ("cannot retrieve authentication
 info"). Never type the user's password into a box. To test unlocking, give the lock a PAM config of

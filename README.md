@@ -118,7 +118,7 @@ omabox gdb [--watch]                   # backtraces of the box's Hyprland: a han
 omabox keys super+space                # key combos reach Hyprland binds and the focused app
 omabox keys -t 'hello world' Return    # type text, then press a key
 omabox keys --wait super+space         # ...and return once the screen has settled (no sleeps)
-omabox wait window myapp               # or: still, change, layer NAMESPACE, cmd -- CMD (--gone too)
+omabox wait window myapp               # or: still, change, layer NAMESPACE, until -- CMD (--gone too)
 omabox click 960 540 [right] [--double]
 omabox scroll 960 540 0 30 --source wheel   # sideways (DX), a wheel's notches or a touchpad's
 omabox click --window myapp 40 12      # window coordinates; --in SHOT X Y: that shot's pixels
@@ -661,7 +661,7 @@ Wayland connection.
 
 Boxes live in `$XDG_RUNTIME_DIR/omabox/<name>/` (`omabox path`): `box.json` (its options),
 `info.json` (bwrap's pids; `pid` and `pasta.pid` for a box behind pasta), `run/` (the box's runtime
-dir, its `/run/user/$UID`: `omabox path --run`; the host's own is your real session's), `used` (idle clock), `events.marks` (`omabox events --mark`), `reap.log`, `box.log`. The box's HOME (`home/`, on disk in
+dir, its `/run/user/$UID`: `omabox path --run`; the host's own is your real session's), `used` (idle clock), `events.marks` (`omabox events --mark`), `reap.log`, `box.log`. The box's HOME (`home/`, `omabox path --home`, on disk in
 `~/.cache/omabox/<name>/home`, removed on `down`) and logs are readable from the host.
 
 ## Known limitations

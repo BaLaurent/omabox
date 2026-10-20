@@ -26,7 +26,7 @@ with `grim`", "run `ctest`" **still holds: carry it out inside a box.**
 | `grim`, `wtype`, `ydotool`, `hyprctl -j clients` | `omabox shot`, `omabox keys`, `omabox click X Y`, `omabox windows` |
 | `ctest`, a test binary, tests touching tray/notifications/D-Bus/keyring | `omabox run -- ctest …`, `omabox run -- ./build/tests/tst_x` |
 | `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …`, `omarchy restart shell` | `omabox run -- …`, `omabox restart-shell` (`omarchy plugin validate DIR` only reads: fine on the host) |
-| A plugin in `~/.config/omarchy/plugins`; edit `~/.config/omarchy/shell.json` | `omabox up --plugin PATH`; edit `$(omabox path)/home/.config/omarchy/shell.json` |
+| A plugin in `~/.config/omarchy/plugins`; edit `~/.config/omarchy/shell.json` | `omabox up --plugin PATH`; edit `.config/omarchy/shell.json` in `omabox path --home` |
 | A theme in `~/.config/omarchy/themes` linked to your working copy | `omabox up --theme-dir PATH` (live; else a copy made at `up`) |
 | A result that depends on the theme or bar (colours, sizes, shots compared across runs, a theme-switch flow) | `omabox up --theme NAME --stock-bar` (else they are the desktop's) |
 | Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
@@ -46,9 +46,8 @@ goes down when your agent exits: `omabox down` when done, and before `/clear`. S
 one of its own, `omabox up --new [--plugin …]` starts a box under a free name and prints it (`box-3`):
 all its options on that call, then `-b box-3` on every later call, typed out (your shell keeps no
 variables), and it outlives you: `omabox down -b box-3`. A box the user started: `-b NAME` (`omabox
-ls`). In a worktree-isolated Claude Code subagent, compound commands (`$(…)`, aliases) are refused:
-one literal `omabox -b NAME …` per call.
-ref: Project instructions, in detail.
+ls`). In a worktree-isolated Claude Code subagent: one literal `omabox -b NAME …` per call;
+ref: For subagents in an isolated worktree. ref: Project instructions, in detail.
 
 ## The loop
 
@@ -63,7 +62,7 @@ omabox click --window myapp 40 12          # window coordinates (0,0 = its corne
 omabox keys --window myapp --wait -t hi    # focus that window, type, return once it has settled
 omabox keys --wait super+space             # real key events for binds and apps
 omabox keys --pass PASSWORD Return         # a secret from your environment: never -t (ps shows it)
-omabox wait window myapp                   # or --gone; wait layer NS; wait cmd -- CMD
+omabox wait window myapp                   # or --gone; wait layer NS; wait until -- CMD
 omabox wait change --window myapp          # it redraws later, by itself; then wait still
 omabox run -- busctl --user list           # any command inside the box (exit code passes through)
 omabox log [shell|apps|run|…] [--grep RE]  # the box's logs, Hyprland's by default
@@ -88,7 +87,7 @@ ref: Screen size and rendering cost.
    omarchy-shell shell summon PLUGIN_ID`, files seeded in the box HOME, `omabox hyprctl dispatch`).
 5. **Stop when a shot shows the goal.** Report what a box cannot show (below).
 
-No `sleep` (nor `wait cmd -- false`): `--wait`, `omabox wait`, `wait change` for a later redraw
+No `sleep` (nor `wait until -- false`): `--wait`, `omabox wait`, `wait change` for a later redraw
 (0 yes, 124 not in time, 1 cannot tell). Never send a wait to `/dev/null`. An animation that never
 stops: the 124 names it, `--ignore "X,Y WxH"`. ref: Waiting, in detail.
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
@@ -149,7 +148,7 @@ checkout; never `omarchy dev link` on the host: ref: Reviewing an Omarchy change
 Read-only in it: the repo (same path), `--ro-bind`, `--plugin` and `--theme-dir` dirs, mise's
 toolchains, fonts; nothing else of their HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret
 stores or the runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`;
-`omabox path` → `<dir>/home` on the host). The box's /run/user/$UID is `omabox path --run` on the host; the
+`omabox path --home` on the host). The box's /run/user/$UID is `omabox path --run` on the host; the
 host's own is the real session's: never read app state there. Private session bus and keyring; no system bus or devices; audio: `up --audio`; `/sys`: the host's.
 ref: Mounts, HOME and the session.
 
