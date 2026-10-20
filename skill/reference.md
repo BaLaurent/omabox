@@ -252,7 +252,8 @@ with `--keep wallpaper` or after a theme set in the box.
 - Accessibility (AT-SPI) tests (dogtail, a toolkit's a11y tests, pyatspi) run in a box against its
   own a11y bus, in its runtime dir: GTK apps register on it; Qt ones once `org.a11y.Status.IsEnabled`
   is true (`omabox run -- busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true`),
-  AccessKit (egui, winit) before accesskit_unix 0.22 once `ScreenReaderEnabled` is (the same call).
+  AccessKit (egui, winit) before accesskit_unix 0.22 once `ScreenReaderEnabled` is (the same call),
+  a property at-spi2-core 2.61 and later no longer have: such an app has no tree with them.
 
 ## The guard, in detail
 

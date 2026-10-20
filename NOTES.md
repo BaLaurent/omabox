@@ -7658,6 +7658,23 @@ from them.
     larger for the room. Tests: t_unit_check (unexplained: a region on the moved element and one
     elsewhere, a scaled shot; check_compare on made runs: two checkpoints with one change and a
     third with another, the line, the count, the diff image).
+368. **at-spi2-core 2.61 has no ScreenReaderEnabled, and libatspi logs as `atspi`** (2026-10-20,
+    #237 and finding 349 revisited). With at-spi2-core 2.62.1 (from 2.60.6) every `tree` printed
+    `omabox: tree: could not set org.a11y.Status.ScreenReaderEnabled (... No such property ...)`:
+    the bus launcher's 2.61.0 rework of IsEnabled (it now also assumes accessibility on once an AT
+    registers events) left only `IsEnabled` on `org.a11y.Status` (its introspection, and the
+    launcher's source at 2.61.0). The line broke `--find`'s one-line answer and `--json | jq` when
+    stderr was read with stdout. `omabox-tree` now reads a "No such property" answer to its Get of
+    ScreenReaderEnabled as none to set, says nothing, and only when PID is not on the bus adds that
+    an egui/winit app on AccessKit before accesskit_unix 0.22 never joins it here (it waits for
+    that property: not omabox's to give; `help tree` and the reference say so). Two libatspi
+    changes too: dbind logs under the GLib domain `atspi` (2.61.0), so finding 341's filter of the
+    cache-object warning missed it, and is now on both domains; and GetItems answered
+    UnknownMethod, ServiceUnknown or NoReply warns no more, so t_tree's mute app (no objects at
+    all) gave no warning to keep: it now has a cache whose GetItems fails with its own error.
+    Seen in a box: GTK4 and Qt Quick trees read with no stray line, IsEnabled set; the failing
+    cache's `atspi-WARNING ... Error in GetItems` shown on a failed `--find` only. Tests: t_tree
+    (ScreenReaderEnabled checked where the bus has it; else the not-on-bus reason checked on foot).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

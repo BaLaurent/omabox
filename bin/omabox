@@ -477,8 +477,9 @@ whole later: --find TEXT prints only the lines holding TEXT (any case, not in th
 its ancestors (\`list > list item "Beta" [selected] @12,354 1872x22\`); exit 1 when none does.
 --json: an array, one object a node printed. GTK, Qt and egui/winit (AccessKit) apps have a tree
 (\`tree\` sets org.a11y.Status.IsEnabled, which Qt waits for, and ScreenReaderEnabled, which older
-AccessKit waits for); Chromium and Electron only when started with --force-renderer-accessibility;
-terminals, the Omarchy shell and its plugins have none: "no accessibility tree", exit 1.
+AccessKit waits for: at-spi2-core 2.61+ has none, so no tree for those); Chromium and Electron only
+when started with --force-renderer-accessibility; terminals, the Omarchy shell and its plugins have
+none: "no accessibility tree", exit 1.
 @ check
 \`check\` compares an app's or a plugin's look with a baseline, so a person need not look. A SCENARIO
 is a script of yours that sets the box up, drives it with omabox commands and calls \`omabox check

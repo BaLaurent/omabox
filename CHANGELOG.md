@@ -105,6 +105,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   and no other pixels; without a tree, the same regions) is now one line, `changed  ID: as FIRST`,
   still counted as changed (`18 changed (16 as another)`), and the report names it on the first one's
   card.
+- **`tree` prints no warning on every call with at-spi2-core 2.61 or later.** That version dropped
+  `org.a11y.Status.ScreenReaderEnabled`, and each `tree` said it could not set it, a line that broke
+  `--find`'s one-line answer and `--json` read with its errors. `tree` now leaves it alone where it
+  is gone and says why only when an app is not on the accessibility bus: an egui/winit app on
+  AccessKit before accesskit_unix 0.22 waits for that property, so it has no tree there. libatspi's
+  warning about such an app's missing cache, which `tree` drops, is dropped under libatspi's new log
+  name too.
 
 ## 0.7.0 — 2026-10-16
 

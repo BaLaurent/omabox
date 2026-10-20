@@ -16,8 +16,9 @@
 //
 // Before reading, it sets org.a11y.Status.IsEnabled and ScreenReaderEnabled (what a screen reader
 // sets): Qt apps export their tree only then, and follow it live; AccessKit apps (egui, winit) before
-// accesskit_unix 0.22 watch only ScreenReaderEnabled (#237); GTK4 exports always. One that just turned
-// either on waits up to 3 s for PID's application to register (again).
+// accesskit_unix 0.22 watch only ScreenReaderEnabled (#237); GTK4 exports always. at-spi2-core 2.61
+// and later have no ScreenReaderEnabled: left alone there, said only when PID is not on the bus. One
+// that just turned either on waits up to 3 s for PID's application to register (again).
 //
 // Exit: 0 printed; 1 --find matched nothing; 3 no tree for that window (said why); 4 the box has no
 // accessibility bus; 2 usage, or outside a box.
@@ -351,6 +352,10 @@ done:
     g_free(val);
 }
 
+// at-spi2-core 2.61 and later have no org.a11y.Status.ScreenReaderEnabled (its bus launcher's
+// IsEnabled rework): then AccessKit before 0.22 never registers, whatever tree does.
+static int no_sre;
+
 // The box's a11y bus answers (at-spi-bus-launcher on its session bus); and IsEnabled set true.
 // Returns -1 without a bus, else whether IsEnabled or ScreenReaderEnabled was off (and is on now).
 static int a11y_bus(void) {
@@ -387,7 +392,15 @@ static int a11y_bus(void) {
         int off = 1;
         r = g_dbus_connection_call_sync(c, "org.a11y.Bus", "/org/a11y/bus", "org.freedesktop.DBus.Properties", "Get",
                                         g_variant_new("(ss)", "org.a11y.Status", PROPS[k]), G_VARIANT_TYPE("(v)"),
-                                        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, NULL);
+                                        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &e);
+        // A property the launcher does not have (GDBus answers InvalidArgs "No such property"): not one
+        // to set. Any other error: try to set it, and say so if that fails too.
+        if (!r && k == 1 && g_error_matches(e, G_DBUS_ERROR, G_DBUS_ERROR_INVALID_ARGS) && strstr(e->message, "No such property")) {
+            g_clear_error(&e);
+            no_sre = 1;
+            continue;
+        }
+        g_clear_error(&e);
         if (r) {
             GVariant *v;
             g_variant_get(r, "(v)", &v);
@@ -436,7 +449,7 @@ static GPtrArray *apps_of(guint pid, int *any, char **toolkit) {
 
 // libatspi's "AT-SPI: Error in GetItems ... Unknown object '/org/a11y/atspi/cache'" on every read of an
 // app without the cache object (AccessKit before 0.22), whose tree reads fine without it: dropped. Any
-// other dbind message passes on.
+// other dbind message passes on. Its log domain is "atspi" from at-spi2-core 2.61, "dbind" before.
 static void dbind_log(const gchar *d, GLogLevelFlags l, const gchar *m, gpointer u) {
     if (m && strstr(m, "Unknown object '/org/a11y/atspi/cache'")) return;
     g_log_default_handler(d, l, m, u);
@@ -511,6 +524,7 @@ static int tree_main(int argc, char **argv) {
     }
     if (find && !*find) find = NULL;
     g_log_set_handler("dbind", G_LOG_LEVEL_WARNING, dbind_log, NULL);
+    g_log_set_handler("atspi", G_LOG_LEVEL_WARNING, dbind_log, NULL);
 
     int was_off = a11y_bus();
     if (was_off < 0) return 4;
@@ -534,6 +548,9 @@ static int tree_main(int argc, char **argv) {
     }
     if (apps->len == 0) {
         if (any) fprintf(stderr, "no accessibility tree: its application (pid %ld) is on the bus with no window under it\n", pid);
+        else if (no_sre) fprintf(stderr, "no accessibility tree: pid %ld is not on the box's accessibility bus (an egui/winit app on "
+                                 "AccessKit before accesskit_unix 0.22 never joins it here: it waits for ScreenReaderEnabled, which "
+                                 "at-spi2-core 2.61 and later do not have)\n", pid);
         else fprintf(stderr, "no accessibility tree: pid %ld is not on the box's accessibility bus\n", pid);
         return 3;
     }

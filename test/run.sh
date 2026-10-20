@@ -5660,13 +5660,15 @@ tree_mid() {
   echo "$((BASH_REMATCH[1] + BASH_REMATCH[3] / 2)) $((BASH_REMATCH[2] + BASH_REMATCH[4] / 2))"
 }
 t_tree() {
-  local B=$P-tree H out rc mid
+  local B=$P-tree H out rc mid sre=1
   check "up" ob up "$B" --no-shell
   H=$(ob path -b "$B")/home
   check_eq "IsEnabled is off at up (Qt apps export nothing yet)" "b false" \
     "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled 2>&1)"
-  check_eq "...ScreenReaderEnabled too" "b false" \
-    "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled 2>&1)"
+  # at-spi2-core 2.61 and later have no ScreenReaderEnabled (finding 368): `tree` leaves it alone there.
+  out=$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled 2>&1) || true
+  if [[ $out == *"No such property"* ]]; then sre=0; ok "...ScreenReaderEnabled: none on this at-spi2-core (2.61 or later)"
+  else check_eq "...ScreenReaderEnabled too" "b false" "$out"; fi
   # Qt Quick first, started before any tree: `tree` turns IsEnabled on and waits for it to register.
   if ob run -b "$B" -- sh -c 'command -v qml6' >/dev/null 2>&1; then
     cat > "$H/tree-demo.qml" <<'QML'
@@ -5757,19 +5759,22 @@ PY
     else no "...a click at its bounds' middle checks it" "no bounds in [$out]"; fi
     rc=0; out=$(ob tree -b "$B" --window 'Tree demo GTK4' --find 'no such words' 2>&1) || rc=$?
     check_eq "...--find with nothing matching: 1, and says so" "1 yes" "$rc $(grep -q 'nothing in the window holds "no such words"' <<<"$out" && echo yes)"
-    # An app on the bus that answers nothing: libatspi warns about it on every read (finding 349).
+    # An app on the bus that answers nothing: libatspi warns about it on every read (finding 349). Its
+    # cache fails GetItems: libatspi from at-spi2-core 2.61 is quiet about a missing one (finding 368).
     cat > "$H/mute-a11y.py" <<'PY'
 from gi.repository import Gio, GLib
 s = Gio.bus_get_sync(Gio.BusType.SESSION)
 addr = s.call_sync('org.a11y.Bus', '/org/a11y/bus', 'org.a11y.Bus', 'GetAddress', None, GLib.VariantType('(s)'), 0, -1, None).unpack()[0]
 c = Gio.DBusConnection.new_for_address_sync(addr, Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION, None, None)
+cache = Gio.DBusNodeInfo.new_for_xml("<node><interface name='org.a11y.atspi.Cache'><method name='GetItems'/></interface></node>").interfaces[0]
+c.register_object('/org/a11y/atspi/cache', cache, lambda *a: a[-1].return_dbus_error('org.omabox.Test.Failed', 'answers nothing'), None, None)
 c.call_sync('org.a11y.atspi.Registry', '/org/a11y/atspi/accessible/root', 'org.a11y.atspi.Socket', 'Embed',
             GLib.Variant('((so))', ((c.get_unique_name(), '/org/a11y/atspi/accessible/root'),)), None, 0, -1, None)
 GLib.MainLoop().run()
 PY
     ob run -b "$B" -d -- python3 -I /home/sbx/mute-a11y.py >/dev/null 2>&1
     # shellcheck disable=SC2329 # called through until_ok
-    warned() { local o; o=$("$CLI" tree -b "$B" --window 'Tree demo GTK4' --find 'no such words' 2>&1); grep -q 'dbind-WARNING.*Error in GetItems' <<<"$o"; }
+    warned() { local o; o=$("$CLI" tree -b "$B" --window 'Tree demo GTK4' --find 'no such words' 2>&1); grep -qE '(dbind|atspi)-WARNING.*Error in GetItems' <<<"$o"; }
     check "a failed tree keeps libatspi's warnings (an app on the bus that answers nothing)" until_ok 10 warned
     out=$(ob tree -b "$B" --window 'Tree demo GTK4' 2>&1)
     check_match "...a tree that was read leaves them out" '^frame "Tree demo GTK4" ' "$out"
@@ -5784,8 +5789,14 @@ PY
   check_match "...and where one is to be had" "force-renderer-accessibility.*terminals" "$out"
   # #237: AccessKit before 0.22 (egui apps on eframe 0.36 and older) registers only once
   # ScreenReaderEnabled is on: `tree` sets it with IsEnabled (no egui app here: checked by hand).
-  check_eq "after tree, ScreenReaderEnabled is on (older AccessKit apps watch only it)" "b true" \
-    "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled 2>&1)"
+  # Without one (finding 368), an app not on the bus is said to be possibly such an app.
+  if [ "$sre" = 1 ]; then
+    check_eq "after tree, ScreenReaderEnabled is on (older AccessKit apps watch only it)" "b true" \
+      "$(ob run -b "$B" -- busctl --user get-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled 2>&1)"
+  else
+    check_match "...not on the bus, with no ScreenReaderEnabled to set: an older AccessKit app's reason said" \
+      "not on the box's accessibility bus \(an egui/winit app on AccessKit before accesskit_unix 0.22 never joins it here" "$out"
+  fi
   check_match "a window that is not there: the box's windows listed" "no window matches nosuchwindow" "$(ob tree -b "$B" --window nosuchwindow 2>&1)"
   check "down" ob down "$B"
 }
