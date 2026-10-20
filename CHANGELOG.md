@@ -3,6 +3,20 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Added
+
+- **`--wait` says what changed on the desktop** (#274). After `keys`, `click`, `scroll`, `drag` and
+  `run -d` with `--wait`, the line (still starting `satisfied:` or `unsatisfied:`) adds what changed
+  since just before the input: `window opened, focused: zenity "Save as"`, `window opened on
+  workspace 2: ...`, `window closed: ...`, `layer omarchy-menu opened`, `focus: none`, `foot title
+  now "..."`, `workspace now 2`; three at most, then `+N more (omabox events --since OFFSET)`. A 124
+  says where the input went (the focused window, a layer holding the keyboard, what was under the
+  click, in the window's own coordinates) and `no window, layer or focus changed` when nothing did,
+  so it needs no shot to learn that nothing happened. `--json` adds `changes`, `target` and
+  `events_since`. Exit codes are unchanged; it costs ~25 ms a call (~40 ms on a 124).
+
 ## 0.9.0 — 2026-10-20
 
 The last release before 1.0. `omabox help CMD` is short, the command's lines and options

@@ -60,7 +60,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `lua --json` | a line each value Lua returned (any JSON value) |
-| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/until add `detail` |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/until add `detail`; an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at`), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
 | `check run --json` | `result` (same, changed), `base, shots, report, setup, counts, checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
@@ -505,6 +505,28 @@ with `--keep wallpaper` or after a theme set in the box.
 - `keys`, `click`, `scroll`, `drag` and `run -d` take `--wait [--start 2s] [--quiet 300ms] [--timeout 10s]
   [-g GEOM] [--ignore GEOM]... [--json]`: the screen before the action, a change within `--start` (5 s
   for `run -d`), then `--quiet` with none. `-g` watches only that part of the screen.
+- The line then says what changed on the desktop since just before the input, from one Hyprland read
+  before and one after (~25 ms): `window opened, focused: zenity "Save as"`, `window opened on
+  workspace 2: ...` (where a shot shows nothing), `window closed: ...`, `layer omarchy-menu
+  opened|closed` (a menu kept mapped at 1x1 is closed), `focus: ...` or `focus: none`, `foot title now
+  "..."`, `workspace now 2`, `... moved to workspace 3`, `... now fullscreen` (or floating, tiled, `out of fullscreen`); 3 at most and
+  ~160 characters, then `+N more (omabox events --since OFFSET)`. Since the input, not caused by it:
+  a toast or a clock's retitle at the same moment is said too. Typing into a field changes none of
+  these: the line is as before. A window that opened and closed within the wait is not seen.
+- A 124 adds where the input went and whether anything moved: `the keys went to foot "K" (focused)`
+  or `to layer omarchy-menu (it has the keyboard)`, `the click at 960,540 was on zenity "Info" (its
+  129,113)` (its own coordinates, as `click --window` takes them) or `on layer omarchy-bar`, `no
+  window from pid 1240 yet` (run -d); then `no window, layer or focus changed`, or what did (a window
+  opened off screen). When it says both, look (`windows`, `tree`, a shot) before sending again; the
+  input was sent. `unknown` (1) adds nothing. The exit code is the screen's, never the desktop's.
+- `--json` adds `changes` (every change, up to 50: `window_opened` `{window, focused}`,
+  `window_closed`, `layer_opened` `{namespace, at}`, `layer_closed`, `focus` `{from, to}`, `title`
+  `{window, from, to}`, `workspace` `{from, to}`, `window_moved` `{window, from, to}`, `window_state`
+  `{window, floating, fullscreen}`; a window is `address, class, title, workspace`; more kinds may
+  come: ignore unknown ones), `[]` for none, `null` when the desktop could not be read; `target`
+  (`kind` window, layer or none, `window`, `namespace`, `at`: what got the input; on a 124 or with
+  --json); `events_since` (`omabox events --since N`: everything from just before the input). `wait
+  still|change` has no action and none of these.
 - The screen watched is every monitor of the box. `-g`, `--window`, `--ignore` and the regions the line
   names are the layout's coordinates, as for a plain `click` and `shot -g`. Beside `--window`, `-g`
   and `--ignore` are still the layout's in 0.9, with a warning (one outside the region watched is

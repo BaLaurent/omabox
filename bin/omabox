@@ -227,7 +227,8 @@ too (omabox -b NAME windows).
 --window SEL (or -w SEL): a window: active (or --active), 0x... (its address), pid:N, class:RE, title:RE, a word
 @short keys click scroll drag run
 --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--strict] [--json]
-       after it, a change on screen within --start, then still for --quiet; 124 if not by --timeout
+       after it, a change on screen within --start, then still for --quiet; 124 if not by --timeout;
+       the line adds what changed on the desktop (windows, layers, focus), a 124 where the input went
 @short run
 -d (or --detach): the command left running in the box, its log said on stderr; --replace: the same one stopped first
 @short shot
@@ -611,6 +612,11 @@ one small region kept changing. -g watches only that part of the screen. The scr
 -g, --window and --ignore pick parts of it, all in the layout's coordinates (as a plain click's).
 Beside --window, -g and --ignore are still the layout's in 0.9, with a warning: 1.0 reads them in
 the window's own, as --window's X Y and shot -g are.
+Their line then adds what changed on the desktop since just before the input: a window opened or
+closed, a layer drawn or hidden, focus, a title, the workspace (3 at most, then "+N more (omabox
+events --since OFFSET)"); a 124 says where the input went (the focused window, a layer holding the
+keyboard, what was under the point) and "no window, layer or focus changed" when nothing did. Since
+the input, not caused by it. --json adds changes (null: not read), target and events_since.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations, here as everywhere: 300ms, 2s, 1.5m, 1h (a bare number is seconds); --timeout at most
@@ -5676,6 +5682,7 @@ cmd_run() {
       # --wait: until what it opens has settled (a first frame within 5 s unless --start says).
       if [ "$SETTLE_WAIT" = 1 ]; then
         local p; p=$(cursor_now) || exit $?; [ -z "$p" ] || SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+        SETTLE_FACTS=run
         settle_begin settle --start 5000 "${SETTLE_ARGS[@]}"
         settle_ready "$SETTLE_JSON"
       fi
@@ -5697,7 +5704,7 @@ cmd_run() {
         (trap - INT QUIT; exec 3>&-; exec /usr/bin/setsid -- "$@") & echo "$!" >&3' omabox-run "/home/sbx/$log" "$ex" "$@" 3>&1 </dev/null >&2 | head -c 64) ||
         die "run -d: could not start the command in box '$NAME'$(box_alive || echo ": the box went down") (what the box said, if anything, is above; omabox log -b $NAME all)"
       local lname=$log; log=$D/home/$log
-      [[ $jpid =~ ^[0-9]+$ ]] && job_record "$jpid" "$log" "$@"
+      [[ $jpid =~ ^[0-9]+$ ]] && job_record "$jpid" "$log" "$@" && SETTLE_FPID=$jpid
       [ $print_log = 0 ] || echo "$log"
       # Its first moments (#286): a job over by then (a server on a port the box has taken already,
       # a typo) is said with its status and log instead of "started", and run -d exits with that
@@ -9524,6 +9531,7 @@ cmd_keys() {
     # --wait: the screen before the keys, then a change and quiet after them. The cursor hides on a
     # key press: not a change.
     local p; p=$(cursor_now) || exit $?; [ -z "$p" ] || SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
+    SETTLE_FACTS=keys
     settle_begin settle "${SETTLE_ARGS[@]}"
     settle_ready "$SETTLE_JSON"
     settle_act keys_send
@@ -9731,6 +9739,7 @@ cmd_click() {
   # --wait: the cursor where it is and where it goes is not the change looked for.
   local p; p=$(cursor_now) || exit $?; [ -z "$p" ] || SETTLE_ARGS+=(--ignore "$(cursor_rect "$p")")
   SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
+  SETTLE_FACTS=click SETTLE_FXY="$x $y"
   settle_begin settle "${SETTLE_ARGS[@]}"
   settle_ready "$SETTLE_JSON"
   MARK_T0=${EPOCHREALTIME//[!0-9]/}
@@ -9800,6 +9809,7 @@ cmd_scroll() {
   fi
   local c; c=$(cursor_now) || exit $?; [ -z "$c" ] || SETTLE_ARGS+=(--ignore "$(cursor_rect "$c")")
   SETTLE_ARGS+=(--ignore "$(cursor_rect "$x $y")")
+  SETTLE_FACTS=scroll SETTLE_FXY="$x $y"
   settle_begin settle "${SETTLE_ARGS[@]}"
   settle_ready "$SETTLE_JSON"
   MARK_T0=${EPOCHREALTIME//[!0-9]/}
@@ -10023,6 +10033,7 @@ cmd_drag() {
     on_box "$BOX_POINTER" --extent "$ext" move "$x1" "$y1"
     local r
     while read -r r; do SETTLE_ARGS+=(--ignore "$r"); done < <(path_rects "$x1" "$y1" "${SEQ[@]}")
+    SETTLE_FACTS=drag SETTLE_FXY="$x1 $y1"
     settle_begin settle "${SETTLE_ARGS[@]}"
     settle_ready "$SETTLE_JSON"
   fi
@@ -10264,6 +10275,176 @@ ptr_release_quiet() {
   ! box_alive 2>/dev/null || say "could not show box '$NAME''s pointer again (omabox pointer show -b $NAME)"
 }
 
+# --- what an action's --wait saw on the desktop (#274) ---------------------------------------------
+
+# An action's --wait (keys, click, scroll, drag, run -d) says what changed on the box's desktop since
+# just before the input: windows and layers opened or closed, focus, titles, the workspace. One
+# batched hyprctl read before (in the background while omabox-still starts) and one after the answer,
+# diffed by DESK_FACTS_JQ. "Since", never "caused by": a toast or a clock's retitle in the same moment
+# is said as it is. Kept in SETTLE_FACTS (the action: keys, click, scroll, drag, run; empty for `wait`,
+# which has no action to say it of), SETTLE_FXY (the point: click, scroll, drag's start), SETTLE_FPID
+# (run -d's job, once started).
+SETTLE_FACTS="" SETTLE_FXY="" SETTLE_FPID="" SETTLE_SNAP="" SETTLE_SNAP_PID="" SETTLE_BEFORE="" SETTLE_LOOKED=0
+DESK_BATCH="j/clients; j/layers; j/activewindow; j/activeworkspace; j/monitors"
+# desk_snap: the desktop now as one JSON object {events (the events log's size, null when unread),
+# clients, layers, active, workspace, monitors}, or nothing when the box does not answer in 2 s. Never
+# dies (not hypr_json): a desktop that could not be read leaves the answer as it was.
+desk_snap() {
+  local out js size
+  # shellcheck disable=SC2016 # the inner sh's
+  out=$(on_box /usr/bin/sh -c 'stat -L -c %s -- "$1" 2>/dev/null || echo -; exec timeout 2 hyprctl --batch "$2"' \
+    sh "$EVENTS_LOG" "$DESK_BATCH" 2>/dev/null | head -c 67108864) || return 0
+  size=${out%%$'\n'*} js=${out#*$'\n'}
+  jq -c -s --arg s "$size" 'select(length == 5 and (.[0] | type) == "array" and (.[1] | type) == "object"
+    and (.[2] | type) == "object" and (.[4] | type) == "array")
+    | {events: ($s | tonumber? // null), clients: .[0], layers: .[1], active: .[2], workspace: .[3], monitors: .[4]}' <<<"$js" 2>/dev/null || true
+}
+# The before snapshot, started in the background (settle_begin) and taken before the input is sent
+# (settle_ready; settle_end when that never came). Bounded: desk_snap gives up after 2 s.
+desk_snap_start() {
+  [ -n "$SETTLE_FACTS" ] || return 0
+  SETTLE_SNAP=$(mktemp) SETTLE_BEFORE=""
+  desk_snap > "$SETTLE_SNAP" &
+  SETTLE_SNAP_PID=$!
+}
+desk_snap_take() {
+  [ -n "$SETTLE_SNAP_PID" ] || return 0
+  wait "$SETTLE_SNAP_PID" 2>/dev/null || true
+  SETTLE_BEFORE=$(cat "$SETTLE_SNAP" 2>/dev/null) || SETTLE_BEFORE=""
+  rm -f "$SETTLE_SNAP"
+  SETTLE_SNAP="" SETTLE_SNAP_PID=""
+}
+# The changes from snapshot $b to $a (desk_snap's), as {changes, line}: changes, every one (at most
+# 50), for --json; line, the first of them in words for the status line, at most 3 and ~160
+# characters, then "+N more (omabox events --since OFFSET)" ($since: the log's offset before the
+# input). Kinds (more may come: readers ignore unknown ones): window_opened {window, focused},
+# window_closed {window}, layer_opened {namespace, at}, layer_closed {namespace}, focus {from, to},
+# title {window, from, to}, workspace {from, to}, window_moved {window, from, to} (its workspace),
+# window_state {window, floating, fullscreen}. A window is {address, class, title, workspace}. The
+# words come in that order of weight, but a title: the focused window's comes before the workspace,
+# another's last. A layer is drawn when it is over 1x1 (layer_at's rule, finding 146), so a menu kept
+# mapped at 1x1 while hidden is a layer closed; layers are counted by namespace (an address changes
+# when a layer maps again). Geometry alone (a tiled window resized because another opened) is no
+# change.
+# shellcheck disable=SC2016 # jq, not shell
+DESK_FACTS_JQ='
+  def cut: if length > 40 then .[:39] + "…" else . end;
+  def win: {address, class, title, workspace: (.workspace.name // null)};
+  def wins: [.clients[]? | select(.mapped)];
+  def lays: [.layers | objects | .[] | .levels? // {} | .[] | .[]
+    | select(.w > 1 and .h > 1) | {ns: (if (.namespace // "") == "" then .address else .namespace end), address, at: {x, y, w, h}}];
+  def shown: [.monitors[]? | .activeWorkspace.id, .specialWorkspace.id] | map(select(. != 0 and . != null));
+  ($b | wins) as $bw | ($a | wins) as $aw | ($bw + $aw) as $all
+  | def name: if (.class // "") == "" then "a window \"\(.title // "" | cut)\"" else "\(.class) \"\(.title | cut)\"" end
+      + (. as $w | if any($all[]; .address != $w.address and .class == $w.class and .title == $w.title) then " (\(.address))" else "" end);
+    def cname: (if (.class // "") == "" then "a window" else .class end)
+      + (. as $w | if any($all[]; .address != $w.address and .class == $w.class) then " (\(.address))" else "" end);
+  ($a.active.address // null) as $fa | ($b.active.address // null) as $fb
+  | ($a | shown) as $ashown
+  | [$aw[] | . as $w | select(all($bw[]; .address != $w.address))] as $opened
+  | [ ($opened[] | (.address == $fa) as $f
+        | {kind: "window_opened", window: win, focused: $f, rank: 1,
+           text: ("window opened" + (. as $w | if any($ashown[]; . == $w.workspace.id) then "" else " on workspace \($w.workspace.name)" end)
+             + (if $f then ", focused" else "" end) + ": \(name)")}),
+      ($bw[] | . as $w | select(all($aw[]; .address != $w.address))
+        | {kind: "window_closed", window: win, rank: 2, text: "window closed: \(name)"}),
+      (($b | lays) as $bl | ($a | lays) as $al
+        | ([$bl[].ns, $al[].ns] | unique[]) as $n
+        | ([$bl[] | select(.ns == $n)] | length) as $nb | [$al[] | select(.ns == $n)] as $an
+        | if ($an | length) > $nb then
+            {kind: "layer_opened", namespace: $n,
+             at: (first($an[] | . as $l | select(all($bl[]; .address != $l.address))) // $an[-1]).at,
+             rank: 3, text: "layer \($n) opened"}
+          elif ($an | length) < $nb then {kind: "layer_closed", namespace: $n, rank: 4, text: "layer \($n) closed"}
+          else empty end),
+      (if $fa != $fb then
+         {kind: "focus", from: (if $fb then $b.active | win else null end), to: (if $fa then $a.active | win else null end),
+          rank: (if $fa != null and any($opened[]; .address == $fa) then null else 5 end),
+          text: ("focus: " + (if $fa then $a.active | name else "none" end))}
+       else empty end),
+      ($aw[] | . as $w | first($bw[] | select(.address == $w.address)) as $o
+        | (if $o.title != $w.title then
+             {kind: "title", window: ($w | win), from: $o.title, to: $w.title,
+              rank: (if $w.address == $fa then 6 else 10 end), text: "\($w | cname) title now \($w.title | cut | tojson)"}
+           else empty end),
+          (if ($o.workspace.name // null) != ($w.workspace.name // null) then
+             {kind: "window_moved", window: ($w | win), from: ($o.workspace.name // null), to: ($w.workspace.name // null),
+              rank: 8, text: "\($w | name) moved to workspace \($w.workspace.name)"}
+           else empty end),
+          (if $o.floating != $w.floating or (($o.fullscreen // 0) > 0) != (($w.fullscreen // 0) > 0) then
+             {kind: "window_state", window: ($w | win), floating: $w.floating, fullscreen: (($w.fullscreen // 0) > 0), rank: 9,
+              text: ("\($w | name) " + ([
+                (if (($o.fullscreen // 0) > 0) != (($w.fullscreen // 0) > 0) then (if ($w.fullscreen // 0) > 0 then "now fullscreen" else "out of fullscreen" end) else empty end),
+                (if $o.floating != $w.floating then (if $w.floating then "now floating" else "now tiled" end) else empty end)] | join(", ")))}
+           else empty end)),
+      (($b.workspace.name // null) as $wb | ($a.workspace.name // null) as $wa
+        | if $wb != $wa then {kind: "workspace", from: $wb, to: $wa, rank: 7, text: "workspace now \($wa)"} else empty end)
+    ] as $all_changes
+  | ($all_changes | map(select(.rank != null)) | sort_by(.rank) | map(.text)) as $texts
+  | (reduce $texts[] as $t ({shown: [], open: true};
+       if .open and (.shown | length) < 3 and ((.shown | length) == 0 or ((.shown | join("; ") | length) + 2 + ($t | length)) <= 160)
+       then .shown += [$t] else .open = false end)) as $cap
+  | (($texts | length) - ($cap.shown | length)) as $more
+  | {changes: ($all_changes[:50] | map(del(.rank, .text))),
+     line: ($cap.shown | join("; ") + (if $more > 0 then "; +\($more) more (omabox events --since \($since // "0"))" else "" end))}'
+# desk_facts BEFORE AFTER: DESK_FACTS_JQ's {changes, line}, or nothing when either is not a snapshot.
+desk_facts() {
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  local since; since=$(jq -r '.events // empty' <<<"$1" 2>/dev/null) || since=""
+  jq -c -n --argjson b "$1" --argjson a "$2" --arg since "$since" "$DESK_FACTS_JQ" 2>/dev/null || true
+}
+# What got the input, from snapshot $s (before it, or after it for run -d): {kind: window|layer|none,
+# window, namespace, at (the point in the window's own coordinates), text (the 124's sentence)}.
+# $what: keys, click, scroll, drag or run; $x $y the point; $kbl the layers holding the keyboard
+# (kb_layers); $pid run -d's job. A point is on what takes the pointer there first: an overlay layer,
+# then a top one, then the topmost window drawn there (WIN_JQ's stacking), then a bottom or background
+# layer. Only a layer's rectangle is known, not the part that takes input (WIN_JQ).
+# shellcheck disable=SC2016 # jq, not shell
+DESK_TARGET_JQ='
+  def cut: if length > 40 then .[:39] + "…" else . end;
+  def win: {address, class, title, workspace: ((.workspace | objects | .name) // .workspace)};
+  def name: (if (.class // "") == "" then "a window" else .class end) + " \"\(.title // "" | cut)\"";
+  def target($k; $w; $n; $at; $t): {kind: $k, window: $w, namespace: $n, at: $at, text: $t};
+  $s.clients as $c | $s.monitors as $m | $s.active as $a | $s.layers as $l
+  | if $what == "keys" then
+      if $kbl != "" then target("layer"; null; ($kbl | split(", ")[0]); null; "the keys went to layer \($kbl) (it has the keyboard)")
+      elif ($a.address // null) then target("window"; ($a | win); null; null; "the keys went to \($a | name) (focused)")
+      else target("none"; null; null; null; "the keys went to no window (none focused)") end
+    elif $what == "run" then
+      (first($c[]? | select(.mapped and .pid == $pid)) // null) as $w
+      | if $w then target("window"; ($w | win); null; null; "its window is \($w | name)")
+        else target("none"; null; null; null; "no window from pid \($pid) yet") end
+    else
+      (if $what == "drag" then "the drag from \($x),\($y) started" elif $what == "scroll" then "the scroll at \($x),\($y) was"
+       else "the click at \($x),\($y) was" end) as $say
+      | def at($o): $x >= $o.x and $x < $o.x + $o.w and $y >= $o.y and $y < $o.y + $o.h;
+      [$l | objects | .[] | .levels? // {} | to_entries[] | (.key | tonumber) as $lv | .value | reverse[]
+        | select(.w > 1 and .h > 1 and at(.)) | {lv: $lv, ns: (if (.namespace // "") == "" then .address else .namespace end)}] as $L
+      | ([(WIN) | .[] | select(.onscreen and at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]})
+            and all(.cover[]; at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]}) | not))] | first // null) as $w
+      | ([$L[] | select(.lv >= 2)] | sort_by(-.lv) | first // null) as $top
+      | if $top then target("layer"; null; $top.ns; null; "\($say) on layer \($top.ns)"
+            + (if $w then " (over \($w | name))" else "" end))
+        elif $w then target("window"; ($w | win); null; {x: ($x - $w.at[0]), y: ($y - $w.at[1])};
+            "\($say) on \($w | name) (its \($x - $w.at[0]),\($y - $w.at[1]))")
+        elif ($L | length) > 0 then target("layer"; null; $L[0].ns; null; "\($say) on no window (layer \($L[0].ns))")
+        else target("none"; null; null; null; "\($say) on no window or layer") end
+    end'
+# desk_target WHAT SNAPSHOT [X Y | PID]: DESK_TARGET_JQ's object, or nothing. keys reads the layers
+# holding the keyboard now (kb_layers: one more hyprctl call; only for a 124 or --json).
+desk_target() {
+  local what=$1 s=$2 kbl="" x=0 y=0 pid=0
+  [ -n "$s" ] || return 0
+  case $what in
+    keys) kbl=$(kb_layers) ;;
+    run) pid=${3:-0} ;;
+    *) read -r x y <<<"$3" ;;
+  esac
+  [[ $x =~ ^[0-9]+$ && $y =~ ^[0-9]+$ && $pid =~ ^[0-9]+$ ]] || return 0
+  jq -c -n --argjson s "$s" --arg what "$what" --arg kbl "$kbl" --argjson x "$x" --argjson y "$y" --argjson pid "$pid" \
+    "${DESK_TARGET_JQ/'(WIN)'/"($WIN_JQ)"}" 2>/dev/null || true
+}
+
 # omabox-still in the box, waiting on its first frame (the baseline). Its stdin is a pipe held here:
 # when this process goes (an action failed, Ctrl-C), the tool sees it close and ends. Sets
 # SETTLE_IN/SETTLE_OUT (fds), SETTLE_PID; SETTLE_T0 is when the baseline was there (ms, for messages).
@@ -10271,6 +10452,8 @@ ptr_release_quiet() {
 settle_begin() {
   # (Before any input is sent: a box started by an omabox without the tool cannot watch.)
   on_box test -x "$BOX_STILL" || die "box '$NAME' has no $BOX_STILL (started by an older omabox): omabox down $NAME, then up again"
+  # An action's: the desktop before it, read while the tool starts (#274).
+  desk_snap_start
   local dir line; dir=$(mktemp -d)
   mkfifo "$dir/in" "$dir/out"
   # OMABOX_STILL_DUMP=DIR (a path in the box; the suite's, for a flaky check: #222): the tool keeps the
@@ -10309,6 +10492,7 @@ settle_begin() {
 # screen) means nothing is sent, and the answer is unknown (1), never the action done unwatched.
 # settle_ready JSON
 settle_ready() {
+  desk_snap_take
   [[ $SETTLE_LINE == ready* ]] && return 0
   settle_end settle "$1" "" || true
   say "nothing was sent: the screen could not be watched"
@@ -10403,16 +10587,51 @@ settle_end() {
       fi ;;
     *) msg=$reason ;;
   esac
+  # An action's --wait (#274): what changed on the desktop since just before the input, appended; on a
+  # 124, where the input went first, and that nothing changed when nothing did. Not on unknown (the box
+  # may be hung: no more seconds on it). changes is null when the desktop could not be read.
+  local changes=null target=null evs=null
+  SETTLE_LOOKED=0
+  if [ -n "$SETTLE_FACTS" ]; then
+    desk_snap_take
+    if [ "$res" != unknown ] && [ -n "$SETTLE_BEFORE" ]; then
+      local after fx="" tg="" tt="" line="" tk
+      after=$(desk_snap)
+      fx=$(desk_facts "$SETTLE_BEFORE" "$after")
+      evs=$(jq -c '.events' <<<"$SETTLE_BEFORE" 2>/dev/null) || evs=null
+      if [ "$res" = unsatisfied ] || [ "$json" = 1 ]; then
+        case $SETTLE_FACTS in
+          run) [ -z "$SETTLE_FPID" ] || [ -z "$after" ] || tg=$(desk_target run "$after" "$SETTLE_FPID") ;;
+          keys) tg=$(desk_target keys "$SETTLE_BEFORE") ;;
+          *) tg=$(desk_target "$SETTLE_FACTS" "$SETTLE_BEFORE" "$SETTLE_FXY") ;;
+        esac
+        if [ -n "$tg" ]; then
+          target=$(jq -c 'del(.text)' <<<"$tg")
+          # (run -d's own window is said as opened, among the changes)
+          tk=$(jq -r .kind <<<"$tg") || tk=""
+          [ "$SETTLE_FACTS" = run ] && [ "$tk" = window ] || tt=$(jq -r .text <<<"$tg") || tt=""
+        fi
+      fi
+      if [ -n "$fx" ]; then changes=$(jq -c .changes <<<"$fx"); line=$(jq -r .line <<<"$fx"); fi
+      if [ "$res" = unsatisfied ]; then
+        [ -z "$tt" ] || msg+="; $tt"
+        if [ -n "$fx" ]; then msg+="; ${line:-no window, layer or focus changed}"; fi
+        [ -z "$tt" ] || [ -z "$fx" ] || SETTLE_LOOKED=1
+      elif [ -n "$line" ]; then msg+="; $line"; fi
+    fi
+  fi
   if [ "$json" = 1 ]; then
     jq -nc --arg res "$res" --arg cond "$cond" --arg msg "$msg" --arg t "${f[t]:-}" --arg first "${f[first]:-}" \
       --arg last "${f[last]:-}" --arg ch "${f[change]:--}" --arg ig "${f[ignored]:--}" --arg why "${f[why]:--}" --arg frames "${f[frames]:-}" \
-      --arg late "${f[late]:--}" '
+      --arg late "${f[late]:--}" --arg facts "$SETTLE_FACTS" --argjson changes "$changes" --argjson target "$target" \
+      --argjson evs "$evs" '
       def secs: if . == "" or . == "-" then null else tonumber / 1000 end;
       def box: if . == "-" then null else split(",") | map(tonumber) | {x: .[0], y: .[1], w: .[2], h: .[3]} end;
       {result: $res, condition: $cond, message: $msg, elapsed: ($t | secs), first_change: ($first | secs),
        last_change: ($last | secs), change: ($ch | box), late_changes: ($late | box),
        ignored: (($ig | box) as $b | if $b then $b + {why: $why} else null end),
-       frames: (if $frames == "" then null else $frames | tonumber end)}'
+       frames: (if $frames == "" then null else $frames | tonumber end)}
+      + if $facts == "" then {} else {changes: $changes, target: $target, events_since: $evs} end'
   else
     echo "$res: $msg"
   fi
@@ -10426,7 +10645,9 @@ settle_end() {
 settle_sent() {
   case $1 in
     0) ;;
-    124) say "$2 all the same (124 is about the screen): take a shot before sending anything again" ;;
+    # (#274: where the input went, and that nothing on the desktop moved, already said on the line)
+    124) if [ "${SETTLE_LOOKED:-0}" = 1 ]; then say "$2 all the same (124 is about the screen): look before sending anything again"
+         else say "$2 all the same (124 is about the screen): take a shot before sending anything again"; fi ;;
     *) say "$2 before the screen could be watched to the end" ;;
   esac
 }

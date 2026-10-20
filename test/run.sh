@@ -3829,6 +3829,8 @@ r run-own \$O run -b $P-none -- true
 r changed \$O shot --changed -o ./changed.png
 r since \$O shot --since ./out.png
 r travel-mod \$O click --steps 3 --mod ctrl 960 600
+r facts \$O run -d -q --wait -- foot -T J sleep 600
+r facts124 \$O keys --wait --timeout 1s --json shift
 r pointer-mod \$O pointer --steps 2 --mod shift -- move 900 500 move 960 540 --steps 3
 r relay-o $R call $br/sock -- shot -b $P-jail -o $br/pwned.png
 r host \$O host -- touch $br/pwned
@@ -3881,6 +3883,10 @@ EOF
   check_match "...--since refused there (a path of the jail's)" "not for a jailed agent.* rc=1" "$(sect since)"
   check_match "click --steps --mod through the broker (#38, #25)" "^rc=0 $" "$(sect travel-mod)"
   check_match "...pointer --steps --mod, and move's own --steps" "^rc=0 $" "$(sect pointer-mod)"
+  # #274: the facts --wait adds (the box read from the broker's side) reach the jail as they are.
+  check_match "--wait's desktop facts through the broker (#274)" '^satisfied: .*; window opened, focused: foot "J" rc=0 $' "$(sect facts)"
+  check_match "...a 124's, with --json's changes and target" \
+    '"message":"nothing changed in .*; the keys went to foot \\"J\\" \(focused\); no window, layer or focus changed".*"changes":\[\],"target":\{"kind":"window".* rc=124 $' "$(sect facts124)"
   check_match "a path of the broker's never written" "never at a path here rc=1" "$(sect relay-o)"
   check_match "host refused" "not for an agent inside ai-jail rc=1" "$(sect host)"
   check_match "a folder the jail lacks does not go in" "not a folder this jail was given whole.* rc=1" "$(sect ro-bind)"
@@ -7932,6 +7938,68 @@ QML
   else no "an on-demand layer maps" "no t201-od layer"; ob keys -b "$B" --window 'title:^K$' ctrl+d >/dev/null 2>&1; fi
   check "with the launcher closed, keys --window types into the terminal" until_ok 5 ob run -b "$B" -- test -s /tmp/typed
   check_eq "...what was typed: nothing from the refused run, both texts after it in the terminal" $'hi\nod' "$(ob run -b "$B" -- cat /tmp/typed)"
+  ob down "$B" >/dev/null
+}
+
+# An action's --wait says what changed on the desktop (#274), in a box: a window run -d opens, one a
+# key opens, a layer a click opens; a 124 says where the keys and the click went and that nothing moved.
+t_wait_facts() {
+  local B=$P-wf D out rc l
+  ob up "$B" --no-shell --net isolated >/dev/null 2>&1 || { no "up" "failed"; return; }
+  D=$(ob path -b "$B")
+  out=$(ob run -b "$B" -d -q --wait -- foot -T F sh -c 'read x; exec foot -T G sleep 600' 2>&1); rc=$?
+  check_eq "run -d --wait: settled" 0 "$rc"
+  check_match "...said: its window opened, focused" '^satisfied: settled after .*; window opened, focused: foot "F"$' "$out"
+  out=$(ob keys -b "$B" --window 'title:^F$' --wait Return 2>&1); rc=$?
+  check_eq "keys --wait that opens a window: settled" 0 "$rc"
+  check_match "...said: the window it opened, focused" '^satisfied: settled after .*; window opened, focused: foot "G"$' "$out"
+  out=$(ob keys -b "$B" --wait --timeout 1s --json shift 2>/dev/null); rc=$?
+  check_eq "keys --wait that changes nothing: 124" 124 "$rc"
+  check_match "...says where the keys went and that nothing moved" \
+    '^nothing changed in 1\.[0-9]+s.*; the keys went to foot "G" \(focused\); no window, layer or focus changed$' "$(jq -r .message <<<"$out")"
+  check_eq "...--json: no changes, the target window" '[] window G' "$(jq -r '"\(.changes) \(.target.kind) \(.target.window.title)"' <<<"$out")"
+  check "...and where the events from before the keys are" jq -e '.events_since | numbers' <<<"$out"
+  out=$(ob keys -b "$B" --wait --timeout 1s shift 2>&1 >/dev/null)
+  check_eq "...stderr: look before sending again" "omabox: the keys were sent all the same (124 is about the screen): look before sending anything again" "$out"
+  # A layer surface (a button) that opens another (its menu) when clicked.
+  cat > "$D/home/t274.qml" <<'QML'
+import QtQuick
+import Quickshell
+import Quickshell.Wayland
+ShellRoot {
+  PanelWindow {
+    anchors { top: true; left: true }
+    implicitWidth: 200; implicitHeight: 80
+    WlrLayershell.layer: WlrLayer.Top
+    WlrLayershell.namespace: "t274-button"
+    Rectangle { anchors.fill: parent; color: "steelblue" }
+    MouseArea { anchors.fill: parent; onClicked: menu.visible = true }
+  }
+  PanelWindow {
+    id: menu
+    visible: false
+    anchors { top: true; left: true }
+    margins { top: 100; left: 0 }
+    implicitWidth: 300; implicitHeight: 300
+    WlrLayershell.layer: WlrLayer.Top
+    WlrLayershell.namespace: "t274-menu"
+    Rectangle { anchors.fill: parent; color: "darkorange" }
+  }
+}
+QML
+  ob run -b "$B" -d -q -- qs -p /home/sbx/t274.qml >/dev/null 2>&1
+  if ob wait -b "$B" layer t274-button >/dev/null 2>&1; then
+    l=$(ob hyprctl -b "$B" -j layers | jq -r '[.[].levels[][] | select(.namespace == "t274-button")][0] | "\(.x + 100) \(.y + 40)"')
+    # shellcheck disable=SC2086 # X Y
+    out=$(ob click -b "$B" --wait $l 2>&1); rc=$?
+    check_eq "click --wait that opens a menu layer: settled" 0 "$rc"
+    check_match "...said: the layer opened" '^satisfied: settled after .*; layer t274-menu opened$' "$out"
+    # shellcheck disable=SC2086 # X Y
+    out=$(ob click -b "$B" --wait --timeout 1s $l 2>/dev/null); rc=$?
+    check_eq "click --wait that changes nothing: 124" 124 "$rc"
+    check_match "...says what was under the click and that nothing moved" \
+      "^unsatisfied: nothing changed in 1\.[0-9]+s.*; the click at ${l/ /,} was on layer t274-button \(over foot \"F\"\); no window, layer or focus changed$" "$out"
+  else no "the button layer maps" "no t274-button layer"; fi
   ob down "$B" >/dev/null
 }
 
@@ -13229,6 +13297,129 @@ t_unit_wait() {
   check_match "...exit 1 within seconds, the tool killed" "^rc 1 in [2-6]s, the tool gone$" "$(tail -n 1 <<<"$out")"
 }
 
+# What an action's --wait says changed on the desktop (#274): DESK_FACTS_JQ on canned snapshots (as
+# desk_snap reads them), DESK_TARGET_JQ's sentence for a 124, and settle_end's line and JSON with them.
+# wf_snap JQ: a snapshot, the base one (foot "K" focused on workspace 1, the bar drawn, the launcher
+# mapped at 1x1) changed by JQ.
+wf_snap() {
+  jq -c -n "{events: 100,
+    clients: [{address: \"0xa\", mapped: true, hidden: false, class: \"foot\", title: \"K\", pid: 40, workspace: {id: 1, name: \"1\"},
+      at: [0, 0], size: [960, 1080], floating: false, fullscreen: 0}],
+    layers: {\"HEADLESS-2\": {levels: {\"0\": [{address: \"0x1\", namespace: \"omarchy-background\", x: 0, y: 0, w: 1920, h: 1080}], \"1\": [],
+      \"2\": [{address: \"0x2\", namespace: \"omarchy-bar\", x: 0, y: 1046, w: 1920, h: 34}],
+      \"3\": [{address: \"0x3\", namespace: \"omarchy-menu\", x: 0, y: 0, w: 1, h: 1}]}}},
+    active: {address: \"0xa\", class: \"foot\", title: \"K\", workspace: {id: 1, name: \"1\"}},
+    workspace: {id: 1, name: \"1\"},
+    monitors: [{id: 0, activeWorkspace: {id: 1}, specialWorkspace: {id: 0}}]} | ${1:-.}"
+}
+# wf_line JQ_AFTER [JQ_BEFORE]: the facts' line from the base (or JQ_BEFORE's) snapshot to JQ_AFTER's.
+wf_line() { lib desk_facts "$(wf_snap "${2:-.}")" "$(wf_snap "$1")" | jq -r .line; }
+t_unit_wait_facts() {
+  local zen='{address: "0xb", mapped: true, hidden: false, class: "zenity", title: "Save as", pid: 41, workspace: {id: 1, name: "1"},
+    at: [960, 0], size: [960, 1080], floating: false, fullscreen: 0}'
+  local zact='.active = {address: "0xb", class: "zenity", title: "Save as", workspace: {id: 1, name: "1"}}'
+  check_eq "nothing changed: no words" "" "$(wf_line .)"
+  check_eq "...and changes is []" "[]" "$(lib desk_facts "$(wf_snap)" "$(wf_snap)" | jq -c .changes)"
+  check_eq "a window opened and focused: one fact (its focus folded in)" 'window opened, focused: zenity "Save as"' \
+    "$(wf_line ".clients += [$zen] | $zact")"
+  check_eq "...its changes: the window (focused) and the focus, from foot to zenity" \
+    '[{"kind":"window_opened","window":{"address":"0xb","class":"zenity","title":"Save as","workspace":"1"},"focused":true},{"kind":"focus","from":{"address":"0xa","class":"foot","title":"K","workspace":"1"},"to":{"address":"0xb","class":"zenity","title":"Save as","workspace":"1"}}]' \
+    "$(lib desk_facts "$(wf_snap)" "$(wf_snap ".clients += [$zen] | $zact")" | jq -c .changes)"
+  check_eq "a window opened, not focused" 'window opened: zenity "Save as"' "$(wf_line ".clients += [$zen]")"
+  check_eq "...on a workspace not shown: said" 'window opened on workspace 2: zenity "Save as"' \
+    "$(wf_line ".clients += [$zen | .workspace = {id: 2, name: \"2\"}]")"
+  check_eq "a window closed, focus to none" 'window closed: zenity "Save as"; focus: none' \
+    "$(wf_line '.active = {}' ".clients += [$zen] | $zact")"
+  check_eq "focus moved between two windows already there" 'focus: zenity "Save as"' "$(wf_line ".clients += [$zen] | $zact" ".clients += [$zen]")"
+  local menu='.layers["HEADLESS-2"].levels["3"] = [{address: "0x4", namespace: "omarchy-menu", x: 660, y: 300, w: 600, h: 480}]'
+  check_eq "the launcher drawn (from 1x1): layer opened" "layer omarchy-menu opened" "$(wf_line "$menu")"
+  check_eq "...with where it is" '{"kind":"layer_opened","namespace":"omarchy-menu","at":{"x":660,"y":300,"w":600,"h":480}}' \
+    "$(lib desk_facts "$(wf_snap)" "$(wf_snap "$menu")" | jq -c '.changes[0]')"
+  check_eq "...back to 1x1, hidden (finding 146): layer closed" "layer omarchy-menu closed" "$(wf_line . "$menu")"
+  check_eq "...unmapped: closed too" "layer omarchy-bar closed" "$(wf_line '.layers["HEADLESS-2"].levels["2"] = []')"
+  check_eq "the focused window's title" 'foot title now "~/code/app"' \
+    "$(wf_line '.clients[0].title = "~/code/app" | .active.title = "~/code/app"')"
+  check_eq "the workspace" "workspace now 2" "$(wf_line '.workspace = {id: 2, name: "2"} | .monitors[0].activeWorkspace.id = 2')"
+  check_eq "fullscreen" 'foot "K" now fullscreen' "$(wf_line '.clients[0].fullscreen = 2')"
+  check_eq "...and back, floating" 'foot "K" out of fullscreen, now floating' "$(wf_line '.clients[0].floating = true' '.clients[0].fullscreen = 1')"
+  check_eq "moved to another workspace" 'foot "K" moved to workspace 3' "$(wf_line '.clients[0].workspace = {id: 3, name: "3"}')"
+  check_eq "a tiled window resized because another opened: not a change of its own" 'window opened: zenity "Save as"' \
+    "$(wf_line ".clients += [$zen] | .clients[0].size = [960, 1080]" '.clients[0].size = [1920, 1080]')"
+  local long; long=$(printf 'x%.0s' {1..200})
+  check_eq "a long title cut to 40 characters" "window opened: zenity \"$(printf 'x%.0s' {1..39})…\"" \
+    "$(wf_line ".clients += [$zen | .title = \"$long\"]")"
+  check_eq "two windows of one class and title: the address says which" 'window closed: foot "K" (0xa)' \
+    "$(wf_line '.clients = [.clients[0] | .address = "0xc"] | .active.address = "0xc"' '.clients += [.clients[0] | .address = "0xc"] | .active.address = "0xc"' |
+      sed 's/; focus.*//')"
+  # Six facts: three said, by weight (opened, closed, layer...), the rest counted, with where to read them.
+  local six=".clients = [$zen, ($zen | .address = \"0xd\" | .title = \"B\")] | .active = {} | $menu | .workspace = {id: 2, name: \"2\"}
+    | .layers[\"HEADLESS-2\"].levels[\"2\"] = []"
+  check_eq "six facts: three said, then +N more and where to read them" \
+    'window opened: zenity "Save as"; window opened: zenity "B"; window closed: foot "K"; +4 more (omabox events --since 100)' \
+    "$(wf_line "$six")"
+  check_eq "...every one in changes" 7 "$(lib desk_facts "$(wf_snap)" "$(wf_snap "$six")" | jq '.changes | length')"
+  check_eq "a snapshot missing (the box did not answer): nothing" "" "$(lib desk_facts "$(wf_snap)" "")"
+  # desk_snap's own check of what hyprctl --batch printed: five JSON values, else nothing.
+  check_eq "desk_snap: five values read as a snapshot" '{"events":7,"clients":[],"layers":{},"active":{},"workspace":{"id":1},"monitors":[]}' \
+    "$(lib eval 'on_box() { printf "7\n[]\n{}\n{}\n{\"id\":1}\n[]\n"; }; desk_snap')"
+  check_eq "...an error from hyprctl: nothing" "" "$(lib eval 'on_box() { printf -- "-\nIPC did not respond\n"; }; desk_snap')"
+
+  # Where the input went (the 124's sentence).
+  local s; s=$(wf_snap ".clients += [$zen | .floating = true | .at = [800, 400] | .size = [300, 200]]")
+  check_eq "keys: the focused window" 'the keys went to foot "K" (focused)' \
+    "$(S=$s lib eval 'kb_layers() { :; }; desk_target keys "$S"' | jq -r .text)"
+  check_eq "...a layer with the keyboard (finding 276) first" "the keys went to layer omarchy-menu (it has the keyboard)|layer" \
+    "$(S=$s lib eval 'kb_layers() { echo omarchy-menu; }; desk_target keys "$S"' | jq -r '"\(.text)|\(.kind)"')"
+  check_eq "...none focused" "the keys went to no window (none focused)|none" \
+    "$(S=$(wf_snap '.active = {}') lib eval 'kb_layers() { :; }; desk_target keys "$S"' | jq -r '"\(.text)|\(.kind)"')"
+  check_eq "click: the floating window over the tiled one, in its own coordinates" \
+    'the click at 900,450 was on zenity "Save as" (its 100,50)|{"x":100,"y":50}' \
+    "$(lib desk_target click "$s" "900 450" | jq -r '"\(.text)|\(.at | tojson)"')"
+  check_eq "...beside it, the tiled one" 'the click at 100,450 was on foot "K" (its 100,450)' "$(lib desk_target click "$s" "100 450" | jq -r .text)"
+  check_eq "...the bar (a top layer) before any window" 'the click at 30,1060 was on layer omarchy-bar (over foot "K")|layer' \
+    "$(lib desk_target click "$s" "30 1060" | jq -r '"\(.text)|\(.kind)"')"
+  check_eq "...a hidden 1x1 menu is not there" 'the click at 0,0 was on foot "K" (its 0,0)' "$(lib desk_target click "$s" "0 0" | jq -r .text)"
+  check_eq "...no window: the background" 'the scroll at 1500,500 was on no window (layer omarchy-background)' \
+    "$(lib desk_target scroll "$s" "1500 500" | jq -r .text)"
+  check_eq "...a window on a workspace not shown is not there" 'the drag from 100,450 started on no window or layer' \
+    "$(lib desk_target drag "$(wf_snap '.clients[0].workspace = {id: 2, name: "2"} | .layers = {}')" "100 450" | jq -r .text)"
+  check_eq "run: no window with the job's pid" "no window from pid 99 yet|none" "$(lib desk_target run "$s" 99 | jq -r '"\(.text)|\(.kind)"')"
+  check_eq "...its window" "window|0xb" "$(lib desk_target run "$s" 41 | jq -r '"\(.kind)|\(.window.address)"')"
+
+  # settle_end with them: the line keeps its start, the facts after it; JSON adds changes, target and
+  # events_since; the exit code is the screen's.
+  local se='source "$1"; NAME=u D=$2; exec {SETTLE_IN}>/dev/null {SETTLE_OUT}< <(echo "$3"); sleep 0.1 & SETTLE_PID=$!
+    SETTLE_LINE="ready 1920x1080" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); SETTLE_FACTS=$4 SETTLE_FXY="900 450" SETTLE_BEFORE=$5
+    AFTER=$6; desk_snap() { printf "%s" "$AFTER"; }; kb_layers() { :; }; rc=0; settle_end settle "$7" "the keys were sent" || rc=$?; echo "rc $rc"'
+  local yes="satisfied settled t=540 first=10 last=240 change=660,300,600,480 ignored=- why=- frames=30"
+  local nothing="unsatisfied nothing t=2000 first=- last=- change=- ignored=- why=- frames=60"
+  local out
+  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" keys "$(wf_snap)" "$(wf_snap "$menu")" 0 2>&1)
+  check_eq "settle_end: the facts after the screen's words" \
+    $'satisfied: settled after 0.54s (last change 0.24s at 660,300 600x480); layer omarchy-menu opened\nrc 0' "$out"
+  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$nothing" keys "$s" "$s" 0 2>&1)
+  check_eq "...a 124: where the keys went, and that nothing moved; look before sending again" \
+    $'unsatisfied: nothing changed in 2.00s; the keys went to foot "K" (focused); no window, layer or focus changed\nomabox: the keys were sent all the same (124 is about the screen): look before sending anything again\nrc 124' "$out"
+  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$nothing" click "$s" "" 0 2>&1)
+  check_eq "...the desktop not read after: where the click went, nothing claimed; a shot as before" \
+    $'unsatisfied: nothing changed in 2.00s; the click at 900,450 was on zenity "Save as" (its 100,50)\nomabox: the keys were sent all the same (124 is about the screen): take a shot before sending anything again\nrc 124' "$out"
+  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" keys "" "$s" 0 2>&1)
+  check_eq "...nor before: the line as it was" $'satisfied: settled after 0.54s (last change 0.24s at 660,300 600x480)\nrc 0' "$out"
+  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" keys "$(wf_snap)" "$(wf_snap "$menu")" 1 2>&1)
+  check_eq "--json: today's fields, then changes, target and events_since" \
+    "result condition message elapsed first_change last_change change late_changes ignored frames changes target events_since" \
+    "$(head -n 1 <<<"$out" | jq -r 'keys_unsorted | join(" ")')"
+  check_eq "...their values" '[[{"kind":"layer_opened","namespace":"omarchy-menu","at":{"x":660,"y":300,"w":600,"h":480}}],"window","foot",100]' \
+    "$(head -n 1 <<<"$out" | jq -c '[.changes, .target.kind, .target.window.class, .events_since]')"
+  check_eq "...the message has the facts too" "settled after 0.54s (last change 0.24s at 660,300 600x480); layer omarchy-menu opened" \
+    "$(head -n 1 <<<"$out" | jq -r .message)"
+  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" keys "$s" "" 1 2>&1)
+  check_eq "...changes null when the desktop could not be read after" "null" "$(head -n 1 <<<"$out" | jq -c .changes)"
+  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" "" "$s" "$(wf_snap "$menu")" 1 2>&1)
+  check_eq "...wait (no action): today's fields only" "result condition message elapsed first_change last_change change late_changes ignored frames" \
+    "$(head -n 1 <<<"$out" | jq -r 'keys_unsorted | join(" ")')"
+}
+
 # omabox wait and --wait (finding 82) in a box of their own: two terminals side by side, one of them
 # repainting 20 times a second.
 # t_wait's thin-line checks: 124, and a last change 2 px high (the underline), or 3: under the full
@@ -13791,9 +13982,9 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

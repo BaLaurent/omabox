@@ -8221,6 +8221,44 @@ from them.
     `--json` and a word refused), t_brief (none yet; one foot by its app id, size and scale, HOME's
     host path; two of one class by address).
 
+396. **An action's `--wait` says what changed on the desktop, and a 124 where the input went**
+    (2026-10-20, #274, part A). `keys`, `click`, `scroll`, `drag` and `run -d` with `--wait` read the
+    box's desktop twice: one `hyprctl --batch "j/clients; j/layers; j/activewindow; j/activeworkspace;
+    j/monitors"` (with the events log's size, in one `on_box sh -c`) started in the background as
+    omabox-still starts and taken before the input is sent, and one after the screen's answer.
+    `DESK_FACTS_JQ` diffs them: windows opened (focused or not; on a workspace not shown, said) and
+    closed by address, layers counted by namespace (drawn = over 1x1, `layer_at`'s rule: a menu
+    kept mapped at 1x1 is closed; an address changes when a layer maps again), focus, titles, the
+    workspace, a window moved to another workspace or turned fullscreen/floating. Geometry alone is
+    no change (a tiled window resized because another opened would be noise in every line). The
+    line keeps its start and adds the facts after `; `, by weight (opened, closed, layer opened,
+    closed, focus, the focused window's title, workspace, moved, state, other titles), 3 at most and
+    ~160 chars, titles cut to 40, the address only when two windows share class and title, then
+    `+N more (omabox events --since OFFSET)`. On a 124, `DESK_TARGET_JQ` adds where the input went
+    from the snapshot before it: keys, a layer holding the keyboard (`kb_layers`, finding 276) or the
+    focused window; a point, an overlay or top layer drawn there (with the window under it), else the
+    topmost window there (`WIN_JQ`'s stacking and `cover`) in its own coordinates, else a bottom or
+    background layer; run -d, a window with the job's pid (box pid namespace = Hyprland's) or "no
+    window from pid N yet"; then the facts or "no window, layer or focus changed", and stderr says
+    "look before sending anything again" in place of "take a shot". `unknown` gets nothing (the box
+    may be hung). `--json` adds `changes` (up to 50; null: a snapshot failed), `target` and
+    `events_since`, only on an action's wait; `wait still|change` is untouched. Measured (box,
+    NVIDIA headless, load ~1): `desk_snap` 11 ms, the diff 4 ms, its parsing ~4 ms, a point target 3
+    ms, a keys target (with `kb_layers`) 12 ms; end to end `keys --wait` settled 338 -> 362 ms (+24),
+    a 124 702 -> 739 ms (+37). Through the jail's broker the line and JSON pass as they are (the
+    relay hands the caller's fds over; t_jail checks both). *Decided*: `--since` gets the offset
+    itself, not a `wait` mark in `events.marks` (no host write per call, no clobbering between two
+    calls, no user mark of that name overwritten). *Decided*: every kind has words (the design had
+    other windows' titles and moves "counted only"): a fullscreen toggle was otherwise only "+1
+    more"; others' titles come last. *Decided*: two kinds beyond the design's seven,
+    `window_moved` and `window_state`. *Decided*: a layer at the point is the target although only
+    its rectangle is known (Omarchy's full-screen notifications overlay would claim every click
+    while a toast shows), so the window under it is named too. Known gap: a window or layer that
+    opened and closed within the wait is not seen (an events tail would close it). Tests:
+    t_unit_wait_facts (the diff on canned snapshots, the cap, cuts and addresses, targets for each
+    kind, settle_end's line, stderr and JSON keys), t_wait_facts (run -d and a key opening windows,
+    a click opening a layer, 124s naming the focused window and the layer under the click), t_jail.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
