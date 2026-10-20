@@ -1400,6 +1400,13 @@ t_unit_box_gone() {
   out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
     NS_HELD="$0: line 12: 4242 Killed                  nsenter -t 1 -- true"$'"'"'\n'"'"'; ns_said 137' _ "$L" 2>&1)
   check_eq "...bash's line for a command killed by a signal passes" "_: line 12: 4242 Killed                  nsenter -t 1 -- true" "$out"
+  # #303: run's own command (NS_KILL_SAY) is said as run says a job's end, not by bash's line.
+  out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
+    NS_HELD="$0: line 12: 4242 Killed                  prlimit --core=1: \"\$@\""$'"'"'\n'"'"'"nsenter: x"$'"'"'\n'"'"'; NS_KILL_SAY=1 ns_said 137' _ "$L" 2>&1)
+  check_eq "...for run's own command: said in words, nsenter's own line kept" $'nsenter: x\nomabox: the command was killed by SIGKILL (137)' "$out"
+  out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
+    NS_HELD="$0: line 12: 4242 Terminated              prlimit --core=1: \"\$@\""$'"'"'\n'"'"'; NS_KILL_SAY=1 ns_said 143' _ "$L" 2>&1)
+  check_eq "...SIGTERM too" "omabox: the command was killed by SIGTERM (143)" "$out"
   # The command's own stderr is never held back: it is the caller's, through the fd the command takes.
   out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 1; }
     nsenter() { while [ "$1" != -- ]; do shift; done; shift; "$@"; }
@@ -8436,9 +8443,10 @@ t_shell_crash() {
 
 # #303 (finding 408): another Quickshell in the box (a project's own, crashed on purpose to test its
 # crash handling) is not the box's shell: its crash is not said as the shell's, and its dialog is left to
-# it. The box's shell killed outright (no report) and started again by its launcher is said, once.
+# it. The box's shell killed outright (no report) and started again by its launcher is said, once; and
+# a `run` command killed by a signal is said in words, not by bash's job-control line.
 t_shell_other_crash() {
-  local B=$P-ocrash D H out qp dp sp i
+  local B=$P-ocrash D H out rc qp dp sp i
   up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   D=$XDG_RUNTIME_DIR/omabox/$B H=$(ob path "$B")/home
   ob run -b "$B" -- sh -c 'mkdir -p /tmp/qt && printf "import Quickshell\nShellRoot {}\n" > /tmp/qt/shell.qml'
@@ -8472,6 +8480,9 @@ t_shell_other_crash() {
     "warning: the shell was killed by SIGKILL \(137\) since the last command and was started again( \(it is starting\))? \(omabox log -b $B shell\)" "$out"
   check_fails "...once" grep -q "shell" <<<"$(ob windows -b "$B" 2>&1 >/dev/null)"
   check "...the bar back" ob wait -b "$B" layer omarchy-bar
+  # A run whose command is killed: run's words and its status, not bash's "line N: PID Killed prlimit ...".
+  out=$(ob run -b "$B" -- sh -c 'kill -KILL $$' 2>&1); rc=$?
+  check_eq "run, its command killed: exit 137, said in words (was bash's job-control line)" "137 omabox: the command was killed by SIGKILL (137)" "$rc $out"
   ob down "$B" >/dev/null
 }
 

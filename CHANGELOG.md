@@ -23,6 +23,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   closed. A shell killed outright (`kill -9`) and started again by Omarchy's launcher is now said by
   the next command: `the shell was killed by SIGKILL (137) since the last command and was started
   again`.
+- **`run` printed bash's `line N: PID Killed prlimit …` for a command killed by a signal**; it now
+  says `the command was killed by SIGKILL (137)`, with the same exit status.
 
 ## 0.9.1 — 2026-10-20
 

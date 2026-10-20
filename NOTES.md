@@ -8460,6 +8460,14 @@ from them.
     warning, `ls` running with no crash counted; the shell SIGKILLed, the next command's warning,
     once. Tests: t_unit_shell_reports, t_unit_shell_crash (reports carry their config now: one not
     written yet and another instance's are no crash), t_shell_other_crash; t_shell_crash unchanged.
+409. **`run` said a command killed by a signal in bash's words** (2026-10-20, #303). `omabox run --
+    CMD` whose command was SIGKILLed printed `…/bin/omabox: line 1867: 662938 Killed  prlimit
+    --core=1: "$@"`: bash's job-control line for its child, which ns_held holds with nsenter's stderr
+    and ns_said passed on as one of nsenter's own lines (finding 235). For run's own command
+    (`NS_KILL_SAY`) that line is now said as run says a job's end: `omabox: the command was killed by
+    SIGKILL (137)` (job_how), the exit status unchanged; omabox's own calls into the box keep the
+    line. Checked in a real box (`run -- sh -c 'kill -KILL $$'`: exit 137, that one line). Tests:
+    t_unit_box_gone (SIGKILL and SIGTERM, nsenter's own line kept), t_shell_other_crash.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

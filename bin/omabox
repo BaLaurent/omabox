@@ -1416,12 +1416,15 @@ ns_hold_read() {
 # CMD"; the word "line" and the signal's are translated).
 ns_own_line() {
   [[ $1 =~ ^(nsenter|prlimit|env):\ . ]] && return 0
-  [[ $1 == "$0: "* ]] && [[ ${1#"$0: "} =~ ^[^\ ]+\ [0-9]+:\ +[0-9]+\ . ]]
+  ns_kill_line "$1"
 }
+ns_kill_line() { [[ $1 == "$0: "* ]] && [[ ${1#"$0: "} =~ ^[^\ ]+\ [0-9]+:\ +[0-9]+\ . ]]; }
 # What ns_held held, after a command that ended RC: on a box that went down meanwhile (its PID 1 can
 # outlive the command by a moment: up to 2 s), WORDS instead, or nothing when the caller says it (run);
 # else its own lines (ns_own_line; whole ones, at most 3, printable ASCII only), and how many bytes
-# of anything else were dropped. ns_said RC [WORDS]
+# of anything else were dropped. With NS_KILL_SAY (run's own command, #303), bash's line for a command
+# killed by a signal ("omabox: line 1867: 662938 Killed  prlimit --core=1: "$@"", its own script's
+# words) is said as run says a job's end: "the command was killed by SIGKILL (137)". ns_said RC [WORDS]
 ns_said() {
   [ -n "${NS_HELD:-}" ] || return 0
   if [ "$1" != 0 ]; then
@@ -1431,16 +1434,20 @@ ns_said() {
       sleep 0.2
     done
   fi
-  local LC_ALL=C l lines=() out="" n=0 kept=0 held=$NS_HELD
+  local LC_ALL=C l lines=() out="" n=0 kept=0 held=$NS_HELD killed=""
   # (A last line without its newline is not a whole one.)
   [[ $held == *$'\n'* ]] && mapfile -t lines <<<"${held%$'\n'*}"
   for l in "${lines[@]}"; do
     l=${l//[^[:print:]]/}
     if [ $n -lt 3 ] && [ ${#l} -le 400 ] && ns_own_line "$l"; then
+      if [ -n "${NS_KILL_SAY:-}" ] && [ "$1" -gt 128 ] && ns_kill_line "$l"; then
+        killed=1 n=$((n + 1)) kept=$((kept + ${#l} + 1)); continue
+      fi
       out+=$l$'\n' n=$((n + 1)) kept=$((kept + ${#l} + 1))
     fi
   done
   printf '%s' "$out" >&2
+  [ -z "$killed" ] || say "the command $(job_how "$1")"
   [ $((${#held} - kept)) -le 0 ] || say "dropped $((${#held} - kept)) bytes of other output on nsenter's stderr"
 }
 
@@ -5875,7 +5882,7 @@ cmd_run() {
       return $rc
     fi
     local rc=0
-    box_exec "$@" || rc=$?
+    NS_KILL_SAY=1 box_exec "$@" || rc=$?
     touch "$D/used" 2>/dev/null || true
     run_gone $rc || rc=125
     return $rc
@@ -5918,7 +5925,7 @@ cmd_run() {
   run_link_notes run 1 "$@"   # (links at the top of the repo: its up said them)
   run_cwd_note run "$@"       # outside a repo: nothing of this dir in the box (#251)
   local rc=0
-  box_exec "$@" || rc=$?
+  NS_KILL_SAY=1 box_exec "$@" || rc=$?
   run_gone $rc || rc=125
   return $rc
 }
