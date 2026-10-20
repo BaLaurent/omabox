@@ -5089,8 +5089,16 @@ rec_glide() {
 # (systemd/inaccessible): ours, but rm cannot enter them until they are made writable.
 rm_box() {
   [[ $D == "$BOXES"/?* ]] || return 0
-  chmod -R u+rwX "$D/run" 2>/dev/null || true
-  rm -rf "$D" "${HOMES:?}/$NAME"
+  rm_tree "box '$NAME'" "$D" "${HOMES:?}/$NAME" || true
+}
+# rm -rf, after making each dir writable again: rm cannot empty a dir it may not write, and a box's own
+# processes leave such dirs (systemd's mode-000 runtime dirs; an app's read-only folder in HOME, #264).
+# -P: a symlink is never followed out of the tree. rm_tree WHAT PATH...; says what is still left.
+rm_tree() {
+  local what=$1 err; shift
+  chmod -R -P u+rwX -- "$@" 2>/dev/null || true
+  err=$(rm -rf -- "$@" 2>&1) && return 0
+  say "could not remove all of $what: ${err%%$'\n'*}"; return 1
 }
 
 # HOMEs whose box is gone: the runtime dir is cleared at logout or reboot, ~/.cache is not. The box dir
@@ -5098,7 +5106,8 @@ rm_box() {
 sweep_homes() {
   local h
   for h in "$HOMES"/*/; do
-    h=${h%/}; [ -d "$h" ] && [ ! -e "$BOXES/${h##*/}" ] && rm -rf "$h"
+    h=${h%/}; [ -d "$h" ] && [ ! -L "$h" ] && [ ! -e "$BOXES/${h##*/}" ] || continue
+    rm_tree "the HOME of box '${h##*/}', which is gone" "$h" || true
   done
   true
 }

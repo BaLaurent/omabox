@@ -7734,6 +7734,19 @@ from them.
     an idle shell starts no processes over 30s` after. Tests: t_unit_inotifywait (no child over 2 s
     on a held pipe and on /dev/null, ends within 1 s of its shell; three of its checks fail on the
     old stand-in).
+374. **`down` removes a box HOME whatever modes its apps left in it** (2026-10-20, #264). A walk
+    that made a read-only folder in the box HOME (`mkdir -p ~/locked/dest && chmod a-w …`, a
+    destination an app cannot write) left `~/.cache/omabox/BOX` behind at `down`: `rm_box` made
+    only the runtime dir writable (finding 61's mode-000 entries), `rm -rf` cannot empty a dir it
+    may not write, and its failure, the last command of `rm_box` under `set -e`, ended `down` before
+    it said `box 'BOX' down` (it printed only rm's complaint). The next `up` under that name
+    inherited the old HOME's leftovers, and `sweep_homes`, with no chmod, failed on it at every `up`
+    without a word. Both now go through `rm_tree`: `chmod -R -P u+rwX` (`-P`: a symlink in the box
+    HOME, which an app can point anywhere on the host, is never followed; sweep_homes also skips a
+    link in the cache dir) then `rm -rf`; if something is still left, one stderr line with rm's first
+    complaint, and `down` goes on. Tests: t_unit_rm_tree (a read-only HOME, a mode-000 runtime dir,
+    a gone box's HOME, a link not followed, a failure said), t_up_again (a box whose app made the
+    folder: HOME gone, `down` says only that the box is down; both failed on the old code).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

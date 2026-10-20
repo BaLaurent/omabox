@@ -121,6 +121,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `inotifywait` started a `sleep 5` every 5 s for as long as the shell ran, so Omarchy's own "an
   idle shell starts no processes" test failed in every box (`6 sleep 5`). It now waits on its
   stdin, which the shell holds and never writes, and starts nothing; it still ends with the shell.
+- **`down` removes a box's HOME even when an app in the box left a read-only folder in it.** The
+  HOME (`~/.cache/omabox/BOX`) stayed behind, `down` printed only rm's "Permission denied", and the
+  next box under that name started with its leftovers. A HOME that still cannot be removed is now
+  said on stderr, by `down` and by the clean-up at each `up`.
 
 ## 0.7.0 — 2026-10-16
 
