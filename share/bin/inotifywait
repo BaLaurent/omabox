@@ -8,7 +8,15 @@
 # real one. t_unit_omarchy_contract checks the registry still runs it this way.
 if [ $# = 8 ] && [ "${*:1:7}" = "-m -r -q -e close_write,create,delete,move --format %w%f" ] &&
    [[ ${8%/} == */.config/omarchy/plugins ]]; then
-  while kill -0 "$PPID" 2>/dev/null; do sleep 5; done
+  # It waits without starting a process (#275: Omarchy's idle-spawn test counts each one). Quickshell
+  # holds the write end of our stdin and never writes to it, so `read` sleeps until the shell is gone
+  # (end of file), waking once an hour to ask. The shell is alive while it is still our parent (it is
+  # no longer once it exits, even unreaped: `kill -0` would still find it). A stdin that ends while the
+  # shell lives (another parent's /dev/null) falls back to asking every 5 s, with bash's own sleep.
+  shell_alive() { local _pid _comm _state ppid; read -r _pid _comm _state ppid _ < /proc/$$/stat && [ "$ppid" = "$PPID" ]; }
+  while IFS= read -r -t 3600 _ || [ $? -gt 128 ]; do shell_alive || exit 0; done
+  enable -f /usr/lib/bash/sleep sleep 2>/dev/null || true
+  while shell_alive; do sleep 5; done
   exit 0
 fi
 exec /usr/bin/inotifywait "$@"

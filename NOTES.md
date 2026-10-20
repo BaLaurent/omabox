@@ -7718,6 +7718,22 @@ from them.
     characters a module name cannot: it names no mounted plugin). Not a concurrent change on the
     host: the box's own shell log, the string is in /usr/bin/quickshell. Tests: t_unit_shell_warnings,
     t_plugin_check, t_plugin_link.
+373. **The registry's stand-in inotifywait waits without starting a process** (2026-10-20, #275).
+    Finding 196's stand-in waited with `while kill -0 "$PPID"; do sleep 5; done`: a `sleep` every
+    5 s for the shell's life, which Omarchy's `test/shell.d/shell-idle-spawn-test.sh` counts, so it
+    failed in every box (`6 sleep 5` in 30 s) and hid a real poll behind omabox's. Quickshell gives
+    the process a stdin pipe whose write end it holds and never writes (seen in a box: the shell's
+    fd and the stand-in's are the only two on it), so the stand-in now `read -t 3600`s it: no
+    process, a wakeup an hour, and end of file the moment the shell is gone. "Alive" is "still our
+    parent" (`/proc/$$/stat`'s ppid against `$PPID`): a shell killed but not yet reaped is a zombie
+    `kill -0` still finds, and the stand-in, reparented at its exit, outlived it in a test that way.
+    A stdin that ends while the shell lives (another parent's /dev/null) falls back to a check
+    every 5 s with bash's loadable `sleep` (`/usr/lib/bash/sleep`, a builtin; the external one where
+    it is missing). Omarchy's idle-spawn test, run in a throwaway box from an Omarchy checkout
+    (`omabox run -- bash test/shell.d/shell-idle-spawn-test.sh`): `not ok … 6 sleep 5` before, `ok -
+    an idle shell starts no processes over 30s` after. Tests: t_unit_inotifywait (no child over 2 s
+    on a held pipe and on /dev/null, ends within 1 s of its shell; three of its checks fail on the
+    old stand-in).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -2221,6 +2221,38 @@ t_unit_omarchy_contract() {
   rm -rf "$t"
 }
 
+# share/bin/inotifywait's idle watch (#129) waits without starting a process (#275: Omarchy's idle-spawn
+# test counted its `sleep 5` every 5 s) and ends with its shell. A stand-in shell holds the write end of
+# its stdin, as Quickshell does, and lives until the test kills it; another gives it /dev/null.
+t_unit_inotifywait() {
+  local d=$TMP/inw o; mkdir -p "$d/home/.config/omarchy/plugins"
+  standin() {   # STDIN: pipe | null; prints the parent's pid, then the stand-in's
+    python3 -c 'import subprocess, sys, time
+p = subprocess.Popen(sys.argv[2:], stdin=subprocess.PIPE if sys.argv[1] == "pipe" else subprocess.DEVNULL)
+print(p.pid, flush=True); time.sleep(60)' "$1" "$ROOT/share/bin/inotifywait" -m -r -q -e close_write,create,delete,move \
+      --format %w%f "$d/home/.config/omarchy/plugins" > "$d/$1.pid" 2>&1 &
+    echo "$!"
+    local i; for i in $(seq 50); do [ ! -s "$d/$1.pid" ] || break; sleep 0.1; done
+    head -1 "$d/$1.pid"
+  }
+  # Children, every 0.1 s for 2 s: the old stand-in had its sleep at once, and again each 5 s.
+  kids() { local i n=""; for i in $(seq 20); do n+=$(cat /proc/"$1"/task/*/children 2>/dev/null); sleep 0.1; done; echo "${n:-none}"; }
+  gone_within() { local i; for i in $(seq "$2"); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.1; done; return 1; }
+  local parent pid; { read -r parent; read -r pid; } < <(standin pipe)
+  check_eq "the idle watch starts no process while it waits (#275)" "none" "$(kids "$pid")"
+  check "...and is still waiting" kill -0 "$pid"
+  kill -KILL "$parent"
+  check "...and ends within a second of its shell (end of its stdin)" gone_within "$pid" 10
+  { read -r parent; read -r pid; } < <(standin null)
+  check_eq "a stdin that ends (/dev/null): still no process" "none" "$(kids "$pid")"
+  check "...still waiting, not ended (the registry would start it again a second later)" kill -0 "$pid"
+  kill -KILL "$parent"
+  check "...and ends within 5 s of its shell" gone_within "$pid" 60
+  kill -KILL "$pid" 2>/dev/null || true
+  o=$(grep -hv "^[0-9]*$" "$d/pipe.pid" "$d/null.pid" || true)
+  check_eq "...said nothing" "" "$o"
+}
+
 # evidence() puts back a box's idle clock after its reads (#111, finding 180), but not over another
 # test's use of that box meanwhile (finding 237). A stand-in omabox lists one box; each read touches its
 # `used` as omabox does; with USE set, the shot read is followed 1.5 s on by another use (USE's time).
@@ -12765,7 +12797,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_saves
+UNIT=(t_unit_fd_exposed t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)

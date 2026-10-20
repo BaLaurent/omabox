@@ -117,6 +117,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `up` and `restart-shell` printed it as each plugin's own warning ("plugin ID loaded, with a
   warning in the shell log: Module path ... is outside of the config folder"). That message is left
   out now; any other line naming the plugin still shows.
+- **Omarchy's idle-spawn test passes in a box.** The box's stand-in for the plugin registry's
+  `inotifywait` started a `sleep 5` every 5 s for as long as the shell ran, so Omarchy's own "an
+  idle shell starts no processes" test failed in every box (`6 sleep 5`). It now waits on its
+  stdin, which the shell holds and never writes, and starts nothing; it still ends with the shell.
 
 ## 0.7.0 — 2026-10-16
 
