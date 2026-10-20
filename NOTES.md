@@ -8067,6 +8067,13 @@ from them.
     t_unit_exit_codes (run's refusals), t_own_processes (125), t_jail (125 and a command's 3 through
     the broker, a usage error's 2).
 
+389. **A jailed `shot --monitor NAME` took NAME for the output file** (2026-10-20, #284, found reading
+    the code for the #273 audit). `relay_shot` knew which of `shot`'s options take a value but not
+    `--monitor`: NAME became the output path, and the broker refused `--monitor` with `--to-fd`.
+    Listed now; and `--after -- ACTION` keeps the action's words (they were taken for files too;
+    the broker refuses `--burst` from a jail anyway, saying so). t_jail takes `shot --monitor NAME`
+    and `--monitor=NAME --output=FILE` from a jail.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

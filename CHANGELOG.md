@@ -79,6 +79,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- A jailed agent's `shot --monitor NAME` took NAME for the output file, and the broker refused it
+  ([#284](https://github.com/diogochaves/omabox/issues/284)).
 - A jailed agent's one-action `record -- ACTION` (and `--for`) gives `--show-input`, `--captions`
   and `--cut-idle` to its stop, where they belong; its start refused them.
 

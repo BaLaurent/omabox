@@ -3653,6 +3653,8 @@ r pwd \$O run -- sh -c 'pwd; cat README'
 r shot \$O shot
 r shotfile sh -c 'f=\$(ls /tmp/omabox-*.png); head -c 8 "\$f" | od -An -c | tr -d " \n"'
 r shot-o \$O shot -o ./out.png
+r monitor sh -c 'm=\$("\$1" monitor list --json | jq -r ".[0].name") && "\$1" shot --monitor "\$m" -o ./mon.png' _ \$O
+r monitor-eq sh -c 'm=\$("\$1" monitor list --json | jq -r ".[0].name") && "\$1" shot --monitor="\$m" --output=./mon2.png' _ \$O
 r usage \$O windows --jsno
 r run-rc \$O run -- sh -c 'exit 3'
 r run-own \$O run -b $P-none -- true
@@ -3696,6 +3698,11 @@ EOF
   check_match "a shot is written into the jail" "211PNG" "$(sect shotfile)"
   check_match "shot -o into the jail's project" "out.png rc=0" "$(sect shot-o)"
   check "...there, on the host too" test -s "$repo/out.png"
+  # #284: --monitor NAME was taken for the output file, and the broker refused --monitor --to-fd.
+  check_match "shot --monitor NAME from the jail (#284)" "rc=0 $" "$(sect monitor)"
+  check "...its file in the jail's project" test -s "$repo/mon.png"
+  check_match "...--monitor=NAME --output=FILE too (#273)" "rc=0 $" "$(sect monitor-eq)"
+  check "...its file there" test -s "$repo/mon2.png"
   # #273: exit codes pass through the relay: a usage error 2, run's command's own, run's own 125.
   check_match "a usage error from the jail: 2, with the nearest option" "did you mean --json.* rc=2 $" "$(sect usage)"
   check_eq "run's command's status through the broker" "rc=3 " "$(sect run-rc)"

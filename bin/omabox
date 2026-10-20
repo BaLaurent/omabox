@@ -14268,8 +14268,11 @@ relay_shot() {
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; args+=("$1" "$2"); shift ;;
-      -g|-w|--window|--fit|--zoom|--burst|--every|--ignore) optarg "$@"; args+=("$1" "$2"); shift ;;
+      # (--monitor NAME was taken for the output file, #284)
+      -g|-w|--window|--monitor|--fit|--zoom|--burst|--every|--ignore) optarg "$@"; args+=("$1" "$2"); shift ;;
       -o|--output) optarg "$@"; two_files shot "$out" "$2"; out=$2; shift ;;
+      # The action's words are its own, not files (the broker says --burst is not a jail's yet).
+      --after) args+=("$@"); break ;;
       # A path of the jail's, which the broker never opens (finding 243): --changed compares with the
       # last shot of the same window or screen instead.
       --since) fail "shot --since: not for a jailed agent (--changed compares with the last shot of it)" ;;
