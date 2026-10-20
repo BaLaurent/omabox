@@ -7662,15 +7662,25 @@ t_unit_install() {
   lib eval 'echo "$AQ_BUILD"' > "$c/build/prefix/.omabox-commit"
   tools0=$(stat -c '%n %.9Y' "$ROOT"/tools/*/omabox-* 2>&1)
   mkdir -p "$h" "$stub"
-  printf '#!/bin/sh\nexit 1\n' > "$stub/sudo"
+  printf '#!/bin/sh\necho "$*" >> "%s/sudo-called"; exit 1\n' "$stub" > "$stub/sudo"
+  # The packages as present whatever this machine has (finding 369: one removed by hand failed every
+  # check below); pacman -T names those in $stub/missing as missing.
+  printf '#!/bin/sh\n[ "$1" = -T ] || exec /usr/bin/pacman "$@"\n[ -s "%s/missing" ] || exit 0\ncat "%s/missing"; exit 127\n' \
+    "$stub" "$stub" > "$stub/pacman"
   printf '#!/bin/sh\ncase "$*" in *tools/keyboard*) exit 1 ;; esac\nexec /usr/bin/make "$@"\n' > "$stub/make"
   # Never the user's shell: setup's widget question (finding 133) would reach the running one, which
   # is the real desktop's whatever HOME says. Answered no up front, and these fail if called.
   printf '#!/bin/sh\necho "$0 $*" >> "%s/shell-called"; exit 1\n' "$stub" > "$stub/omarchy"
   cp "$stub/omarchy" "$stub/omarchy-shell"
   mkdir -p "$h/.config/omabox"; date -Is > "$h/.config/omabox/widget-declined"
-  chmod +x "$stub/sudo" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell"
+  chmod +x "$stub/sudo" "$stub/pacman" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell"
+  echo omabox-no-such-package > "$stub/missing"
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); local rc=$?
+  check_eq "a missing package: install.sh installs it with sudo pacman, and stops when that fails" \
+    "1 pacman -S --needed omabox-no-such-package" "$rc $(cat "$stub/sudo-called" 2>&1)"
+  check_match "...naming it" "missing: omabox-no-such-package" "$out"
+  rm "$stub/missing"
+  out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); rc=$?
   check_match "a failed tool build stops install.sh" "building tools/keyboard failed" "$out"
   check_eq "...with a failure" 1 "$rc"
   check_match "...its aquamarine step before that built nothing (the stand-in build)" "boxes use a private build.*: nothing to build" "$out"

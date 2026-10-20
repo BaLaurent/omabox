@@ -7675,6 +7675,15 @@ from them.
     Seen in a box: GTK4 and Qt Quick trees read with no stray line, IsEnabled set; the failing
     cache's `atspi-WARNING ... Error in GetItems` shown on a failed `--find` only. Tests: t_tree
     (ScreenReaderEnabled checked where the bus has it; else the not-on-bus reason checked on foot).
+369. **t_unit_install read this machine's packages** (2026-10-20). Fourteen of its checks failed
+    at once after `hyprwayland-scanner` (one of install.sh's aquamarine build packages) was removed
+    from the machine by hand: install.sh asked the real `pacman -T`, found it missing, and the
+    test's `sudo` stub (exit 1) stopped it at the Packages step, before the tools, links and guard
+    the checks were about. The test's guard checks had a fake HOME throughout; nothing reached the
+    real `~/.claude` or `~/.codex`. A `pacman` stub now answers `-T` as all present, or with the
+    names a test file lists, and the `sudo` stub logs what it was asked. Tests: t_unit_install (a
+    missing package: `sudo pacman -S --needed` with it, install.sh stops when that fails, the
+    package named; the rest as before, on any package set).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
