@@ -63,6 +63,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
+- **The agent skill's SKILL.md is the core every task needs**, about half its size (7.8 kB where it
+  was 14 kB, ~2k tokens fewer each time an agent loads it): what never to do, the project
+  instructions table, the loop, driving an app, waiting, coordinates, and a line for each section of
+  `reference.md` beside it. The rest (the guard and `omabox host`, ai-jail, mounts, showing the
+  user, what a box cannot test, reporting) moved to `reference.md` sections the core names; nothing
+  was dropped. A text question (a label, a checked box, a field's text) now goes to `tree --find`
+  before a shot ([#270](https://github.com/diogochaves/omabox/issues/270)).
 - **`omabox help CMD` is short**: the command's lines and its options, one line each (30 lines at
   most; `help up` 2 kB where it was 19 kB), ending with `more: omabox help CMD --long`, which
   prints the whole text as before: what each option does, defaults, limits. `omabox CMD --help` is

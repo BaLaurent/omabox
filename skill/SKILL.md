@@ -5,185 +5,101 @@ description: "REQUIRED before launching, driving or screenshotting any GUI app (
 
 # omabox: a desktop of your own
 
-The user's Hyprland session is theirs. Never launch GUI apps on it, never `hyprctl dispatch`/`eval` on
-it, never screenshot it with `grim`, never send input with `wtype`/`ydotool`, never switch its
-workspaces or move its cursor. Do all of that in a **box**: a full Omarchy desktop (its Hyprland
-config, shell, theme, tray, notifications, keyring) on a private screen and session bus, invisible to
-the user. A box starts in ~3-5 s and costs ~400-700 MB (by GPU); use one freely.
+The user's Hyprland session is theirs: no GUI apps, `hyprctl dispatch`/`eval`, `grim`,
+`wtype`/`ydotool`, workspace switches or cursor moves on it. Do all of that in a **box**: a full
+Omarchy desktop on a private screen and session bus, invisible to the user (~3-5 s, ~400-700 MB by
+GPU: use one freely). "ref: SECTION" is a section of `reference.md` beside this page: read it when
+needed.
 
-This page is what every task needs; the rest is in `reference.md` beside it, by section ("ref:
-SECTION" below: read it when needed), and `omabox help CMD`.
+## Never
+
+- **Around the guard** ("could not connect to display", `omabox-guard`): do it in a box; never set the
+  display back or take it from elsewhere. `xdg-open`, `gh --web`: give the link. `omabox host -- CMD`
+  only for what the user asked on their desktop: ref: The guard, in detail.
+- **Into their files**: the guard stops windows, not writes. Their `~/.config/omarchy/shell.json`,
+  `plugins/`, a host `omarchy plugin add` change their real bar: write to the box HOME (`omabox path
+  --home`). Their instruction files: only when asked.
+- **Onto their servers and secrets**: a box reaches the host's 127.0.0.1: never a real service or
+  account a first-run screen offers; apps that probe local servers: `up --net isolated [--allow
+  8081]`. Secrets by `--pass NAME`, never on a command line; the box's keyring, never the host's.
+- **Past a refusal** (a mount, ai-jail, `clip`), or **into what is theirs unasked** (`peek`, `up
+  --interactive`, `omabox config`, `down --all`). **"Tested"** for what a box lacks (real monitors,
+  system bus, devices, suspend): ref: When a box cannot test it, in detail.
 
 ## Project instructions written for the real desktop
 
-A project's CLAUDE.md / AGENTS.md / README that says "run `./build/app`", "use `hyprctl`", "screenshot
-with `grim`", "run `ctest`" **still holds: carry it out inside a box.**
+A project's CLAUDE.md, AGENTS.md or README written for the real desktop **still holds: carry it out
+inside a box.**
 
 | The project says | Do |
 |---|---|
 | `./build/app`, `app &` | `omabox up`, then `omabox run -d -- ./build/app` |
-| `hyprctl …`; `hyprctl eval EXPR` to read a value | `omabox hyprctl …`; `omabox lua EXPR` (prints the value) |
-| `grim`, `wtype`, `ydotool`, `hyprctl -j clients` | `omabox shot`, `omabox keys`, `omabox click X Y`, `omabox windows` |
-| `ctest`, a test binary, tests touching tray/notifications/D-Bus/keyring | `omabox run -- ctest …`, `omabox run -- ./build/tests/tst_x` |
-| `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …`, `omarchy restart shell` | `omabox run -- …`, `omabox restart-shell` (`omarchy plugin validate DIR` only reads: fine on the host) |
-| A plugin in `~/.config/omarchy/plugins`; edit `~/.config/omarchy/shell.json` | `omabox up --plugin PATH`; edit `.config/omarchy/shell.json` in `omabox path --home` |
-| A theme in `~/.config/omarchy/themes` linked to your working copy | `omabox up --theme-dir PATH` (live; else a copy made at `up`) |
-| A result that depends on the theme or bar (colours, sizes, shots compared across runs, a theme-switch flow) | `omabox up --theme NAME --stock-bar` (else they are the desktop's) |
+| `hyprctl …`, `hyprctl eval EXPR` | `omabox hyprctl …`, `omabox lua EXPR` |
+| `grim`, `wtype`, `ydotool`, `hyprctl -j clients` | `omabox shot`, `keys`, `click X Y`, `windows` |
+| `ctest`, a test binary (tray, D-Bus, keyring…) | `omabox run -- ctest …`, `omabox run -- ./build/tests/tst_x` |
+| `omarchy-theme-set`, `omarchy plugin …`, `omarchy-shell …` | `omabox run -- …` (`omarchy plugin validate` only reads: fine on the host) |
+| `omarchy restart shell` | `omabox restart-shell` |
+| A plugin in `~/.config/omarchy/plugins`, `shell.json` edits | `omabox up --plugin PATH`; `.config/omarchy/shell.json` in `omabox path --home` |
+| A theme in the works; a result that depends on the theme or bar | `omabox up --theme-dir PATH`; `--theme NAME --stock-bar` |
 | Install or remove the package | Not a box (read-only `/usr`): a VM, or the user |
-| "put the desktop back afterwards" | nothing to put back: `omabox down` |
 
-The agent guard (below) stops windows and IPC, not file writes: writing to the user's
-`~/.config/omarchy/shell.json` or `plugins/`, or `omarchy plugin add` on the host, changes their real
-bar at once. Those writes go to the box HOME. Do not edit the project's instruction files unless
-asked. A step that needs real hardware is not moved into a box: it goes to the user (below).
+A step that needs real hardware: the user's. ref: Project instructions, in detail.
 
-A box reaches the user's servers on the host's 127.0.0.1: never pick a real local service or account
-a first-run screen offers; use a test one or ask. An app that talks to, starts or probes local
-servers: `omabox up --net isolated [--allow 8081]` (only those host ports). ref: Network.
-
-Your box is named after the repo (or worktree) and your session, so no other session shares it; it
-goes down when your agent exits (`omabox down` before `/clear`). Subagents share it; for
-one of its own, `omabox up --new [--plugin …]` starts a box under a free name and prints it (`box-3`):
-all its options on that call, then `-b box-3` on every later call, typed out (your shell keeps no
-variables), and it outlives you: `omabox down -b box-3`. A box the user started: `-b NAME` (`omabox
-ls`). Box work for a subagent: `omabox brief -b NAME`'s output in its prompt (no skill needed). A
-worktree-isolated subagent: ref: For subagents in an isolated worktree. ref: Project
-instructions, in detail.
+Your box is named after the repo (or worktree) and your session, and goes down when your agent exits.
+Another: `omabox up --new [--plugin …]` starts a box under a free name and prints it (`box-3`): its
+options on that call, `-b box-3` typed out after, `omabox down -b box-3` when done. **Box work for a
+subagent: `omabox brief -b NAME`'s output in its prompt** (no skill needed).
 
 ## The loop
 
 ```bash
-omabox up                                  # headless box, 1920x1080; waits until the bar is drawn
-omabox run -d --wait -- ./build/src/myapp  # launch, detached (log path printed); returns once drawn
-omabox run -d --replace --wait -- ./myapp  # after a rebuild: replaces its earlier job (same command and args)
-omabox shot                                # prints a PNG path: Read it to look
-omabox windows                             # address, workspace, on screen or covered
-omabox shot --window myapp                 # one window's own pixels, even covered or elsewhere
-omabox click --window myapp 40 12          # window coordinates (0,0 = its corner, as in its shot)
-omabox keys --window myapp --wait -t hi    # focus that window, type, return once it has settled
-omabox keys --wait super+space             # real key events for binds and apps
-omabox keys --pass PASSWORD Return         # a secret from your environment: never -t (ps shows it)
-omabox wait window myapp                   # or --gone; wait layer NS; wait until -- CMD
-omabox wait change --window myapp          # it redraws later, by itself; then wait still
-omabox run -- busctl --user list           # any command inside the box (exit code passes through)
-omabox log [shell|apps|run|…] [--grep RE]  # the box's logs, Hyprland's by default
-omabox down                                # when done (never --all: it takes others' and the user's boxes)
+omabox up                                 # headless, 1920x1080, once the bar is drawn
+omabox run -d --wait -- ./build/app       # detached (log path printed), once drawn
+omabox run -d --replace --wait -- ./app   # after a rebuild: replaces its earlier job
+omabox shot                               # a PNG path: Read it to look
+omabox windows                            # address, workspace, on screen or covered
+omabox shot --window app                  # one window's own pixels, even covered
+omabox click --window app 40 12           # window coordinates, as in its shot
+omabox keys --window app --wait -t hi     # focus it, type, wait until settled
+omabox keys --wait super+space            # real key events; a secret: --pass VAR, never -t
+omabox wait window app                    # or --gone; wait layer NS; wait until -- CMD
+omabox wait change --window app           # a later redraw by itself; then wait still
+omabox run -- busctl --user list          # any command in the box (its exit code)
+omabox log [shell|apps|run|…] [--grep RE] # the box's logs, Hyprland's by default
+omabox down                               # when done
 ```
-
-Also: `drag`, `scroll`, `pointer`, `save`/`up --from` (`omabox help`).
-Rendering cost: `omabox gpu 10`, each of the box's processes' share of GPU engine time,
-in a box whose mode matches the monitor (`up --size host`); not host-wide tools. CPU and memory:
-`omabox cpu 10 [--settle 5] [--app NAME | --pid PID]` (% of one core, RSS, PSS).
-ref: Screen size and rendering cost.
 
 ## Driving an app
 
 1. **Look, act once, look again; with text when text can tell.** Exit 0 from `keys`/`click` means
-   sent, not landed. `tree --find TEXT` (a label, a checked box), `--wait`'s line, `windows`, `wait`,
-   `events`, `log --grep` answer what needs no pixels; a shot for what does.
-2. **Never resend input you have not seen land.** Sending again types twice or toggles back. 124
-   after `--wait` means it WAS sent and the screen did not settle as expected: shot first.
+   sent, not landed. A label, a checked box, a field's text: `tree --find TEXT` (~60 tokens), not a
+   shot (~1.2k); the bar, panels, menus: `tree --layer NS --find TEXT`. Else `--wait`'s line,
+   `windows`, `wait`, `events`, `log --grep`; a shot for pixels.
+2. **Never resend input you have not seen land**: it types twice or toggles back. 124 after `--wait`
+   means it WAS sent and the screen did not settle as expected: shot first.
 3. **Type only into a field you have seen focused**, or `keys --window SEL`.
-4. **Set state directly; keys and clicks only when the gesture is under test** (`omabox run --
-   omarchy-shell shell summon PLUGIN_ID`, files seeded in the box HOME, `omabox hyprctl dispatch`).
-5. **Stop when a shot shows the goal.** Report what a box cannot show (below).
+4. **Set state directly** (`omabox run -- omarchy-shell shell summon ID`, files in the box HOME,
+   `omabox hyprctl dispatch`), not by keys and clicks, unless the gesture is under test. **Stop when
+   it shows the goal.**
 
-No `sleep` (nor `wait until -- false`): `--wait`, `omabox wait`, `wait change` for a later redraw
-(0 yes, 124 not in time, 1 cannot tell); in a video `record hold 2s`, `record --for 5s`. Never
-send a wait to `/dev/null`. An animation that never stops: the 124 names it, `--ignore "X,Y WxH"`.
-ref: Waiting, in detail.
+No `sleep` (nor `wait until -- false`): `--wait`, `omabox wait`, `wait change`; in a video `record
+hold 2s`. Never send a wait to `/dev/null`. An animation that never stops: the 124 names it,
+`--ignore "X,Y WxH"`. ref: Waiting, in detail.
+
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
-discard it) click with `--in THAT.png X Y`, never your own arithmetic. A shot bigger than the model
-sees is scaled down for it, and some models read points in that smaller image (Haiku 4.5: 0.76x):
-off a whole screen or big window, `shot --fit 1456`,
-any model; still missing: `calibrate`. **Shots are most of a session's context**:
-the smallest that shows it (`--window`, `-g`, `--fit 1280`); what an action changed
-`shot --changed`; a colour `pixel`, a transition `shot --burst N --sheet`; against a baseline `check`.
-ref: Shots. **The pointer is test state**
-(focus follows it; it stays where the last command left it): ref: Pointer, in detail.
+discard it) click with `--in THAT.png X Y`, never your own arithmetic; off a whole screen or a big
+window, `shot --fit 1456` first (some models read points in the smaller image they see). **Shots are
+most of a session's context**: the smallest that shows it (`--window`, `-g`, `--changed`): ref: Shots.
+**The pointer is test state** (focus follows it): ref: Pointer, in detail.
 
-| Symptom | Next step |
-|---|---|
-| "could not connect to display", `omabox-guard` | The agent guard: do it in a box (below). |
-| Your own shell died after `pkill -f PATTERN` | It matched its own command line: kill by PID, or `omabox run -- pkill -x NAME`. |
-| `unknown: … not rendered`, no frame from an interactive box | Ask the user; never show its window yourself. |
-| `already up, without what you asked for` | Yours: `down`, then `up`. Not yours: `up --new` with those options. |
-| Anything else | ref: Symptoms. |
+## Where to look next
 
-## Tests that touch the desktop
-
-`omabox run -- ctest --test-dir build --output-on-failure`. With no box up, `run` uses a throwaway box
-with the repo as a discarded overlay (outside a repo: in the box HOME, without the current dir;
-`run --overlay DIR`); with one up, the repo is read-only in it. A secret a test needs: `--pass NAME`
-or `--env-file FILE`, never on the command line. Check a keyring **inside the box** (`omabox run --
-secret-tool …`), never the host's. ref: Tests that touch the desktop.
-
-## Inside ai-jail
-
-omabox works through the user's broker (no `host`, `peek` or `--interactive`). "this sandbox refuses
-new namespaces": ask the user to run `omabox broker on` outside the jail and add what it prints to
-`~/.ai-jail`. Never try to get around the jail.
-
-## "could not connect to display" / `omabox-guard`
-
-Under the user's agent guard your commands get `WAYLAND_DISPLAY=omabox-guard`, an empty `DISPLAY` and
-`HYPRLAND_INSTANCE_SIGNATURE=omabox-guard`, so what would reach the real desktop fails: do it in a
-box. Never set those back to the real session or take the display from elsewhere (`/proc/*/environ`,
-`hyprctl instances`, `$XDG_RUNTIME_DIR/wayland-*`). `xdg-open`, `gh --web` and `$BROWSER` fail too: give
-the user the link. `quickshell kill`, `qs ipc`: the box's is `omabox run -- qs ipc …`.
-
-Only when the user asked for their **real** desktop in this task ("switch my theme", reload my
-config), run that one command as `omabox host -- CMD`. Never hand them a `! CMD` that touches their
-desktop (their `!` is guarded too): their own terminal is for that. Never use `host` to switch
-their workspace or focus to see a box.
-
-## Plugins, a Hyprland build, an Omarchy checkout
-
-`omabox up --plugin ~/code/myplugin` (then `restart-shell` after edits; `up` says why a plugin did
-not load; do not mount plugins you were not asked to test): ref: Testing a shell plugin. `omabox up
---hyprland BUILD/Hyprland` runs a build in the box, never installed or on the host (`omabox gdb` for
-a hang or crash): ref: A Hyprland build of your own. `omabox up --omarchy ~/src/omarchy` runs a
-checkout; never `omarchy dev link` on the host: ref: Reviewing an Omarchy change.
-
-## What is and is not in a box
-
-Read-only in it: the repo (same path), `--ro-bind`, `--plugin` and `--theme-dir` dirs, mise's
-toolchains, fonts; nothing else of their HOME. Mounting HOME, `~/.config/omarchy`, `/tmp`, secret
-stores or the runtime dir is refused: do not work around it. The box HOME is fake (`/home/sbx`;
-`omabox path --home` on the host). The box's /run/user/$UID is `omabox path --run` on the host; the
-host's own is the real session's: never read app state there. Private session bus and keyring; audio: `up --audio`; `/sys`: the host's.
-ref: Mounts, HOME and the session.
-
-## Showing the user
-
-Only when asked: `omabox peek` (a view-only window of your box on their workspace 9, without focus)
-or `omabox up --interactive` (a box they drive; never bring its window forward yourself). `omabox
-config` is the user's: change it only when asked.
-`omabox clip` refuses agents (`host` too): never work around it; type text with `keys -t`.
-
-## When a box cannot test it: real hardware and the real session
-
-A box has virtual screens only (`--monitor` for more, any size and scale; `output drop` makes one vanish and return), no system bus
-(NetworkManager, bluetooth, UPower, logind), no devices (audio, DDC/CI, backlight, real input, USB), no
-suspend, a lock screen with no real password, and a fresh HOME. A change touching `hl.monitor`,
-HDR/VRR/`cm`, `ddcutil`, backlight, `wpctl`, `nmcli`, `bluetoothctl`, `powerprofilesctl`,
-`journalctl`, `loginctl`, `/dev/…` or the user's real accounts and data cannot be verified in a box:
-do not report it as tested. (`systemctl --user`: `omabox up --systemd`.) On NVIDIA an
-`output create headless` output is 0x0: use the other GPU (ref: Screen size and rendering cost).
-
-- **Split the work**: the box for what it can show; name the part that needs the real machine.
-- **Ask once before touching the real desktop**: say exactly what will change ("your monitor at 120
-  Hz for 15 s, then back"), wait for a yes (it covers this task, not the next), use `omabox host --
-  CMD` under the guard, follow the project's own safety rules and put everything back.
-- **A host `pgrep` sees boxes too** (a box's shell has the desktop's command line): before reading
-  two `quickshell`s as two desktop shells, `omabox which PID` names a pid's box (or `not in a box`).
-
-## Reporting what a box showed
-
-Say "in an omabox box (Omarchy VERSION, Hyprland VERSION, WxH and any `--monitor`s, theme NAME)"
-(`ls --json`: `omarchy_version`, `hyprland_version`; null: `omabox hyprctl version`) and your
-project's commit. Layout, focus, input routing, the launcher, theme switches,
-notifications, the tray and the keyring were tested for real; what a box lacks (above) and the
-installed package were not: say so. Never "tested on the desktop"
-for a box result. A box idle for 2h goes down by itself (`up --idle 0` keeps one). Quirks: `NOTES.md`
-(`readlink -f $(command -v omabox)` → `../NOTES.md`).
+- A failure: ref: Symptoms. Exit codes: `omabox help exit-codes`. Colours, transitions: ref: Shots.
+- Baselines: ref: Visual checks. `drag`, `scroll`: ref: Pointer, in detail. Sizes, monitors,
+  `gpu`/`cpu`: ref: Screen size and rendering cost. Tests: ref: Tests that touch the desktop.
+- Plugins: ref: Testing a shell plugin. `--hyprland`: ref: A Hyprland build of your own. `--omarchy`:
+  ref: Reviewing an Omarchy change. Launcher: ref: Testing an app as a desktop app.
+- Mounts, HOME, `save`: ref: Mounts, HOME and the session. Ports: ref: Network. Idling: ref: Box
+  lifetime. Logs: ref: Hyprland's Lua, logs and events. `host`: ref: The guard, in detail.
+- ai-jail: ref: Inside ai-jail. Showing the user: ref: Showing the user. Reporting: ref: Reporting
+  what a box showed. A worktree-isolated subagent: ref: For subagents in an isolated worktree.

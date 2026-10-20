@@ -1,7 +1,7 @@
 # omabox: reference
 
-Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The safety rules are all in
-`SKILL.md`; nothing here relaxes them.
+Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The safety rules are in
+`SKILL.md` ("Never"), some spelled out here; nothing here relaxes them.
 
 ## Project instructions, in detail
 
@@ -11,7 +11,14 @@ Detail that `SKILL.md` points to ("ref: SECTION" there is a section here). The s
   its files in the box HOME, then `omabox keys --wait super+alt+space` ("Testing an app as a desktop
   app"); `omarchy-theme-set NAME` → `omabox run -- omarchy-theme-set NAME`; `omarchy plugin
   add/enable/disable/remove` → `omabox run -- omarchy plugin …`; a back-up and restore of the bar
-  around a test: nothing to restore, the box's bar is its own.
+  around a test ("put the desktop back afterwards"): nothing to restore, the box's bar is its own
+  (`omabox down`). `hyprctl eval EXPR` to read a value → `omabox lua EXPR`, which prints the value.
+- Themes: a theme in `~/.config/omarchy/themes` linked to your working copy → `omabox up --theme-dir
+  PATH` (live; else a copy made at `up`). A result that depends on the theme or bar (colours, sizes,
+  shots compared across runs, a theme-switch flow) → `omabox up --theme NAME --stock-bar`; else they
+  are the desktop's.
+- A step that needs real hardware is not moved into a box: it goes to the user ("When a box cannot
+  test it, in detail").
 - A box starts with a fresh HOME: apps start as on first run. A server in a default box also holds
   its port on the user's 127.0.0.1 (their own dev server on it then fails to start), and a probe there
   can reach theirs or another box's (only one box gets a port on the host; `omabox ports` says which
@@ -82,7 +89,7 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 ## Handing box work to a subagent
 
 `omabox brief -b NAME` prints what a subagent needs to drive that box, ~15 lines (~450 tokens,
-against the skill's ~3 500): the box's name, size and scale, its windows one a line (each by a
+against the skill core's ~2 000): the box's name, size and scale, its windows one a line (each by a
 `--window` word that finds it alone, else its address; six at most), then the rules: `-b NAME` on
 every call, one literal command per call, look, act once, look again, never resend input not seen
 landing, no sleep, never the real desktop, the box HOME's host path, and the five below. Paste it
@@ -134,6 +141,8 @@ a turn. Five rules keep every omabox call plain:
   "publishes no accessible items" (Omarchy's own bar today), exit 1. Its `frame`s have no names, so
   the layer's is the one of its pid that is its size: two layers of one pid and size are told apart
   only when one holds the keyboard (the launcher over the wallpaper); else `tree` says so.
+- `click --window SEL X Y` takes the window's own coordinates (0,0 its corner, as in its `shot
+  --window`).
 - `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a
   title, failing those a hyphen-separated part of the class (`portal` for `xdg-desktop-portal-gtk`);
   `title:RE`, `class:RE`, `pid:N` or an address (`0x…`) narrow it; `wait window SEL` is satisfied by
@@ -296,6 +305,8 @@ with `--keep wallpaper` or after a theme set in the box.
 
 | Symptom | Next step |
 |---|---|
+| "could not connect to display", `omabox-guard` | The agent guard: do it in a box ("The guard, in detail"). |
+| Your own shell died after `pkill -f PATTERN` | It matched its own command line: kill by PID, or `omabox run -- pkill -x NAME`. |
 | After a rebuild the app still shows the old build (a single-instance app raised the old window) | Restart it with `omabox run -d --replace --wait -- CMD`, not a kill and a new `run -d`. |
 | `unsatisfied: nothing changed` (124) after `--wait` | Shot; right window focused (`omabox windows`)? Do not resend. |
 | `run -d` (`--wait` or not): "the command exited with status N … left nothing running" | It ended at once, or before drawing: read the log lines it printed (a file under `/tmp` or HOME the box does not have is named), fix that, run it again. No shot. |
@@ -352,6 +363,17 @@ with `--keep wallpaper` or after a theme set in the box.
 
 ## The guard, in detail
 
+- Under the user's agent guard your commands get `WAYLAND_DISPLAY=omabox-guard`, an empty `DISPLAY`
+  and `HYPRLAND_INSTANCE_SIGNATURE=omabox-guard`, so what would reach the real desktop fails: do it in
+  a box. Never set those back to the real session or take the display from elsewhere
+  (`/proc/*/environ`, `hyprctl instances`, `$XDG_RUNTIME_DIR/wayland-*`). `xdg-open`, `gh --web` and
+  `$BROWSER` fail too: give the user the link.
+- Only when the user asked for their **real** desktop in this task ("switch my theme", reload my
+  config), run that one command as `omabox host -- CMD`. Never hand them a `! CMD` that touches their
+  desktop (their `!` is guarded too): their own terminal is for that. Never use `host` to switch
+  their workspace or focus to see a box.
+- Before touching the real desktop for a check a box cannot make, ask once: "When a box cannot test
+  it, in detail".
 - `QT_QPA_PLATFORM=offscreen` still works under the guard. To look at a web page yourself, open it in
   your box (`omabox run -d -- xdg-open URL`, then `omabox shot`). `quickshell kill` and `qs ipc` are
   refused ("not running quickshell kill"): they would reach the user's desktop shell; a box's shell is
@@ -361,6 +383,12 @@ with `--keep wallpaper` or after a theme set in the box.
   ask to see on their desktop stay in a box: `shot` works on a hidden interactive box.
 - "this hook is outdated (omabox changed it)" at session start: tell the user to run `omabox guard on`
   (it rewrites your own settings, so leave it to them).
+
+## Inside ai-jail
+
+omabox works through the user's broker (no `host`, `peek` or `--interactive`). "this sandbox refuses
+new namespaces": ask the user to run `omabox broker on` outside the jail and add what it prints to
+`~/.ai-jail`. Never try to get around the jail.
 
 ## Screen size and rendering cost
 
@@ -455,6 +483,8 @@ with `--keep wallpaper` or after a theme set in the box.
   registers no other, QTBUG-112432): a Qt Quick `WheelHandler` at its default `acceptedDevices`
   (Mouse) never fires, in a box or on the desktop. Not omabox's to fix; for the app:
   `acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad`, or a `MouseArea`'s `onWheel`.
+- `keys --pass VAR` types the value of a variable from your environment, shown nowhere: a secret
+  never goes in `-t TEXT`, which the process list shows.
 - `keys -t TEXT` and `--pass VAR` type a newline as Return and a tab as Tab; any other control
   character (backspace, escape, a carriage return) is refused, exit 2, before anything is typed. A
   `--pass` value's one trailing `\r` (a Windows line ending) is dropped.
@@ -575,6 +605,13 @@ with `--keep wallpaper` or after a theme set in the box.
 
 ## Mounts, HOME and the session
 
+- In short: a box is a full Omarchy desktop (its Hyprland config, shell, theme, tray, notifications,
+  keyring). Read-only in it are the repo (same path), `--ro-bind`, `--plugin` and `--theme-dir`
+  dirs, mise's toolchains and the fonts; nothing else of the user's HOME. Mounting HOME,
+  `~/.config/omarchy`, `/tmp`, secret stores or the runtime dir is refused: do not work around it.
+  The box HOME is fake (`/home/sbx`; `omabox path --home` on the host). The box's /run/user/$UID is
+  `omabox path --run` on the host; the host's own is the real session's: never read app state there.
+  Private session bus and keyring; audio: `up --audio`; `/sys`: the host's.
 - The repo you ran `omabox up` from is visible **read-only** at the same path (from a linked worktree
   or a submodule, the main checkout's `.git` too: git reads work there, writes fail), plus any dirs listed in
   `~/.config/omabox/ro-bind` or passed with `--ro-bind` (`DIR:DEST` for another path, e.g. testing
@@ -708,7 +745,9 @@ with `--keep wallpaper` or after a theme set in the box.
 ## Network
 
 - Each box has its own network namespace. By default it reaches the internet, the LAN and the user's
-  servers on the host's 127.0.0.1; `--net isolated --allow PORTS` reaches only those host ports.
+  servers on the host's 127.0.0.1: never pick a real local service or account a first-run screen
+  offers; use a test one or ask. An app that talks to, starts or probes local servers: `omabox up
+  --net isolated [--allow 8081]` reaches only those host ports.
   An `--allow` port is taken inside the box too (pasta listens on it there, leading to the host's):
   it is for reaching a host server from the box, and a box server on that port fails, "address in
   use" (`omabox ports` lists it as `allowed`). Serve on another port.
@@ -737,6 +776,12 @@ with `--keep wallpaper` or after a theme set in the box.
 
 ## Box lifetime
 
+- Your box is named after the repo (or worktree) and your session, so no other session shares it;
+  subagents share it. `omabox down` before `/clear`. A box of a subagent's own: `omabox up --new
+  [--plugin …]`, all its options on that call, then `-b box-3` (as printed) on every later call, typed
+  out (your shell keeps no variables); it outlives you: `omabox down -b box-3`. A box the user
+  started: `-b NAME` (`omabox ls`). `omabox down` never with `--all`: it takes others' and the user's
+  boxes. A box idle for 2h goes down by itself (`up --idle 0` keeps one).
 - Your session's box goes down when your agent (Claude Code, Codex) exits. A peek window or an
   `omabox run` still going then keeps it until they end; a `run -d` job does not. After `/clear` the
   agent's process lives on and the old box only idles out.
@@ -745,8 +790,8 @@ with `--keep wallpaper` or after a theme set in the box.
 
 - `omabox up [NAME] --hyprland PATH` (and `run --hyprland PATH -- CMD` for a throwaway) starts PATH
   instead of `/usr/bin/Hyprland`. PATH's folder is mounted read-only at its own path, refused as
-  `--ro-bind`'s are (a binary right in HOME or `/tmp`: build into a folder of its own). Build, never
-  install (e.g. `cmake -B build && cmake --build build`, then `--hyprland build/Hyprland`: wherever
+  `--ro-bind`'s are (a binary right in HOME or `/tmp`: build into a folder of its own). It runs in the
+  box, never on the host. Build, never install (e.g. `cmake -B build && cmake --build build`, then `--hyprland build/Hyprland`: wherever
   the build put the binary; a wrapper script is refused, it must be the ELF itself).
 - The box loads a private aquamarine from `/opt/omabox/lib` when omabox has one with the build's
   soname (`omabox --version` names it), else the system's; so the build must link a
@@ -823,7 +868,7 @@ with `--keep wallpaper` or after a theme set in the box.
 
 The checks a plugin's own checklist asks for "on a live desktop", in a box. `omabox up --plugin
 PATH` (add `--stock-bar` for Omarchy's default bar, `--net isolated` when it starts or probes local
-servers), then `omabox restart-shell` after each edit (the plugin is live in the box, read-only). The box's
+servers; do not mount plugins you were not asked to test), then `omabox restart-shell` after each edit (the plugin is live in the box, read-only). The box's
 `shell.json` has only built-in widgets plus the plugins you mount, each enabled where its manifest
 says, in a copy of the user's bar layout (Omarchy's workspace numbers in place of a plugin's left out);
 `--stock-bar` uses Omarchy's default bar (workspaces, clock, the stock right side), to see a plugin as
@@ -994,6 +1039,20 @@ login screen and the disk passphrase stay a VM's to test.
 
 ## When a box cannot test it, in detail
 
+A box has virtual screens only (`--monitor` for more, any size and scale; `output drop` makes one
+vanish and return), no system bus (NetworkManager, bluetooth, UPower, logind), no devices (audio,
+DDC/CI, backlight, real input, USB), no suspend, a lock screen with no real password, and a fresh
+HOME. A change touching `hl.monitor`, HDR/VRR/`cm`, `ddcutil`, backlight, `wpctl`, `nmcli`,
+`bluetoothctl`, `powerprofilesctl`, `journalctl`, `loginctl`, `/dev/…` or the user's real accounts
+and data cannot be verified in a box: do not report it as tested. (`systemctl --user`: `omabox up
+--systemd`.)
+
+- **Split the work**: the box for what it can show; name the part that needs the real machine.
+- **Ask once before touching the real desktop**: say exactly what will change ("your monitor at 120
+  Hz for 15 s, then back"), wait for a yes (it covers this task, not the next), use `omabox host --
+  CMD` under the guard, follow the project's own safety rules and put everything back.
+- **A host `pgrep` sees boxes too** (a box's shell has the desktop's command line): before reading
+  two `quickshell`s as two desktop shells, `omabox which PID` names a pid's box (or `not in a box`).
 - The screens: any size, refresh rate, number (`--monitor`) and scale for the extra ones; no real
   modes, HDR, VRR, 10-bit, colour management or DPMS. The screen going and coming back (a monitor
   dropping off on wake, a KVM, a dock) can be tested: `omabox output drop [NAME] --for 300ms
@@ -1013,6 +1072,9 @@ login screen and the disk passphrase stay a VM's to test.
 
 ## Showing the user
 
+- Only when asked: `omabox peek` or `omabox up --interactive` (a box they drive; never bring its
+  window forward yourself). `omabox config` is the user's: change it only when asked. `omabox clip`
+  refuses agents (`host` too): never work around it; type text with `keys -t`.
 - `omabox peek` opens a live, view-only window of your headless box on the user's workspace 9 (or the
   one they set with `omabox config workspace`) without taking focus. It does not affect the box. Your
   `click`, `pointer` and `keys` show on it for ~3 s (a ring, key captions; `--pass` values as `*`),
@@ -1025,3 +1087,12 @@ login screen and the disk passphrase stay a VM's to test.
   the new one is drawn only while shown: `click` and `keys` still reach it, but `shot` gets no frame,
   and the new window can open on an empty workspace, where they reach no app. When the user has to
   act in it (a login), tell them which workspace it is on and let them go there.
+
+## Reporting what a box showed
+
+Say "in an omabox box (Omarchy VERSION, Hyprland VERSION, WxH and any `--monitor`s, theme NAME)"
+(`ls --json`: `omarchy_version`, `hyprland_version`; null: `omabox hyprctl version`) and your
+project's commit. Layout, focus, input routing, the launcher, theme switches, notifications, the tray
+and the keyring were tested for real; what a box lacks ("When a box cannot test it, in detail") and
+the installed package were not: say so. Never "tested on the desktop" for a box result. Quirks:
+`NOTES.md` (`readlink -f $(command -v omabox)` → `../NOTES.md`).

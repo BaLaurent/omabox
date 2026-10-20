@@ -2480,7 +2480,10 @@ t_unit_version() {
   check_eq "...the check: what it reads as a reference, and what it misses" \
     "ref: Pointer|ref: Nope|ref: SECTION|refs 6" \
     "$(skill_refs "$TMP/refs-skill.md" "$TMP/refs-ref.md" 2>&1 | paste -sd '|')"
-  check "...and stays short (under 14 KB: #143)" test "$(wc -c < "$ROOT/skill/SKILL.md")" -lt 14000
+  # #270: SKILL.md is the core every task loads (the rules, the loop, waiting, coordinates, where to look
+  # next); the rest is in reference.md. Each load costs its whole size, so the cap is the core's + a margin.
+  check "...and stays short (under 8 000 bytes: #143, #270)" test "$(wc -c < "$ROOT/skill/SKILL.md")" -lt 8000
+  check "...and sends text questions to tree, not a shot (#270)" grep -qF '`tree --find TEXT` (~60 tokens), not a' "$ROOT/skill/SKILL.md"
   # #241, finding 330: without wait change in the loop, agents slept with wait cmd -- false.
   check "...and its loop has wait change" grep -qE '^omabox wait change --window ' "$ROOT/skill/SKILL.md"
   if command -v omarchy-plugin-validate >/dev/null; then
