@@ -13451,6 +13451,9 @@ t_unit_wait_facts() {
   check_eq "...a hidden 1x1 menu is not there" 'the click at 0,0 was on foot "K" (its 0,0)' "$(lib desk_target click "$s" "0 0" | jq -r .text)"
   check_eq "...no window: the background" 'the scroll at 1500,500 was on no window (layer omarchy-background)' \
     "$(lib desk_target scroll "$s" "1500 500" | jq -r .text)"
+  check_eq "...a bottom layer there is over the background: it, not the background (finding 398)" \
+    'the scroll at 1500,500 was on no window (layer waybar-like)' \
+    "$(lib desk_target scroll "$(jq -c '.layers["HEADLESS-2"].levels["1"] = [{address: "0x6", namespace: "waybar-like", x: 1400, y: 400, w: 200, h: 200}]' <<<"$s")" "1500 500" | jq -r .text)"
   check_eq "...a window on a workspace not shown is not there" 'the drag from 100,450 started on no window or layer' \
     "$(lib desk_target drag "$(wf_snap '.clients[0].workspace = {id: 2, name: "2"} | .layers = {}')" "100 450" | jq -r .text)"
   check_eq "...certain" true "$(lib desk_target click "$s" "100 450" | jq -r .certain)"

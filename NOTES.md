@@ -8323,6 +8323,9 @@ from them.
     `PanelWindow` stub (top, 300x150) under the same toast refused `--no-raise`; a plain click on the
     toast closed it. t_click_layer (that), t_unit_window_select and t_unit_wait_facts (scale 2, a
     turned output, a second output's origin, mixed layers).
+    *Since*: with no window under the point, the 124 named the first of the bottom and background
+    layers listed (the background) even where a bottom layer lay over it: the topmost now (#274).
+    t_unit_wait_facts.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

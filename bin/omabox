@@ -10428,10 +10428,11 @@ desk_facts() {
 # sentence)}. $what: keys, click, scroll, drag or run; $x $y the point; $kbl the layers holding the
 # keyboard (kb_layers); $pid run -d's job. A point is on what takes the pointer there first: an
 # overlay layer, then a top one, then the topmost window drawn there (WIN_JQ's stacking), then a
-# bottom or background layer. Only a layer's rectangle is known, not the part that takes input
-# (WIN_JQ): a top or overlay one covering its whole output (LAYER_WHOLE_JQ: Omarchy's notifications)
-# may have taken it or not, so the target is what is under it, `certain` false, and the sentence
-# adds "or possibly on layer NS" (finding 398). One that is not full-screen wins over it.
+# bottom layer, then a background one (the topmost first). Only a layer's rectangle is known, not the
+# part that takes input (WIN_JQ): a top or overlay one covering its whole output (LAYER_WHOLE_JQ:
+# Omarchy's notifications) may have taken it or not, so the target is what is under it, `certain`
+# false, and the sentence adds "or possibly on layer NS" (finding 398). One that is not full-screen
+# wins over it.
 # shellcheck disable=SC2016 # jq, not shell
 DESK_TARGET_JQ="$LAYER_WHOLE_JQ"'
   def cut: if length > 40 then .[:39] + "…" else . end;
@@ -10465,7 +10466,7 @@ DESK_TARGET_JQ="$LAYER_WHOLE_JQ"'
           (if $w then target("window"; ($w | win); null; {x: ($x - $w.at[0]), y: ($y - $w.at[1])};
               "\($say) on \($w | name) (its \($x - $w.at[0]),\($y - $w.at[1]))")
            elif ($L | map(select(.lv < 2)) | length) > 0 then
-             ($L | map(select(.lv < 2)) | first) as $b | target("layer"; null; $b.ns; null; "\($say) on no window (layer \($b.ns))")
+             ($L | map(select(.lv < 2)) | sort_by(-.lv) | first) as $b | target("layer"; null; $b.ns; null; "\($say) on no window (layer \($b.ns))")
            else target("none"; null; null; null; "\($say) on no window or layer") end)
           | if $maybe then .certain = false
               | .text += ", or possibly on layer \($maybe.ns) (full-screen: if one of its items, a toast, is there)"
