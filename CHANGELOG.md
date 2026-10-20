@@ -3,7 +3,13 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.9.1 — 2026-10-20
+
+The release candidate for 1.0 (planned for 2026-10-24). The skill's core is about half its size,
+the rest in `reference.md`. An action's `--wait` says what changed on the desktop, and where the
+input went when it timed out. A `run -d` job that dies in its first 30 s is said on the box's next
+command. A full-screen layer such as Omarchy's notifications is only "possibly" over a point, so
+`--no-raise` goes on. And `up --clean`'s frozen clock no longer slips under load.
 
 ### Added
 
