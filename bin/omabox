@@ -725,10 +725,13 @@ program with other arguments (named, with its pid). A \`run -d\` whose command e
 0.3 s, leaving nothing running (a server on a port already taken), says so instead of started, with
 its exit status and its log's last lines, and exits with that status. A \`run -d --wait\` whose
 command ended before the screen settled, leaving nothing running, says so too, and exits with that
-status (124 when it was 0: the screen is still the question). A job that ends later, within its
+status (124 when it was 0: the screen is still the question); one killed or failed by the time the
+screen settled on something else (a window closing) is unsatisfied, said the same way. A job that ends later, within its
 first 30 s, with a status other than 0 (a server that dies a second in) is said once by the box's
 next command, whatever it is: "warning: run -d job CMD (pid N) exited with status 1 after 2.1s,
-since the last command (omabox log -b NAME run)". Not one --replace stopped, nor one already said.
+since the last command (omabox log -b NAME run)". Not one --replace stopped, one killed (SIGTERM,
+SIGINT, SIGKILL) while an \`omabox run\` ran in the box or just after (\`omabox run -- pkill APP\`),
+nor one already said.
 @ up run
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
@@ -5480,13 +5483,14 @@ box_procs() {
   done
 }
 
-# Of box_procs' lines (stdin), job PID's, as "HOST_PID BOX_PID": its session's. START is its leader's
-# start time, - when the leader had exited before the job was recorded: a leader that started at
-# another time (or at all, for -) has the pid after the job ended, and the job has none. The pid is
-# not reused while any process of the session is left. job_procs PID START
+# Of box_procs' lines (stdin), job PID's, as "HOST_PID BOX_PID": its session's, and its leader by its
+# pid before it has made that session (run-job.sh's subshell between its fork and its setsid, finding
+# 405). START is its leader's start time, - when the leader had exited before the job was recorded: a
+# leader that started at another time (or at all, for -) has the pid after the job ended, and the job
+# has none. The pid is not reused while any process of the session is left. job_procs PID START
 job_procs() {
   awk -v pid="$1" -v start="$2" '
-    $3 == pid { if ($2 == pid && $4 != start) reused = 1; out = out $1 " " $2 "\n" }
+    $3 == pid || $2 == pid { if ($2 == pid && $4 != start) reused = 1; out = out $1 " " $2 "\n" }
     END { if (!reused) printf "%s", out }'
 }
 
@@ -5497,26 +5501,36 @@ job_exe() {
   case $1 in */*) realpath -ms -- "$1" 2>/dev/null || printf '%s\n' "$1" ;; *) printf '%s\n' "$1" ;; esac
 }
 
-# After a launch: the record of job PID (in the box), unless it is gone already. job_record PID LOG ARGV...
+# After a launch: the record of job PID (in the box), START the start time of the process with that
+# pid: the job, or run-job.sh's subshell that is about to make it a session of its own (one process:
+# exec keeps it). Written for a job gone already too (START -): job_note and --wait name a job that
+# died in its first moment from it (finding 405). job_record PID LOG ARGV...
 job_record() {
-  local pid=$1 log=$2 procs start; shift 2
-  procs=$(box_procs | awk -v pid="$pid" '$3 == pid') || true
-  [ -n "$procs" ] || return 0
-  start=$(awk -v pid="$pid" '$2 == pid { print $4 }' <<<"$procs")
+  local pid=$1 log=$2 start; shift 2
+  start=$(box_procs | awk -v pid="$pid" '$2 == pid { s = $4 } END { print s }') || start=""
   mkdir -p "$D/jobs"
   jq -nc --arg pid "$pid" --arg start "${start:--}" --arg log "$log" --arg exe "$(job_exe "$1")" \
     '{pid: $pid, start: $start, log: $log, exe: $exe, argv: $ARGS.positional}' --args -- "$@" > "$D/jobs/$pid" || true
 }
 
-# The processes of the jobs recorded in FILES, as "HOST_PID BOX_PID" lines; a record whose job has
-# ended is removed. job_live FILE...
+# The processes of the jobs recorded in FILES, as "HOST_PID BOX_PID" lines. A record whose job has
+# ended is removed once its end has been dealt with (job_said): until then job_note needs it to name
+# what ended (finding 405). job_live FILE...
 job_live() {
-  local f procs pid start; procs=$(box_procs)
+  local f procs pid start log; procs=$(box_procs)
   for f in "$@"; do
-    { read -r pid; read -r start; } < <(jq -r '.pid, .start' "$f" 2>/dev/null) || { rm -f "$f"; continue; }
+    { read -r pid; read -r start; read -r log; } < <(jq -r '.pid, .start, .log' "$f" 2>/dev/null) || { rm -f "$f"; continue; }
     local p; p=$(job_procs "$pid" "$start" <<<"$procs")
-    if [ -n "$p" ]; then echo "$p"; else rm -f "$f"; fi
+    if [ -n "$p" ]; then echo "$p"; elif job_said "$log"; then rm -f "$f"; fi
   done
+}
+
+# Whether the end of the job whose log is LOG has been dealt with (job_note's $D/jobs-noted): said, or
+# not to be said. A box an older omabox started (no jobs-noted) and a log not named as run -d names
+# them: yes. job_said LOG
+job_said() {
+  [ -f "$D/jobs-noted" ] && [[ ${1##*/} =~ ^run-([0-9]{1,19})\.log$ ]] || return 0
+  grep -Fqx "omabox.run-${BASH_REMATCH[1]}.exit" "$D/jobs-noted"
 }
 
 # The live `run -d` jobs of ARGV's program (job_exe; argv[0] itself in a record made before it had
@@ -5617,6 +5631,7 @@ job_ended() {
     st=""; [ $i = 10 ] || sleep 0.1
   done
   job_noted "${ex##*/}"   # said here (or a 0 under QUIET), not again by the next command
+  rm -f "$D/jobs/$jpid"
   local what; what=$(job_how "$st")
   if [ -z "$st" ]; then JOB_RC=1
   else JOB_RC=$st; [ "$st" != 0 ] || [ "$when" = start ] || JOB_RC=124; fi
@@ -5632,6 +5647,19 @@ job_ended() {
   [ ${#miss[@]} = 0 ] || say "its arguments name host paths box '$NAME' does not have: ${miss[*]} (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME)"
   if [ -n "$tail" ]; then say "its log ends (omabox log -b $NAME run):"; printf '%s\n' "$tail" >&2
   else say "its log is empty"; fi
+}
+
+# run -d --wait's job PID (#297, finding 404): whether it has died, killed or with a status other than
+# 0 (its waiter's status file, read here in $D/run), nothing of its session left. A 0 is no death: a
+# one-shot (notify-send, a dispatch) changes the screen and ends with 0. No status file: it runs (the
+# leader's end writes one at once), and that costs a stat. job_failed PID
+job_failed() {
+  local f log st
+  [[ ${1:-} =~ ^[0-9]+$ ]] && f=$D/jobs/$1 && [ -f "$f" ] || return 1
+  log=$(jq -r .log "$f" 2>/dev/null) && [[ ${log##*/} =~ ^run-([0-9]{1,19})\.log$ ]] || return 1
+  st=$(run_read "omabox.run-${BASH_REMATCH[1]}.exit" | head -c 64) || st=""
+  [[ $st =~ ^[0-9]+$ ]] && [ "$st" != 0 ] || return 1
+  [ -z "$(job_live "$f")" ]
 }
 
 # A job's end in words, from its exit status (bash's: 128+N for signal N; empty when not kept).
@@ -5688,11 +5716,16 @@ job_note() {
     [ -n "$st" ] || [ $(( now / 1000 - ${end/./} )) -ge 2000 ] || continue
     job_noted "$n"
     [ "$st" != 0 ] || continue
-    # What it was: its record ($D/jobs, the host's), while run -d's checks have not dropped it. A
-    # leader that exited leaving its session running (a launcher, "started" for run -d too) is no end.
+    # Stopped by the agent itself (#300, finding 406): killed while an `omabox run` ran in the box
+    # (`omabox run -- pkill APP`), or just after. An exit or a crash is still said.
+    case $st in 130|137|143) ! job_run_stopped "${end/./}" || continue ;; esac
+    # What it was: its record ($D/jobs, the host's), kept until now (finding 405). Found by its log's
+    # name (a D spelled otherwise by another caller is the same box), each record a line read on its
+    # own: one being written or removed meanwhile does not lose the others. A leader that exited
+    # leaving its session running (a launcher, "started" for run -d too) is no end.
     rec=""; words="" pid=""
     if compgen -G "$D/jobs/*" >/dev/null; then
-      rec=$(jq -r --arg log "$D/home/run-$ns.log" 'select(.log == $log) | "\(input_filename)\t\(.pid)\t\(.argv | join(" "))"' "$D"/jobs/* 2>/dev/null | head -n 1) || rec=""
+      rec=$({ jq -Rr --arg log "/run-$ns.log" 'fromjson? | select(.log | strings | endswith($log)) | "\(input_filename)\t\(.pid)\t\(.argv | join(" "))"' "$D"/jobs/* 2>/dev/null || true; } | head -n 1)
     fi
     if [ -n "$rec" ]; then
       f=${rec%%$'\t'*} rec=${rec#*$'\t'}
@@ -5703,6 +5736,40 @@ job_note() {
     if [ "run-$ns.log" = "$newest" ]; then where="omabox log -b $NAME run"; else where="log: $D/home/run-$ns.log"; fi
     say "warning: run -d job ${words:-(its words were not kept)}${pid:+ (pid $pid)} $(job_how "$st") after $((ms / 1000)).$((ms % 1000 / 100))s, since the last command ($where)"
   done
+}
+
+# `omabox run` in a box up, timed for job_note (#300, finding 406): a run -d job killed (SIGTERM,
+# SIGINT, SIGKILL) while one ran, or within JOB_RUN_GRACE_MS of its end, was stopped by the agent
+# itself (`omabox run -- pkill APP`): no news. $D/runs (host-only) holds o.PID.START while one runs
+# (PID the omabox's) and c.START.END once it ended, in ms: names only, read with builtins.
+JOB_RUN_GRACE_MS=2000 RUN_MARK=""
+run_mark_begin() {
+  RUN_MARK=$(( ${EPOCHREALTIME/[.,]/} / 1000 ))
+  { mkdir -p "$D/runs" && : > "$D/runs/o.$$.$RUN_MARK"; } 2>/dev/null || RUN_MARK=""
+}
+run_mark_end() {
+  [ -n "$RUN_MARK" ] || return 0
+  local f now=$(( ${EPOCHREALTIME/[.,]/} / 1000 ))
+  mv -f -- "$D/runs/o.$$.$RUN_MARK" "$D/runs/c.$RUN_MARK.$now" 2>/dev/null || true
+  # Dropped: a run that ended 10 s before this one began (every end it covers was there for this
+  # one's job_note, but one not yet written: up to 2 s), and one whose omabox is gone (killed outright).
+  for f in "$D"/runs/*; do
+    if [[ ${f##*/} =~ ^c\.[0-9]+\.([0-9]+)$ ]]; then [ "${BASH_REMATCH[1]}" -ge $((RUN_MARK - 10000)) ] || rm -f -- "$f"
+    elif [[ ${f##*/} =~ ^o\.([0-9]+)\.[0-9]+$ ]]; then [ -d "/proc/${BASH_REMATCH[1]}" ] || rm -f -- "$f"; fi
+  done
+}
+# Whether a job that ended at END (ms) did so while an `omabox run` ran in the box, or within
+# JOB_RUN_GRACE_MS of one's end. job_run_stopped END
+job_run_stopped() {
+  local f
+  for f in "$D"/runs/*; do
+    if [[ ${f##*/} =~ ^c\.([0-9]+)\.([0-9]+)$ ]]; then
+      [ "${BASH_REMATCH[1]}" -le "$1" ] && [ "$1" -le $((BASH_REMATCH[2] + JOB_RUN_GRACE_MS)) ] && return 0
+    elif [[ ${f##*/} =~ ^o\.([0-9]+)\.([0-9]+)$ ]]; then
+      [ "${BASH_REMATCH[2]}" -le "$1" ] && [ -d "/proc/${BASH_REMATCH[1]}" ] && return 0
+    fi
+  done
+  return 1
 }
 
 # A throwaway whose `up` failed: its logs, copied out of the box dir its `down` removes (finding 167),
@@ -5838,7 +5905,9 @@ cmd_run() {
       return $rc
     fi
     local rc=0
+    run_mark_begin   # (a job it stops is no news: job_note)
     box_exec "$@" || rc=$?
+    run_mark_end
     touch "$D/used" 2>/dev/null || true
     run_gone $rc || rc=125
     return $rc
@@ -10751,6 +10820,12 @@ settle_end() {
       fi ;;
     *) msg=$reason ;;
   esac
+  # run -d --wait (#297, finding 404): a screen that settled after the job had died (killed, or a
+  # status other than 0, nothing of it left) settled on something else: the last app's window
+  # closing, another agent's. Unsatisfied, so run -d says the job's end and its log as for a 124.
+  if [ "$res" = satisfied ] && [ "$SETTLE_FACTS" = run ] && job_failed "$SETTLE_FPID"; then
+    res=unsatisfied msg+="; the command had ended by then: not its screen"
+  fi
   # An action's --wait (#274): what changed on the desktop since just before the input, appended; on a
   # 124, where the input went first, and that nothing changed when nothing did. Not on unknown (the box
   # may be hung: no more seconds on it). changes is null when the desktop could not be read.

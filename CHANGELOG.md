@@ -40,6 +40,26 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `box 'NAME' up (1920x1080@60 + 1080x1920@60)` for a box started with `--monitor 1080x1920`, not
   the main screen alone.
 
+- **`run -d --wait` said `satisfied` for a command that had already died**
+  ([#297](https://github.com/diogochaves/omabox/issues/297)), when something else on the screen
+  settled meanwhile (the last app's window closing, another agent's window), and its end only came
+  as a warning on the next command. Now a command killed or ended with a status other than 0 by the
+  time the screen settles makes the answer `unsatisfied`, says its end and its log's last lines, and
+  exits with its status. One that ends with 0 having changed the screen stays satisfied.
+
+- **A `run -d` job's warning said "its words were not kept" for ordinary jobs**
+  ([#298](https://github.com/diogochaves/omabox/issues/298)). The next command's warning about a
+  job that ended lost what the job was when it died at once, when the box was slow to make it a
+  session of its own, when `--replace` or another command had looked at it first, or when another
+  command touched the job records at the same moment. A job's record is now always kept until its
+  end has been said, so the warning names the command and its pid.
+
+- **The warning about a `run -d` job that ended fired for jobs you stopped yourself**
+  ([#300](https://github.com/diogochaves/omabox/issues/300)): after `omabox run -- pkill APP`, the
+  next command said the job "was killed by SIGTERM". A job killed (SIGTERM, SIGINT or SIGKILL) while
+  an `omabox run` ran in its box, or within 2 s of one ending, is no longer said; exits and crashes
+  still are.
+
 ## 0.9.2 — 2026-10-20
 
 A fix to the agent guard for hosts on Omarchy 4.5 (its release candidates and the edge channel):

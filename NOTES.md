@@ -8431,6 +8431,69 @@ from them.
     OMABOX_TEST_OMARCHY on a 4.5 tree, a control shows its omarchy-shell reaching a stand-in shell
     socket without the file; under `guard exec` nothing reaches it, by path or by name).
 
+404. **`run -d --wait` said satisfied for a job that had died at once, when something else on screen
+    settled** (2026-10-20, #297). Seen twice: a Qt app started right after `omabox run -- pkill` of
+    the last one (the closing window was the awaited change) and a binary given a host path the box
+    lacks, in a box another agent was using (its window). The job's end (SIGABRT at 0.0 s, exit 255
+    at 0.1 s) only came on the next command, as finding 399's warning. `--wait` watches the whole
+    screen, and `job_ended` (#215) was asked only on a 124. Reproduced: a foot window open, `run -d
+    --wait -- sh -c 'pkill -f "^foot -T K "; exit 3'` said `satisfied: settled after 0.81s ...;
+    window closed: foot "K"`, exit 0. *Decided*: the liveness check, not counting only the job's own
+    windows: a job that never opens one (a server, a one-shot) would have nothing to settle on, and
+    the job's state is what the agent needs. **Fix**: when the screen settles under `run -d --wait`,
+    `job_failed` reads the job's status file ($D/run, one stat while it runs); a job killed or ended
+    with a status other than 0, nothing of its session left, turns the answer to `unsatisfied: settled
+    after 0.48s (...); the command had ended by then: not its screen; ...` and run -d says its end,
+    the host paths it lacked and its log's tail, and exits with its status, as for a 124. A 0 stays
+    satisfied: a one-shot (`notify-send`, a dispatch, a `pkill` of a window) changes the screen and
+    ends with 0. **Checked** in a box: the reproduction above now exits 3 with the job's end and log;
+    `kill -ABRT $$` 134; `--json` gives `result: unsatisfied`. Tests: t_replace (a job dead as
+    another window closed: 3, unsatisfied, its end and log, not said again by the next command; a
+    one-shot that closes it and exits 0: satisfied).
+
+405. **A `run -d` job's warning said "its words were not kept" for ordinary jobs** (2026-10-20,
+    #298). Finding 399's warning names the job from its record (`$D/jobs/PID`), and the record went
+    missing in four ways. (1) `job_record` wrote none for a job gone before it looked: the SIGABRT at
+    0.0 s and the exit 255 at 0.1 s of #297. (2) It looked for the job as a session (`sid == pid`),
+    but run-job.sh says the pid right after its fork, before the subshell has exec'd setsid: a host
+    quicker than the box found no such session yet and wrote nothing, for a job that then ran for
+    minutes (by reading; 50 starts in an idle and a loaded box all kept theirs). (3) `job_live`
+    removed the record of any job it found ended, before the next command's `job_note` had said the
+    end: `--replace` (its own records and, through job_others, every ended job of the same program:
+    399's *Off*), `job_ended`, and a concurrent command's. (4) `job_note` read all records in one
+    `jq` under pipefail: one being written or removed by another command meanwhile (jq exits 2 or 5)
+    lost every record's words, and the log was matched by its full path, so a caller whose
+    `XDG_RUNTIME_DIR` is spelled otherwise (`/run/user/1000/`) matched none. **Fix**: a record is
+    always written, its start time that of the process with the job's pid, whatever its session
+    (one process from fork to the app: exec keeps it; `-` when none is left); `job_procs` counts
+    that process as the job before its setsid. `job_live` drops an ended job's record only once its
+    end is in `jobs-noted` (`job_said`; a box from an older omabox: as before), so it stays until
+    `job_note` or `job_ended` has dealt with it; those then drop it. `job_note` reads each record as
+    a line of its own (`jq -R 'fromjson?'`, its exit status ignored) and matches the log by its name
+    `run-NS.log`. A record whose end never comes (its waiter killed in the box) stays until `down`.
+    Tests: t_unit_job_note (a record matched by its name beside a half-written one; job_live keeps an
+    ended job's record until its end is noted, then drops it; job_record records a job gone already,
+    and one before its setsid by its start); t_unit_cli (job_procs: the leader before its setsid).
+
+406. **The job-ended warning fired for jobs the agent had stopped itself with `omabox run -- pkill`**
+    (2026-10-20, #300). One agent's loop of start, probe, stop got finding 399's warning a dozen
+    times, often on an unrelated command; it added `grep -v warning` everywhere, and the log path in
+    the line then broke a `grep -o '/run/[^)]*log'` capture of its own. A SIGTERM sent through
+    `omabox run` in the same box is no news. **Fix**: `omabox run` in a box up marks its time in
+    `$D/runs` (host-only; `o.PID.START` while it runs, PID the omabox's, renamed `c.START.END` when it
+    returns, ms), and `job_note` does not say a job that ended by SIGTERM, SIGINT or SIGKILL (143, 130,
+    137) while one ran or up to 2 s after one ended (an app slow to quit on SIGTERM under load; the
+    issue asked about a second); it is noted all the same. Exits and crashes (SIGSEGV, SIGABRT) are
+    said as before, and so is a kill with no `run` around it. An `o.` mark counts only while its
+    omabox lives (one killed outright leaves its mark: ignored, then dropped). Marks are names read
+    with builtins; each `run`'s end drops those that ended 10 s before it began (its own `job_note`
+    had every end they could cover by then). *Off*: a job killed by something else in the box during
+    an agent's `omabox run` (another agent's `pkill`, the OOM killer) is not said either; `run -d --
+    pkill` is not a stop through `run`. Tests: t_unit_job_note (killed during a run or 2 s after: not
+    said; an exit then and a kill 3 s after: said; during a run still going: not said; a run whose
+    omabox is gone: said; run marks open, then closed, old and dead ones dropped); t_replace (`run --
+    pkill -xf 'sleep 611'`: the next command says nothing; a job killing itself 3 s in: said).
+
 410. **`tree --window` printed an app's only frame for a window it does not publish** (2026-10-20,
     #302). An egui app with a root window and two child viewports publishes one AT-SPI frame, the
     root's; `tree --window "title:<child>"` printed the root's tree for both children (one of them

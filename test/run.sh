@@ -4108,6 +4108,54 @@ t_unit_job_note() {
   check "...and noted" grep -q . "$d/jobs-noted"
   jn_job 2 100 1 121 dead ./z >/dev/null
   check_match "...a job ending after that is said" "job ./z \(pid 121\) exited with status 1" "$(jn_note)"
+  # #298, finding 405: a record found by its log's name (another caller's D spelled otherwise), and
+  # one half written beside it (read each on its own: it lost every record's words before)
+  ns=$(jn_job 3 100 6 123 dead ./v)
+  jq -c '.log |= sub("/home/"; "//home/")' "$d/jobs/123" > "$d/jobs/123.t" && mv "$d/jobs/123.t" "$d/jobs/123"
+  printf '{"pid":' > "$d/jobs/0"
+  check_match "a record by its log's name, a half-written one beside it: its words" "job \./v \(pid 123\) exited with status 6" "$(jn_note)"
+  rm -f "$d/jobs/0"
+  # #300, finding 406: a job killed while an `omabox run` ran in the box ($D/runs: c.START.END, ms;
+  # o.PID.START while one runs), or up to 2 s after, was stopped by the agent: not said. An exit, a
+  # kill 3 s after, one during a run whose omabox is gone: said.
+  local t0=$(( (now - 20) * 1000 )); mkdir -p "$d/runs"
+  : > "$d/runs/c.$(( t0 - 500 )).$(( t0 + 900 ))"
+  jn_job 20 800 143 124 dead ./k1 >/dev/null; jn_job 20 2700 137 125 dead ./k2 >/dev/null
+  jn_job 20 300 130 126 dead ./k3 >/dev/null; jn_job 20 800 1 127 dead ./e1 >/dev/null
+  jn_job 20 4000 143 128 dead ./k4 >/dev/null
+  out=$(jn_note)
+  check_eq "killed during an omabox run or 2 s after: not said; an exit then, and a kill 3 s after: said" \
+    "./e1 exited with status 1|./k4 was killed by SIGTERM (143)" "$(sed -n 's/.*run -d job \([^ ]*\) (pid [0-9]*) \(.*\) after .*/\1 \2/p' <<<"$out" | sort | paste -sd'|')"
+  sleep 600 & local alive=$!
+  : > "$d/runs/o.$alive.$(( t0 + 9000 ))"; : > "$d/runs/o.999999999.$(( t0 + 9000 ))"
+  jn_job 20 9500 143 129 dead ./k5 >/dev/null
+  check_eq "...during one still running: not said" "" "$(jn_note)"
+  rm "$d/runs/o.$alive."*; kill "$alive"; wait "$alive" 2>/dev/null
+  jn_job 20 9600 143 130 dead ./k6 >/dev/null
+  check_match "...one whose omabox is gone without its end: said" "job \./k6 \(pid 130\) was killed by SIGTERM" "$(jn_note)"
+  # run_mark_begin/end: the run's mark open, then closed with its end; one ended long before and one
+  # whose omabox is gone dropped
+  rm -f "$d/runs/"*; : > "$d/runs/c.1000.2000"; : > "$d/runs/o.999999999.1000"
+  local marks; marks=$(D=$d bash -c 'source "$1"; run_mark_begin; ls "$D/runs" | grep -c "^o\.$$\.[0-9]\{13\}$"; run_mark_end; ls "$D/runs"' _ "$TMP/lib/bin/omabox")
+  check_match "run marks: open while it runs, then closed; an old one and a dead one's dropped" \
+    "^1"$'\n'"c\.[0-9]{13}\.[0-9]{13}$" "$marks"
+  # The record kept until the end is dealt with: job_live (box_procs stubbed as BOX_PID SID START)
+  # lists a live job, keeps an ended one's record until job_note has noted its end, then drops it.
+  jl() { local ps=$1; shift; NAME=u D=$d PS=$ps bash -c 'source "$1"; shift; box_procs() { [ -z "$PS" ] || awk "{ print 900 + NR, \$0 }" <<<"$PS"; }; "$@"' _ "$TMP/lib/bin/omabox" "$@"; }
+  printf '{"pid":"50","start":"777","log":"%s/home/run-1000.log","argv":["a"]}\n' "$d" > "$d/jobs/50"
+  printf '{"pid":"51","start":"778","log":"%s/home/run-1001.log","argv":["b"]}\n' "$d" > "$d/jobs/51"
+  check_eq "job_live: a live job listed, an ended one not" "901 50" "$(jl '50 50 777' job_live "$d/jobs/50" "$d/jobs/51")"
+  check "...the ended one's record kept: its end not noted yet" test -f "$d/jobs/51"
+  echo omabox.run-1001.exit >> "$d/jobs-noted"
+  jl '50 50 777' job_live "$d/jobs/51" >/dev/null
+  check_fails "...dropped once it is" test -e "$d/jobs/51"
+  # job_record: a job gone before it is recorded still is (start -), and one caught before its setsid
+  # (its pid in run-job.sh's session) by its own start time
+  jl '' job_record 52 "$d/home/run-1002.log" ./gone
+  check_eq "job_record: a job gone already is recorded, start -" "52 - ./gone" "$(jq -r '"\(.pid) \(.start) \(.argv | join(" "))"' "$d/jobs/52" 2>&1)"
+  jl '53 49 555' job_record 53 "$d/home/run-1003.log" ./early
+  check_eq "...one before its setsid: its start" "555" "$(jq -r .start "$d/jobs/53" 2>&1)"
+  check_eq "...and live" "901 53" "$(jl '53 49 555' job_live "$d/jobs/53")"
 }
 
 # run -d --replace with other arguments (#255): a job of the same program is named, by its resolved
@@ -4240,6 +4288,8 @@ t_unit_cli() {
   check_eq "job_procs: the leader restarted under the pid: none" "" "$(lib job_procs 7 499 <<<"$ps")"
   check_eq "job_procs: the leader gone, its session left" "101 8" "$(lib job_procs 7 - <<<$'101 8 7 510')"
   check_eq "job_procs: - with a leader there: none" "" "$(lib job_procs 7 - <<<"$ps")"
+  check_eq "job_procs: the leader before its setsid (run-job.sh's session): it (finding 405)" "103 7" "$(lib job_procs 7 500 <<<$'103 7 6 500')"
+  check_eq "...one of another start: none" "" "$(lib job_procs 7 500 <<<$'103 7 6 499')"
 }
 
 # `omabox clip` (issue #23, finding 119): never for an agent, and what it hands over. Only refusals and
@@ -13937,6 +13987,15 @@ t_replace() {
   old=$(cd "$D/home" && printf '%s\n' run-*.log | sort | tail -n 2 | head -n 1)
   check "a job --replace stopped: its status kept (killed)" until_ok 5 test -e "$D/run/omabox.${old%.log}.exit"
   check_eq "...not said by the next command" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job')"
+  # #300, finding 406: a job the agent stopped itself through `omabox run` is not said; one killed
+  # otherwise (by itself, 3 s in: past the 2 s after that run) still is
+  out=$(ob run -b "$B" -d -q --print-log -- sleep 611)
+  ob run -b "$B" -- pkill -xf 'sleep 611'
+  check "a job stopped by omabox run -- pkill: its status kept" until_ok 5 test -e "$D/run/omabox.$(basename "$out" .log).exit"
+  check_eq "...not said by the next command" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job')"
+  out=$(ob run -b "$B" -d -q --print-log -- sh -c 'sleep 3; kill -TERM $$')
+  check "a job killed otherwise: its status kept" until_ok 8 test -e "$D/run/omabox.$(basename "$out" .log).exit"
+  check_match "...said" "run -d job sh -c sleep 3; kill -TERM .* was killed by SIGTERM \(143\) after 3\." "$(ob windows -b "$B" 2>&1 >/dev/null)"
   # A job that ignores SIGTERM: killed after 5 s
   ob run -b "$B" -d -q -- sh -c 'trap "" TERM; sleep 603'
   local t0=$SECONDS
@@ -13964,6 +14023,22 @@ t_replace() {
   err=$(ob run -b "$B" -d -q --wait --start 1s -- sleep 605 2>&1 >/dev/null); rc=$?
   check_eq "a command still running that draws nothing: 124" 124 "$rc"
   check_match "...started all the same, as before" "the command was started all the same \(124 is about the screen\)" "$err"
+  # #297, finding 404: a job dead at once while another window closed: the screen settled on that,
+  # and it said satisfied. Now unsatisfied, its end said, its status the exit's; a one-shot that
+  # closes it and exits 0 is satisfied, as before.
+  ob run -b "$B" -d -q -- foot -T K sh -c 'sleep 600'
+  ob wait -b "$B" window 'title:^K$' >/dev/null
+  out=$(ob run -b "$B" -d -q --wait -- sh -c 'pkill -f "^foot -T K "; echo gone >&2; exit 3' 2>"$TMP/rep.err"); rc=$?; err=$(cat "$TMP/rep.err")
+  check_eq "run -d --wait of a job that died as another window closed: its status (3)" 3 "$rc"
+  check_match "...unsatisfied: not its screen" "^unsatisfied: .*the command had ended by then: not its screen" "$out"
+  check_match "...its end and log said" "the command exited with status 3 before the screen settled, and left nothing running.*"$'\n'"  gone" "$err"
+  # (foot K's own end, killed, is said: it was a run -d job too)
+  check_eq "...not said again by the next command" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job sh -c pkill')"
+  ob run -b "$B" -d -q -- foot -T K sh -c 'sleep 600'
+  ob wait -b "$B" window 'title:^K$' >/dev/null
+  out=$(ob run -b "$B" -d -q --wait -- pkill -f "^foot -T K " 2>/dev/null); rc=$?
+  check_match "...a one-shot that closes it and exits 0: satisfied" "^0 satisfied: " "$rc $out"
+  ob windows -b "$B" >/dev/null 2>&1
   # A missing command still says so in its log
   out=$(ob run -b "$B" -d -q --print-log -- omabox-no-such-command)
   check "a missing command: said in its log" until_ok 5 grep -q 'setsid: failed to execute omabox-no-such-command' "$out"
