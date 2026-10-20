@@ -14356,8 +14356,8 @@ cmd_brief() {
     echo "You drive an omabox box: a private Omarchy desktop, not the user's. Start yours: omabox up --new [--plugin PATH]"
     echo "(all its options there); it prints its name (box-3): that is NAME below. It has no windows yet."
   fi
-  local own="The box is your parent's: leave it up."
-  [ "$b" != NAME ] || own="The box is yours: omabox down -b NAME when done."
+  local own="The box is your parent's: leave it up, and never down another box you did not start."
+  [ "$b" != NAME ] || own="The box is yours: omabox down -b NAME when done; never down a box you did not start (your session's other agents use theirs)."
   cat <<EOF
 Every call: omabox -b $b CMD ..., one literal command per call: no \$VAR, \$(...), pipes, && or ;. Look a value up, then type it.
 The loop: look, act once, look again. Text first (omabox -b $b windows, tree --find TEXT --window SEL); pixels: shot --window SEL prints a PNG path: Read it.

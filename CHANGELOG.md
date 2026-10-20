@@ -13,6 +13,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - The reference says plainly that wgpu apps (eframe's default renderer, iced, Bevy) do not start in
   a box on NVIDIA, and what to do: a GL renderer, or a box on the AMD/Mesa GPU
   ([#306](https://github.com/diogochaves/omabox/issues/306)).
+- Parallel subagents of one session share its default box name: the reference tells each to take a
+  box of its own (`up --new` or `-b` a name of its task), and `omabox brief` to take down no box it
+  did not start ([#295](https://github.com/diogochaves/omabox/issues/295)).
 
 ### Fixed
 

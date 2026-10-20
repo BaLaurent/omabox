@@ -98,6 +98,12 @@ load the skill when the brief is not enough. Run it right before delegating (the
 they were then). With no box up it prints the same rules for a box the subagent starts itself (`up
 --new`, down when done), and says so on stderr; exit 0 either way.
 
+**Parallel subagents share your session's default box name** (it comes from the session's id, which
+they all have), so two that run `omabox up` get one box, and one's `down` ends the other's test. Give
+each its own: `omabox up --new` (then `-b box-N`, as printed) or `-b` a name of its task; it never
+takes down a box it did not start (a box with your session's suffix in `omabox ls` may be a
+sibling's).
+
 ## For subagents in an isolated worktree
 
 Claude Code checks each Bash call of a worktree-isolated subagent and refuses what it cannot follow:
@@ -809,7 +815,8 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
 ## Box lifetime
 
 - Your box is named after the repo (or worktree) and your session, so no other session shares it;
-  subagents share it. `omabox down` before `/clear`. A box of a subagent's own: `omabox up --new
+  subagents share it (parallel ones each need their own: "Handing box work to a subagent").
+  `omabox down` before `/clear`. A box of a subagent's own: `omabox up --new
   [--plugin …]`, all its options on that call, then `-b box-3` (as printed) on every later call, typed
   out (your shell keeps no variables); it outlives you: `omabox down -b box-3`. A box the user
   started: `-b NAME` (`omabox ls`). `omabox down` never with `--all`: it takes others' and the user's

@@ -4282,6 +4282,7 @@ t_unit_brief() {
   check_match "...says so on stderr" "no box '$P-nobrief' is up" "$err"
   check "...20 lines at most" test "$(wc -l <<<"$out")" -le 20
   check_match "...a box of its own: up --new, down when done" "omabox up --new.*omabox down -b NAME when done" "${out//$'\n'/ }"
+  check_match "...and no box it did not start (#295: a session's agents share its default names)" "never down a box you did not start" "$out"
   for r in "omabox -b NAME CMD" "one literal command per call" "look, act once, look again" \
     "never resend input you have not seen land" "No sleep" "wait until -- CMD \(never wait cmd\)" "record hold" \
     "Never the real desktop" "path --home" "Read, Write and Edit" "run -- sh /home/sbx/" "Stay in your worktree" \
@@ -9018,7 +9019,7 @@ t_brief() {
   check_match "...its window, by the word that finds it" $'\n  t271  "brief-one"  [0-9]+x[0-9]+ at [0-9]+,[0-9]+  on-screen, active\n' "$out"
   check_match "...-b NAME in its rules" "omabox -b $B CMD" "$out"
   check_match "...the box HOME's host path" "/home/sbx is $XDG_RUNTIME_DIR/omabox/$B/home on the host" "$out"
-  check_match "...the box is the parent's" "leave it up" "$out"
+  check_match "...the box is the parent's" "leave it up, and never down another box you did not start" "$out"
   check "...20 lines at most" test "$(wc -l <<<"$out")" -le 20
   ob run -b "$B" -d --wait -- foot --app-id t271 -T brief-two sleep 600 >/dev/null 2>&1
   out=$(ob brief -b "$B" 2>&1)
