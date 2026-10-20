@@ -8626,6 +8626,13 @@ from them.
     + 1080x1920@60)`. `up --json` and `ls --json` had every one already (`monitors`), unchanged.
     Tests: t_monitors_wait, t_monitors_wait_nvidia.
 
+414. **`wait` garbled the still tool's answer when a read timed out at a space** (2026-10-20, #310;
+    seen under load in t_wait: `unsatisfied: changingt=2002`). Finding 217 keeps what a timed-out
+    `read -t 1` had of a line, but with the default IFS that read strips trailing whitespace from
+    the part it keeps, and the next one strips the rest's leading whitespace: an answer split at a
+    space lost it, so the reason ran into the fields after it. **Fix**: `IFS= read` in settle_begin
+    and settle_end. Tests: t_unit_settle_read (an answer and a `ready` line split at a space).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

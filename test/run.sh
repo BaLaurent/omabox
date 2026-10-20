@@ -8944,6 +8944,16 @@ t_unit_settle_read() {
   out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; on_box() { { printf r; sleep 1.5; printf "eady 1920x1080\n"; sleep 5; }; }
     settle_begin still; echo "line [$SETTLE_LINE] err [$SETTLE_ERR]"' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
   check_match "settle_begin: a ready line split across a read timeout too" "line \[ready 1920x1080\] err \[\]" "$out"
+  # #310: split right at a space, a read with the default IFS dropped it from both parts:
+  # "unsatisfied: changingt=2002".
+  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; box_alive() { return 0; }
+    exec {SETTLE_OUT}< <(printf "unsatisfied changing "; sleep 1.5; printf "%s\n" "t=2002 first=2 last=1970 change=27,31,7,10 ignored=- why=- late=- frames=42")
+    exec {SETTLE_IN}>/dev/null; sleep 0.1 & SETTLE_PID=$!
+    SETTLE_LINE="ready 1920x1080" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); rc=0; settle_end still 0 "" || rc=$?; echo "rc $rc"' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
+  check_match "an answer split at a space keeps it (#310)" "^unsatisfied: still changing after 2\.00s" "$out"
+  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; on_box() { { printf "ready "; sleep 1.5; printf "1920x1080\n"; sleep 5; }; }
+    settle_begin still; echo "line [$SETTLE_LINE] err [$SETTLE_ERR]"' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
+  check_match "settle_begin: a ready line split at a space too" "line \[ready 1920x1080\] err \[\]" "$out"
 }
 
 # up's waits after the bar, on a box that died meanwhile (#157, finding 216): bar_settle retried its

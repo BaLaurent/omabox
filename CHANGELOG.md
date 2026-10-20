@@ -109,6 +109,10 @@ text, defaults and heuristics, image pixels, what other programs report through 
 - **`run` printed bash's `line N: PID Killed prlimit …` for a command killed by a signal**; it now
   says `the command was killed by SIGKILL (137)`, with the same exit status.
 
+- **`wait` and `--wait` could print a garbled answer under load**
+  ([#310](https://github.com/diogochaves/omabox/issues/310)), such as `unsatisfied: changingt=2002`,
+  when the screen watcher's answer arrived in two pieces split at a space. The space is kept now.
+
 ## 0.9.2 — 2026-10-20
 
 A fix to the agent guard for hosts on Omarchy 4.5 (its release candidates and the edge channel):
