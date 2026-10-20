@@ -4463,6 +4463,14 @@ t_unit_agent_session() {
     "no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' \(started from another directory\): -b $P-r-$sid" \
     "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
       bash -c 'source "$1"; want=$2; box_state() { if [ "$NAME" = "$want" ]; then echo up; else echo dead; fi; }; box_alive() { false; }; MAIN_CMD=wait; select_box ""; need_box' _ "$lib" "$P-r-$sid" 2>&1)"
+  # #296: run -d there named the session's box after an `omabox up` of the derived name.
+  check_eq "...run -d there: only the session's box, no up of another" \
+    "omabox: no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' (started from another directory): -b $P-r-$sid" \
+    "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
+      bash -c 'source "$1"; want=$2; box_state() { if [ "$NAME" = "$want" ]; then echo up; else echo dead; fi; }; box_alive() { false; }; MAIN_CMD=run; cmd_run -d -- true' _ "$lib" "$P-r-$sid" 2>&1)"
+  check_eq "...none: the up it needs" "omabox: run -d needs a box that is up (omabox up $P-as-$sid)" \
+    "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
+      bash -c 'source "$1"; box_state() { echo dead; }; box_alive() { false; }; MAIN_CMD=run; cmd_run -d -- true' _ "$lib" 2>&1)"
   check_eq "up there: the session's box named, the new one still starts"     "omabox: note: this session already has box $P-r-$sid (started from another directory); -b NAME to use it"     "$(sel "$P-r-$sid" up up_session_note)"
   check_eq "...nothing when it has none" "" "$(sel "$P-r-0000beef" up up_session_note)"
   check_match "...a name given: as before" "no box 'nope' is up \(up: " "$(sel "$P-r-$sid" wait select_box nope \; need_box)"

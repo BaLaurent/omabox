@@ -21,6 +21,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   it is that window's size and no other window of the app is; else `tree` says the window has no
   tree, or that which one it is cannot be told, exit 1.
 
+- **`run -d` in a repo no longer says to start a box when your session has one up elsewhere**
+  ([#296](https://github.com/diogochaves/omabox/issues/296)). After `omabox up` in a scratch folder,
+  `run -d` back in the repo said `omabox up <repo>-…`, and agents started a second box. It now names
+  the session's box to pass with `-b`, as the other commands do there.
+
 ## 0.9.1 — 2026-10-20
 
 The release candidate for 1.0 (planned for 2026-10-24). The skill's core is about half its size,

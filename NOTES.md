@@ -8425,6 +8425,17 @@ from them.
     (`Gdk.Surface.new_toplevel`, drawn by a `Gsk.CairoRenderer`), which have no accessible. Tests:
     t_tree (a window of another size; one of two of the frame's size; the root's tree still read).
 
+411. **`run -d` from a repo told an agent to start a second box while its session's was up**
+    (2026-10-20, #296). An agent's `cd <scratch>; omabox up` made `default-<sfx>`; back in the repo
+    (Claude Code resets the directory between calls), `run -d` derived `<repo>-<sfx>`, found it down
+    and said `run -d needs a box that is up (omabox up <repo>-<sfx>)`, while every other command
+    there says need_box's `no box '<repo>-<sfx>' is up; this session's box is 'default-<sfx>'
+    (started from another directory): -b default-<sfx>`; the agent's report had both lines, which
+    disagree. **Fix**: run -d with a derived name, when the session has boxes up under other names,
+    gives need_box's answer alone; with none, the `up` line as before. Using the session's only box
+    from any directory waits for an owner per box (#295): with parallel subagents it may be a
+    sibling's. Tests: t_unit_agent_session.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -5831,7 +5831,13 @@ cmd_run() {
     run_gone $rc || rc=125
     return $rc
   fi
-  [ $detach = 0 ] || die "run -d needs a box that is up (omabox up $NAME)"
+  if [ $detach = 1 ]; then
+    # This session's box, up under another directory's name: named, not an `up` that would start a
+    # second box (#296).
+    local mine=""; [ "${NAME_DERIVED:-0}" = 0 ] || mine=$(session_boxes)
+    [ -z "$mine" ] || need_box
+    die "run -d needs a box that is up (omabox up $NAME)"
+  fi
   for kv in "${envs[@]}"; do up_args+=(--env "$kv"); done
   # A box asked for by name (-b, $OMABOX), one that was up and died, or one that expired is not
   # replaced by a throwaway: that would run the command in a new network namespace without the box's mounts
