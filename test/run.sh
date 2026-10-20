@@ -853,8 +853,11 @@ t_unit_deprecated() {
   check_eq "...under run: run's own failure, 125" 125 "$(OMABOX_STRICT=1 lib eval 'DIE_RC=125; deprecated a b' 2>/dev/null; echo $?)"
   check_eq "...no other warning names a form 1.0 refuses (each goes through deprecated)" "" \
     "$(grep -nE 'say "warning:.*(refused in|deprecat)|say "deprecat' "$ROOT/bin/omabox" | grep -vF 'say "deprecated: $1: write $2 (refused in $v)"')"
-  check_eq "OMABOX_STRICT is documented: help exit-codes, the reference" "2" \
-    "$( { ob help exit-codes | grep -c OMABOX_STRICT=1; grep -c OMABOX_STRICT "$ROOT/skill/reference.md"; } | grep -c '^[1-9]')"
+  check_eq "OMABOX_STRICT is documented: help exit-codes, the reference, README's Stability" "3" \
+    "$( { ob help exit-codes | grep -c OMABOX_STRICT=1; grep -c OMABOX_STRICT "$ROOT/skill/reference.md"
+         awk '/^## Stability$/ {on = 1; next} on && /^## / {exit} on' "$ROOT/README.md" | grep -c OMABOX_STRICT; } | grep -c '^[1-9]')"
+  check_eq "...and no claim of semantic versioning anywhere" "" \
+    "$(grep -rliE 'semantic versioning|semver' "$ROOT/README.md" "$ROOT/CHANGELOG.md" "$ROOT/skill" "$ROOT/bin/omabox")"
 }
 
 # #273 part B: one meaning per exit code. A usage error (an unknown option or word, a value missing

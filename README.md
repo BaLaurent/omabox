@@ -667,6 +667,31 @@ Boxes live in `$XDG_RUNTIME_DIR/omabox/<name>/` (`omabox path`): `box.json` (its
 dir, its `/run/user/$UID`: `omabox path --run`; the host's own is your real session's), `used` (idle clock), `events.marks` (`omabox events --mark`), `reap.log`, `box.log`. The box's HOME (`home/`, `omabox path --home`, on disk in
 `~/.cache/omabox/<name>/home`, removed on `down`) and logs are readable from the host.
 
+## Stability
+
+omabox is used mostly by agents, which read its warnings; a script or CI reads `--json` and exit
+codes, and watches stderr for `deprecated:`. From 1.0, within 1.x:
+
+- **Kept, or changed only by addition:** exit codes (0 done or yes, 1 failed or no, 2 called wrongly,
+  124 not in time; `check run`'s 3 and 4; `run`'s 125 for its own failures, its command's status
+  otherwise: `omabox help exit-codes`), and `--json`'s field names, types and meaning (fields may be
+  added: read the ones you need by name; `skill/reference.md`, "JSON", lists them).
+- **Changed only after a warning:** commands (`brief` and the aliases help documents among them),
+  options, arguments, `config` keys and `OMABOX_*` variables. The new form comes first; the old one
+  keeps working for one minor release, with `omabox: deprecated: OLD: write NEW` on stderr and a
+  CHANGELOG line under "Deprecated"; then it is refused with a line naming the new one, never read
+  another way. `OMABOX_STRICT=1` refuses it at once (exit 2), for CI.
+- A save made by a 1.x starts with any later 1.x (`up --from`). A `check` baseline approved by a 1.x
+  compares with any later 1.x, or is refused ("approve again"), never compared wrongly. [What a box
+  cannot touch](#what-a-box-can-and-cannot-touch) only gets stricter.
+
+Not covered: the wording of messages and tables; help and skill text; defaults and heuristics (each
+change gets a CHANGELOG line, and no timeout gets shorter in 1.x); the pixels of the images omabox
+draws; what other programs report through omabox, as they report it (`hyprctl`, `lua`, Hyprland's
+own fields in `windows --json`, `events`, `tree`'s roles); a box's inside (its HOME, config and
+logs); and internal or undocumented forms, such as a box's name given to `peek`, `reload` or
+`restart-shell` without `-b`.
+
 ## Known limitations
 
 - Other NVIDIA models and drivers are untested. Of the agents the skill is installed for, Claude
