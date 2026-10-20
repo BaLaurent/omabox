@@ -7892,6 +7892,29 @@ from them.
     a file the box wrote in /home/sbx read there); t_unit_wait (the warning, the same refusals for
     both names, `path` taking one of --home/--run/--logs).
 
+382. **`log shell` lines carry their time** (2026-10-20, #276). Timing a shell plugin's retry backoff
+    needed `omabox run -- quickshell log --log-times -p <the box's shell path>`, whose times come
+    from the binary `.qslog` and are whole seconds there (`19:39:11.000`). Quickshell's own
+    `--log-times` (in every release since 0.1.0) stamps each line it logs with `yyyy-MM-dd
+    hh:mm:ss.zzz`, to the millisecond, before the level; it changes the log's lines and nothing
+    else the shell does. The box's `systemd-cat` stand-in (which Omarchy's launcher runs the shell
+    under) now passes it to quickshell, and shell.sh's fallback for a tree without the launcher too;
+    the `logger -t omarchy-shell` stand-in stamps the launcher's lines the same way (`%F %T.%3N`,
+    was whole seconds), and the crash-dialog line from hyprland.lua too. Times by default, not
+    behind `--times` (pre-1.0; output wording is not the contract), read straight from shell.log,
+    so `--grep` (which sees the time as part of the line) and `-f` are unchanged. Not timed: what
+    Quickshell prints outside its logger (a crash handler's stderr before logging starts, Qt's own
+    early stderr), and an `--omarchy` tree whose launcher runs quickshell without systemd-cat.
+    Hyprland's log has no times and `omabox events` uses `HH:MM:SS.mmm`: there was no common format
+    to match, so the shell keeps Quickshell's own. `shell_warnings` (plugin states at `up` and
+    `restart-shell`) drops the time with the level/category prefix. The box's shell command line is
+    now `quickshell --log-times -n -p ...`, which a host `pgrep -a` tells from the desktop's. Quirk:
+    Quickshell writes no space between the time and a `quickshell.bare` message ("Could not open
+    config file"). Real box (Omarchy 4.0.6, Hyprland 0.56.2, Quickshell 0.3.2): t_plugin_check
+    (a Quickshell line timed to the ms in `log shell`, `--grep` keeping only matches, plugin states
+    read from timed lines), t_dbus_user_app (the logger line timed), t_omarchy_tree, t_shell_crash,
+    t_shell_restart_dup, t_omarchy_restart, t_quickshell; t_unit_shell_warnings (timed lines).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

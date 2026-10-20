@@ -17,6 +17,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - The skill's reference has a section for subagents in an isolated worktree: five rules that keep
   every omabox call one the worktree check lets through.
 
+### Changed
+
+- **`omabox log shell` lines carry their time**, to the millisecond (`2026-10-20 14:03:07.512
+  WARN qml: ...`): the box's shell runs with Quickshell's `--log-times`, and the launcher's
+  `logger -t omarchy-shell` lines have the same stamp. Timing what a shell plugin does (a retry's
+  backoff) no longer takes `quickshell log --log-times` by hand; `--grep` and `-f` work as before
+  ([#276](https://github.com/diogochaves/omabox/issues/276)).
+
 ### Deprecated
 
 - `omabox wait cmd` still works, with a warning naming `wait until`; 1.0 refuses it.

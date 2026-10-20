@@ -1693,6 +1693,12 @@ t_unit_shell_warnings() {
   check_eq "shell_warnings: a plugin's lines, not Quickshell's 'outside of the config folder' (any plugin's)" \
     $'Module path contains invalid characters for a module name:  "/plugins/image-picker"\nPlugin widget x.qml failed: W.qml:9:1: Syntax error' \
     "$(lib shell_warnings "$f")"
+  # #276: the lines as --log-times writes them, the time before the level (in grey, coloured).
+  printf '%s\n' $'\e[90m2026-10-20 02:26:30.852\e[33m  WARN\e[97m quickshell.qmlscanner\e[0m: Module path "/p/x.good" is outside of the config folder.' \
+    $'\e[90m2026-10-20 02:26:30.853\e[33m  WARN\e[97m qml\e[0m: Plugin widget x.qml failed: boom' \
+    '2026-10-20 02:26:30.854 ERROR quickshell.x: bad' '2026-10-20 02:26:30.855  INFO: Configuration Loaded' > "$f"
+  check_eq "shell_warnings: timed lines (--log-times) lose their time too" \
+    $'Plugin widget x.qml failed: boom\nbad' "$(lib shell_warnings "$f")"
 }
 
 # A fake desk's Omarchy config (#206): what `up --desk-shell` reads, in place of ~/.config/omarchy.
@@ -5159,6 +5165,12 @@ t_plugin_check() {
   check_fails "fixed, restart-shell: no line for it" grep -q "$P.qml failed" <<<"$out"
   check_match "...still one for the others" "plugin $P.entry failed" "$out"
   check_eq "...and ls --json has it loaded" loaded "$(ob ls --json | jq -r --arg n "$B" --arg i "$P.qml" '.[] | select(.name == $n) | .plugin_status[$i].state')"
+  # #276: the shell's lines carry their time (Quickshell's --log-times, to the millisecond), --grep still
+  # keeps only what matches; the plugin states above were read from those timed lines.
+  out=$(ob log -b "$B" shell -n all --grep 'Configuration Loaded' | sed 's/\x1b\[[0-9;]*m//g')
+  check_match "log shell: a Quickshell line with its time to the millisecond (#276)" \
+    '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} +INFO: Configuration Loaded$' "$(tail -n 1 <<<"$out")"
+  check_eq "...--grep still keeps only the lines that match" "" "$(grep -v 'Configuration Loaded' <<<"$out")"
   # finding 161: a shell.log the host cannot read (write-only, so the shell still writes it) does not
   # end restart-shell after "shell restarted".
   ob run -b "$B" -- chmod 200 /home/sbx/shell.log
@@ -5317,8 +5329,8 @@ logger -t omarchy-shell omabox shell route' >/dev/null 2>&1
     bash -c "'$CLI' log -b '$B' journal --grep 'omabox-plain\[[0-9]+\]: (plain one|stdin a|stdin b)$' | wc -l | grep -qx 3"
   check "...without -t, under the user's name, as logger's own default" until_ok 5 \
     bash -c "'$CLI' log -b '$B' journal --grep '^[0-9-]+ [0-9:]+ $(id -un)\[[0-9]+\]: plain untagged$' | grep -q ."
-  check "...logger -t omarchy-shell still in shell.log (omabox log shell)" until_ok 5 \
-    bash -c "'$CLI' log -b '$B' shell --grep 'omarchy-shell: omabox shell route$' | grep -q ."
+  check "...logger -t omarchy-shell still in shell.log (omabox log shell), timed as the shell's lines (#276)" until_ok 5 \
+    bash -c "'$CLI' log -b '$B' shell --grep '^[0-9-]+ [0-9:]+\.[0-9]{3} omarchy-shell: omabox shell route$' | grep -q ."
   out=$(ob log -b "$B" journal --grep 'omabox shell route' 2>&1) || out="exit $?: $out"
   check_eq "...and not in the journal" "" "$out"
   ob run -b "$B" -- /usr/bin/systemd-cat -t omabox-cat printf 'line one\nline two\n' >/dev/null 2>&1
@@ -10702,7 +10714,7 @@ t_omarchy_tree() {
   check_eq "the box's Hyprland loaded the tree's config" tree "$(ob lua -b "$B" 'return omabox_tree_marker')"
   check_eq "...run has it as OMARCHY_PATH" "$T" "$(ob run -b "$B" -- sh -c 'echo "$OMARCHY_PATH"')"
   check_eq "...and its bin first" omabox-tree "$(ob run -b "$B" -- omarchy-version)"
-  check_match "...the bar runs from it" "quickshell -n -p $T/shell" "$(ob run -b "$B" -- pgrep -a quickshell)"
+  check_match "...the bar runs from it" "quickshell --log-times -n -p $T/shell" "$(ob run -b "$B" -- pgrep -a quickshell)"
   check_eq "...a terminal's bash too (the box's /etc/omarchy.conf)" "$T omabox-tree" "$(ob run -b "$B" -- bash -ic 'echo "$OMARCHY_PATH $(omarchy-version)"' 2>/dev/null)"
   check_eq "ls --json names it" "$T" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy')"
   check_eq "...and its version as dev (no git: no commit)" dev "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version')"

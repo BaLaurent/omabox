@@ -468,7 +468,8 @@ with `--keep wallpaper` or after a theme set in the box.
   `omabox lua`. (An `hl.on` callback that a `hyprctl dispatch` sets off errors in that dispatch's
   answer.)
 - `omabox log [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]`: the box's logs, the last 100 lines
-  of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors), `apps` (what the
+  of each. `hyprland` (the default), `shell` (the bar, plugins, QML errors; each line with its
+  time to the millisecond, `YYYY-MM-DD HH:MM:SS.mmm`, for timing what the shell does), `apps` (what the
   launcher and binds started), `run` (the latest `run -d`), `keyring`, `labwc`, `systemd` (with
   `--systemd`), `audio` (PipeWire's, with `--audio`), `events` (Hyprland's events, which `omabox events` reads), `journal` (what programs
   sent the box's journal sockets: dbus-broker, `logger` and `logger --journald` (not `-t omarchy-shell`: `shell`), `/usr/bin/systemd-cat` (the bare name writes `~/ID.log`), Qt with `QT_FORCE_STDERR_LOGGING=0`, units' output; at most 4 MB, then

@@ -23,11 +23,13 @@ if [ "$tag" = omarchy-shell ]; then
   [ $# = 0 ] || echo $$ > "$XDG_RUNTIME_DIR/omabox-shell.pid"
   # The box's own quickshell (#151: the launcher runs the bar in every box now), not a stub of a test's
   # in the box HOME's ~/.local/bin, which comes before /usr/bin; the shell's PATH stays the session's.
-  # `up --quickshell`'s build when share/session.sh linked one (finding 358).
+  # `up --quickshell`'s build when share/session.sh linked one (finding 358). With --log-times (#276):
+  # each line its time to the millisecond, as the journal gives it on a desktop (`omabox log shell`);
+  # it changes the log's lines only.
   if [ "${1:-}" = quickshell ]; then
     qs=$XDG_RUNTIME_DIR/omabox-quickshell/quickshell
     [ -x "$qs" ] || qs=/usr/bin/quickshell
-    set -- "$qs" "${@:2}"
+    set -- "$qs" --log-times "${@:2}"
   fi
 fi
 [ $# -gt 0 ] || exec cat >> "$log"

@@ -37,5 +37,6 @@ fi
 log=$HOME/${tag:-logger}.log
 [ "$tag" != omarchy-shell ] || log=$HOME/shell.log
 [ -z "$file" ] || [ $# -gt 0 ] || exec < "$file"
-line() { printf '%s %s: %s\n' "$(date '+%F %T')" "${tag:-logger}" "$1" >> "$log"; }
+# Its time as the shell's own lines have it (--log-times, #276): YYYY-MM-DD HH:MM:SS.mmm.
+line() { printf '%s %s: %s\n' "$(date '+%F %T.%3N')" "${tag:-logger}" "$1" >> "$log"; }
 if [ $# -gt 0 ]; then line "$*"; else while IFS= read -r l; do line "$l"; done; fi

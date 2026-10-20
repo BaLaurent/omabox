@@ -347,7 +347,7 @@ if not omabox_crash_hook then
     f:close()
     if not env:find("__QUICKSHELL_CRASH_DUMP_PID=", 1, true) then return end
     local pid = math.floor(w.pid)
-    hl.exec_cmd("kill " .. pid .. "; echo \"omabox: closed the shell's crash dialog (pid " .. pid ..
+    hl.exec_cmd("kill " .. pid .. "; echo \"$(date '+%F %T.%3N') omabox: closed the shell's crash dialog (pid " .. pid ..
       "); the report is in ~/.cache/quickshell/crashes\" >> \"$HOME/shell.log\"")
   end)
 end

@@ -552,10 +552,12 @@ hl.timer) that runs later is logged nowhere: catch it with pcall.
 \`run -d\`'s, apps what Omarchy's launcher started, journal what programs sent the box's journal
 sockets (/run/systemd/journal: dbus-broker, \`logger\` and \`logger --journald\` (\`-t omarchy-shell\`
 goes to shell), \`/usr/bin/systemd-cat\` (the bare name writes ~/ID.log), units' output; at most 4 MB,
-then journal.1.log), box bwrap's. -f follows them until the box goes
-down (-n then counts lines before --grep). Hyprland writes its log in pieces: its newest lines can
-come late. \`log gdb --crash\`: only each crash's signal and the backtrace of the thread it hit
-(-n and --grep then apply to those).
+then journal.1.log), box bwrap's. shell's lines carry their time (YYYY-MM-DD HH:MM:SS.mmm, Quickshell's
+--log-times; the launcher's \`logger\` lines too, not what Quickshell prints outside its log) as
+\`omabox events\`' do (HH:MM:SS.mmm); Hyprland's have none. --grep sees the time as part of the
+line. -f follows them until the box goes down (-n then counts lines before --grep). Hyprland writes
+its log in pieces: its newest lines can come late. \`log gdb --crash\`: only each crash's signal and
+the backtrace of the thread it hit (-n and --grep then apply to those).
 @ gdb
 \`gdb\` prints every thread's backtrace of the box's Hyprland (--shell: the shell; --pid PID: a
 process of the box), stopped or deadlocked too, and leaves it as it was; -- ARGS replace the backtrace
@@ -2249,12 +2251,12 @@ resolve_plugin() {
 # box.json (`plugin_status`, in `ls --json` and `up --json`): loaded, failed (listed, its QML did not
 # load), not loaded (not listed), disabled, or enabled (a panel, menu or overlay only: its QML loads
 # when summoned, so its errors show then, in `omabox log shell`).
-# A shell log's warnings and errors, colour codes and the level/category prefix dropped. Not
+# A shell log's warnings and errors, colour codes, the time and the level/category prefix dropped. Not
 # Quickshell's (0.3.2) about every plugin dir outside the shell's config folder, as Omarchy's all are:
 # nothing about the plugin (finding 372).
 shell_warnings() {
   sed 's/\x1b\[[0-9;]*m//g' "$1" 2>/dev/null |
-    sed -nE '/ quickshell\.qmlscanner: Module path .* is outside of the config folder\.$/d; s/^ *(WARN|ERROR) +[^:]*: //p'
+    sed -nE '/ quickshell\.qmlscanner: Module path .* is outside of the config folder\.$/d; s/^([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9:.]+)? *(WARN|ERROR) +[^:]*: //p'
 }
 
 plugin_check() {
