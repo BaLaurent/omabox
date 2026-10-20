@@ -10764,7 +10764,8 @@ settle_begin() {
   # (finding 181), read here and said in words; before, after 5 s, settle_end waited on it forever.
   local end=$((SECONDS + 12)) rc part=""
   while :; do
-    if read -r -t 1 -u "$SETTLE_OUT" line; then
+    # (IFS=: a line split at a space keeps it, #310.)
+    if IFS= read -r -t 1 -u "$SETTLE_OUT" line; then
       line=$part$line part=""
       [[ $line == ready* ]] && break
       [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
@@ -10802,7 +10803,8 @@ settle_end() {
   if [[ $line == ready* ]]; then
     line=""
     while :; do
-      if read -r -t 1 -u "$SETTLE_OUT" line; then
+      # (IFS=: with the default one, a line split at a space lost it from both parts, #310.)
+      if IFS= read -r -t 1 -u "$SETTLE_OUT" line; then
         line=$part$line part=""
         [[ $line =~ ^(satisfied|unsatisfied|unknown)\  ]] && break
         SETTLE_ERR+="${SETTLE_ERR:+; }$line"; line=""; continue
