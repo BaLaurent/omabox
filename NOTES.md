@@ -8297,6 +8297,33 @@ from them.
     The "Tests:" pointer under "Where to look next" went (the new line names that section): 7 966
     bytes.
 
+398. **A full-screen layer is possibly over a point, not certainly** (2026-10-20, #263). Since
+    finding 379, a top/overlay layer whose rectangle covered a `--window` point was named over it
+    and `--no-raise` refused; finding 396's 124 named such a layer as where a click went. Hyprland
+    gives only rectangles (finding 379), and Omarchy's `omarchy-notifications` is a full-screen
+    overlay that takes input on its toasts only, so while any toast showed, every point counted as
+    covered: a plain click far from the toast warned that it went to the layer, `--no-raise`
+    refused it, and a 124 said "on layer omarchy-notifications" for a click that reached the window.
+    *Decided* (Diogo): say what is known. A layer whose rectangle covers its whole output
+    (`LAYER_WHOLE_JQ`: the output named by `hyprctl layers`' key, its mode over its scale, turned by
+    its transform, within 1 px) is uncertain coverage: `click`/`scroll`/`drag`/`pointer --window`
+    say "a full-screen layer "NS" (…) is up over window …: input at X,Y may go to it if one of its
+    items (a toast) is there; elsewhere it goes to the window (omabox wait layer NS --gone waits it
+    out)" and `--no-raise` goes on; `windows` says it "is full-screen, possibly over" the windows;
+    the 124 names the window (or bottom layer) under it as the target, adding "or possibly on
+    layer NS (full-screen: if one of its items, a toast, is there)". A layer smaller than its output
+    keeps the certain wording and the refusal, and where both are over a point the certain one wins
+    (`win_layer` prints `certain|possible` first). `--json`: `windows`' `layers` and the `--wait`
+    `target` gain `certain` (additive; a target's `namespace` stays its own, the possible layer is
+    in the text only). An output not found in `monitors` (or without geometry) counts as smaller:
+    certain, as before. #283 (the toasts' bounds from the layer's accessibility tree) would narrow
+    "possibly" to yes or no where a layer publishes one. Real box (Omarchy 4.0.6, Hyprland 0.56.2,
+    1920x1080): with a `notify-send` toast up, `--no-raise` at 20,20 clicked and said "may", the
+    toast stayed; a 124 named foot and "possibly on layer omarchy-notifications"; a Quickshell
+    `PanelWindow` stub (top, 300x150) under the same toast refused `--no-raise`; a plain click on the
+    toast closed it. t_click_layer (that), t_unit_window_select and t_unit_wait_facts (scale 2, a
+    turned output, a second output's origin, mixed layers).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

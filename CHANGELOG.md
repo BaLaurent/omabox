@@ -19,6 +19,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changed
 
+- **A full-screen layer is said as possibly over a `--window` point, not refused**
+  ([#263](https://github.com/diogochaves/omabox/issues/263)). Omarchy's notifications sit in a
+  layer covering the whole screen that takes input on its toasts only, so while a toast showed every
+  click counted as under it: `--no-raise` refused clicks far from the toast. Such a layer is now
+  said as one the input *may* go to (`a full-screen layer "omarchy-notifications" … is up …: input
+  at X,Y may go to it if one of its items (a toast) is there`), `--no-raise` goes on, `windows`
+  lists it as possibly over the windows, and an action's 124 names the window under it, `or
+  possibly on layer omarchy-notifications`. A layer smaller than its screen (a panel, a menu) is
+  still over the point for certain and still refused, and wins where both are. `--json` adds
+  `certain` to `windows`' `layers` and to `--wait`'s `target`.
+
 - **The agent skill's SKILL.md is the core every task needs**, about half its size (8 kB where it
   was 14 kB, ~2k tokens fewer each time an agent loads it): what never to do, the project
   instructions table, the loop, driving an app, waiting, coordinates, and a line for each section of
