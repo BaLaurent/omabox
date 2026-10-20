@@ -17,6 +17,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   Hyprland starts Xwayland with `-core`, which raised its core limit back past the 1 byte everything
   in a box gets, so its abort when the box's compositor went was recorded as a crash. A box's Xwayland
   now keeps the 1-byte limit (unless you raised it yourself).
+- **The shell-crash warning fired for any Quickshell in the box, and missed a killed shell.** A
+  Quickshell of your own crashing (to test its crash handling) was reported as the shell crashing,
+  and omabox closed its crash dialog; now only the box shell's crashes count and only its dialog is
+  closed. A shell killed outright (`kill -9`) and started again by Omarchy's launcher is now said by
+  the next command: `the shell was killed by SIGKILL (137) since the last command and was started
+  again`.
 
 ## 0.9.1 — 2026-10-20
 

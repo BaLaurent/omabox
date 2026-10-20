@@ -8430,6 +8430,36 @@ from them.
     aborted and the kernel logged `106(Xwayland): RLIMIT_CORE is set to 1, aborting core`, no new
     entry in `coredumpctl list`. Tests: t_unit_xwayland (a fake Xwayland next on PATH gets 1/1, and
     unlimited/unlimited passed on), t_keys (the running Xwayland's limits).
+408. **The shell-crash warning was any Quickshell's, and missed a killed shell** (2026-10-20, #303).
+    An agent crashing its own Quickshell instance in a box (its own config) to test Quickshell's crash
+    handling got `warning: the shell crashed since the last command and was started again` after each
+    crash, the box's shell alive throughout, and omabox closed that instance's crash dialog
+    (`closed the shell's crash dialog`): it interfered with the very thing under test. Then its
+    `pkill -9 -f /usr/bin/quickshell` killed the box's shell too, Omarchy's launcher started it again
+    (a new pid), and nothing was said. **Why**: shell_crashes, shell_crash_report and output's cycles
+    counted every folder under the box HOME's `~/.cache/quickshell/crashes`, where every Quickshell
+    writes its reports, and hyprland.lua closed any reporter's window (told by
+    `__QUICKSHELL_CRASH_DUMP_PID` in its environment). A SIGKILL leaves no report (no handler runs).
+    A report's `Crashed process ID` cannot key it to the shell: it is the child Quickshell's handler
+    forks to dump (`raise(sig)` there), the shell itself being exec'd again at its own pid. **Fix**:
+    a report is the shell's when its `Config Path` is the Omarchy tree's `shell/shell.qml` (slashes
+    squeezed; `meta omarchy` is a resolved path); a folder whose report is not written yet counts
+    once it is. The dialog: hyprland.lua passes the reporter's pid and its dump pid to
+    `share/crash-dialog.sh`, which finds the report naming that dump pid (written before the dialog
+    shows; up to 1 s for it) and closes the dialog only when the report is the shell's; with no
+    report, only when the reporter's parent is the box shell's pid. A shell killed or exiting non-zero
+    is said from the launcher's own line (`Omarchy shell exited with status N; relaunching.`, the
+    box's logger puts it in shell.log): shell_note keeps "MARK COUNT STATUS" (shell.sh's
+    omabox-shell.mark, how many such lines, the last status) in `shell-relaunches-seen` beside
+    `shell-crashes-seen` (`up`, `restart-shell` and output's cycles write both: shell_seen), and says
+    `warning: the shell was killed by SIGKILL (137) since the last command and was started again`
+    once; a crash said with its relaunch is said as the crash. A shell stopped on purpose (`omarchy
+    restart shell`) quits cleanly and logs no such line, so it is not said; a pid change alone would
+    have said it. t_unit_omarchy_contract checks the launcher still logs that line. Checked in a real
+    box: a `quickshell -p /tmp/qt` of the test's own SIGSEGVed, its report and dialog left, no
+    warning, `ls` running with no crash counted; the shell SIGKILLed, the next command's warning,
+    once. Tests: t_unit_shell_reports, t_unit_shell_crash (reports carry their config now: one not
+    written yet and another instance's are no crash), t_shell_other_crash; t_shell_crash unchanged.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
