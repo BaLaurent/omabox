@@ -6542,6 +6542,56 @@ PY
     out=$(ob tree -b "$B" --window 'Tree demo GTK4' 2>&1)
     check_match "...a tree that was read leaves them out" '^frame "Tree demo GTK4" ' "$out"
     check_fails "...no warning line in it" grep -q 'WARNING\|omabox: tree:' <<<"$out"
+    # #302: an app that publishes one of its windows (egui's root viewport, not its child ones): its only
+    # frame is not the tree of a window of another size, nor of one of two windows of its size. The
+    # unpublished windows are bare GDK surfaces (no GTK window behind them, so no accessible).
+    cat > "$H/viewports.py" <<'PY'
+import gi, sys
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gsk", "4.0")
+gi.require_version("Graphene", "1.0")
+from gi.repository import Gtk, Gdk, Gsk, Graphene
+keep = []
+def bare(display, title):
+    s = Gdk.Surface.new_toplevel(display)
+    s.set_title(title)
+    r = Gsk.CairoRenderer()
+    r.realize(s)
+    def draw(s, w, h):
+        c = Gdk.RGBA(); c.parse("#336699")
+        r.render(Gsk.ColorNode.new(c, Graphene.Rect().init(0, 0, w, h)), None)
+    s.connect("compute-size", lambda s, sz: sz.set_size(300, 300))
+    s.connect("layout", draw)
+    s.present(Gdk.ToplevelLayout.new())
+    keep.extend((s, r))
+def build(app):
+    w = Gtk.ApplicationWindow(application=app, title="Root viewport")
+    w.set_child(Gtk.Button(label="Root button"))
+    w.present()
+    for i in range(int(sys.argv[1])):
+        bare(w.get_display(), "%s viewport %d" % (sys.argv[2], i + 1))
+app = Gtk.Application(application_id="org.omabox.Viewports")
+app.connect("activate", build)
+app.run(None)
+PY
+    # Alone on the workspace, so tiled: two windows of one size, then the root beside two halves.
+    ob run -b "$B" -- pkill -f 'tree-demo|mute-a11y' >/dev/null 2>&1 || true
+    ob wait -b "$B" --timeout 10s window 'title:^Tree demo GTK4$' --gone >/dev/null 2>&1 || true
+    ob wait -b "$B" --timeout 10s window 'title:^Tree demo QML$' --gone >/dev/null 2>&1 || true
+    ob run -b "$B" -d -- env GSK_RENDERER=cairo python3 /home/sbx/viewports.py 1 Twin >/dev/null 2>&1
+    ob wait -b "$B" --timeout 20s window 'title:^Twin viewport 1$' >/dev/null
+    rc=0; out=$(ob tree -b "$B" --window 'title:^Twin viewport 1$' 2>&1) || rc=$?
+    check_eq "an app's only frame, the size of two of its windows: cannot be told, exit 1" "1 yes" \
+      "$rc $(grep -q 'publishes one window, "Root viewport", and 2 of its windows are this one.s size.*cannot be told' <<<"$out" && echo yes)"
+    check_match "...the window it names still has its tree" '^frame "Root viewport" ' "$(ob tree -b "$B" --window 'title:^Root viewport$' 2>&1)"
+    ob run -b "$B" -- pkill -f viewports.py >/dev/null 2>&1 || true
+    ob wait -b "$B" --timeout 10s window 'title:^Twin viewport 1$' --gone >/dev/null 2>&1 || true
+    ob run -b "$B" -d -- env GSK_RENDERER=cairo python3 /home/sbx/viewports.py 2 Child >/dev/null 2>&1
+    ob wait -b "$B" --timeout 20s window 'title:^Child viewport 2$' >/dev/null
+    rc=0; out=$(ob tree -b "$B" --window 'title:^Child viewport 2$' 2>&1) || rc=$?
+    check_eq "...one of another size: no tree for it (not the root's), exit 1" "1 yes" \
+      "$rc $(grep -qE 'no accessibility tree for this window: its application publishes one window, "Root viewport" [0-9]+x[0-9]+, and this one is [0-9]+x[0-9]+' <<<"$out" && echo yes)"
+    ob run -b "$B" -- pkill -f viewports.py >/dev/null 2>&1 || true
   else
     skip "tree of a GTK4 window" "no GTK4 or python-gobject"
   fi

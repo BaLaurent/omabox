@@ -14,6 +14,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   happens under load. PipeWire's clients in a box no longer load that module, so the limit stays
   unlimited.
 
+- **`tree --window` printed another window's tree for a window its app does not publish**
+  ([#302](https://github.com/diogochaves/omabox/issues/302)). An app that puts only one of its
+  windows on the accessibility bus (egui's root viewport, not its child ones) had that window's tree
+  printed for every other one. Now the app's only window stands for one of another title only when
+  it is that window's size and no other window of the app is; else `tree` says the window has no
+  tree, or that which one it is cannot be told, exit 1.
+
 ## 0.9.1 — 2026-10-20
 
 The release candidate for 1.0 (planned for 2026-10-24). The skill's core is about half its size,

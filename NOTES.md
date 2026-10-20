@@ -8412,6 +8412,19 @@ from them.
     shell's RLIMIT_RTTIME holds unlimited once its PipeWire service has tried to connect; it read
     0/0 before).
 
+410. **`tree --window` printed an app's only frame for a window it does not publish** (2026-10-20,
+    #302). An egui app with a root window and two child viewports publishes one AT-SPI frame, the
+    root's; `tree --window "title:<child>"` printed the root's tree for both children (one of them
+    920x1056, the root 920x521), since a window whose title no frame names fell back to the app's only
+    frame. **Fix**: tools/tree takes that frame only when it is the window's size (2 px either way)
+    and no other window of the app's pid is that size (`omabox tree` passes the count, `--twins`):
+    else `no accessibility tree for this window: its application publishes one window, "Root" 920x521,
+    and this one is 920x1056` (exit 7), or `... and 2 of its windows are this one's size ...: which
+    one it is cannot be told` (exit 6); `tree` says either, exit 1. A window whose title the frame
+    names is unchanged. Reproduced without egui: a GTK4 window beside bare GDK toplevels
+    (`Gdk.Surface.new_toplevel`, drawn by a `Gsk.CairoRenderer`), which have no accessible. Tests:
+    t_tree (a window of another size; one of two of the frame's size; the root's tree still read).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
