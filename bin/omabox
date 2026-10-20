@@ -4527,7 +4527,7 @@ cmd_up() {
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
   rm -f "$D/starting"; touch "$D/used"
   local screen live_sc; screen=$(box_screen); live_sc=$(main_scale_live) || live_sc=""
-  say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")) in $D"
+  say "box '$NAME' up ($(size_text "${screen#* }" "${live_sc:-1}")$(more_screens "${screen%% *}")) in $D"
   [ "$CLEAN" = 0 ] || say "clean: $(clean_text "$THEME" "$net")"
   # A Hyprland that stops answering here (finding 353): said, the box left up, exit 1 at the end.
   local unanswered=0; hypr_errors_note || unanswered=1
@@ -11506,6 +11506,14 @@ cmd_events() {
 box_screen() {
   local m; m=$(hypr_json monitors) || exit $?
   jq -r <<<"$m" "$(main_screen)"' // empty | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)"'
+}
+# The box's other monitors (--monitor, `monitor add`: #308), as up's line has the main one, each after
+# " + ": " + 1080x1920@60 + 800x600@30,scale=2"; nothing when it has none. more_screens MAIN_NAME
+more_screens() {
+  local m; m=$(hypr_json monitors) || return 0
+  jq -r --arg main "$1" '[.[] | select((.disabled | not) and .name != $main)
+    | " + \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)" + ((.scale * 100 | round / 100) as $s
+      | if $s == 1 then "" else ",scale=\($s)" end)] | join("")' <<<"$m" 2>/dev/null || true
 }
 # The box's main screen in `hyprctl -j monitors` (jq): a headless box's HEADLESS-2, or WAYLAND-1 on
 # NVIDIA (finding 77); an interactive box's first window (WAYLAND-N: after a close with confirm-close

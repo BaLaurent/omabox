@@ -10264,6 +10264,8 @@ monitors_wait_on() {
   local n=$1 B=$2 out rc g w when c gx gy gw gh i
   OMABOX_RENDER_NODE="$n" up_ok "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
     --monitor 1080x1920,below || { no "up with two more monitors" "$UP_OUT"; return; }
+  check_match "up's line names every monitor, a scale where it is not 1 (#308)" \
+    "box '$B' up \(1920x1080@60 \+ 1280x720@60,scale=1.6 \+ 1080x1920@60\) in " "$UP_OUT"
   ob pointer -b "$B" -- move 2300 200 >/dev/null
   ob run -b "$B" -d -q -- foot -T N sh -c 'i=0; while :; do printf "\r%s" $((i++ % 10)); sleep 0.05; done'
   ob wait -b "$B" window 'title:^N$' >/dev/null

@@ -8447,6 +8447,13 @@ from them.
     layout names a widget the box has not. A `--plugin` of it still mounts it (its own tests). Checked
     on this desk: the box's shell log has no omabox line. Tests: t_unit_desk_shell, t_desk_shell.
 
+413. **`up`'s line named only the main screen** (2026-10-20, #308). `up NAME --monitor 1080x1920`
+    said `box 'NAME' up (1920x1080@60)`, though the second monitor was there (a window sat on it), and
+    an agent ran `monitor list` to be sure. **Fix**: every other enabled monitor follows the main
+    one, as Hyprland has it once `up`'s `monitor add`s are done: `up (1920x1080@60 + 1280x720@60,scale=1.6
+    + 1080x1920@60)`. `up --json` and `ls --json` had every one already (`monitors`), unchanged.
+    Tests: t_monitors_wait, t_monitors_wait_nvidia.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

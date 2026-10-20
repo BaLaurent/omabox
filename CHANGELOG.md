@@ -31,6 +31,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   which a box does not have, so the box's shell logged a warning for it (and would have notified).
   `up` says it left it out; `--plugin` still mounts it.
 
+- **`up`'s line names every monitor** ([#308](https://github.com/diogochaves/omabox/issues/308)):
+  `box 'NAME' up (1920x1080@60 + 1080x1920@60)` for a box started with `--monitor 1080x1920`, not
+  the main screen alone.
+
 ## 0.9.1 — 2026-10-20
 
 The release candidate for 1.0 (planned for 2026-10-24). The skill's core is about half its size,
