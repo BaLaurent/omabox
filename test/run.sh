@@ -4044,6 +4044,61 @@ t_unit_run_job() {
   check "...a signal's: 128+N" until_ok 5 grep -qx 143 "$TMP/rj2.exit"
 }
 
+# A `run -d` job that ended within its first 30 s, said once by the box's next command (#286,
+# finding 399): job_note on a box dir of its own, with status files dated as the waiter's would be,
+# records as run -d writes them, and job_live stubbed (a job is live while its record says "live").
+t_unit_job_note() {
+  local d=$TMP/jn now; mkdir -p "$d/run" "$d/home" "$d/jobs"; now=$(date +%s)
+  : > "$d/jobs-noted"
+  # job NS_OFFSET_S END_AFTER_MS STATUS [PID LIVE ARGV...]: a job started NS_OFFSET_S seconds ago that
+  # ended END_AFTER_MS after its start, with its log and, given a PID, its record.
+  jn_job() { local t0=$(( now - $1 )) ms=$2 st=$3 ns; shift 3; ns=$t0$(printf '%09d' $((RANDOM % 1000)))
+    : > "$d/home/run-$ns.log"; printf '%s\n' "$st" > "$d/run/omabox.run-$ns.exit"
+    touch -d "@$(( t0 + ms / 1000 )).$(printf '%03d' $(( ms % 1000 )))" "$d/run/omabox.run-$ns.exit"
+    if [ $# -gt 0 ]; then local pid=$1 live=$2; shift 2
+      jq -nc --arg pid "$pid" --arg live "$live" --arg log "$d/home/run-$ns.log" '{pid: $pid, start: "1", log: $log, live: $live, exe: "x", argv: $ARGS.positional}' \
+        --args -- "$@" > "$d/jobs/$pid"; fi
+    echo "$ns"; }
+  jn_note() { NAME=u D=$d bash -c 'source "$1"; job_live() { jq -e ".live == \"live\"" "$1" >/dev/null && echo "1 2"; true; }; job_note' _ "$TMP/lib/bin/omabox" 2>&1; }
+  check_eq "no job ended: nothing" "" "$(jn_note)"
+  local ns; ns=$(jn_job 60 400 1 100 dead false)
+  jn_job 50 30500 1 101 dead ./server --port 1 >/dev/null
+  jn_job 40 1500 0 102 dead xdg-open URL >/dev/null
+  check_eq "one that ran past 30 s, one that exited 0 (a one-shot), and one a minute old that ran 0.4 s: only that one said" \
+    "omabox: warning: run -d job false (pid 100) exited with status 1 after 0.4s, since the last command (log: $d/home/run-$ns.log)" "$(jn_note)"
+  check_eq "...once" "" "$(jn_note)"
+  jn_job 10 2100 3 115 dead sh -c 'sleep 1; exit 3' >/dev/null
+  check_eq "a job that ended 2.1 s in, its log the newest: its words, pid, status, and log -b NAME run" \
+    "omabox: warning: run -d job sh -c sleep 1; exit 3 (pid 115) exited with status 3 after 2.1s, since the last command (omabox log -b u run)" "$(jn_note)"
+  check_eq "...said once" "" "$(jn_note)"
+  ns=$(jn_job 5 1000 143 116 dead ./app)
+  jn_job 5 1200 143 >/dev/null
+  : > "$d/home/run-9$ns.log"   # (a later job's log the newest)
+  local out; out=$(jn_note)
+  check_eq "killed, and one whose record went: both said" 2 "$(grep -c . <<<"$out")"
+  check_match "...by its signal, its log by path when not the newest" \
+    "^omabox: warning: run -d job \./app \(pid 116\) was killed by SIGTERM \(143\) after 1\.0s, since the last command \(log: $d/home/run-$ns\.log\)$" "$(grep -F "(pid 116)" <<<"$out")"
+  check_match "...one with no record" "run -d job \(its words were not kept\) was killed by SIGTERM \(143\) after 1\.2s" "$out"
+  ns=$(jn_job 3 500 1 117 dead ./x)
+  printf 'omabox.run-%s.exit\n' "$ns" >> "$d/jobs-noted"
+  check_eq "one noted already (--replace stopped it, run -d said it): not said" "" "$(jn_note)"
+  jn_job 3 100 1 118 live sh -c 'server & exit 1' >/dev/null
+  check_eq "a launcher whose session still runs: no end" "" "$(jn_note)"
+  ns=$(jn_job 3 100 '' 122 dead ./w); touch "$d/run/omabox.run-$ns.exit"
+  check_eq "a status file not written yet: left for the next command" "" "$(jn_note)"
+  echo 4 > "$d/run/omabox.run-$ns.exit"
+  check_match "...which says it" "job ./w \(pid 122\) exited with status 4" "$(jn_note)"
+  jn_job 3 100 2 119 dead "$(printf 'a%.0s' {1..80})" >/dev/null
+  check_match "long words cut to 60" "job a{59}… \(pid 119\)" "$(jn_note)"
+  ln -s /etc/passwd "$d/run/omabox.run-1$(printf '%018d' 0).exit"
+  check_eq "a link at a status file's name: not read" "" "$(jn_note)"
+  rm "$d/jobs-noted"; job 3 100 1 120 dead ./y >/dev/null
+  check_eq "a box from an older omabox (no jobs-noted): what is there taken as dealt with" "" "$(jn_note)"
+  check "...and noted" grep -q . "$d/jobs-noted"
+  jn_job 2 100 1 121 dead ./z >/dev/null
+  check_match "...a job ending after that is said" "job ./z \(pid 121\) exited with status 1" "$(jn_note)"
+}
+
 # run -d --replace with other arguments (#255): a job of the same program is named, by its resolved
 # path (a record from before it had one: by its argv[0]); one that ended or of another program is not.
 # Records in a dir of their own; job_live stubbed (a job is live while its record says "live").
@@ -13706,13 +13761,28 @@ t_replace() {
   # Nothing to replace: said; a job that ended: its record dropped
   err=$(ob run -b "$B" -d --replace -- env sleep 609 2>&1 >/dev/null)
   check_match "no earlier job: said" "no earlier job of this command" "$err"
-  ob run -b "$B" -d -q -- sh -c 'sleep 1.5'
+  out=$(ob run -b "$B" -d -q --print-log -- sh -c 'sleep 1.5')
   until_ok 5 bash -c "! '$CLI' run -b '$B' -- pgrep -fx '(sh -c )?sleep 1.5'" >/dev/null
   old=$(grep -l '"sleep 1.5"' "$D"/jobs/*)
+  # (Its status kept, then said by a command of its own: an end within 30 s, finding 399.)
+  until_ok 5 test -e "$D/run/omabox.$(basename "$out" .log).exit" >/dev/null; ob windows -b "$B" >/dev/null 2>&1
   err=$(ob run -b "$B" -d --replace -- sh -c 'sleep 1.5' 2>&1 >/dev/null)
   check_match "a job that exited: nothing to replace" "no earlier job" "$err"
   check_fails "...nor named" grep -q 'sleep 1.5' <<<"$err"
   check "...its record dropped (${old##*/})" test -n "$old" -a ! -e "$old"
+  # #286, finding 399: a job that ends after run -d's first 0.3 s, within 30 s, is said by the box's
+  # next command, once; one --replace stopped is not.
+  out=$(ob run -b "$B" -d -q --print-log -- sh -c 'sleep 1; exit 3')
+  check "a job that exits 3 after 1 s: its status kept" until_ok 5 test -e "$D/run/omabox.$(basename "$out" .log).exit"
+  err=$(ob windows -b "$B" 2>&1 >/dev/null)
+  check_match "...the next command says it, with its pid, status, time and log" \
+    "omabox: warning: run -d job sh -c sleep 1; exit 3 \(pid [0-9]+\) exited with status 3 after 1\.[0-9]s, since the last command \(omabox log -b $B run\)" "$err"
+  check_eq "...once: not the command after" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job')"
+  ob run -b "$B" -d -q -- sh -c 'sleep 610'
+  out=$(ob run -b "$B" -d -q --print-log --replace -- sh -c 'sleep 610')
+  old=$(cd "$D/home" && printf '%s\n' run-*.log | sort | tail -n 2 | head -n 1)
+  check "a job --replace stopped: its status kept (killed)" until_ok 5 test -e "$D/run/omabox.${old%.log}.exit"
+  check_eq "...not said by the next command" "" "$(ob windows -b "$B" 2>&1 >/dev/null | grep 'run -d job')"
   # A job that ignores SIGTERM: killed after 5 s
   ob run -b "$B" -d -q -- sh -c 'trap "" TERM; sleep 603'
   local t0=$SECONDS
@@ -14071,7 +14141,7 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
+  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_brief t_link_out t_run_cwd t_clean t_check)
 

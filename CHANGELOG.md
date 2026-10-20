@@ -17,6 +17,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   so it needs no shot to learn that nothing happened. `--json` adds `changes`, `target` and
   `events_since`. Exit codes are unchanged; it costs ~25 ms a call (~40 ms on a 124).
 
+- **A `run -d` job that dies a few seconds in is said by the next command**
+  ([#286](https://github.com/diogochaves/omabox/issues/286)). `run -d` catches a job over in its
+  first 0.3 s; a server that died a second later was said by nothing. Now a job that ends within its
+  first 30 s with a status other than 0 is one warning on the box's next command, whatever it is
+  (`omabox: warning: run -d job ./server (pid 115) exited with status 1 after 2.1s, since the last
+  command (omabox log -b NAME run)`), once. A job `--replace` stopped, one `run -d` already
+  reported, one that ran longer, a one-shot that exited 0 and a launcher whose app still runs are
+  not said. No cost to a command while no job has ended.
+
 ### Changed
 
 - **A full-screen layer is said as possibly over a `--window` point, not refused**

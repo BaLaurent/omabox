@@ -721,7 +721,10 @@ program with other arguments (named, with its pid). A \`run -d\` whose command e
 0.3 s, leaving nothing running (a server on a port already taken), says so instead of started, with
 its exit status and its log's last lines, and exits with that status. A \`run -d --wait\` whose
 command ended before the screen settled, leaving nothing running, says so too, and exits with that
-status (124 when it was 0: the screen is still the question).
+status (124 when it was 0: the screen is still the question). A job that ends later, within its
+first 30 s, with a status other than 0 (a server that dies a second in) is said once by the box's
+next command, whatever it is: "warning: run -d job CMD (pid N) exited with status 1 after 2.1s,
+since the last command (omabox log -b NAME run)". Not one --replace stopped, nor one already said.
 @ up run
 A \`run -d\` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
 At --idle 0 a session's box still goes with its agent (\`ls\` says never); a box with another name
@@ -1246,7 +1249,7 @@ covers_held() {
   [ -z "${D:-}" ] || [ ! -e "$D/covers-pending" ] || die "box '$NAME' is still starting: what its jail hides is not checked yet (omabox down $NAME ends it)"
 }
 need_box() {
-  if box_alive; then covers_held; touch "$D/used" 2>/dev/null || true; take_over && return 0; fi
+  if box_alive; then covers_held; touch "$D/used" 2>/dev/null || true; take_over && { job_note; return 0; }; fi
   [ -f "$BOXES/.expired-$NAME" ] && die "box '$NAME' went down after $(cat "$BOXES/.expired-$NAME") idle (start it again with: omabox up $NAME; --idle 0 keeps it)"
   # How its Hyprland ended, when labwc said (#232).
   local end; end=$(hypr_end) || end=""
@@ -4081,6 +4084,7 @@ cmd_up() {
   # (A throwaway's up whose run is gone ends its box whole: up_owner_check.)
   trap '[ $? = 0 ] || { up_owner_check; kill_box || true; [ -f "$D/box.json" ] || rm_box; }' EXIT
   rm_box; rm -f "$BOXES/.expired-$NAME"; mkdir -p "$D/run" "$HOMES/$NAME/home"; ln -s "$HOMES/$NAME/home" "$D/home"
+  : > "$D/jobs-noted"   # no run -d job has ended yet (job_note)
   # The box's XDG_RUNTIME_DIR, 0700 as a session's (#153): a helper that checks its session bus
   # refuses a runtime dir others can read.
   chmod 700 "$D/run"
@@ -5516,6 +5520,11 @@ job_replace() {
     [ -f "$f" ] && jq -e --argjson a "$want" '.argv == $a' "$f" >/dev/null 2>&1 && recs+=("$f")
   done
   procs=""; [ ${#recs[@]} = 0 ] || procs=$(job_live "${recs[@]}")
+  # Stopped on purpose: not an early end for the next command to say (job_note).
+  if [ -n "$procs" ]; then
+    local stop=(); mapfile -t stop < <(jq -r '.log | capture("/run-(?<ns>[0-9]+)\\.log$").ns | "omabox.run-\(.).exit"' "${recs[@]}" 2>/dev/null)
+    job_noted ${stop[@]+"${stop[@]}"}
+  fi
   if [ -z "$procs" ]; then
     # A job of the same program with other arguments still runs (#255): named, as it would otherwise
     # stay up beside the new one, and said under -q too. The contract stays the same words.
@@ -5580,10 +5589,10 @@ job_ended() {
     [[ $st =~ ^[0-9]+$ ]] && break
     st=""; [ $i = 10 ] || sleep 0.1
   done
-  local what sig
-  if [ -z "$st" ]; then what="exited (its exit status was not kept)" JOB_RC=1
-  elif [ "$st" -gt 128 ] && sig=$(kill -l "$((st - 128))" 2>/dev/null); then what="was killed by SIG$sig ($st)" JOB_RC=$st
-  else what="exited with status $st" JOB_RC=$st; [ "$st" != 0 ] || [ "$when" = start ] || JOB_RC=124; fi
+  job_noted "${ex##*/}"   # said here (or a 0 under QUIET), not again by the next command
+  local what; what=$(job_how "$st")
+  if [ -z "$st" ]; then JOB_RC=1
+  else JOB_RC=$st; [ "$st" != 0 ] || [ "$when" = start ] || JOB_RC=124; fi
   [ "$when" = wait ] || [ "$st" != 0 ] || [ "$quiet" = 0 ] || return 0
   local a miss=()
   for a; do
@@ -5596,6 +5605,77 @@ job_ended() {
   [ ${#miss[@]} = 0 ] || say "its arguments name host paths box '$NAME' does not have: ${miss[*]} (a box sees the repo and what --ro-bind mounts, not /tmp or the rest of HOME)"
   if [ -n "$tail" ]; then say "its log ends (omabox log -b $NAME run):"; printf '%s\n' "$tail" >&2
   else say "its log is empty"; fi
+}
+
+# A job's end in words, from its exit status (bash's: 128+N for signal N; empty when not kept).
+job_how() {
+  local sig
+  if [ -z "$1" ]; then echo "exited (its exit status was not kept)"
+  elif [ "$1" -gt 128 ] && sig=$(kill -l "$(($1 - 128))" 2>/dev/null); then echo "was killed by SIG$sig ($1)"
+  else echo "exited with status $1"; fi
+}
+
+# A `run -d` job that ended within its first JOB_EARLY_MS, said by the box's next command, once (#286,
+# finding 399): run -d's own watch (0.3 s) misses a server that dies a second later. Each job's waiter
+# (share/run-job.sh) writes its status as it ends to omabox.run-NS.exit in the box's runtime dir ($D/run
+# here), NS its start (its log is run-NS.log). $D/jobs-noted (host-only) names those dealt with: said
+# here, said by run -d itself (job_ended), stopped by --replace, ended with status 0 (a one-shot such
+# as xdg-open or notify-send finished; no death), or later than that (a server that ran for an hour
+# and stopped is no early death). A box an older omabox started has no such file: what is there by
+# then is taken as dealt with. While no new status file is there this is a glob and builtins, no
+# process. Said whatever -q (as shell_note's warnings are).
+JOB_EARLY_MS=30000
+job_noted() {
+  [ $# = 0 ] || [ ! -d "$D" ] || printf '%s\n' "$@" >> "$D/jobs-noted" 2>/dev/null || true
+}
+job_note() {
+  local f n ends=() old=0 line
+  for f in "$D"/run/omabox.run-*.exit; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    ends+=("${f##*/}")
+  done
+  [ ${#ends[@]} -gt 0 ] || return 0
+  [ -f "$D/jobs-noted" ] || old=1
+  local -A seen=()
+  if [ $old = 0 ]; then
+    while IFS= read -r line; do seen[$line]=1; done < "$D/jobs-noted"
+  fi
+  local fresh=()
+  for n in "${ends[@]}"; do [ -n "${seen[$n]:-}" ] || fresh+=("$n"); done
+  [ ${#fresh[@]} -gt 0 ] || return 0
+  [ $old = 0 ] || { job_noted "${fresh[@]}"; return 0; }
+  local ns st end ms rec words pid where newest="" l now=${EPOCHREALTIME/[.,]/}
+  for l in "$D"/home/run-*.log; do [[ ${l##*/} =~ ^run-[0-9]+\.log$ ]] && newest=${l##*/}; done
+  for n in "${fresh[@]}"; do
+    [[ $n =~ ^omabox\.run-([0-9]{1,19})\.exit$ ]] || { job_noted "$n"; continue; }
+    ns=${BASH_REMATCH[1]}
+    # Its end: the status file's time (a link or anything but a file is not the waiter's).
+    f=$D/run/$n
+    [ ! -L "$f" ] && [ -f "$f" ] && end=$(stat -c %.3Y -- "$f" 2>/dev/null) && [[ $end =~ ^[0-9]+\.[0-9]{3}$ ]] || { job_noted "$n"; continue; }
+    ms=$(( ${end/./} - 10#$ns / 1000000 ))
+    [ "$ms" -ge 0 ] && [ "$ms" -le "$JOB_EARLY_MS" ] || { job_noted "$n"; continue; }
+    st=$(run_read "$n" | head -c 64) || st=""
+    [[ $st =~ ^[0-9]+$ ]] || st=""
+    # Made, not yet written (the waiter's `echo $? >`): the next command reads it; one still empty
+    # 2 s on was not kept.
+    [ -n "$st" ] || [ $(( now / 1000 - ${end/./} )) -ge 2000 ] || continue
+    job_noted "$n"
+    [ "$st" != 0 ] || continue
+    # What it was: its record ($D/jobs, the host's), while run -d's checks have not dropped it. A
+    # leader that exited leaving its session running (a launcher, "started" for run -d too) is no end.
+    rec=""; words="" pid=""
+    if compgen -G "$D/jobs/*" >/dev/null; then
+      rec=$(jq -r --arg log "$D/home/run-$ns.log" 'select(.log == $log) | "\(input_filename)\t\(.pid)\t\(.argv | join(" "))"' "$D"/jobs/* 2>/dev/null | head -n 1) || rec=""
+    fi
+    if [ -n "$rec" ]; then
+      f=${rec%%$'\t'*} rec=${rec#*$'\t'}
+      pid=${rec%%$'\t'*} words=${rec#*$'\t'}
+      [ -z "$(job_live "$f")" ] || continue
+      [ ${#words} -le 60 ] || words="${words:0:59}…"
+    fi
+    if [ "run-$ns.log" = "$newest" ]; then where="omabox log -b $NAME run"; else where="log: $D/home/run-$ns.log"; fi
+    say "warning: run -d job ${words:-(its words were not kept)}${pid:+ (pid $pid)} $(job_how "$st") after $((ms / 1000)).$((ms % 1000 / 100))s, since the last command ($where)"
+  done
 }
 
 # A throwaway whose `up` failed: its logs, copied out of the box dir its `down` removes (finding 167),
@@ -5674,6 +5754,7 @@ cmd_run() {
     ENVKV+=("${envs[@]}")   # after --env-file's, so the flag wins; --pass wins over both
     touch "$D/used" 2>/dev/null || true   # use, for idle expiry (so is its end, below)
     take_over || need_box   # gone while it waited: says so
+    job_note                # (need_box's, when it did not run)
     run_link_notes "down, then up" 0 "$@"   # its words through a link out of the repo (#235)
     run_cwd_note "down, then up" "$@"       # a path in this dir, which the box does not have (#251)
     if [ $detach = 1 ]; then

@@ -8326,6 +8326,35 @@ from them.
     *Since*: with no window under the point, the 124 named the first of the bottom and background
     layers listed (the background) even where a bottom layer lay over it: the topmost now (#274).
     t_unit_wait_facts.
+399. **A `run -d` job that ends in its first 30 s is said by the box's next command** (2026-10-20,
+    #286). Finding 394's watch covers a `run -d` job's first 0.3 s; a server that died a second in
+    (a port taken late, a file read after startup) was "started" and nothing said otherwise until a
+    shot showed no window. *Decided* (Diogo): the 0.3 s stays, and the box's next command says the
+    rest, once per job, as shell_note says a shell crash. `need_box` (what a command that addresses
+    a box up goes through: keys, click, shot, windows, wait, tree...) and `run` call `job_note`: a
+    glob of the box's run dir for the waiters' status files (`omabox.run-NS.exit`, share/run-job.sh,
+    NS the job's start as in its log's name `run-NS.log`) against `$D/jobs-noted` (host-only, one
+    name per line, made empty by `up`), read with builtins: ~0.03 ms with no status file, ~0.35 ms
+    with 20 dealt with, no process. A new one whose time (the file's mtime) is within 30 s of its
+    start and whose status is not 0 is said: `warning: run -d job CMD (pid N) exited with status 3
+    after 1.0s, since the last command (omabox log -b NAME run)` (the log's path when a later job's
+    log is the newest; the words from the job's record, cut to 60; "its words were not kept" when
+    run -d's checks dropped it). Every new one is noted, said or not; not said: one `run -d`
+    reported itself (job_ended notes it, the 0.3 s watch and --wait's alike, a 0 under -q included),
+    one `--replace` stopped (noted before its SIGTERM), one that ran past 30 s, a launcher whose
+    session still runs (job_live: "started" for run -d too), a file not yet written (left for the
+    next command, up to 2 s), and a box an older omabox started (no jobs-noted: what is there is
+    taken as dealt with). `down` removes the box with them. Said whatever `-q` (as shell_note is).
+    Through the broker the command runs host-side, so a jailed caller gets the line on its stderr as
+    it gets the shell's. *Decided*: status 0 is not said: a one-shot (`xdg-open` handing off to a
+    running browser, `notify-send`, a script) ends with 0 and is no death; the 0.3 s watch says a 0
+    only because "started" would be wrong there. *Decided*: CMD is the job's words, not argv[0]
+    alone (`sh -c ...` says nothing). *Off*: `run -d --replace` of another program's arguments drops
+    ended records (job_others → job_live), so such a job is said without its words. Tests:
+    t_unit_job_note (said once, by status, signal, record gone, path vs `log run`, 0, past 30 s,
+    noted, launcher, unwritten file, a link at the name, an older box); t_replace (`sh -c 'sleep 1;
+    exit 3'`: the next `windows` says it, the one after does not; a job --replace stopped is not
+    said; the ended-job check drains its line).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
