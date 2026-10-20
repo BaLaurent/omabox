@@ -7944,6 +7944,40 @@ from them.
     apart; `mark --hold` from the mark's time; the frozen recorder above), and t_scale,
     t_scale_nvidia (NVIDIA), t_record_layout, t_record_input, t_audio and t_jail_record unchanged by
     the new frame reader; t_unit_record (the refusals, the relay's `hold` and `--for`).
+384. **`tree --layer SEL`: a layer surface's accessibility tree** (2026-10-20, #254; finding 358's
+    plan). The machine's Quickshell is 0.3.2 now (with 916a0dd), so a plain box's shell publishes
+    its layers: a python3 `gi.repository.Atspi` walk in a box showed what finding 358 saw on a build
+    (an empty `gtk` application and the `Qt` one, both with the shell's pid; one nameless `frame` a
+    layer at 0,0 with its size), and two facts more: the frames' AccessibleId is
+    `QGuiApplication.ProxiedWindow`, the same for all (nothing names the layer), and Omarchy's open
+    launcher (`omarchy-menu`, 1920x1080, the wallpaper's size) has `filler` rows (id `row`) under
+    an `[active]` frame. A closed menu is unmapped on this Omarchy, its frame gone. Accessibility
+    comes on as for windows: at-spi2-core 2.62.1 has only `IsEnabled` (finding 368), which `tree`
+    sets; the shell, started before it, registers its frames within the 3 s `tree` waits.
+    `tree --layer SEL` takes a namespace, `address:0x...` or `pid:PID` from `hyprctl -j layers`
+    (`layer_select`: a 1x1 one, a closed menu kept mapped, only when nothing bigger matches, and then
+    said, exit 1; none or several listed, exit 2; `--window` with it exit 2). `layer_read` runs
+    `omabox-tree --pid PID --layer --size WxH --offset X,Y`: the tool takes, among the pid's
+    applications with something under them (so never the empty `gtk` one, whatever the order), the
+    frame of the layer's size; the bounds it prints are the surface's plus the layer's x, y, the
+    screen's coordinates, since no call takes a layer's: a plain `click X Y` at a node's middle lands
+    on it. Two frames of one pid and size (the launcher over the wallpaper) are told apart only by the
+    keyboard: when exactly one of the tied layers holds it (`kb_layers`: mapped, exclusive), its frame
+    is the one `[active]` frame (`--active yes`) and the others' are not (`--active no`), applied
+    when exactly one tied frame is active; otherwise exit 6, said with the tied layers listed (exit
+    1). A frame with nothing under it is exit 5: "the layer publishes no accessible items (nothing in
+    it sets an Accessible role)", exit 1, which Omarchy's bar says today; no frame at all of the
+    pid's on a Quickshell is "no accessibility tree" plus that Quickshell publishes from 0.3.2 on
+    (and the box's version line). `tree` with no selector in a box with no window says the shell is
+    layers (exit 2), and foot's "no accessibility tree" points there too. `layer_read` is the
+    function a caller in bin/omabox uses for a layer's items' bounds (`--json`, depth > 0; #283).
+    Seen in a box (Omarchy 4.0.6, Hyprland 0.56.2, Quickshell 0.3.2): a `qs -p` config with a named
+    button in a `PanelWindow` at 342,200 gave `button "a named button" @492,240 120x50`, and a plain
+    click at its middle renamed it; the launcher's frame and the wallpaper's (none) apart; two
+    100x100 layers of one process refused. Not seen: a Quickshell before 0.3.2 (none here: its
+    branch of t_tree_layer is untested), a scaled or second monitor. Tests: t_unit_tree_layer (the
+    selection, the hint with the keyboard and box stubbed), t_tree_layer (all of the above, and
+    the bar), t_tree unchanged.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
@@ -7978,9 +8012,6 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   (library dirs ahead of the system's; `/opt/omabox/lib` comes first now) is parked until a project
   needs it (→ #81). A `--hyprland` or `--quickshell` build whose RUNPATH points outside its own
   folder finds those libraries on the host (`ldd` passes) but not in the box.
-- `tree` reads windows only (finding 358): the shell's layer surfaces, which a Quickshell with
-  AT-SPI (0.3.2, or a build with 916a0dd) publishes as frames, are out of its reach. What it would
-  take is in finding 358; → #254.
 - Portals (findings 12, 148): ScreenCast needs PipeWire in the box (started by hand it worked; an
   `up --audio` box has it now, finding 313, ScreenCast there not rechecked); portal
   errors are not logged (dbus-daemon drops an activated service's stderr).

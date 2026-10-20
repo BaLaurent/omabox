@@ -112,7 +112,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..."    where you see each mark: 1:1, or the --fit N that maps it
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
-  omabox tree [-b NAME] [--window SEL] [--find TEXT] [--json] [--all]   a window's accessibility tree as text
+  omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text
   omabox check run [--approve [--runs 3]] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO [ARG...]
                                                          a visual check: the scenario's checkpoints against a baseline
   omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
@@ -499,8 +499,13 @@ its ancestors (\`list > list item "Beta" [selected] @12,354 1872x22\`); exit 1 w
 --json: an array, one object a node printed. GTK, Qt and egui/winit (AccessKit) apps have a tree
 (\`tree\` sets org.a11y.Status.IsEnabled, which Qt waits for, and ScreenReaderEnabled, which older
 AccessKit waits for: at-spi2-core 2.61+ has none, so no tree for those); Chromium and Electron only
-when started with --force-renderer-accessibility; terminals, the Omarchy shell and its plugins have
-none: "no accessibility tree", exit 1.
+when started with --force-renderer-accessibility; terminals have none: "no accessibility tree", exit 1.
+--layer SEL reads a layer surface instead (the shell's bar, panels, menus, a plugin's panel): its
+namespace (omabox hyprctl layers), address:0x... or pid:PID. Its bounds are the screen's coordinates:
+a plain \`click X Y\` at their middle lands on that node. Quickshell publishes them from 0.3.2 on, and
+only items that set an Accessible role: "the layer publishes no accessible items", exit 1, when none
+does (Omarchy's own bar). Two layers of one process with one size cannot be told apart (their frames
+have no names) unless one of them holds the keyboard: said so, exit 1.
 @ check
 \`check\` compares an app's or a plugin's look with a baseline, so a person need not look. A SCENARIO
 is a script of yours that sets the box up, drives it with omabox commands and calls \`omabox check
@@ -7978,49 +7983,147 @@ cmd_pixel() {
 # the app by the pid Hyprland has for the window (the AT-SPI application's, finding 244), the window
 # by its title, only what is inside it, in the coordinates `click --window` takes. Query-first: a
 # dense window's whole tree costs more than its shot; `--find TEXT` is the line that answers.
+# --layer SEL (#254): a layer surface's instead (the shell's bar, panels, menus), in the screen's
+# coordinates (layer_read).
 cmd_tree() {
-  local name="" sels=() find="" json=0 all=0
+  local name="" sels=() layer="" find="" json=0 all=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       --active) sels+=(active) ;;
+      -l|--layer) optarg "$@"; layer=$2; shift ;;
       --find) optarg "$@"; find=$2; shift ;;
       --json) json=1 ;;
       --all) all=1 ;;
       -h|--help) usage tree; return ;;
       -*) die "tree: unknown option $1" ;;
-      *) die "tree: unexpected $1 (the window is --window SEL; text to look for, --find TEXT)" ;;
+      *) die "tree: unexpected $1 (the window is --window SEL, a layer --layer SEL; text to look for, --find TEXT)" ;;
     esac
     shift
   done
+  [ -z "$layer" ] || [ ${#sels[@]} = 0 ] || { say "tree: --window or --layer, not both"; exit 2; }
   select_box "$name"; need_box; shell_note
-  local wins w pid title size
-  wins=$(box_windows) || exit $?
-  [ ${#sels[@]} -gt 0 ] || sels=(active)
-  w=$(win_select "$wins" "${sels[@]}")
-  pid=$(jq -r .pid <<<"$w") title=$(jq -r .title <<<"$w") size=$(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w")
-  [[ $pid =~ ^[1-9][0-9]*$ ]] || die "tree: window $(win_desc "$w") has no pid to find its app by ($pid)"
   on_box test -x "$BOX_TREE" 2>/dev/null ||
     die "box '$NAME' has no $BOX_TREE (started by an omabox without it): omabox down $NAME, then up again"
-  local args=(--pid "$pid" --title "$title" --size "$size") err rc=0
+  local args=() err rc=0 what why
   [ -z "$find" ] || args+=(--find "$find")
   [ $json = 0 ] || args+=(--json)
   [ $all = 0 ] || args+=(--all)
-  err=$(mktemp)
-  box_sys /usr/bin/timeout 30 "$BOX_TREE" "${args[@]}" 2>"$err" || rc=$?
-  local why; why=$(sed 's/^omabox-tree: //' "$err"); rm -f "$err"
+  if [ -n "$layer" ]; then
+    local lys l
+    lys=$(hypr_json layers) || exit $?
+    l=$(layer_select "$lys" "$layer")
+    what="layer $(layer_desc "$l")"
+    err=$(mktemp)
+    layer_read "$l" "$lys" "$err" "${args[@]}" || rc=$?
+  else
+    local wins w pid title size
+    wins=$(box_windows) || exit $?
+    if [ ${#sels[@]} = 0 ] && [ "$(jq length <<<"$wins")" = 0 ]; then
+      say "tree: the box has no window; the shell's bar, panels and menus are layers: tree --layer NAMESPACE (omabox hyprctl layers)"
+      exit 2
+    fi
+    [ ${#sels[@]} -gt 0 ] || sels=(active)
+    w=$(win_select "$wins" "${sels[@]}")
+    pid=$(jq -r .pid <<<"$w") title=$(jq -r .title <<<"$w") size=$(jq -r '"\(.size[0])x\(.size[1])"' <<<"$w")
+    what=$(win_desc "$w")
+    [[ $pid =~ ^[1-9][0-9]*$ ]] || die "tree: window $what has no pid to find its app by ($pid)"
+    err=$(mktemp)
+    box_sys /usr/bin/timeout 30 "$BOX_TREE" --pid "$pid" --title "$title" --size "$size" "${args[@]}" 2>"$err" || rc=$?
+  fi
+  why=$(sed 's/^omabox-tree: //' "$err"); rm -f "$err"
   case $rc in
     0) [ -z "$why" ] || say "tree: $why" ;;
     1) say "tree: $why"; exit 1 ;;
-    3) say "tree: $(win_desc "$w"): $why"
-       say "GTK, Qt and egui/winit (AccessKit) apps have one; Chromium and Electron only when started with --force-renderer-accessibility; terminals (foot), the Omarchy shell and its plugins have none: look with a shot (shot --window SEL)"
+    3) say "tree: $what: $why"
+       if [ -n "$layer" ]; then
+         layer_qs_note "$l"
+       else
+         say "GTK, Qt and egui/winit (AccessKit) apps have one; Chromium and Electron only when started with --force-renderer-accessibility; terminals (foot) have none: look with a shot (shot --window SEL). The shell's bar, panels and menus are layers: tree --layer NAMESPACE"
+       fi
+       exit 1 ;;
+    5) say "tree: $what: $why"; exit 1 ;;
+    6) say "tree: $what: $why; the layers of that pid and size:"
+       layer_lines "$(jq -c "$LAYER_LIST_JQ"' | map(select(.pid == $l.pid and .w == $l.w and .h == $l.h))' --argjson l "$l" <<<"$lys")" >&2
        exit 1 ;;
     4) die "tree: ${why:-no accessibility bus} (a box started by an omabox before 0.5.3, or with --env ATSPI_DBUS_IMPLEMENTATION=dbus-broker: omabox down $NAME, then up again)" ;;
-    124) die "tree: $(win_desc "$w") did not answer in 30 s (busy or hung?)" ;;
+    124) die "tree: $what did not answer in 30 s (busy or hung?)" ;;
     *) box_alive || die "tree: box '$NAME' went down"
        die "tree: reading the tree failed${why:+: $why} (status $rc)" ;;
   esac
+}
+
+# The box's layer surfaces from `hyprctl -j layers`, one object each: namespace, address, pid, x, y,
+# w, h (the screen's coordinates), monitor and level.
+# shellcheck disable=SC2016 # jq, not shell
+LAYER_LIST_JQ='[to_entries[] | .key as $m | .value.levels // {} | to_entries[] | (.key | tonumber) as $lv
+  | .value[] | {namespace, address, pid, x, y, w, h, monitor: $m,
+    level: (["background", "bottom", "top", "overlay"][$lv] // "level \($lv)")}]'
+# One layer of LAYERS (`hyprctl -j layers`) by SEL: its namespace, address:0x... or pid:PID; a 1x1
+# one only when nothing bigger matches (Omarchy keeps a closed menu mapped at 1x1: finding 146), and
+# then said so, exit 1. None or several: listed, exit 2. Callers take it with `l=$(layer_select ...)`.
+# layer_select LAYERS SEL
+layer_select() {
+  local all hits big
+  all=$(jq -c "$LAYER_LIST_JQ" <<<"$1" 2>/dev/null) || die "box '$NAME' did not list its layers"
+  # shellcheck disable=SC2016 # jq, not shell
+  hits=$(jq -c --arg s "$2" '[.[] | select(
+      if ($s | startswith("address:")) then .address == ($s | ltrimstr("address:"))
+      elif ($s | startswith("pid:")) then (.pid | tostring) == ($s | ltrimstr("pid:"))
+      else .namespace == $s end)]' <<<"$all")
+  big=$(jq -c 'map(select(.w > 1 and .h > 1))' <<<"$hits")
+  case $(jq length <<<"$big") in
+    1) jq -c '.[0]' <<<"$big"; return ;;
+    0) if [ "$(jq length <<<"$hits")" != 0 ]; then
+         say "tree: layer $2 is mapped at 1x1, not drawn (a closed menu: open it first)"; exit 1
+       fi
+       say "no layer matches $2 (a namespace, address:0x... or pid:PID); the box's layers:"; layer_lines "$all" >&2 ;;
+    *) say "$2 matches $(jq length <<<"$big") layers: name one by its address (address:0x...):"; layer_lines "$big" >&2 ;;
+  esac
+  exit 2
+}
+layer_lines() {
+  jq -r 'if length == 0 then "  (none)" else .[] | "  \(.address)  \(.namespace | tojson)  pid \(.pid)  \(.level) \(.w)x\(.h) at \(.x),\(.y) on \(.monitor)" end' <<<"$1"
+}
+# "omarchy-bar" (pid 142, 42x1080 at 0,0), for messages.
+layer_desc() { jq -r '"\(.namespace | tojson) (pid \(.pid), \(.w)x\(.h) at \(.x),\(.y))"' <<<"$1"; }
+
+# layer_read LAYER LAYERS ERR [omabox-tree ARGS]: the accessibility tree of LAYER (layer_select's
+# object, from LAYERS: the same `hyprctl -j layers`) on stdout, its bounds in the screen's coordinates
+# (the surface's own plus the layer's x, y: `click X Y` at a node's middle lands on it), the tool's
+# words in the file ERR; returns its exit code: 0, 1 (--find matched nothing), 3 no tree, 4 no
+# accessibility bus, 5 the layer publishes no items, 6 its frame cannot be told from another of the
+# same size, 124 no answer in 30 s. One AT-SPI read in the box; a caller after the bounds of a layer's
+# accessible items (#283) reads them so: `layer_read "$l" "$lys" "$err" --json | jq -r '.[] |
+# select(.depth > 0 and .w != null) | "\(.x) \(.y) \(.w) \(.h)"'`.
+# The layer's frame is the one of its pid's that is its size (finding 358: Quickshell's frames have no
+# names). Two layers of one pid with one size are told apart only when exactly one of them holds the
+# keyboard (kb_layers: an exclusive one, say the launcher over the wallpaper): its frame is the active one.
+layer_read() {
+  local l=$1 lys=$2 err=$3 pid w h x y hint=() tied kb ex; shift 3
+  read -r pid w h x y < <(jq -r '"\(.pid) \(.w) \(.h) \(.x) \(.y)"' <<<"$l")
+  [[ $pid =~ ^[1-9][0-9]*$ ]] || { echo "the layer has no pid to find its application by ($pid)" > "$err"; return 3; }
+  tied=$(jq -c "$LAYER_LIST_JQ"' | map(select(.pid == $l.pid and .w == $l.w and .h == $l.h))' --argjson l "$l" <<<"$lys")
+  if [ "$(jq length <<<"$tied")" -gt 1 ]; then
+    kb=$(kb_layers)
+    # shellcheck disable=SC2016 # jq, not shell
+    ex=$(jq -r --arg kb "$kb" '($kb | split(", ")) as $k | [.[] | select(.namespace as $n | .address as $a
+      | any($k[]; . == $n or . == $a))] | if length == 1 then .[0].address else "" end' <<<"$tied")
+    if [ -n "$ex" ]; then
+      if [ "$ex" = "$(jq -r .address <<<"$l")" ]; then hint=(--active yes); else hint=(--active no); fi
+    fi
+  fi
+  box_sys /usr/bin/timeout 30 "$BOX_TREE" --pid "$pid" --layer --size "${w}x$h" --offset "$x,$y" "${hint[@]}" "$@" 2>"$err"
+}
+# After "no accessibility tree" for a layer of a Quickshell: which releases publish one.
+layer_qs_note() {
+  local pid comm v
+  pid=$(jq -r .pid <<<"$1")
+  comm=$(box_sys /usr/bin/cat "/proc/$pid/comm" 2>/dev/null) || comm=""
+  [ "$comm" = quickshell ] || [ "$comm" = qs ] || return 0
+  v=$(meta quickshell_version)
+  say "Quickshell publishes its windows' accessibility trees from 0.3.2 on (quickshell-mirror/quickshell 916a0dd)${v:+; this box runs $v}: up --quickshell PATH runs a build of your own"
 }
 
 # shot --burst N (#132, finding 212): N frames of the same capture, 100 ms or --every apart (0: back

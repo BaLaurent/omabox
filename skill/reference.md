@@ -57,11 +57,17 @@ a turn. Five rules keep every omabox call plain:
   (no SEL: the active one); a dense one (an editor, a long page) costs more than its shot, so ask
   with `--find`. `--json` for a script; exit 1 when nothing holds TEXT. GTK, Qt and egui/winit
   (AccessKit) apps have a tree (`tree` turns Qt's and AccessKit's on); Chromium and Electron only
-  when started with `--force-renderer-accessibility` (start them so when you will ask); terminals (foot), the Omarchy shell, its plugins and bar widgets
-  have none and say "no accessibility tree": shots for those. (`tree` reads windows only: the shell's
-  bar and panels are layer surfaces, out of its reach even on a Quickshell with AT-SPI, 0.3.2 or
-  `--quickshell` a build: "A Quickshell build of your own".) An unnamed control (a switch beside its
-  label) matches by its role (`--find switch`), or read the whole tree.
+  when started with `--force-renderer-accessibility` (start them so when you will ask); terminals
+  (foot) have none and say "no accessibility tree": shots for those. An unnamed control (a switch
+  beside its label) matches by its role (`--find switch`), or read the whole tree.
+- The shell's bar, panels, menus and plugins are layer surfaces: `omabox tree --layer SEL` (a
+  namespace from `omabox hyprctl layers`, `address:0x...` or `pid:PID`), with `--find`, `--json` and
+  `--all` as for windows. Its bounds are the **screen's** coordinates: plain `click X Y` at a node's
+  middle lands on it. Quickshell publishes them from 0.3.2 (older: "no accessibility tree", or
+  `--quickshell` a build), and only items that set an `Accessible.role`: a layer without any says
+  "publishes no accessible items" (Omarchy's own bar today), exit 1. Its `frame`s have no names, so
+  the layer's is the one of its pid that is its size: two layers of one pid and size are told apart
+  only when one holds the keyboard (the launcher over the wallpaper); else `tree` says so.
 - `--window SEL`: `myapp` is a class, its last part (`nautilus` for `org.gnome.Nautilus`) or part of a
   title, failing those a hyphen-separated part of the class (`portal` for `xdg-desktop-portal-gtk`);
   `title:RE`, `class:RE`, `pid:N` or an address (`0x…`) narrow it; `wait window SEL` is satisfied by
@@ -206,7 +212,7 @@ little text, and the next show a pixel of it), so a 2 px spacing change in a bar
 caught. `--speck N` sets one for all
 (a baseline from before this: 32). A change smaller than the speck shows only in the tree.
 Baselines are per GPU: another GPU, omabox, Hyprland, Omarchy, theme, size, locale or timezone is
-said in the report. The Omarchy shell and its plugins have no tree: their checks are pixels only. `omabox check
+said in the report. A check's tree is a window's: the shell's and its plugins' checks are pixels only. `omabox check
 diff A.png B.png [--ignore G] [--speck N] [--report R.png]` compares two shots of yours the same way
 (32 px specks unless `--speck`; exit 0 same, 1 not, 2 an error). Not inside ai-jail yet.
 
@@ -715,14 +721,8 @@ with `--keep wallpaper` or after a theme set in the box.
   number (a build with 0.3.2's fix says "Quickshell 0.3.1 (revision fae96f1..., ...)"). The revision
   in that line, when there is one, is the commit: check it contains the fix (`git merge-base
   --is-ancestor FIX REVISION` in the Quickshell checkout).
-- Testing a shell plugin's accessibility tree: `omabox tree` reads windows, not the shell's layer
-  surfaces, so it says no window matches. Read AT-SPI yourself with a python3 `gi.repository.Atspi`
-  script run by `omabox run` (set `org.a11y.Status` `IsEnabled` on the a11y bus first; Qt Quick
-  publishes only items with an `Accessible.role`, so Omarchy's own bar shows empty frames). Under
-  Omarchy the shell's pid has two applications named `quickshell`: an empty `gtk` one listed first
-  and the `Qt` one: select by `get_toolkit_name()`. Its `frame`s have no names and sit at 0,0 in
-  their own surface's coordinates; match them to `hyprctl -j layers` by size (and add that layer's
-  x, y for screen coordinates).
+- Testing a shell plugin's accessibility tree: `omabox tree --layer NAMESPACE` (Shots, above), on
+  the installed Quickshell from 0.3.2 or on a build.
 
 ## The Omarchy shell's IPC (direct routes)
 

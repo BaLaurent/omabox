@@ -27,6 +27,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `record start`. `record mark TEXT --hold 2s` marks, then holds from the mark. The skill names
   both as the way to let time pass in a recording
   ([#280](https://github.com/diogochaves/omabox/issues/280)).
+- **`omabox tree --layer SEL`** reads the accessibility tree of a layer surface: the Omarchy
+  shell's bar, panels and menus, a plugin's panel. SEL is a namespace (`omarchy-bar`),
+  `address:0x...` or `pid:PID`; `--find`, `--json` and `--all` work as for windows, and the bounds
+  are the screen's, so a plain `click X Y` at a node's middle lands on it. It needs Quickshell 0.3.2
+  or later (or `up --quickshell` a build), and shows only items that set an `Accessible.role`: a
+  layer without any says it "publishes no accessible items", as Omarchy's own bar does today
+  ([#254](https://github.com/diogochaves/omabox/issues/254)).
 
 ### Changed
 
