@@ -101,11 +101,11 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--json]                                     the box as ls --json lists it, on stdout
   omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
              [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
-  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer]
+  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
               [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
               [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
   omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [--glide DURATION]
-                | mark TEXT [--hold DURATION] | hold DURATION | stop [SHEET] [POLISH] | status)   a video of the screen
+                | mark TEXT [--hold DURATION] | hold DURATION | stop [SHEET] [POLISH] | status [--json])   a video of the screen
   omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--hold 1s] [--no-pointer] [--audio] [--glide DURATION]
                 [SHEET] [POLISH] -- ACTION...   one action, recorded
   omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [SHEET] [POLISH]
@@ -115,14 +115,15 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
               POLISH: [--show-input] [--captions] [--cut-idle [1s]]   clicks, pointer, keys and marks drawn in; still stretches cut
   omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb
   omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
-  omabox calibrate [CARD] --answer "A X,Y B X,Y ..."    where you see each mark: 1:1, or the --fit N that maps it
+  omabox calibrate [CARD] --answer "A X,Y B X,Y ..." [--json]   where you see each mark: 1:1, or the --fit N that maps it
   omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
   omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text
-  omabox check run [--approve [--runs 3]] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO [ARG...]
+  omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO [ARG...]
                                                          a visual check: the scenario's checkpoints against a baseline
   omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
                                                          a checkpoint, in a scenario: once still, a shot (and the tree)
-  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png]   what differs, as a check sees it
+  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png] [--json]
+                                                         what differs, as a check sees it
   omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s DURATION | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
   omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
                [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
@@ -133,7 +134,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
                  raw: move X Y [--steps N], click/down/up [BTN], scroll DY, hscroll DX,
                  source wheel|finger|continuous|tilt, sleep DURATION
   omabox pointer [-b NAME] hide | show                   the pointer out of shots and recordings (it still moves), over reloads
-  omabox scroll [-b NAME] [--window SEL | --in SHOT] [--wait] X Y DY [DX] [--source wheel|finger|continuous|tilt]
+  omabox scroll [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y DY [DX] [--source wheel|finger|continuous|tilt]
                 [--mod MODS]
                                                          scroll there (DX: sideways; 15 is a wheel notch)
   omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
@@ -146,7 +147,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys to the box while focused, pointer on it
   omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
   omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox
-  omabox mode [-b NAME] [WxH[@HZ][,scale=S]|host]        show or change a headless box's screen mode
+  omabox mode [-b NAME] [--json | WxH[@HZ][,scale=S]|host]   show or change a headless box's screen mode
   omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back
   omabox gpu [-b NAME] [DURATION] [--json]               GPU engine time of this box's processes (default 5s)
   omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
@@ -163,13 +164,13 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit
   omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)
   omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
-  omabox events [-b NAME] --mark [MARK]                  from here: prints the offset, keeps MARK for --since
+  omabox events [-b NAME] --mark [MARK] [--json]         from here: prints the offset, keeps MARK for --since
   omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]
-  omabox path [NAME | -b NAME] [--home | --run | --logs] the box dir; --home: its /home/sbx (<dir>/home);
+  omabox path [NAME | -b NAME] [--home | --run | --logs [--json]]   the box dir; --home: its /home/sbx (<dir>/home);
                                                          --run: its /run/user/\$UID (<dir>/run); --logs: each log's file
   omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)
   omabox ls [--json]
-  omabox which PID                                       the box a host process is in, or "not in a box" (exit 1)
+  omabox which [--json] PID                              the box a host process is in, or "not in a box" (exit 1)
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
   omabox saves [--json] | saves rm SAVE...               the saves: list, delete
   omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu, shot-fit
@@ -181,19 +182,23 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox setup [--remove]                                your links (skill, bar widget), settings dir, agent guard
   omabox setup --feedback-skill|--no-feedback-skill      opt in to the omabox-feedback skill, or out again
   omabox setup --aquamarine [--force]                    build omabox's aquamarine: the fix, and its own patches
-  omabox --version                                       and which aquamarine new boxes use
+  omabox --version [--json]                              and which aquamarine new boxes use
   omabox help [COMMAND | exit-codes]                     one command's options and notes; what each exit code means
 
 @ up run ls down path
 NAME defaults to \$OMABOX, else the current git repo's name, else "default". In an agent session
 (Claude Code, Codex, \`guard exec\`) that name gets the session's id, myrepo-5cc72cdc: one box per
 session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off. A git worktree is named
-by its own folder, so each worktree has its own box. -b NAME also goes before the command
-(omabox -b NAME windows), for every command that takes it. Outside any repo (a scratch dir) the name
+by its own folder, so each worktree has its own box. Outside any repo (a scratch dir) the name
 is default-SESSION; with no box of that name, every command but \`up\` uses the session's one box
 started from its repo, said once: \`down\` too, so \`omabox down\` there takes that box down. A
 \`down\` whose name has no box, while the session has boxes up started elsewhere, names each with the
 \`down -b\` that takes it, and exits 1.
+@ up run shot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip
+-b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
+too (omabox -b NAME windows).
+@ shot record calibrate check
+-o (or --output) names what the command writes.
 @ path
 From the host, the box's HOME (/home/sbx in it) is <dir>/home, \`omabox path --home\`, and its
 /run/user/\$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, \`omabox path
@@ -320,7 +325,7 @@ private API, so the build must be one against the installed Qt: \`up\` refuses a
 another Qt, or one needing a library the box lacks, naming both. \`ls\` and \`windows\` name it;
 \`ls --json\` has quickshell_version (\`quickshell --version\` in the box, every box's), which is the
 last release's number, never proof that a fix is in: a build of an unreleased commit says it too.
-@ shot windows keys click drag pointer wait pixel
+@ shot windows keys click drag pointer scroll wait pixel tree check
 SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
 initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
 org.gnome.Nautilus, or part of its title; failing those, a hyphen-separated part of the class,
@@ -512,7 +517,7 @@ its ancestors (\`list > list item "Beta" [selected] @12,354 1872x22\`); exit 1 w
 (\`tree\` sets org.a11y.Status.IsEnabled, which Qt waits for, and ScreenReaderEnabled, which older
 AccessKit waits for: at-spi2-core 2.61+ has none, so no tree for those); Chromium and Electron only
 when started with --force-renderer-accessibility; terminals have none: "no accessibility tree", exit 1.
---layer SEL reads a layer surface instead (the shell's bar, panels, menus, a plugin's panel): its
+--layer SEL (or -l SEL) reads a layer surface instead (the shell's bar, panels, menus, a plugin's panel): its
 namespace (omabox hyprctl layers), address:0x... or pid:PID. Its bounds are the screen's coordinates:
 a plain \`click X Y\` at their middle lands on that node. Quickshell publishes them from 0.3.2 on, and
 only items that set an Accessible role: "the layer publishes no accessible items", exit 1, when none
@@ -552,8 +557,9 @@ change there, for an app that redraws later, by itself (a sync, a timer): then \
 GEOM]... [--json]: a change within --start (5s for run -d), then quiet. --ignore "X,Y WxH" (up to 16)
 leaves out an animation that never stops (a spinner, a glow); a 124 "still changing" names it when
 one small region kept changing. -g watches only that part of the screen. The screen is every monitor;
--g, --window and --ignore pick parts of it, all in the layout's coordinates (as click's), --ignore
-with --window too.
+-g, --window and --ignore pick parts of it, all in the layout's coordinates (as a plain click's).
+Beside --window, -g and --ignore are still the layout's in 0.9, with a warning: 1.0 reads them in
+the window's own, as --window's X Y and shot -g are.
 Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
 down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
 Durations, here as everywhere: 300ms, 2s, 1.5m, 1h (a bare number is seconds); --timeout at most
@@ -583,7 +589,7 @@ goes to shell), \`/usr/bin/systemd-cat\` (the bare name writes ~/ID.log), units'
 then journal.1.log), box bwrap's. shell's lines carry their time (YYYY-MM-DD HH:MM:SS.mmm, Quickshell's
 --log-times; the launcher's \`logger\` lines too, not what Quickshell prints outside its log) as
 \`omabox events\`' do (HH:MM:SS.mmm); Hyprland's have none. --grep sees the time as part of the
-line. -f follows them until the box goes down (-n then counts lines before --grep). Hyprland writes
+line. -f (or --follow) follows them until the box goes down (-n then counts lines before --grep). Hyprland writes
 its log in pieces: its newest lines can come late. \`log gdb --crash\`: only each crash's signal and
 the backtrace of the thread it hit (-n and --grep then apply to those).
 @ gdb
@@ -599,7 +605,7 @@ own (debuginfod off).
 its start, never cleared. --mark MARK takes "from here" (a byte offset: safe while events come);
 --since MARK (a mark, an offset, or 30s/2m/1h ago) reads from there. --grep and --until match the
 EVENT>>DATA part (grep -E). --until: the first matching event from --since (or from now), printed:
-exit 0, 124 none by --timeout, 1 the box went down; -f follows until the box goes down.
+exit 0, 124 none by --timeout, 1 the box went down; -f (or --follow) follows until the box goes down.
 @ up peek config
 Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
 (1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. A peek window shows
@@ -647,7 +653,7 @@ A headless box goes down after \$OMABOX_IDLE (default 2h) with no omabox command
 peek window and no \`omabox run\` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
 Write the unit: a bare --idle 45 is still minutes, with a warning, until 1.0 refuses it.
 @ run
-\`run -d\` says where the command's output goes (its log) on stderr: -q says nothing (errors still),
+\`run -d\` (or --detach) says where the command's output goes (its log) on stderr: -q says nothing (errors still),
 --print-log prints the log's path on stdout (first, before --wait's line). \`run -d --replace\`
 first stops what \`run -d\` started in that box with the same command and arguments (SIGTERM to its
 session, SIGKILL after 5 s) and waits for its windows to go: a rebuilt app in one step. Nothing
@@ -5917,7 +5923,13 @@ cmd_windows() {
   select_box "$name"; need_box; shell_note
   local lys wins; lys=$(hypr_json layers) || exit $?
   wins=$(box_windows "$lys") || exit $?
-  if [ $json = 1 ]; then jq . <<<"$wins"; return; fi
+  # One line, and each rectangle as x, y, w, h too, as every other --json gives one (#273, audit N2,
+  # N3); at and size, Hyprland's, stay.
+  if [ $json = 1 ]; then
+    jq -c 'def r: . + {x: .at[0], y: .at[1], w: .size[0], h: .size[1]};
+      map(r | .cover |= map(r) | if .layers then .layers |= map(r) else . end)' <<<"$wins"
+    return
+  fi
   # A box on a Hyprland build of its own (finding 116) says so first.
   [ -z "$(meta hyprland)" ] || printf 'box %s runs Hyprland %s%s\n' "$NAME" "$(meta hyprland)" "$(v=$(meta hyprland_version); [ -z "$v" ] || echo " ($v)")"
   # And one whose shell runs a Quickshell build (finding 358): its layer surfaces are not listed here.
@@ -6264,10 +6276,11 @@ two_files() {
 # calibrate [-b NAME] [--size WxH] [CARD | -o CARD]: a new card, its path on stdout.
 # calibrate [CARD] --answer "A X,Y ...": what the readings say.
 cmd_calibrate() {
-  local name="" card="" size="" answer="" given=0 w h
+  local name="" card="" size="" answer="" given=0 w h json=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
+      --json) json=1 ;;
       -o|--output) optarg "$@"; two_files calibrate "$card" "$2"; card=$2; shift ;;
       --size) optarg "$@"; size=$2; shift ;;
       --answer) optarg "$@"; answer=$2; given=1; shift ;;
@@ -6283,8 +6296,9 @@ cmd_calibrate() {
   [ -n "$card" ] || card=$dflt
   if [ $given = 1 ]; then
     [ -z "$size" ] || die "calibrate --answer: about a card already drawn: no --size"
-    parsed; calib_verdict "$card" "$answer"; return
+    parsed; calib_verdict "$card" "$answer" "$json"; return
   fi
+  [ $json = 0 ] || die "calibrate: --json goes with --answer (the verdict); a card's path is its one line"
   if [ -n "$size" ]; then
     [[ $size =~ ^([0-9]{2,5})x([0-9]{2,5})$ ]] && [ "${BASH_REMATCH[1]}" -ge 64 ] && [ "${BASH_REMATCH[2]}" -ge 64 ] &&
       [ "${BASH_REMATCH[1]}" -le 16384 ] && [ "${BASH_REMATCH[2]}" -le 16384 ] || die "calibrate: --size is WxH, 64-16384 each, got $size"
@@ -6316,7 +6330,9 @@ cmd_calibrate() {
 }
 
 # The answer's verdict, on stdout: 1:1, the --fit to use, or that no scale fits. Exit 0, 1 (no scale
-# fits), 2 (no card, or an answer it cannot read).
+# fits), 2 (no card, or an answer it cannot read). JSON 1 (#273, audit J8): one object instead,
+# result one (1:1), fit, up (points past the marks) or none (no one scale), the same exit codes.
+# calib_verdict CARD ANSWER [JSON]
 calib_verdict() {
   local card=$1 info w h marks reads res n vd cur
   info=$(calib_read "$card") || { say "calibrate: no card at $card (omabox calibrate draws one first)"; exit 2; }
@@ -6332,6 +6348,22 @@ calib_verdict() {
   [ -n "$res" ] || res=none
   cur=$(shot_fit_default 2>/dev/null) || cur=""
   read -ra vd <<<"$res"
+  if [ "${3:-0}" = 1 ]; then
+    jq -nc --arg r "$res" --arg w "$w" --arg h "$h" --arg cur "$cur" --argjson n "$n" '
+      def num: tonumber? // null;
+      ($r | split(" ")) as $v
+      | {result: (if $v[0] == "one" or $v[0] == "fit" or $v[0] == "up" then $v[0] else "none" end),
+         card: {w: ($w | num), h: ($h | num)}, marks: $n, scale: null, scale_x: null, scale_y: null, fit: null,
+         fit_size: null, error_px: null, worst: null, tolerance_px: null, off: {}, shot_fit: ($cur | num)}
+      + if $v[0] == "one" then {scale: 1, error_px: ($v[1] | num), worst: $v[2]}
+        elif $v[0] == "fit" then {scale: ($v[1] | num), scale_x: ($v[2] | num), scale_y: ($v[3] | num), fit: ($v[4] | num),
+          fit_size: $v[5], error_px: ($v[6] | num), worst: $v[7]}
+        elif $v[0] == "up" then {scale: ($v[1] | num)}
+        elif $v[0] == "off" then {scale: (($v[1] | num) as $s | if $s == 0 then null else $s end), tolerance_px: ($v[2] | num),
+          off: ([$v[3:][] | select(test("^[A-Z]:[0-9]+$")) | split(":") | {(.[0]): (.[1] | tonumber)}] | add // {})}
+        else {} end'
+    case ${vd[0]} in one|fit) return 0 ;; *) exit 1 ;; esac
+  fi
   case ${vd[0]} in
     one)
       echo "read 1:1: every mark within ${vd[1]} px of where it is on this ${w}x$h card. Full-size shots and click X Y land; no --fit needed."
@@ -6390,11 +6422,12 @@ REC_TAGS=(-pix_fmt yuv420p -color_range tv -colorspace bt709 -color_primaries bt
 REC_AAC=(-c:a aac -b:a 192k)
 cmd_record() {
   local name="" sub="" out="" monitor="" fps=30 hold=1000 holdset=0 ract=() nopointer=0 text=() video="" audio=0
-  local forms="" hdur="" sheet=0 frames="" every="" fit="" w glide="" show=0 caps=0 cut="" as="" tofd="" mfd="" vfd="" fromfd="" mfromfd="" sfile=0
+  local forms="" hdur="" sheet=0 frames="" every="" fit="" w glide="" show=0 caps=0 cut="" as="" tofd="" mfd="" vfd="" fromfd="" mfromfd="" sfile=0 json=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
+      --json) json=1 ;;
       # A jailed caller's omabox (relay_record, #224): its files opened in the jail and passed as fds,
       # the video's (or the sheet's, with sheet) --to-fd, the marks' and captions' --marks-fd and
       # --vtt-fd; sheet reads its video from --from-fd and the video's marks from --marks-from-fd.
@@ -6482,6 +6515,7 @@ cmd_record() {
   # The fds and names a jailed caller's omabox passes (#224), checked before anything is done: the
   # broker writes and reads a jailed agent's files only through them, never at a path it names.
   [ $sfile = 0 ] || [ "$sub" = status ] || die "record: --file goes with status"
+  [ $json = 0 ] || [ "$sub" = status ] || die "record: --json goes with status (record status --json)"
   [ -z "$tofd" ] || [ "$sub" = stop ] || [ "$sub" = sheet ] || die "record: --to-fd goes with stop or sheet"
   [ -z "$mfd$vfd" ] || [ "$sub" = stop ] || die "record: --marks-fd and --vtt-fd go with stop"
   [ -z "$fromfd$mfromfd" ] || [ "$sub" = sheet ] || die "record: --from-fd and --marks-from-fd go with sheet"
@@ -6523,7 +6557,7 @@ cmd_record() {
   fi
   select_box "$name"; need_box
   case $sub in
-    status) record_status "$sfile"; return ;;
+    status) if [ $json = 1 ]; then record_status_json; else record_status "$sfile"; fi; return ;;
     mark) record_mark "${text[*]}"
       [ $holdset = 0 ] || record_hold "$hold" "$CALL_US"; return ;;
     hold) record_hold "$hdur" "$CALL_US"; return ;;
@@ -6664,6 +6698,22 @@ record_status() {
     else echo "recording $REC_OUT of box '$NAME'$snd at $REC_FPS fps, to $REC_FILE$whose (omabox record stop)"; fi
   elif [ -f "$D/record" ]; then echo "box '$NAME': its recording stopped by itself (omabox record stop keeps what it has)"
   else echo "box '$NAME': not recording"; fi
+}
+
+# record status --json (#273, audit J5): recording (true while its wf-recorders run), stopped (one
+# that stopped by itself, which stop still keeps), monitors (their names), fps, file (null for a
+# recording started outside a jail, seen from one), audio, started (epoch seconds).
+record_status_json() {
+  local rec=false stopped=false file=""
+  if record_running; then rec=true; elif [ -f "$D/record" ]; then stopped=true; fi
+  if [ "$rec$stopped" != falsefalse ]; then
+    if ! in_jail || [ -f "$D/record.as" ]; then file=$REC_FILE; fi
+  fi
+  jq -nc --argjson r $rec --argjson s $stopped --arg out "${REC_OUT:-}" --arg fps "${REC_FPS:-}" --arg f "$file" \
+    --argjson a "$([ -f "$D/record.audio" ] && echo true || echo false)" --arg t "${REC_START:-}" \
+    'if $r or $s then {recording: $r, stopped: $s, monitors: ($out | split(",")), fps: ($fps | tonumber? // null),
+      file: (if $f == "" then null else $f end), audio: $a, started: ($t | tonumber? / 1000000 // null)}
+     else {recording: false, stopped: false, monitors: [], fps: null, file: null, audio: false, started: null} end'
 }
 
 # record_start FILE MONITOR FPS NOPOINTER AUDIO GLIDE_MS [as] (MONITOR all: the whole layout, #225; AUDIO
@@ -7608,12 +7658,13 @@ record_sheet() {
 
 cmd_shot() {
   local name="" out="" geom="" sels=() fit="" tofd="" as="" zoom="" burst="" every="" sheet=0 bdiff=0 after=() monitor=""
-  local changed=0 since="" masks=() nopointer=0
+  local changed=0 since="" masks=() nopointer=0 json=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
       -o|--output) optarg "$@"; two_files shot "$out" "$2"; out=$2; shift ;;
       --no-pointer) nopointer=1 ;;
+      --json) json=1 ;;
       # A jailed caller's omabox (relay_shot): the image goes to its file, opened in the jail and
       # passed as fd N, and is named AS in what shot says. The broker opens no path of the caller's.
       --to-fd) optarg "$@"; [[ $2 =~ ^[3-9]$ ]] || die "shot: --to-fd takes 3-9, got $2"; tofd=$2; shift ;;
@@ -7649,6 +7700,7 @@ cmd_shot() {
   [ "$fit" != 0 ] || fit=""
   if [ -n "$burst" ]; then
     [ -z "$zoom" ] || die "shot: --burst or --zoom, not both"
+    [ $json = 0 ] || die "shot: --json goes with one shot, not --burst (a line each frame: path and time)"
     case ${after[0]:-} in
       ""|keys|click|scroll|drag|pointer|run|hyprctl|lua|output|monitor|mode|restart-shell) ;;
       *) die "shot --after: an omabox command that acts (keys, click, scroll, drag, pointer, run, hyprctl, lua, output, monitor, mode, restart-shell), got ${after[0]}" ;;
@@ -7902,7 +7954,35 @@ cmd_shot() {
   elif [ "$where $lw $iw" != "screen 0,0 $lw $lw" ] || [ "$lh" != "$ih" ]; then
     say "${iw}x$ih image of the screen's ${lw}x$lh at ${where#screen }$k; click with --in $out"
   fi
-  echo "$out"
+  shot_said "$out" "${gx:-0}" "${gy:-0}" "$lw" "$lh" "$iw" "$ih"
+}
+
+# What shot prints on stdout: the image's path, or with --json (#273, audit J2) what it is, for a
+# script: path; kind, screen (the whole layout), region (-g), monitor or window; region, the part
+# taken, in the layout's coordinates or, for a window, its own (as -g, click --window and --in take
+# them); image, its size in pixels; scale, image pixels to a layout pixel (2 on a scale-2 screen,
+# under 1 with --fit: click --in divides by it); window (address, class, title, workspace, its
+# place in the layout) or null; monitor, fit, zoom or null; changed, with --changed: result changed
+# (the image is the crop around it), nothing (no image: path, region and image null) or whole (no
+# earlier shot to compare with: why says it), and since, the shot compared with. Uses cmd_shot's
+# json, win, monitor, g, fit, zoom, changed. shot_said PATH X Y W H IW IH [RESULT SINCE WHY]
+shot_said() {
+  if [ "$json" = 0 ]; then [ -z "$1" ] || echo "$1"; return 0; fi
+  local kind=screen
+  if [ -n "$win" ]; then kind=window; elif [ -n "$monitor" ]; then kind=monitor; elif [ -n "$g" ]; then kind=region; fi
+  jq -nc --arg p "$1" --arg k "$kind" --arg x "$2" --arg y "$3" --arg w "$4" --arg h "$5" --arg iw "$6" --arg ih "$7" \
+    --argjson win "${win:-null}" --arg mon "$monitor" --arg fit "$fit" --arg zoom "$zoom" --argjson ch "$changed" \
+    --arg res "${8:-}" --arg since "${9:-}" --arg why "${10:-}" '
+    def n: if . == "" then null else tonumber end;
+    ($p != "") as $img
+    | {path: (if $img then $p else null end), kind: $k,
+       region: (if $img then {x: ($x | n), y: ($y | n), w: ($w | n), h: ($h | n)} else null end),
+       image: (if $img then {w: ($iw | n), h: ($ih | n)} else null end),
+       scale: (if $img then (($iw | n) / ($w | n) * 10000 | round / 10000) else null end),
+       window: ($win | if . == null then null else {address, class, title, workspace, x: .at[0], y: .at[1], w: .size[0], h: .size[1]} end),
+       monitor: (if $mon == "" then null else $mon end), fit: ($fit | n), zoom: ($zoom | n),
+       changed: (if $ch == 1 then {result: $res, since: (if $since == "" then null else $since end),
+         why: (if $why == "" then null else $why end)} else null end)}'
 }
 
 # shot --changed (#145, finding 243): the whole frame just taken ($file) against the last whole shot
@@ -7951,7 +8031,7 @@ shot_changed() {
     shot_record "$out" "$mode" "$where" "${lw}x$lh ${iw}x$ih" "$rec"
     shot_ref_save "$file" "$key" "$out" "$mode" "${lw}x$lh ${iw}x$ih" "$ptr"; rm -f -- "$file"
     say "--changed: $why: a whole shot of $what (${lw}x$lh); click with --in $out"
-    echo "$out"; return
+    shot_said "$out" 0 0 "$lw" "$lh" "$iw" "$ih" whole "" "$why"; return
   fi
   # What is left out, in image pixels (the target's pixels scaled as the image is).
   # The pointer where it was, when it moved since (where it is now is drawn: a change under it shows).
@@ -7982,6 +8062,7 @@ shot_changed() {
   if [ -z "$box" ]; then
     rm -f -- "$file"
     say "--changed: nothing changed in $what since $rshot ($ago ago)$caret: no image"
+    shot_said "" "" "" "" "" "" "" nothing "$rshot"
     return 0
   fi
   # The crop: 16 px around it, inside the target; in image pixels as the image is scaled.
@@ -8016,7 +8097,7 @@ shot_changed() {
   [ "$ciw" = "$cw" ] || k="; image ${ciw}x$cih (x$(awk -v a="$cw" -v b="$ciw" 'BEGIN { s = sprintf("%.2f", a / b); sub(/\.?0+$/, "", s); print s }'))"
   [ -z "$win" ] || coords=" (its coordinates)"
   say "--changed since $rshot ($ago ago): ${cw}x$ch at $x0,$y0 of $what$coords$k${places:+; it changed in $n places: $places}$alone; click with --in $out"
-  echo "$out"
+  shot_said "$out" "$x0" "$y0" "$cw" "$ch" "$ciw" "$cih" changed "$rshot"
 }
 
 # The colour of screen (or window) pixels (#133, finding 209): one grab of the box around the points,
@@ -8562,11 +8643,22 @@ cmd_check() {
   esac
 }
 
+# check --json (#273, audit J1): regions as check.py gives them ("X,Y WxH PIXELS" a line) as objects,
+# specks ("N PIXELS LARGEST") as one, a size change ("WxH -> WxH") as {from, to}.
+# shellcheck disable=SC2016 # jq, not shell
+CHK_JQ='def regions: split("\n") | map(select(. != "") | capture("^(?<x>-?[0-9]+),(?<y>-?[0-9]+) (?<w>[0-9]+)x(?<h>[0-9]+) (?<p>[0-9]+)")
+    | {x: (.x | tonumber), y: (.y | tonumber), w: (.w | tonumber), h: (.h | tonumber), pixels: (.p | tonumber)});
+  def specks: if . == "" then null else split(" ") | map(tonumber) | {count: .[0], pixels: .[1], largest: (.[2] // null)} end;
+  def size: if . == "" then null else split(" -> ") | {from: .[0], to: .[1]} end;
+  def path: if . == "" then null else . end;'
+
 # check diff A.png B.png: what differs between two shots, as `check run` compares a checkpoint.
+# --json: {result same|changed, size, regions, specks, marked, report}, the exit codes the same.
 check_diff() {
-  local files=() masks=() speck=$CHECK_SPECK out="" report="" g
+  local files=() masks=() speck=$CHECK_SPECK out="" report="" g json=0
   while [ $# -gt 0 ]; do
     case $1 in
+      --json) json=1 ;;
       --ignore) optarg "$@"; g=$(geom_parse "$2") || die "check diff: --ignore is \"X,Y WxH\", got $2"; masks+=("$g"); shift ;;
       --speck) optarg "$@"; [[ $2 =~ ^[0-9]{1,6}$ ]] || die "check diff: --speck is a number of pixels, got $2"; speck=$((10#$2)); shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
@@ -8595,42 +8687,57 @@ check_diff() {
     printf 'title\tcheck diff: %s, then %s; red: pixels that changed\npoint\t%s\t%s\t%s\t\t\t\n' \
       "$(basename -- "${files[0]}")" "$(basename -- "${files[1]}")" "$pid" "${files[0]}" "${files[1]}" > "$plan"
   fi
+  # (With --json the text lines are not said: the object at the end says it all.)
+  local said rep=""; if [ $json = 1 ]; then exec {said}>/dev/null; else exec {said}>&1; fi
   if [ "$sa" != "$sb" ]; then
-    echo "size $sa -> $sb"
-    [ -z "$plan" ] || { printf 'size\t%s\n' "$sa -> $sb" >> "$plan"; check_diff_report "$plan" "$report"; }
+    echo "size $sa -> $sb" >&"$said"
+    [ -z "$plan" ] || { printf 'size\t%s\n' "$sa -> $sb" >> "$plan"; ! check_diff_report "$plan" "$report" >&"$said" || rep=$report; }
+    check_diff_json changed "$sa -> $sb" "" "" "" "$rep"
     return 1
   fi
   local res; res=$(check_regions "${files[0]}" "${files[1]}" "$speck" ${masks[@]+"${masks[@]}"}) || die "check diff: could not compare them (magick)"
   local regions; regions=$(grep -v '^specks ' <<<"$res" || true)
-  local sp; sp=$(sed -n 's/^specks //p' <<<"$res")
-  sp=${sp% *}   # (N PIXELS; not the largest)
+  local sp spl; spl=$(sed -n 's/^specks //p' <<<"$res")
+  sp=${spl% *}   # (N PIXELS; not the largest)
   if [ -z "$regions" ]; then
     [ -z "$plan" ] || rm -f -- "${plan:?}"
-    echo "same (specks: ${sp% *}, ${sp#* } px)"; return 0
+    echo "same (specks: ${sp% *}, ${sp#* } px)" >&"$said"
+    check_diff_json same "" "" "$spl" "" ""; return 0
   fi
   local r m
   while IFS= read -r r; do
     echo "${r% *} (${r##* } px)"
     [ -z "$plan" ] || { m=$(check_mask_of "$r") && printf 'region\t%s\n' "${m// /$'\t'}" >> "$plan"; }
-  done <<<"$regions"
-  echo "specks: ${sp% *}, ${sp#* } px"
+  done <<<"$regions" >&"$said"
+  echo "specks: ${sp% *}, ${sp#* } px" >&"$said"
   if [ -n "$out" ]; then
     local rs=(); mapfile -t rs <<<"$regions"
     check_mark "${files[1]}" "$out" "${rs[@]}" || die "check diff: could not draw $out (magick)"
   fi
-  [ -z "$plan" ] || check_diff_report "$plan" "$report"
+  [ -z "$plan" ] || ! check_diff_report "$plan" "$report" >&"$said" || rep=$report
+  check_diff_json changed "" "$regions" "$spl" "$out" "$rep"
   return 1
 }
+# check diff --json's object (uses check_diff's json). check_diff_json RESULT SIZE REGIONS SPECKS MARKED REPORT
+check_diff_json() {
+  exec {said}>&-
+  [ "$json" = 1 ] || return 0
+  jq -nc --arg res "$1" --arg size "$2" --arg regs "$3" --arg sp "$4" --arg marked "$5" --arg rep "$6" "$CHK_JQ"'
+    {result: $res, size: ($size | size), regions: ($regs | regions), specks: ($sp | specks), marked: ($marked | path),
+     report: ($rep | path)}'
+}
 
-# check diff --report: the report of a plan, then the plan gone; a failure said (the answer stands).
+# check diff --report: the report of a plan, then the plan gone; a failure said (the answer stands)
+# and returned. check_diff_report PLAN REPORT
 check_diff_report() {
-  local left=""
+  local left="" rc=0
   if left=$(check_report "$1" "$2"); then
     echo "report: $2${left:+ (not in it, no room: $left)}"
   else
-    say "check diff: the report could not be drawn (magick, to $2)"
+    say "check diff: the report could not be drawn (magick, to $2)"; rc=1
   fi
   rm -f -- "${1:?}"
+  return $rc
 }
 
 # A checkpoint's --ignore region in its shot's pixels (#281): given in the window's own coordinates
@@ -8866,17 +8973,18 @@ check_env() {
 # 3 times (--runs N) and makes the baseline, check_approve's way. --speck N: for every checkpoint
 # (else each its own, measured at --approve).
 check_run() {
-  local approve=0 runs="" base=omabox-check out="" speck="" upopts=() scen=()
+  local approve=0 runs="" base=omabox-check out="" speck="" upopts=() scen=() json=0
   while [ $# -gt 0 ]; do
     case $1 in
       --approve) approve=1 ;;
+      --json) json=1 ;;
       --runs) optarg "$@"; [[ $2 =~ ^[2-9]$ ]] || die "check run: --runs is 2 to 9 (for --approve), got $2"; runs=$2; shift ;;
       --base) optarg "$@"; base=$2; shift ;;
       -o|--output) optarg "$@"; out=$2; shift ;;
       --speck) optarg "$@"; [[ $2 =~ ^[0-9]{1,6}$ ]] || die "check run: --speck is a number of pixels, got $2"; speck=$((10#$2)); shift ;;
       -h|--help) usage check; return ;;
       --) shift; scen=("$@"); break ;;
-      -b|--box|--new|--interactive|-i|--json) die "check run: the scenario gets a box of its own (no $1)" ;;
+      -b|--box|--new|--interactive|-i) die "check run: the scenario gets a box of its own (no $1)" ;;
       --clean) ;;   # every check box is
       # (--idle's warning said here: the box's up writes to a log)
       --idle) optarg "$@"; idle_duration "$2" "--idle " >/dev/null || die "check run: --idle takes a duration like 30m or 2h, or 0 (never), got $2"
@@ -8892,6 +9000,7 @@ check_run() {
   done
   [ ${#scen[@]} -gt 0 ] || die "check run: which scenario? omabox check run [OPTIONS] -- SCENARIO [ARG...]"
   [ -z "$runs" ] || [ $approve = 1 ] || die "check run: --runs goes with --approve (a check is one run)"
+  [ $json = 0 ] || [ $approve = 0 ] || die "check run: --json reports a check against its baseline, not --approve (whose baseline.png is for looking at)"
   parsed
   ! in_jail || fail "check run: not inside ai-jail yet (it starts boxes of its own and reads their shots on the host)"
   command -v magick >/dev/null || die "check: needs ImageMagick's magick (package imagemagick, part of Omarchy)"
@@ -8899,6 +9008,7 @@ check_run() {
   # No baseline: exit 4, its own (1 is "changed": a script must not read a missing baseline as that).
   if [ $approve = 0 ] && ! compgen -G "$base/*.png" >/dev/null; then
     say "check run: no baseline in $base: omabox check run --approve [--base DIR] -- ${scen[*]} makes one"
+    [ $json = 0 ] || jq -nc --arg b "$base" '{result: "no_baseline", base: $b}'
     exit 4
   fi
   [ -n "$out" ] || out=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/check/$(date +%Y%m%d-%H%M%S)-$$
@@ -8925,12 +9035,56 @@ check_run() {
     "$self" down "$box" >/dev/null 2>&1 || true
     if [ $rc != 0 ]; then
       say "check: the scenario failed in run $k (exit $rc): $(grep . "$out/run$k.log" | tail -n 1) ($out/run$k.log)"
+      [ $json = 0 ] || jq -nc --argjson rc "$rc" --arg log "$out/run$k.log" '{result: "failed", exit: $rc, log: $log}'
       exit 3
     fi
-    [ -n "$(check_ids "$out/run$k")" ] || { say "check: the scenario took no checkpoint (omabox check point ID in it)"; exit 3; }
+    if [ -z "$(check_ids "$out/run$k")" ]; then
+      say "check: the scenario took no checkpoint (omabox check point ID in it)"
+      [ $json = 0 ] || jq -nc --arg log "$out/run$k.log" '{result: "failed", exit: 0, log: $log, message: "the scenario took no checkpoint"}'
+      exit 3
+    fi
   done
   trap - EXIT
-  if [ $approve = 1 ]; then check_approve "$out" "$base" "$speck" "$runs"; else check_compare "$out" "$base" "$speck"; fi
+  if [ $approve = 1 ]; then check_approve "$out" "$base" "$speck" "$runs"; return; fi
+  if [ $json = 1 ]; then check_compare_json "$out" "$base" "$speck"; else check_compare "$out" "$base" "$speck"; fi
+}
+
+# check run --json (#273, audit J1): check_compare's lines unsaid, its checkpoints gathered
+# (CHK_JSONL), one object at the end; its exit code. check_compare_json OUT BASE SPECK
+check_compare_json() {
+  local out=$1 base=$2 speck=$3
+  CHK_JSONL=$out/.check.jsonl CHK_SUM=""
+  : > "$CHK_JSONL"
+  local crc=0; check_compare "$out" "$base" "$speck" > /dev/null || crc=$?
+  jq -sc --arg sum "$CHK_SUM" --argjson rc "$crc" "$CHK_JQ"'
+    ($sum | split("\t")) as $s
+    | {result: (if $rc == 0 then "same" else "changed" end), base: $s[0], shots: $s[1], report: ($s[2] | path),
+       setup: ($s[3] | path),
+       counts: {checkpoints: ($s[4] | tonumber), same: ($s[5] | tonumber), changed: ($s[6] | tonumber), as_another: ($s[7] | tonumber),
+         holes: ($s[8] | tonumber), new: ($s[9] | tonumber), missing: ($s[10] | tonumber)},
+       checkpoints: .}' "$CHK_JSONL"
+  rm -f -- "$CHK_JSONL"
+  return $crc
+}
+
+# false when a checkpoint's .point says it was not still when taken. chk_still POINT
+chk_still() { if grep -qx 'settled no' "$1" 2>/dev/null; then echo false; else echo true; fi; }
+# One checkpoint of check run --json, a line of CHK_JSONL (check_compare's): ID, RESULT (same,
+# changed, holes, new, missing), AS (the checkpoint whose change it is, or ""); its size change,
+# regions, tree lines and specks from check_one's CHK_*, its new holes (HOLES, lines), MARKED (the
+# marked copy, or ""), APPROVED (holes as in the baseline), STILL (false when not still when taken;
+# "" for one not taken or with no baseline: null).
+# chk_point_json ID RESULT AS HOLES MARKED APPROVED STILL
+chk_point_json() {
+  [ -n "${CHK_JSONL:-}" ] || return 0
+  local size=$CHK_SIZE regs=$CHK_REGIONS tree=$CHK_TREE sp=$CHK_SPECKS
+  case $2 in new|missing) size="" regs="" tree="" sp="" ;; esac
+  jq -nc --arg id "$1" --arg res "$2" --arg as "$3" --arg holes "$4" --arg marked "$5" --arg ok "${6:-0}" --arg still "${7:-}" \
+    --arg size "$size" --arg regs "$regs" --arg tree "$tree" --arg sp "$sp" "$CHK_JQ"'
+    {id: $id, result: $res, as: ($as | path), size: ($size | size), regions: ($regs | regions),
+     holes: ($holes | regions),
+     tree: ($tree | split("\n") | map(select(. != ""))), specks: ($sp | specks), marked: ($marked | path),
+     approved_holes: ($ok | tonumber), still: (if $still == "" then null else $still == "true" end)}' >> "$CHK_JSONL"
 }
 
 # What a checkpoint's speck is, said at --approve: check_speck_text SPECK LARGEST GIVEN
@@ -9103,13 +9257,14 @@ check_approve() {
 # Each checkpoint with its own speck (the baseline's .point; 32 for one from before it), unless SPECK.
 check_compare() {
   local out=$1 base=$2 speck=$3 id fail=0 same=0 n=0 r regs=() e holes=() nh old what m changed=0 left bt nt
-  local plan=$out/report.plan ps nholed=0 new=0 missing=0 sp spa=() key first alike=0
+  local plan=$out/report.plan ps nholed=0 new=0 missing=0 sp spa=() key first alike=0 setup=""
   local -A firsts=()
   : > "$plan.body"
   for id in $(check_ids "$out/run1"); do
     n=$((n + 1))
     if [ ! -f "$base/$id.png" ]; then
-      echo "new      $id: no baseline (omabox check run --approve adds it)"; fail=1 new=$((new + 1)); continue
+      echo "new      $id: no baseline (omabox check run --approve adds it)"; fail=1 new=$((new + 1))
+      chk_point_json "$id" new "" "" "" 0 ""; continue
     fi
     ps=$speck
     [ -n "$ps" ] || ps=$(sed -n 's/^speck \([0-9]\{1,6\}\)$/\1/p' "$base/$id.point" | head -n 1) || ps=""
@@ -9130,6 +9285,7 @@ check_compare() {
     if [ -z "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ] && [ ${#holes[@]} = 0 ]; then
       same=$((same + 1)); echo "same     $id${sp:+ ($sp)}"
       [ $old -le 0 ] || echo "  note: $old hole$([ $old = 1 ] || echo s) as in the baseline ($what there: approved)"
+      chk_point_json "$id" same "" "" "" "$((old > 0 ? old : 0))" "$(chk_still "$out/run1/$id.point")"
       continue
     fi
     fail=1 bt="" nt=""
@@ -9153,8 +9309,11 @@ check_compare() {
         echo "changed  $id: as $first (its ${#regs[@]} region$([ ${#regs[@]} = 1 ] || echo s)$([ ${#holes[@]} = 0 ] || echo " and holes"))"
       fi
       regs+=(${holes[@]+"${holes[@]}"})
-      [ -n "$CHK_SIZE" ] || [ ${#regs[@]} = 0 ] || check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || true
+      local mk=""
+      [ -n "$CHK_SIZE" ] || [ ${#regs[@]} = 0 ] || ! check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || mk=$out/$id.diff.png
       if grep -qx 'settled no' "$out/run1/$id.point"; then echo "  note: $id was not still when taken"; fi
+      chk_point_json "$id" "$([ -n "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ] && echo changed || echo holes)" "$first" \
+        "$(printf '%s\n' ${holes[@]+"${holes[@]}"})" "$mk" "$((old > 0 ? old : 0))" "$(chk_still "$out/run1/$id.point")"
       continue
     fi
     firsts[$key]=$id
@@ -9179,20 +9338,26 @@ check_compare() {
     done
     [ $old -le 0 ] || echo "  note: $old hole$([ $old = 1 ] || echo s) as in the baseline (approved)"
     regs+=(${holes[@]+"${holes[@]}"})
-    [ -n "$CHK_SIZE" ] || [ ${#regs[@]} = 0 ] || check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || true
+    local mk=""
+    [ -n "$CHK_SIZE" ] || [ ${#regs[@]} = 0 ] || ! check_mark "$out/run1/$id.png" "$out/$id.diff.png" "${regs[@]}" || mk=$out/$id.diff.png
     if [ -n "$CHK_TREE" ]; then while IFS= read -r r; do echo "  tree: $r"; done <<<"$CHK_TREE"; fi
     [ -z "$sp" ] || echo "  $sp (parts under $ps px)"
     if grep -qx 'settled no' "$out/run1/$id.point"; then echo "  note: $id was not still when taken"; fi
+    chk_point_json "$id" "$([ -n "$CHK_SIZE$CHK_REGIONS$CHK_TREE" ] && echo changed || echo holes)" "" \
+      "$(printf '%s\n' ${holes[@]+"${holes[@]}"})" "$mk" "$((old > 0 ? old : 0))" "$(chk_still "$out/run1/$id.point")"
   done
   for r in "$base"/*.point; do
     [ -f "$r" ] || continue
     id=$(basename "$r" .point)
-    [ -f "$out/run1/$id.point" ] || { echo "missing  $id: in the baseline, not taken this run"; fail=1 missing=$((missing + 1)); }
+    [ -f "$out/run1/$id.point" ] || { echo "missing  $id: in the baseline, not taken this run"; fail=1 missing=$((missing + 1))
+      chk_point_json "$id" missing "" "" "" 0 ""; }
   done
+  local rep=""
   if [ $((changed + nholed)) -gt 0 ]; then
     { printf 'title\tcheck: %s of %s changed. Each pair: the baseline, then this run; red: pixels that changed, blue: only the tree\n' \
         "$((changed + nholed))" "$n"; cat -- "$plan.body"; } > "$plan"
     if left=$(check_report "$plan" "$out/report.png"); then
+      rep=$out/report.png
       echo "report:  $out/report.png (every change beside its baseline in one image: look at it first)"
       [ -z "$left" ] || echo "  not in it, no room: $left (their changes are listed above)"
     else
@@ -9207,7 +9372,7 @@ check_compare() {
       '($a[0] // {}) as $x | ($b[0] // {}) as $y | [("omabox", "hyprland", "omarchy", "gpu", "theme", "size", "locale", "timezone")
         | select($x[.] != $y[.] and ((. != "locale" and . != "timezone") or $x[.] != null))
         | "\(.) \($x[.] // "?") -> \($y[.] // "?")"] | join(", ")' 2>/dev/null) || e=""
-    [ -z "$e" ] || echo "note: the baseline was made with another setup ($e): a difference may be that"
+    [ -z "$e" ] || { echo "note: the baseline was made with another setup ($e): a difference may be that"; setup=$e; }
   fi
   # Every checkpoint counted: those of this run, and those of the baseline it did not take.
   e=""
@@ -9217,6 +9382,8 @@ check_compare() {
   [ $new = 0 ] || e+=", $new new"
   [ $missing = 0 ] || e+=", $missing missing"
   echo "check: $same of $((n + missing)) same$e; shots in $out/run1"
+  # (check run --json's summary: check_run puts it together)
+  CHK_SUM=$(printf '%s\t' "$base" "$out/run1" "$rep" "$setup" "$((n + missing))" "$same" "$changed" "$alike" "$nholed" "$new" "$missing")
   return $fail
 }
 
@@ -9228,7 +9395,10 @@ cmd_keys() {
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       --active) sels+=(active) ;;
       # A value is the tool's, whatever it looks like (-t --wait types "--wait", -t --pass "--pass").
-      -t|--delay) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift ;;
+      -t|--delay) [ $# -ge 2 ] || die "keys: $1 needs a value"; toks+=("$1" "$2"); shift
+        # --delay MS (#273, audit F13): the keyboard tool's own time between keys, never documented,
+        # and read only as its first word; warned in 0.9, refused in 1.0.
+        [ "${toks[-2]}" != --delay ] || say "warning: keys --delay: the keyboard tool's own time between keys (ms), read only as the first word: for a pause, -s DURATION (refused in 1.0)" ;;
       # -s DURATION: a pause, as the tool's milliseconds (#273: a bare number, ms, is warned).
       -s) [ $# -ge 2 ] || die "keys: -s needs a value"; t=$(pause_ms "keys -s" "$2") || exit $?; toks+=(-s "$t"); shift ;;
       -m|-p) die "keys: $1 is omabox's own (to hold a modifier across a click: click, drag or pointer --mod)" ;;
@@ -9245,7 +9415,7 @@ cmd_keys() {
     esac
     shift
   done
-  settle_opts_check
+  settle_opts_check ${#sels[@]}
   # (audit E8: what to send, by example)
   [ ${#toks[@]} -gt 0 ] || usage_die "keys: nothing to send: a combo (keys super+space), text (keys -t hello), a key (keys Return), or several (keys ctrl+a -t hi Tab)"
   set -- "${toks[@]}"
@@ -9447,7 +9617,7 @@ cmd_click() {
     esac
     shift
   done
-  settle_opts_check
+  settle_opts_check ${#sels[@]}
   [ ${#xy[@]} -eq 2 ] || die "click: need X Y, got ${#xy[@]} number$([ ${#xy[@]} = 1 ] || echo s)"
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "click: --in or --window, not both"
   [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "click: --no-raise goes with --window or --in"
@@ -9521,7 +9691,7 @@ cmd_scroll() {
     esac
     shift
   done
-  settle_opts_check
+  settle_opts_check ${#sels[@]}
   [ ${#xy[@]} -ge 3 ] && [ ${#xy[@]} -le 4 ] || die "scroll: need X Y DY [DX] (15 is one wheel notch; positive is down and right)"
   [[ ${xy[0]} =~ ^[0-9]+$ && ${xy[1]} =~ ^[0-9]+$ ]] || die "scroll: X Y are whole pixels, got ${xy[0]} ${xy[1]}"
   awk -v a="${xy[2]}" -v b="${xy[3]:-0}" 'BEGIN { exit !(a >= -10000 && a <= 10000 && b >= -10000 && b <= 10000 && (a != 0 || b != 0)) }' ||
@@ -9734,7 +9904,7 @@ cmd_drag() {
     esac
     shift
   done
-  settle_opts_check
+  settle_opts_check ${#sels[@]}
   [ ${#xy[@]} -eq 4 ] || die "drag: need X1 Y1 X2 Y2"
   [ -z "$in" ] || [ ${#sels[@]} = 0 ] || die "drag: --in or --window, not both"
   [ $raise = 1 ] || [ -n "$in" ] || [ ${#sels[@]} -gt 0 ] || die "drag: --no-raise goes with --window or --in"
@@ -10213,9 +10383,17 @@ settle_opt() {
     *) SETTLE_TOOK=0 ;;
   esac
 }
+# settle_opts_check [WINDOWS]: WINDOWS, how many --window selectors the command was given.
 settle_opts_check() {
   [ "$SETTLE_WAIT" = 1 ] || { [ ${#SETTLE_ARGS[@]} = 0 ] && [ "$SETTLE_JSON" = 0 ]; } ||
     die "--start, --quiet, --timeout, --strict, --ignore, -g and --json go with --wait"
+  if [ "${1:-0}" != 0 ]; then
+    local a what=""
+    for a in ${SETTLE_ARGS[@]+"${SETTLE_ARGS[@]}"}; do
+      case $a in --region) what+=${what:+ and }-g ;; --mask) [[ $what == *--ignore* ]] || what+=${what:+ and }--ignore ;; esac
+    done
+    [ -z "$what" ] || win_region_warn "$MAIN_CMD --wait" "$what"
+  fi
   # An --ignore that misses -g's region leaves nothing out: said, as wait does (#162).
   local i region=""
   for ((i = 0; i < ${#SETTLE_ARGS[@]} - 1; i++)); do [ "${SETTLE_ARGS[i]}" != --region ] || region=${SETTLE_ARGS[i + 1]}; done
@@ -10224,6 +10402,12 @@ settle_opts_check() {
     if [ "${SETTLE_ARGS[i]}" != --mask ] || rects_meet "${SETTLE_ARGS[i + 1]}" "$region"; then continue; fi
     say "--ignore \"$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"${SETTLE_ARGS[i + 1]}")\" is outside -g's region: it leaves nothing out there"
   done
+}
+# #273 (audit F8): with --window every coordinate is the window's own (click's X Y, shot's -g and
+# --ignore, check point's), but wait's and --wait's regions beside --window are still the screen's
+# (the layout's): 0.9 warns, 1.0 reads them in the window's. win_region_warn LABEL WHAT
+win_region_warn() {
+  say "warning: $1 with --window: $2 taken in the screen's coordinates (the layout's) until 1.0, which takes the window's own, as for --window's X Y and shot -g (omabox help wait)"
 }
 # Whether two X,Y,W,H rectangles overlap. rects_meet A B
 rects_meet() {
@@ -10380,6 +10564,7 @@ cmd_wait() {
     *) unknown_word wait condition "$cond" "(still, change, window SEL, layer NAMESPACE or until -- CMD)" still change window layer until ;;
   esac
   [ "$cond" != change ] || [ -z "$quiet" ] || die "wait change: no --quiet (that is still's)"
+  [ "$cond" = window ] || [ ${#sels[@]} = 0 ] || [ ${#masks[@]} = 0 ] || win_region_warn "wait $cond" --ignore
   select_box "$name"; need_box; shell_note
   case $cond in
     window)
@@ -10803,7 +10988,9 @@ cmd_events() {
     else
       say "events: from byte $size (--since $size)"
     fi
-    echo "$size"
+    # --json (#273, audit J9): {mark (null without a name), offset}.
+    if [ "${EV_JSON:-0}" = 1 ]; then jq -nc --arg m "$mark" --argjson o "$size" '{mark: (if $m == "" then null else $m end), offset: $o}'
+    else echo "$size"; fi
     return 0
   fi
   local off=0
@@ -10963,15 +11150,17 @@ parent_display() {
 # Change a headless box's mode live. `hyprctl keyword monitor` fails under the Lua config ("keyword
 # can't work with non-legacy parsers"), so it goes through eval; omabox.mode keeps it over a reload.
 cmd_mode() {
-  local name="" want=""
+  local name="" want="" json=0
   while [ $# -gt 0 ]; do
     case $1 in
       -b|--box) optarg "$@"; name=$2; shift ;;
+      --json) json=1 ;;
       -*) unknown_opt mode "$1" ;;
       *) [ -z "$want" ] || usage_die "mode: one mode, got $want and $1"; want=$1 ;;
     esac
     shift
   done
+  [ $json = 0 ] || [ -z "$want" ] || usage_die "mode: --json shows the mode (omabox mode --json), it sets none"
   # The mode's form, before any box is asked (host's size is read later).
   if [ -n "$want" ]; then
     local form; form=$(split_scale mode "$want") || refused
@@ -10984,6 +11173,12 @@ cmd_mode() {
   [ -z "$away" ] || { read -r away _ <<<"$away"
     die "mode: box '$NAME''s main screen ($away) is away (omabox output drop): omabox output back $away -b $NAME"; }
   local screen sc; screen=$(box_screen)
+  # --json (#273, audit J6): the main screen as monitor list --json gives each monitor (name, mode, scale).
+  if [ -z "$want" ] && [ $json = 1 ]; then
+    sc=$(main_scale_live) || exit $?
+    jq -nc --arg n "${screen%% *}" --arg m "${screen#* }" --arg s "${sc:-1}" '{name: $n, mode: $m, scale: ($s | tonumber? // 1)}'
+    return
+  fi
   [ -n "$want" ] || { sc=$(main_scale_live) || exit $?; size_text "$screen" "${sc:-1}"; return; }
   [ "$(meta mode)" = headless ] || die "mode: box '$NAME' is interactive: its window's size is its mode"
   # No scale given is 1, as for up (finding 296).
@@ -12367,13 +12562,14 @@ cmd_ports() {
   done
   [ -z "$name" ] || { local o kept=(); for o in "${out[@]}"; do [ "${o%%|*}" != "$name" ] || kept+=("$o"); done; out=("${kept[@]}"); }
   [ ${#out[@]} = 0 ] || mapfile -t out < <(printf '%s\n' "${out[@]}" | sort -t'|' -k1,1 -k2,2n)
+  # (addresses, plural as a list is named elsewhere, #273 audit N5; address, the same list, goes in 1.0)
   if [ $json = 1 ]; then
     local o f
     for o in "${out[@]}"; do
       IFS='|' read -r -a f <<<"$o|"
       jq -nc --arg box "${f[0]}" --argjson port "${f[1]}" --arg addr "${f[2]}" --arg proc "${f[3]}" --arg state "${f[4]}" \
         --arg who "${f[5]}" --arg boxes "${f[6]}" --arg resets "${f[7]}" --arg hcomm "$( [ "${f[4]}" != host ] || [ -z "${f[5]}" ] || cat "/proc/${f[5]}/comm" 2>/dev/null)" '
-        { box: $box, port: $port, address: ($addr | split(",")), process: $proc,
+        { box: $box, port: $port, addresses: ($addr | split(",")), address: ($addr | split(",")), process: $proc,
           host: ({ state: $state }
             + (if $state == "this" or $state == "this-resets" or $state == "shared" then { boxes: ($boxes | split(" ")) } else {} end)
             + (if $state == "shared" then { resets: ($resets | split(" ")) } else {} end)
@@ -13050,9 +13246,10 @@ cmd_env() {
 }
 
 cmd_path() {
-  local name="" logs=0 rundir=0 home=0 a args=()
-  for a; do case $a in --logs) logs=1 ;; --run) rundir=1 ;; --home) home=1 ;; *) args+=("$a") ;; esac; done
+  local name="" logs=0 rundir=0 home=0 json=0 a args=()
+  for a; do case $a in --logs) logs=1 ;; --run) rundir=1 ;; --home) home=1 ;; --json) json=1 ;; *) args+=("$a") ;; esac; done
   [ $((logs + rundir + home)) -le 1 ] || die "path: one of --home, --run and --logs"
+  [ $json = 0 ] || [ $logs = 1 ] || die "path: --json goes with --logs (path --logs --json)"
   name=$(name_arg path "${args[@]}") || refused
   select_box "$name"
   # Seeding a box's HOME through its path is using it.
@@ -13066,12 +13263,13 @@ cmd_path() {
   [ $rundir = 0 ] || { [ -d "$D" ] || need_box; echo "$D/run"; return 0; }
   # --logs (issue #41): each log the box has, where it is on the host (`omabox log NAME` reads it).
   [ -d "$D" ] || need_box
+  # --json (#273, audit J7): {NAME: PATH}, the logs there are.
   local s w
   for s in "${LOG_NAMES[@]}"; do
     w=$(log_where "$s") || continue
     w=$(log_host_path "${w#* }")
     [ ! -e "$w" ] || printf '%-9s %s\n' "$s" "$w"
-  done
+  done | if [ $json = 1 ]; then jq -Rnc '[inputs | capture("^(?<k>[^ ]+) +(?<v>.*)$") | {(.k): .v}] | add // {}'; else cat; fi
 }
 
 # --- clipboard -----------------------------------------------------------------------------------
@@ -13262,11 +13460,14 @@ cmd_config() {
         # headless box renders on now (the setting's, or its fallback), by slot.
         local now auto; now=$(OMABOX_RENDER_NODE="" render_node 2>/dev/null) || now=""
         auto=$(render_nodes | head -n 1)
+        # The keys snake_case, as every other --json (#273, audit N1); the kebab-case ones beside them
+        # are 0.8's, kept for 0.9 (a widget or a script from before) and gone in 1.0.
         for k in "${CONF_KEYS[@]}"; do printf '%s\t%s\n' "$k" "$(conf_get "$k")"; done |
-          jq -R 'split("\t") | {(.[0]): .[1]}' | jq -s --argjson a "$avail" --arg v "$(cat "$ROOT/VERSION")" --argjson gpus "$(gpu_json)" \
+          jq -R 'split("\t") | {(.[0] | gsub("-"; "_")): .[1]}' | jq -s -c --argjson a "$avail" --arg v "$(cat "$ROOT/VERSION")" --argjson gpus "$(gpu_json)" \
             --arg now "${now:+$(render_slot "$now")}" --arg auto "${auto:+$(render_slot "$auto")}" \
-            'add + {"confirm-close-available": $a, version: $v, gpus: $gpus,
-              "gpu-auto": (if $auto == "" then null else $auto end), "gpu-now": (if $now == "" then null else $now end)}'
+            'add + {confirm_close_available: $a, version: $v, gpus: $gpus,
+              gpu_auto: (if $auto == "" then null else $auto end), gpu_now: (if $now == "" then null else $now end)}
+             | . + (with_entries(select(.key | test("_")) | .key |= gsub("_"; "-")))'
       else
         for k in "${CONF_KEYS[@]}"; do echo "$k=$(conf_get "$k")"; done
       fi ;;
@@ -13478,7 +13679,9 @@ box_json() {
   local orphan=false; [ "$state" != up ] || ! box_orphan || orphan=true
   jq -c --arg name "$NAME" --arg state "$state" --argjson peeking $peeking --argjson keys $keys --arg theme "$theme" --argjson hung "$hung" \
     --arg sh "$sh" --argjson crashes "$crashes" --argjson orphan "$orphan" \
-    '{name: $name, mode, size, created, plugins, net: (.net // "host"), allow: (.allow // ""), addrs: (.addrs // []), idle: (.idle // 0),
+    '{name: $name, mode, size, scale: (.scale // 1), created, plugins, net: (.net // "host"), allow: (.allow // ""),
+      allowed: (.allow // "" | split(",") | map(select(. != "") | tonumber)), addrs: (.addrs // []), idle: (.idle // 0),
+      dir: (.dir // null),
       plugin_status: ((.plugin_status // {}) as $s | (.plugin_via // {}) as $v
         | reduce (.plugins // [])[] as $i ($s; .[$i] = ((.[$i] // {}) + {via: ($v[$i] // "mounted")}))), bar: (.bar // "user"), systemd: (.systemd // false), audio: (.audio // false), autoreload: (.autoreload // false), hyprland: (.hyprland // null), omarchy: (.omarchy // null),
       hyprland_version: (.hyprland_version // null), quickshell: (.quickshell // null), quickshell_version: (.quickshell_version // null), aquamarine: (.aquamarine // null), render: (.render // null),
@@ -13501,6 +13704,9 @@ submap_release() {
   host_hyprctl eval 'if hl.get_current_submap() == "omabox" then hl.dispatch(hl.dsp.submap("reset")) end' >/dev/null
 }
 
+# (ls --json, #273, audit N4: allowed, the ports as numbers, is allow's successor: allow, a comma
+# string, goes in 1.0; scale and dir, the main screen's scale and the directory up ran in, as box.json
+# has them.)
 # --json is for the bar widget (plugin/): one array, a single pass, with peek state. Anything else is
 # refused (#236): a -b or an unknown flag dropped here gave a script the table where it asked for JSON.
 cmd_ls() {
@@ -13578,15 +13784,25 @@ cmd_ls() {
 # does not list: another state dir or user namespace), said as such. Exit 0 in a box, 1 not in one, 2
 # cannot tell.
 cmd_which() {
-  [ $# = 1 ] && [[ $1 =~ ^[0-9]+$ ]] || usage_die "which: one PID (omabox which PID)"
+  # --json (#273, audit J4): {pid, box (null: not in one), by: pidns or env}; the exit codes as without.
+  local json=0 a=() n
+  for n; do case $n in --json) json=1 ;; -*) unknown_opt which "$n" ;; *) a+=("$n") ;; esac; done
+  set -- ${a[@]+"${a[@]}"}
+  [ $# = 1 ] && [[ $1 =~ ^[0-9]+$ ]] || usage_die "which: one PID (omabox which [--json] PID)"
   parsed
   local pid=$1 uid n bpid self p ns names=() nss=() i
+  # The answer: a box's name or "not in a box". which_say BOX|"" BY
+  which_say() {
+    if [ $json = 1 ]; then jq -nc --argjson p "$pid" --arg b "$1" --arg by "$2" \
+      '{pid: $p, box: (if $b == "" then null else $b end), by: (if $by == "" then null else $by end)}'
+    else echo "${1:-not in a box}"; fi
+  }
   uid=$(awk '/^Uid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null) && [ -n "$uid" ] ||
     { say "which: no process $pid (gone, or not in this pid namespace)"; exit 2; }
   # A box runs as the user who started it (its user namespace maps that uid alone), so another user's
   # process is in none of theirs; its namespaces are not ours to read anyway.
   if [ "$uid" != "$(id -u)" ]; then
-    echo "not in a box"
+    which_say "" ""
     say "which: process $pid is $(id -nu "$uid" 2>/dev/null || echo "uid $uid")'s; boxes run as the user who started them"
     exit 1
   fi
@@ -13600,7 +13816,7 @@ cmd_which() {
   p=$pid
   while [ -n "$p" ] && [ "$p" -gt 0 ]; do
     if ns=$(readlink "/proc/$p/ns/pid" 2>/dev/null); then
-      for i in "${!nss[@]}"; do [ "$ns" != "${nss[i]}" ] || { echo "${names[i]}"; exit 0; }; done
+      for i in "${!nss[@]}"; do [ "$ns" != "${nss[i]}" ] || { which_say "${names[i]}" pidns; exit 0; }; done
       [ "$ns" != "$self" ] || break
     fi
     p=$(awk '/^PPid:/ {print $2; exit}' "/proc/$p/status" 2>/dev/null) || p=""
@@ -13608,12 +13824,12 @@ cmd_which() {
   # Only a name a box can have: the environment is the process's own to set.
   n=$({ tr '\0' '\n' < "/proc/$pid/environ"; } 2>/dev/null | sed -n 's/^OMABOX_BOX=//p' | head -1) || n=""
   if [[ $n =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
-    echo "$n"
+    which_say "$n" env
     say "which: by its environment (OMABOX_BOX) only: no box this omabox lists has its pid namespace"
     exit 0
   fi
   [ -d "/proc/$pid" ] || { say "which: process $pid is gone"; exit 2; }
-  echo "not in a box"
+  which_say "" ""
   exit 1
 }
 
@@ -14601,8 +14817,10 @@ cmd_saves() {
       for d in "$SAVES"/*/; do
         [ -d "$d/home" ] || continue
         local k=false; save_keyring "$d" && k=true
-        jq -c --arg name "$(basename "$d")" --arg size "$(du -sh "$d" | cut -f1)" --argjson keyring $k \
-          '{name: $name, box, saved, size: $size, keyring: $keyring}' "$d/save.json" 2>/dev/null ||
+        # (size_kb: a number, as cpu's sizes are, #273 audit N6; size stays du's own words, 1.2G)
+        local kb; kb=$(du -sk "$d" | cut -f1) || kb=0
+        jq -c --arg name "$(basename "$d")" --arg size "$(du -sh "$d" | cut -f1)" --argjson kb "${kb:-0}" --argjson keyring $k \
+          '{name: $name, box, saved, size: $size, size_kb: $kb, keyring: $keyring}' "$d/save.json" 2>/dev/null ||
           jq -nc --arg name "$(basename "$d")" '{name: $name}'
       done | jq -s -c . ;;
     "")
@@ -14629,15 +14847,15 @@ declare -A CMD_OPTS=(
   [up]="-b= --box= --json --workspace= --new --confirm-close --no-confirm-close --interactive -i $UP_BOX_OPTS"
   [run]="-b= --box= -d --detach -q --print-log --replace --pass= --env-file= $SETTLE_OPTS $UP_BOX_OPTS"
   [shot]="-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every=
-    --sheet --diff --changed --since= --ignore= --after"
+    --sheet --diff --changed --since= --ignore= --after --json"
   [record]="-b= --box= -o= --output= --monitor= --no-pointer --audio --glide= --show-input --captions --cut-idle? --fps=
-    --hold= --for= --sheet --frames= --every= --fit="
+    --hold= --for= --sheet --frames= --every= --fit= --json"
   [pixel]="-b= --box= -w= --window= --active --in= --json"
-  [calibrate]="-b= --box= -o= --output= --size= --answer="
+  [calibrate]="-b= --box= -o= --output= --size= --answer= --json"
   [windows]="-b= --box= --json"
   [tree]="-b= --box= -w= --window= --active -l= --layer= --find= --json --all"
   [check]="-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= -w= --window= --active -g=
-    --timeout= $UP_BOX_OPTS"
+    --timeout= --json $UP_BOX_OPTS"
   [keys]="-b= --box= -w= --window= --active -t= --delay= -s= --pass= $SETTLE_OPTS"
   [keys-to-box]="-b= --box="
   [click]="-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= $SETTLE_OPTS"
@@ -14651,7 +14869,7 @@ declare -A CMD_OPTS=(
   [log]="-b= --box= -f --follow --crash --grep= -i -n="
   [events]="-b= --box= --since= --mark? --grep= -i --json -f --follow --until= --timeout= -n="
   [peek]="-b= --box= --fps= --workspace= --focus --monitor="
-  [restart-shell]="-b= --box=" [reload]="-b= --box=" [env]="-b= --box=" [mode]="-b= --box="
+  [restart-shell]="-b= --box=" [reload]="-b= --box=" [env]="-b= --box=" [mode]="-b= --box= --json"
   [output]="-b= --box= --for= --cycles="
   [monitor]="-b= --box= --name= --json"
   [gdb]="-b= --box= --shell --pid= --watch"
@@ -14659,9 +14877,9 @@ declare -A CMD_OPTS=(
   [cpu]="-b= --box= --settle= --pid= --app= --threads --json"
   [audio]="-b= --box= --json"
   [ports]="-b= --box= --json"
-  [path]="-b= --box= --logs --run --home"
+  [path]="-b= --box= --logs --run --home --json"
   [down]="-b= --box= --all --orphans"
-  [ls]="--json" [saves]="--json" [config]="--json"
+  [ls]="--json" [saves]="--json" [config]="--json" [--version]="--json" [which]="--json"
   [save]="-b= --box= --force -f"
   [clip]="-b= --box= --from-box"
   [setup]="--aquamarine --force --remove --feedback-skill --no-feedback-skill"
@@ -14777,10 +14995,28 @@ unknown_command() {
 # The version, then what a new box would run on: the aquamarine (finding 125). Nothing else is taken
 # (finding 348): `version foo` printed it and exited 0, as ls and saves did with theirs (finding 327).
 cmd_version() {
-  [ $# = 0 ] || { say "--version: unknown argument $1 (omabox --version)"; exit 2; }
+  local json=0
+  local a
+  for a; do
+    case $a in
+      --json) json=1 ;;
+      -*) unknown_opt --version "$a" ;;
+      *) say "--version: unknown argument $a (omabox --version [--json])"; exit 2 ;;
+    esac
+  done
+  local want aq=0
+  if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null; then aq=1; fi
+  # --json (#273, audit J3): the version, and the aquamarine new boxes use as ls --json names a box's
+  # (kind private or system, version, fixed), its words as message; null when none is found.
+  if [ $json = 1 ]; then
+    if [ $aq = 1 ]; then
+      jq -nc --arg v "$(cat "$ROOT/VERSION")" --arg k "$AQ_KIND" --arg av "$AQ_VER" --argjson f "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
+        --arg m "$(aq_desc)" '{version: $v, aquamarine: {kind: $k, version: $av, fixed: $f, message: $m}}'
+    else jq -nc --arg v "$(cat "$ROOT/VERSION")" '{version: $v, aquamarine: null}'; fi
+    return
+  fi
   echo "omabox $(cat "$ROOT/VERSION")"
-  local want
-  if want=$(hypr_aq_soname 2>/dev/null) && aq_resolve "$want" 2>/dev/null; then echo "aquamarine: $(aq_desc)"; fi
+  [ $aq = 0 ] || echo "aquamarine: $(aq_desc)"
 }
 
 main() {

@@ -45,6 +45,39 @@ The same in every command (`omabox help exit-codes`):
 
 An option that takes a value takes it as `--opt VALUE` or `--opt=VALUE`, in every command.
 
+## JSON
+
+What `--json` gives, by its top-level fields. These are kept from 1.0: a field may be added, never
+renamed, dropped or given another type; read the ones you need by name. Field order, whitespace and
+the words inside `message` are not part of it. Snake_case everywhere; rectangles are `x`, `y`, `w`,
+`h`; durations seconds; sizes in kB (`_kb`). One object or array on stdout unless said "a line each".
+
+| Command | Shape |
+|---|---|
+| `up --json`, `ls --json` | a box (an array of them for `ls`): `name, state, mode, size, scale, created, dir, net, allowed, addrs, idle, plugins, plugin_status, bar, theme, render, monitors, hyprland_version, quickshell_version, omarchy_version, aquamarine, clean, starter, hung, peeking, keys_to_box, shell_state, shell_crashes, orphan` and more; `allow` (a comma string) goes in 1.0 for `allowed` |
+| `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them) |
+| `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
+| `pixel --json` | a line each point: `x, y, hex, r, g, b` |
+| `lua --json` | a line each value Lua returned (any JSON value) |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/until add `detail` |
+| `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
+| `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
+| `check run --json` | `result` (same, changed), `base, shots, report, setup, counts, checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
+| `check diff --json` | `result, size, regions, specks, marked, report` |
+| `record status --json` | `recording, stopped, monitors, fps, file, audio, started` |
+| `mode --json` | `name, mode, scale` |
+| `monitor list --json` | an array: `name, mode, scale, x, y, workspace` (`dropped` for one `output drop` took) |
+| `gpu --json` | `box, seconds, source, render, percent, engines` and more |
+| `cpu --json` | `box, seconds, settle, cores, percent, processes, total` and more |
+| `audio --json` | `box, seconds, sound, sound_s, peak_db, rms_db, spans, levels` and more |
+| `ports --json` | an array: `box, port, addresses, process, host`; `address` (the same list) goes in 1.0 |
+| `path --logs --json` | `{NAME: PATH}`, each log there is |
+| `saves --json` | an array: `name, box, saved, size, size_kb, keyring` |
+| `config --json` | `workspace, confirm_close, bar_icon, gpu, shot_fit, confirm_close_available, version, gpus, gpu_auto, gpu_now`; the kebab-case copies (`bar-icon`, `gpu-now`...) go in 1.0 |
+| `calibrate --answer --json` | `result` (one, fit, up, none), `card, marks, scale, fit, fit_size, error_px, worst, off, shot_fit` |
+| `which --json` | `pid, box, by` (pidns or env; `box` null: not in one) |
+| `--version --json` | `version, aquamarine` (`kind, version, fixed, message`) |
+
 ## For subagents in an isolated worktree
 
 Claude Code checks each Bash call of a worktree-isolated subagent and refuses what it cannot follow:
@@ -456,8 +489,10 @@ with `--keep wallpaper` or after a theme set in the box.
   [-g GEOM] [--ignore GEOM]... [--json]`: the screen before the action, a change within `--start` (5 s
   for `run -d`), then `--quiet` with none. `-g` watches only that part of the screen.
 - The screen watched is every monitor of the box. `-g`, `--window`, `--ignore` and the regions the line
-  names are the layout's coordinates, as for `click` and `shot -g`; `--ignore` stays that with
-  `--window` too (not the window's own coordinates: one outside the region watched is said).
+  names are the layout's coordinates, as for a plain `click` and `shot -g`. Beside `--window`, `-g`
+  and `--ignore` are still the layout's in 0.9, with a warning (one outside the region watched is
+  said): 1.0 takes them in the window's own coordinates, as `click --window` takes X Y. Until then a
+  script that must not change meaning watches with `-g` (the window's place) instead of `--window`.
 - `--ignore "X,Y WxH"` (up to 16; `--strict` keeps them) leaves out an animation that never stops. A 124
   "still changing" whose late changes were all in one small region ends with `--ignore "X,Y WxH" if
   that is an animation`: add it if the shot shows a spinner or a glow there, not the app under test.

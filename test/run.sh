@@ -931,15 +931,103 @@ t_unit_cli_contract() {
       grep -oE '(^|[[ (|])-{1,2}[a-zA-Z][a-zA-Z0-9-]*' | sed 's/^[[ (|]//' | sort -u)
     # (run's help has up's lines: these are up's own, refused by run)
     [ "$c" != run ] || syn=$(grep -vxE -- '--(confirm-close|no-confirm-close|interactive|new|workspace)' <<<"$syn")
-    miss=$(comm -23 <(printf '%s\n' "$syn") <(sort -u <<<"$tab") | xargs)
+    # (--version's line names itself)
+    miss=$(comm -23 <(printf '%s\n' "$syn" | grep -vx -- "$c") <(sort -u <<<"$tab") | paste -sd ' ')
     [ -z "$miss" ] || bad+=" $c: $miss;"
   done
   check_eq "every option in a command's help lines is in its CMD_OPTS" "" "$bad"
-  check_eq "...and every command with options has a CMD_OPTS line" "" \
+  # The other way (#273, part C): every option a command takes is in its help (its lines or its
+  # paragraphs: an alias, -o or --output, said once there), but the deprecated forms 0.9 warns (up -i,
+  # save -f, keys --delay), which help never shows; check's UP OPTIONS are up's, documented there.
+  local o h up; bad=""
+  up=$(lib eval 'echo $UP_BOX_OPTS' | tr ' ' '\n' | sed 's/=$//')
+  for c in $(lib eval 'printf "%s\n" "${!CMD_OPTS[@]}"' | sort); do
+    h=$(ob help "$c")
+    for o in $(lib cmd_opts "$c" | sed 's/[=?]$//'); do
+      case "$c $o" in "up -i"|"save -f"|"keys --delay") continue ;; esac
+      [[ $h != *"UP OPTIONS"* ]] || ! grep -qx -- "$o" <<<"$up" || continue
+      grep -qE -- "(^|[^a-zA-Z0-9-])$o([^a-zA-Z0-9-]|\$)" <<<"$h" || bad+=" $c $o;"
+    done
+  done
+  check_eq "...and every option in CMD_OPTS is in its command's help (aliases too)" "" "$bad"
+  check_match "...--box said for every box command (help windows)" "\-b NAME \(or --box NAME\)" "$(ob help windows)"
+  check_eq "...-o (or --output) where -o goes" "4" "$(for c in shot record calibrate check; do ob help "$c"; done | grep -c -- '-o (or --output)')"
+  check_eq "...every command with options has a CMD_OPTS line" "" \
     "$(for c in $(ob help | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u); do
          case $c in help|--version|which|guard|host|broker|check) continue ;; esac
          lib cmd_opts "$c" >/dev/null || echo -n " $c"
        done)"
+}
+
+# #273 part C: the --json shapes that need no box (each a jq check: the fields a script reads), the
+# warnings for what 1.0 changes (F8: a region beside --window; keys --delay), and --json where it
+# does not go.
+t_unit_json() {
+  local d=$TMP/ujson j rc; mkdir -p "$d"
+  j=$("$CLI" --version --json)
+  check_eq "--version --json: version, aquamarine {kind, version, fixed, message}" "$(cat "$ROOT/VERSION") true" \
+    "$(jq -r '"\(.version) \(.aquamarine == null or (.aquamarine | has("kind") and has("version") and (.fixed | type == "boolean") and has("message")))"' <<<"$j")"
+  rc=0; j=$("$CLI" which --json $$) || rc=$?
+  check_eq "which --json: {pid, box: null, by: null}, exit 1 as without" "{\"pid\":$$,\"box\":null,\"by\":null} 1" "$j $rc"
+  # check diff --json: same, changed (regions), another size.
+  magick -size 200x100 xc:white "$d/a.png"; magick -size 300x100 xc:white "$d/c.png"
+  magick -size 200x100 xc:white -fill black -draw "rectangle 10,10 60,40" "$d/b.png"
+  rc=0; j=$("$CLI" check diff "$d/a.png" "$d/b.png" --json -o "$d/m.png") || rc=$?
+  check_eq "check diff --json: changed, a region {x,y,w,h,pixels}, the marked copy, exit 1" \
+    "changed [{\"x\":10,\"y\":10,\"w\":51,\"h\":31,\"pixels\":1581}] $d/m.png null 1" \
+    "$(jq -r '"\(.result) \(.regions | tojson) \(.marked) \(.report)"' <<<"$j") $rc"
+  check_eq "...one line, nothing else on stdout" 1 "$(wc -l <<<"$j")"
+  check_eq "...same: no regions, the specks, exit 0" "same [] 0 null 0" \
+    "$(j=$("$CLI" check diff "$d/a.png" "$d/a.png" --json); echo "$(jq -r '"\(.result) \(.regions | tojson) \(.specks.count) \(.size)"' <<<"$j") $?")"
+  check_eq "...another size: size {from, to}" '{"from":"200x100","to":"300x100"}' "$("$CLI" check diff "$d/a.png" "$d/c.png" --json | jq -c .size)"
+  check_eq "...without --json, its lines as before" $'10,10 51x31 (1581 px)\nspecks: 0, 0 px' "$("$CLI" check diff "$d/a.png" "$d/b.png")"
+  # check run --json's object (check_compare_json), on a baseline and a run made here.
+  mkdir -p "$d/base" "$d/out/run1"
+  cp "$d/a.png" "$d/base/p1.png"; cp "$d/a.png" "$d/base/p2.png"; cp "$d/a.png" "$d/base/gone.png"
+  cp "$d/a.png" "$d/out/run1/p1.png"; cp "$d/b.png" "$d/out/run1/p2.png"; cp "$d/a.png" "$d/out/run1/p3.png"
+  local f; for f in base/p1 base/p2 base/gone out/run1/p1 out/run1/p2 out/run1/p3; do echo "of screen" > "$d/$f.point"; done
+  echo "settled no" >> "$d/out/run1/p2.point"
+  rc=0; j=$(lib eval "CHECK_PY=$ROOT/share/check.py; check_compare_json $d/out $d/base ''" 2>/dev/null) || rc=$?
+  check_eq "check run --json: result, counts, exit 1" "changed 4 1 1 1 1 1" \
+    "$(jq -r '"\(.result) \(.counts | "\(.checkpoints) \(.same) \(.changed) \(.new) \(.missing)")"' <<<"$j") $rc"
+  check_eq "...each checkpoint's id and result" "p1:same p2:changed p3:new gone:missing" "$(jq -r '[.checkpoints[] | "\(.id):\(.result)"] | join(" ")' <<<"$j")"
+  check_eq "...a changed one: its region, marked copy, not still" '[{"x":10,"y":10,"w":51,"h":31,"pixels":1581}] true false' \
+    "$(jq -r '.checkpoints[1] | "\(.regions | tojson) \(.marked | endswith("p2.diff.png")) \(.still)"' <<<"$j")"
+  check_eq "...base, shots, the report" "$d/base $d/out/run1 true" "$(jq -r '"\(.base) \(.shots) \(.report | endswith("report.png"))"' <<<"$j")"
+  check_fails "...its gathering file gone" test -e "$d/out/.check.jsonl"
+  check_match "check run: --json is not --approve's" "check run: --json reports a check .* not --approve" "$("$CLI" check run --approve --json -- true 2>&1)"
+  rc=0; j=$("$CLI" check run --json --base "$d/none" -- true 2>/dev/null) || rc=$?
+  check_eq "check run --json with no baseline: {result: no_baseline}, exit 4" "no_baseline 4" "$(jq -r .result <<<"$j") $rc"
+  # --json where it does not go: a usage error.
+  local o w
+  for o in "shot --json --burst 3" "record start --json" "path --json" "mode --json 800x600" "calibrate --json --size 640x480"; do
+    read -ra w <<<"$o"
+    rc=0; "$CLI" "${w[@]}" -b "$P-nobox" >/dev/null 2>&1 || rc=$?
+    check_eq "$o: refused, exit 2" 2 "$rc"
+  done
+  # saves --json: size_kb, a number, beside size (du's words).
+  mkdir -p "$TMP/data/omabox/saves/$P-js/home"; head -c 300000 /dev/urandom > "$TMP/data/omabox/saves/$P-js/home/f"
+  echo '{"box":"x","saved":"2026-10-20T00:00:00+00:00"}' > "$TMP/data/omabox/saves/$P-js/save.json"
+  check_eq "saves --json: size_kb a number, size a string" "true true" \
+    "$(sv saves --json | jq -r --arg s "$P-js" '.[] | select(.name == $s) | "\((.size_kb | type == "number") and .size_kb >= 290) \(.size | type == "string")"')"
+  rm -rf -- "${TMP:?}/data/omabox/saves/$P-js"
+  # F8 (#273): a region beside --window is still the screen's, warned; without --window, nothing.
+  check_match "wait still --window --ignore: warned, the screen's until 1.0" \
+    "warning: wait still with --window: --ignore taken in the screen's coordinates \(the layout's\) until 1.0, which takes the window's own" \
+    "$("$CLI" wait still --window foo --ignore "1,1 2x2" -b "$P-nobox" 2>&1)"
+  check_match "click --window --wait -g --ignore: warned" "warning: click --wait with --window: -g and --ignore taken in the screen's" \
+    "$("$CLI" click --window foo --wait -g "0,0 9x9" --ignore "1,1 2x2" 1 1 -b "$P-nobox" 2>&1)"
+  check_fails "...wait still --ignore without --window: no warning" grep -q warning <<<"$("$CLI" wait still --ignore "1,1 2x2" -b "$P-nobox" 2>&1)"
+  check_fails "...click --window --wait with no region: none" grep -q warning <<<"$("$CLI" click --window foo --wait 1 1 -b "$P-nobox" 2>&1)"
+  check_match "keys --delay: warned, refused in 1.0" "warning: keys --delay: .*-s DURATION \(refused in 1.0\)" "$("$CLI" keys --delay 5 a -b "$P-nobox" 2>&1)"
+  # The promise written down: each command that takes --json has its row in the reference's JSON table.
+  local tab c bad=""
+  tab=$(awk '/^## JSON$/ {on = 1; next} on && /^## / {exit} on && /^\| `/' "$ROOT/skill/reference.md")
+  for c in $(lib eval 'for c in "${!CMD_OPTS[@]}"; do [[ " ${CMD_OPTS[$c]//$'"'\\n'"'/ } " == *" --json "* ]] && echo "$c"; done' | sort); do
+    case $c in run|keys|click|scroll|drag) c=--wait ;; esac
+    grep -qF -- "\`$c " <<<"$tab" || grep -qF -- "\`$c\`" <<<"$tab" || bad+=" $c"
+  done
+  check_eq "reference.md's JSON table has every command that takes --json" "" "$bad"
 }
 
 # finding 325: which of a caller's fds a box could reach again through /proc, and so are relayed.
@@ -1532,8 +1620,13 @@ t_unit_config() {
   check_eq "confirm-close yes reads on" confirm-close=on "$(cfg confirm-close yes | tail -1)"
   check_eq "bar-icon auto" bar-icon=auto "$(cfg bar-icon auto)"
   check_fails "bar-icon takes auto or always" env HOME="$h" "$CLI" config bar-icon sometimes
-  check_eq "--json for the widget" '{"workspace":"special:omabox","confirm-close":"on","bar-icon":"auto","gpu":"auto","shot-fit":"off"}' \
-    "$(HOME=$h "$CLI" config --json | jq -c 'del(.["confirm-close-available"], .version, .gpus, .["gpu-auto"], .["gpu-now"])')"
+  local cj; cj=$(HOME=$h "$CLI" config --json)
+  check_eq "--json for the widget: snake_case keys (#273, audit N1)" '{"workspace":"special:omabox","confirm_close":"on","bar_icon":"auto","gpu":"auto","shot_fit":"off"}' \
+    "$(jq -c '{workspace, confirm_close, bar_icon, gpu, shot_fit}' <<<"$cj")"
+  check_eq "...the read-only ones too" "boolean string" "$(jq -r '"\(.confirm_close_available | type) \(.version | type)"' <<<"$cj")"
+  check_eq "...0.8's kebab-case keys beside them, the same values, until 1.0" "true" \
+    "$(jq '.["confirm-close"] == .confirm_close and .["bar-icon"] == .bar_icon and .["shot-fit"] == .shot_fit
+      and .["confirm-close-available"] == .confirm_close_available and .["gpu-auto"] == .gpu_auto and .["gpu-now"] == .gpu_now' <<<"$cj")"
   local bad; for bad in 0 100 "3 silent" "special:a'b" "special:" "1;x" "special:$(printf 'x%.0s' {1..33})"; do
     check_fails "workspace '$bad' refused" env HOME="$h" "$CLI" config workspace "$bad"
   done
@@ -2287,9 +2380,9 @@ t_unit_version() {
   local v; v=$(cat "$ROOT/VERSION")
   check_eq "omabox --version" "omabox $v" "$("$CLI" --version | head -1)"
   check_match "...then the aquamarine boxes use (finding 125)" "^aquamarine: (a private build, |the system's, )" "$("$CLI" --version | sed -n 2p)"
-  check_eq "...an argument it does not take refused, exit 2, nothing printed" "omabox: --version: unknown argument foo (omabox --version) 2" \
+  check_eq "...an argument it does not take refused, exit 2, nothing printed" "omabox: --version: unknown argument foo (omabox --version [--json]) 2" \
     "$(o=$("$CLI" version foo 2>&1); echo "$o $?")"
-  check_eq "...--version too" "omabox: --version: unknown argument --json (omabox --version) 2" "$(o=$("$CLI" --version --json 2>&1); echo "$o $?")"
+  check_eq "...an option too" "omabox: --version: unknown option --bogus (omabox help --version) 2" "$(o=$("$CLI" --version --bogus 2>&1); echo "$o $?")"
   check_eq "the widget's manifest has it" "$v" "$(jq -r .version "$ROOT/plugin/manifest.json")"
   check_match "...and its Settings face" "pluginVersion: \"$v\"" "$(grep pluginVersion "$ROOT/plugin/Panel.qml")"
   # The widget shows box names and errors agents wrote, in the user's real bar: never as rich text.
@@ -5036,6 +5129,8 @@ t_ports() {
   check_eq "...a box's server reaches the host as its own" "this $A" "$(q "$A" "$own")"
   check_eq "...a port two boxes serve on names both, for each" "shared $A,$B|shared $A,$B" "$(q "$A" "$shared")|$(q "$B" "$shared")"
   check_eq "...a server on ::1 only: this box holds the port, and resets" "this-resets $A" "$(q "$A" "$local6")"
+  check_eq "...addresses, a list, beside address, the same (#273: address goes in 1.0)" "true" \
+    "$(jq 'length > 0 and all(.[]; (.addresses | type == "array") and .addresses == .address)' <<<"$out")"
   check_eq "...the host's server mirrored into a box is not the box's" "" "$(q "$B" "$hostp")"
   out=$(ob ports -b "$B")
   check_match "ports -b lists that box only" "^BOX .*"$'\n'"$B +$shared +0\.0\.0\.0 +python3? +one of $A, $B" "$out"
@@ -8639,6 +8734,7 @@ t_widget() {
   check "bar-icon always (default): the panel opens with no boxes" until_ok 3 panel
   ob keys -b "$B" Escape >/dev/null
   local reads; reads=$(grep -c "^config --json$" "$H/actions")
+  # (an omabox from before 0.9 gives kebab-case keys: the widget takes them too, #273)
   echo '{"bar-icon":"auto"}' > "$H/config.json"; echo "bar-icon=auto" > "$H/.config/omabox/config"
   until_ok 5 lines_over "$H/actions" "$reads" "^config --json$"; sleep 0.3   # read again, taken in
   ob run -b "$B" -- omarchy-shell chaves.omabox open
@@ -8945,7 +9041,7 @@ t_widget_list() {
   # to vfio-pci: unavailable), the fallback said when the chosen one is not there; a pick runs config.
   local gpus='[{"pci":"0000:01:00.0","driver":"vfio-pci","kind":"nvidia","name":"GeForce RTX 5070 Ti","node":null,"available":false,"why":"bound to vfio-pci"},
     {"pci":"0000:7a:00.0","driver":"amdgpu","kind":"amd","name":"Radeon Graphics","node":"/dev/dri/renderD128","available":true}]'
-  jq -n --argjson g "$gpus" '{gpu: "0000:01:00.0", gpus: $g, "gpu-auto": "0000:7a:00.0", "gpu-now": "0000:7a:00.0"}' > "$H/config.json"
+  jq -n --argjson g "$gpus" '{gpu: "0000:01:00.0", gpus: $g, gpu_auto: "0000:7a:00.0", gpu_now: "0000:7a:00.0"}' > "$H/config.json"
   ob keys -b "$B" Escape >/dev/null
   ob run -b "$B" -- omarchy-shell chaves.omabox.panel face settings
   until_ok 3 panel_takes_keys "$B"
@@ -8964,7 +9060,7 @@ t_widget_list() {
   # vfio-pci), only a fallback's, with its slot.
   local rr='{"node":"/dev/dri/renderD128","pci":"0000:7a:00.0","driver":"amdgpu"}'
   jq -n "[$row + {name: \"a\", render: ($rr + {fallback: true, wanted: \"nvidia\"})}, $row + {name: \"c\", render: ($rr + {fallback: false}), orphan: true}]" > "$H/list.json"
-  jq -n --argjson g "$gpus" '{gpu: "nvidia", gpus: $g, "gpu-auto": "0000:7a:00.0", "gpu-now": "0000:7a:00.0"}' > "$H/config.json"
+  jq -n --argjson g "$gpus" '{gpu: "nvidia", gpus: $g, gpu_auto: "0000:7a:00.0", gpu_now: "0000:7a:00.0"}' > "$H/config.json"
   ob keys -b "$B" Escape Escape >/dev/null
   ob run -b "$B" -- omarchy-shell chaves.omabox.panel face settings
   until_ok 3 bash -c "'$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -e '.gpu.value == \"nvidia\"' >/dev/null"
@@ -8974,7 +9070,7 @@ t_widget_list() {
     "$(q '[.rows[] | {(.name): .caption}] | add | "\(.a | test("^headless · amdgpu 7a:00.0 \\(fallback\\) · ")) \(.c | test("amdgpu"))"')"
   check_eq "...and says orphan for an orphan, as ls does (#220)" "false true" \
     "$(q '[.rows[] | {(.name): .caption}] | add | "\(.a | test("orphan")) \(.c | test(" · orphan"))"')"
-  jq -n --argjson g "[$(jq -c '.[1]' <<<"$gpus")]" '{gpu: "auto", gpus: $g, "gpu-auto": "0000:7a:00.0", "gpu-now": "0000:7a:00.0"}' > "$H/config.json"
+  jq -n --argjson g "[$(jq -c '.[1]' <<<"$gpus")]" '{gpu: "auto", gpus: $g, gpu_auto: "0000:7a:00.0", gpu_now: "0000:7a:00.0"}' > "$H/config.json"
   ob keys -b "$B" Escape Escape >/dev/null
   ob run -b "$B" -- omarchy-shell chaves.omabox.panel face settings
   check "...not with one GPU and gpu auto" until_ok 3 bash -c "[ \"\$('$CLI' run -b '$B' -- omarchy-shell chaves.omabox.panel inspect | jq -r .gpu.shown)\" = false ]"
@@ -11841,6 +11937,45 @@ t_pixel() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# #273 part C: the --json shapes that need a box, each a jq check of the fields a script reads:
+# shot (screen, region, window, fit, --changed), windows (x, y, w, h; one line), ls (scale, allowed,
+# dir), mode, record status, events --mark, path --logs (ports' addresses: t_ports).
+t_json() {
+  local B=$P-json o=$TMP/json j
+  mkdir -p "$o"
+  ob up "$B" --no-shell --net isolated --allow 8093 >/dev/null 2>&1 || { no "up" "failed"; return; }
+  local W H; read -r W H < <(ob mode -b "$B" --json | jq -r '.mode | sub("@.*"; "") | split("x") | "\(.[0]) \(.[1])"')
+  check_eq "mode --json: {name, mode, scale}" "HEADLESS-2 true 1" \
+    "$(ob mode -b "$B" --json | jq -r '"\(.name | sub("WAYLAND-1"; "HEADLESS-2")) \(.mode | test("^[0-9]+x[0-9]+@")) \(.scale)"')"
+  j=$(ob ls --json | jq -c --arg b "$B" '.[] | select(.name == $b)')
+  check_eq "ls --json: scale, allowed (numbers) beside allow, dir" "1 [8093] 8093 $PWD" "$(jq -r '"\(.scale) \(.allowed | tojson) \(.allow) \(.dir)"' <<<"$j")"
+  j=$(ob shot -b "$B" --json -o "$o/s.png")
+  check_eq "shot --json: path, kind screen, region the layout, image, scale 1" "$o/s.png screen 0 0 $W $H $W $H 1 null null" \
+    "$(jq -r '"\(.path) \(.kind) \(.region.x) \(.region.y) \(.region.w) \(.region.h) \(.image.w) \(.image.h) \(.scale) \(.window) \(.changed)"' <<<"$j")"
+  check "...the file is there" test -s "$o/s.png"
+  check_eq "...-g: kind region, its place" "region 10 20 100 50" "$(ob shot -b "$B" --json -g "10,20 100x50" -o "$o/g.png" | jq -r '"\(.kind) \(.region | "\(.x) \(.y) \(.w) \(.h)")"')"
+  check_eq "...--fit: the scale an image pixel is" "$(awk -v w="$W" 'BEGIN { printf "%.4f", 400 / w }' | sed 's/0*$//; s/\.$//')" \
+    "$(ob shot -b "$B" --json --fit 400 -o "$o/f.png" | jq -r '.scale')"
+  ob run -b "$B" -d -q --wait -- foot -T J sleep 600 >/dev/null 2>&1
+  j=$(ob windows -b "$B" --json)
+  check_eq "windows --json: one line, x y w h as at and size" "1 true" \
+    "$(wc -l <<<"$j") $(jq '.[] | select(.title == "J") | .x == .at[0] and .y == .at[1] and .w == .size[0] and .h == .size[1]' <<<"$j")"
+  local ww; ww=$(jq -r '.[] | select(.title == "J") | "\(.size[0]) \(.size[1]) \(.address)"' <<<"$j")
+  check_eq "shot --window --json: kind window, its own coordinates, the window named" "window 0 0 $ww" \
+    "$(ob shot -b "$B" --json -w 'title:^J$' -o "$o/w.png" | jq -r '"\(.kind) \(.region.x) \(.region.y) \(.region.w) \(.region.h) \(.window.address)"')"
+  ob shot -b "$B" --fit 0 -o "$o/base.png" >/dev/null 2>&1
+  ob pointer -b "$B" -- move 5 5 >/dev/null 2>&1
+  j=$(ob shot -b "$B" --changed --json -o "$o/c.png" 2>/dev/null)
+  check_match "shot --changed --json: changed {result, since}" "^(nothing|changed) $o/base.png$" "$(jq -r '"\(.changed.result) \(.changed.since)"' <<<"$j")"
+  j=$(ob shot -b "$B" --changed --json -o "$o/c2.png" 2>/dev/null)
+  check_eq "...nothing changed since: path null, result nothing" "null nothing" "$(jq -r '"\(.path) \(.changed.result)"' <<<"$j")"
+  check_eq "record status --json: not recording" '{"recording":false,"stopped":false,"monitors":[],"fps":null,"file":null,"audio":false,"started":null}' \
+    "$(ob record -b "$B" status --json)"
+  check_match "events --mark M --json: {mark, offset}" '^\{"mark":"M","offset":[0-9]+\}$' "$(ob events -b "$B" --mark M --json 2>/dev/null)"
+  check_eq "path --logs --json: {NAME: PATH}" "true" "$(ob path -b "$B" --logs --json | jq '.hyprland | type == "string"')"
+  ob down "$B" >/dev/null 2>&1
+}
+
 # output drop/back (#146, finding 210; #163, finding 232): a screen gone and back, under its name,
 # mode, place and scale: the main screen, or a monitor by name, never one taken for the other (a
 # second drop took the monitor, `mode` named it); a config reload while one is away does not bring it
@@ -13511,9 +13646,9 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_keys_to_box t_keys_layer t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

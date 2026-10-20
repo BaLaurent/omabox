@@ -73,10 +73,12 @@ Panel {
     boxes.some(function(b) { return b.name === keysFileBox && b.state === "up" }) ? keysFileBox : ""
   // `omabox config --json`; the defaults until it answers. Not named `settings`: that is the base
   // Panel's, which the bar sets to this widget's shell.json entry for setting() (finding 169).
-  property var cliConfig: ({ "workspace": "9", "confirm-close": "off", "bar-icon": "always" })
+  // Its keys snake_case (#273); an omabox from before 0.9 gives kebab-case ones (bar-icon), which
+  // configProc copies to their snake_case names.
+  property var cliConfig: ({ "workspace": "9", "confirm_close": "off", "bar_icon": "always" })
   // bar-icon: always (the default) keeps the icon, and the panel's settings, in the bar with no box
   // up, dimmed; auto shows it only while any box exists.
-  readonly property bool alwaysShown: cliConfig["bar-icon"] !== "auto"
+  readonly property bool alwaysShown: cliConfig.bar_icon !== "auto"
   // Inside a box (OMABOX_BOX, which `up` gives its whole session: finding 242) there is usually no
   // omabox to run, when a box mounts every plugin of the desk (#207). There a command that cannot run
   // is no error: the widget draws nothing and notifies nothing, from the start until a poll runs one
@@ -105,9 +107,9 @@ Panel {
   readonly property bool gpuShown: gpus.length > 1 || gpuSetting !== "auto"
   function gpuBySlot(slot) { return gpus.find(function(g) { return g.pci === slot }) }
   function gpuName(g) { return g ? (g.name || (g.driver + " " + g.pci)) : "" }
-  readonly property string gpuNowName: gpuName(gpuBySlot(cliConfig["gpu-now"])) || "no GPU"
+  readonly property string gpuNowName: gpuName(gpuBySlot(cliConfig.gpu_now)) || "no GPU"
   readonly property var gpuOptions: {
-    var o = [{ value: "auto", label: "Auto (now: " + (gpuName(gpuBySlot(cliConfig["gpu-auto"])) || "none") + ")" }]
+    var o = [{ value: "auto", label: "Auto (now: " + (gpuName(gpuBySlot(cliConfig.gpu_auto)) || "none") + ")" }]
     gpus.forEach(function(g) {
       o.push({ value: g.pci, label: gpuName(g) + " · " + (g.available ? g.driver : "unavailable" + (g.why ? " (" + g.why + ")" : "")) })
     })
@@ -129,7 +131,7 @@ Panel {
   // The setting names a GPU and new boxes render elsewhere: it is not there now (vfio-pci, gone).
   readonly property bool gpuFallback: {
     if (gpuSetting === "auto") return false
-    var now = gpuBySlot(cliConfig["gpu-now"])
+    var now = gpuBySlot(cliConfig.gpu_now)
     if (!now) return true
     var kinds = { nvidia: ["nvidia", "nouveau"], amd: ["amdgpu", "radeon"], intel: ["i915", "xe"] }
     return kinds[gpuSetting] ? kinds[gpuSetting].indexOf(now.driver) < 0 : now.pci !== gpuSetting
@@ -484,6 +486,10 @@ Panel {
       try {
         var c = JSON.parse(configOut.text)
         if (c && typeof c === "object") {
+          for (var k in c) {
+            var snake = k.replace(/-/g, "_")
+            if (snake !== k && !(snake in c)) c[snake] = c[k]
+          }
           root.cliConfig = c
           // A pick sets the Dropdown's own value, which ends its binding: show the setting again (a
           // refused pick, or `omabox config workspace N` since).
@@ -898,11 +904,11 @@ Panel {
           // Off and greyed while boxes cannot open their window again (an aquamarine without the fix,
           // NOTES finding 125): `config --json` says so, read again each time Settings opens.
           SettingSwitch {
-            readonly property bool available: root.cliConfig["confirm-close-available"] !== false
+            readonly property bool available: root.cliConfig.confirm_close_available !== false
             title: "Confirm before closing"
             caption: available ? "Closing an interactive box's window asks first; closing it again shuts the box down."
               : "Needs aquamarine's fix for nested Wayland outputs: run omabox setup --aquamarine, then open Settings again."
-            checked: available && root.cliConfig["confirm-close"] === "on"
+            checked: available && root.cliConfig.confirm_close === "on"
             enabled: available
             onToggled: if (available) root.setSetting("confirm-close", checked ? "off" : "on")
           }

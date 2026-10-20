@@ -39,8 +39,21 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   layer without any says it "publishes no accessible items", as Omarchy's own bar does today
   ([#254](https://github.com/diogochaves/omabox/issues/254)).
 
+- **`--json` on what lacked it** ([#273](https://github.com/diogochaves/omabox/issues/273)):
+  `check run` and `check diff` (each checkpoint's result, regions, holes and tree changes, the
+  report; for CI), `shot` (the path, what it covers, in which coordinates, the image's size and
+  scale, and what `--changed` found), `record status`, `mode`, `path --logs`, `calibrate --answer`,
+  `which`, `--version` and `events --mark`. `ls --json` adds `scale`, `dir` and `allowed` (the
+  ports as numbers), `ports --json` `addresses`, `saves --json` `size_kb`, `windows --json`
+  `x, y, w, h` beside Hyprland's `at` and `size`. The skill's reference lists each command's
+  fields under "JSON": from 1.0 they only grow.
+
 ### Changed
 
+- `config --json` gives its keys in snake_case (`bar_icon`, `shot_fit`, `gpu_now`), as every other
+  `--json` does; the bar widget reads them. `windows --json` is one line, as the others are.
+- `omabox help CMD` names every option the command takes, aliases too: `--box`, `--output`,
+  `--follow`, `--detach`, `-l`, `-w` and `--active` where they go, `scroll --no-raise`.
 - **Exit codes mean one thing in every command**, in one table: `omabox help exit-codes` and the
   skill's reference ([#273](https://github.com/diogochaves/omabox/issues/273)). Called wrong (an
   unknown option or command, a value missing or not of its form, a word too many or too few) is
@@ -96,6 +109,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   - `shot` and `calibrate` given two files: the last was taken without a word; name one.
   - A box name given with characters a box name cannot have, or past 40 of them (`-b "my box"`):
     it was written to fit without a word (`my-box`), `up` aside; write the name that fits.
+  - `keys --delay MS`, the keyboard tool's own time between keys, read only as the first word and
+    never documented: for a pause, `-s DURATION`.
+- With `--window`, every coordinate is the window's own (`click`'s X Y, `shot -g`, `check point`),
+  except the regions `wait still|change --window` and `--wait` take beside it (`--ignore`, `-g`):
+  those are still the screen's, now with a warning, and 1.0 takes them in the window's own. A script
+  that wants the screen's watches with `-g` (the window's place) instead of `--window`.
+- Fields that 1.0 drops, each with its successor beside it now: `config --json`'s kebab-case keys
+  (`bar-icon`, `confirm-close-available`, `gpu-now`...), `ls --json`'s `allow` (a comma string; use
+  `allowed`), `ports --json`'s `address` (use `addresses`).
 
 ## 0.8.0 — 2026-10-20
 

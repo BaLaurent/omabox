@@ -8074,6 +8074,43 @@ from them.
     the broker refuses `--burst` from a jail anyway, saying so). t_jail takes `shot --monitor NAME`
     and `--monitor=NAME --output=FILE` from a jail.
 
+390. **`--json` on what lacked it, one coordinate rule announced, every option in help** (2026-10-20,
+    #273, part C of the CLI audit; audit F8, F13, N1-N6, J1-J9). New `--json`, each additive: `check
+    run` (`check_compare_json`: `check_compare`'s lines unsaid, each checkpoint a line of
+    `CHK_JSONL` from `chk_point_json`, one object at the end; exit 3 and 4 give `result` failed /
+    no_baseline; not with `--approve`, whose output is for looking at) and `check diff` (`CHK_JQ`:
+    regions `{x, y, w, h, pixels}`, specks, a size change `{from, to}`; its text through an fd that
+    is /dev/null with `--json`, never `> /dev/stdout`, which truncates a caller's file); `shot`
+    (`shot_said`: path, kind, region in the coordinates `--in` takes, image, scale = image px per
+    layout px, window, monitor, fit, zoom, and `--changed`'s result changed / nothing / whole; not
+    with `--burst`); `record status`, `mode` (show only), `path --logs`, `calibrate --answer` (from
+    `calib_fit`'s line: `one ERR WORST`, `fit S SX SY N SIZE ERR WORST`, `off S TOL L:ERR...`, `up S`),
+    `which`, `--version` (CMD_OPTS has `[--version]` and `[which]` now), `events --mark`. Added
+    fields: `ls` `scale`, `dir`, `allowed`; `ports` `addresses`; `saves` `size_kb`; `windows` `x, y,
+    w, h` (top level, `cover[]`, `layers[]`), one line now. N1: `config --json` keys snake_case; the
+    kebab-case copies stay for 0.9 (an older widget, a script), and the widget reads snake_case,
+    copying a kebab key to its snake name when only that came (an older CLI). Deprecated here, for
+    1.0 to drop or change: config's kebab keys, `ls`'s `allow`, `ports`' `address`, `keys --delay`
+    (warned: the keyboard tool's own per-key delay, read only as its first word), and F8. **F8,
+    decided: warn, not switch, in 0.9.** With `--window` every coordinate is the window's (click's X
+    Y, `shot -g`/`--ignore`, `check point` since #281) except `wait still|change --window --ignore`
+    and `--wait`'s `-g`/`--ignore` beside `--window` (keys, click, scroll, drag), which watch the
+    screen in the layout's coordinates. Switching now would move a 0.8 script's region without a
+    word (help said "--ignore with --window too"), and no form means "the window's" today, so
+    `win_region_warn` says it at parse time (before any box), and 1.0 reads them in the window's
+    own; a script that must keep the screen's watches with `-g` instead of `--window`. Help names
+    every option a command takes (`-b NAME (or --box NAME)` in one paragraph for every box command,
+    `-o (or --output)`, `--follow`, `--detach`, `-l`, `-w`/`--active` on scroll, tree and check,
+    `scroll --no-raise`), and `t_unit_cli_contract` checks both ways now: every CMD_OPTS option in its
+    command's help (the deprecated `up -i`, `save -f`, `keys --delay` aside; check's UP OPTIONS are
+    up's). The promise is written down: skill/reference.md "JSON", each command's top-level fields,
+    additive only from 1.0; t_unit_json checks every command taking `--json` has its row. Not done
+    (audit N7-N9, keep and document: one line each for pixel, lua, events; times as they are; wait's
+    core fields): written in that table. Tests: t_unit_json (version, which, check diff and run,
+    saves, the refusals, F8, `--delay`, the table), t_unit_config, t_unit_cli_contract, t_json
+    (shot, windows, ls, mode, record status, events --mark, path --logs; box), t_ports (addresses),
+    t_widget_list (snake_case), t_widget (kebab from an older CLI).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
