@@ -95,6 +95,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   ([#276](https://github.com/diogochaves/omabox/issues/276)).
 - `record start`, `stop`, `status` and `sheet` refuse `--hold` (exit 2), which they ignored: it
   goes with `-- ACTION` or `mark`.
+- `omabox help tree --long` and the skill's reference say what an egui/winit app needs for a tree
+  on at-spi2-core 2.61 and later (Arch's now): accesskit_unix 0.22+ (eframe 0.37+). An older one
+  waits only for a property those versions dropped, so it never joins the accessibility bus, and
+  nothing `tree` sets helps; they no longer say `tree` turns it on
+  ([#282](https://github.com/diogochaves/omabox/issues/282)).
 
 ### Fixed
 

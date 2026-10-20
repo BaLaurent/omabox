@@ -550,8 +550,10 @@ window's own coordinates: \`click --window SEL\` at their middle lands on that n
 whole later: --find TEXT prints only the lines holding TEXT (any case, not in the bounds), each after
 its ancestors (\`list > list item "Beta" [selected] @12,354 1872x22\`); exit 1 when none does.
 --json: an array, one object a node printed. GTK, Qt and egui/winit (AccessKit) apps have a tree
-(\`tree\` sets org.a11y.Status.IsEnabled, which Qt waits for, and ScreenReaderEnabled, which older
-AccessKit waits for: at-spi2-core 2.61+ has none, so no tree for those); Chromium and Electron only
+(\`tree\` sets org.a11y.Status.IsEnabled, which Qt and AccessKit wait for). AccessKit needs
+accesskit_unix 0.22+ (eframe 0.37+) with at-spi2-core 2.61+: an older one waits only for
+ScreenReaderEnabled, which those no longer have (\`tree\` sets it where it is), so it never joins the
+bus and has no tree, said so; update the app's AccessKit. Chromium and Electron only
 when started with --force-renderer-accessibility; terminals have none: "no accessibility tree", exit 1.
 --layer SEL (or -l SEL) reads a layer surface instead (the shell's bar, panels, menus, a plugin's panel): its
 namespace (omabox hyprctl layers), address:0x... or pid:PID. Its bounds are the screen's coordinates:

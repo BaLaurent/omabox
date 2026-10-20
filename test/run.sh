@@ -6437,6 +6437,13 @@ t_unit_tree_layer() {
   check_match "two of its size, it with the keyboard: its frame is the active one" "--offset 0,0 --active yes --json$" "$(read_args omarchy-launcher omarchy-launcher)"
   check_match "...the other: not the active one" "--active no --json$" "$(read_args omarchy-background omarchy-launcher)"
   check_fails "...neither with the keyboard: no hint (tree says it cannot tell)" grep -q -- --active <<<"$(read_args omarchy-background "")"
+  # #282: AccessKit's requirement on at-spi2-core 2.61+ is named where an agent reads about tree.
+  out=$(ob help tree --long | tr '\n' ' ')
+  check_match "help tree --long names AccessKit's requirement (accesskit_unix 0.22+, eframe 0.37+, #282)" \
+    "accesskit_unix 0.22\+ \(eframe 0.37\+\) with at-spi2-core 2.61\+" "$out"
+  check_fails "...and no longer says tree gives older AccessKit its property" grep -q "ScreenReaderEnabled, which older" <<<"$out"
+  check_match "the skill reference names it too" "accesskit_unix 0.22\+ \(eframe 0.37\+\) on at-spi2-core 2.61\+" \
+    "$(tr '\n' ' ' < "$ROOT/skill/reference.md" | tr -s ' ')"
 }
 
 # tree --layer (#254, finding 384) in a box: a Quickshell config with a named button in a layer and

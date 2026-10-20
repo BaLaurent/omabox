@@ -108,7 +108,9 @@ a turn. Five rules keep every omabox call plain:
   widget is placed relative to the dock: check with a shot). `tree` alone prints the whole window
   (no SEL: the active one); a dense one (an editor, a long page) costs more than its shot, so ask
   with `--find`. `--json` for a script; exit 1 when nothing holds TEXT. GTK, Qt and egui/winit
-  (AccessKit) apps have a tree (`tree` turns Qt's and AccessKit's on); Chromium and Electron only
+  (AccessKit) apps have a tree (`tree` turns Qt's and AccessKit's on). AccessKit needs
+  accesskit_unix 0.22+ (eframe 0.37+) on at-spi2-core 2.61+ (Arch has it): an older one never joins
+  the bus, `tree` says so, and only updating the app's AccessKit helps; Chromium and Electron only
   when started with `--force-renderer-accessibility` (start them so when you will ask); terminals
   (foot) have none and say "no accessibility tree": shots for those. An unnamed control (a switch
   beside its label) matches by its role (`--find switch`), or read the whole tree.
@@ -331,8 +333,10 @@ with `--keep wallpaper` or after a theme set in the box.
 - Accessibility (AT-SPI) tests (dogtail, a toolkit's a11y tests, pyatspi) run in a box against its
   own a11y bus, in its runtime dir: GTK apps register on it; Qt ones once `org.a11y.Status.IsEnabled`
   is true (`omabox run -- busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true`),
-  AccessKit (egui, winit) before accesskit_unix 0.22 once `ScreenReaderEnabled` is (the same call),
-  a property at-spi2-core 2.61 and later no longer have: such an app has no tree with them.
+  AccessKit (egui, winit) from accesskit_unix 0.22 (eframe 0.37) on IsEnabled too; before 0.22 only
+  once `ScreenReaderEnabled` is (the same call), a property at-spi2-core 2.61 and later no longer
+  have: such an app never registers with them (IsEnabled, or an AT's registered events, do not
+  help: it watches that one property).
 
 ## The guard, in detail
 

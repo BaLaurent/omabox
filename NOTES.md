@@ -8144,6 +8144,18 @@ from them.
     are `@`, `@+`, `@short`; `--long` before CMD; `CMD --help`; bare help), t_unit_cli and t_unit_wait
     read the notes they check with `--long`.
 
+392. **AccessKit needs accesskit_unix 0.22+ (eframe 0.37+) for a tree on at-spi2-core 2.61+**
+    (2026-10-20, #282). Finding 368 left `help tree` saying `tree` sets ScreenReaderEnabled "which
+    older AccessKit waits for", and the skill's reference "`tree` turns Qt's and AccessKit's on":
+    true for at-spi2-core before 2.61 only. Both now name the requirement and what an agent can do
+    (update the app's AccessKit). Checked whether `IsEnabled`, or the 2.61 launcher's "an AT
+    registered events" rule, could reach an older one: no. accesskit_unix 0.21.1's event loop
+    (`context.rs`, read in the cargo registry) subscribes to `receive_screen_reader_enabled_changed`
+    only and starts its AT-SPI bus connection only on that property's value; 0.24.0 subscribes to
+    `IsEnabled` instead. With the property gone the first read fails, so nothing omabox sets on the
+    bus wakes it. Docs only, no behaviour change. Tests: t_unit_tree_layer (help tree --long and the
+    reference name it; the old wording is gone).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
