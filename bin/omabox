@@ -194,6 +194,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)
   omabox ls [--json]
   omabox which [--json] PID                              the box a host process is in, or "not in a box" (exit 1)
+  omabox brief [-b NAME]                                 ~15 lines for a subagent's prompt: the box, its windows, the rules
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
   omabox saves [--json] | saves rm SAVE...               the saves: list, delete
   omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu, shot-fit
@@ -217,7 +218,7 @@ is default-SESSION; with no box of that name, every command but \`up\` uses the 
 started from its repo, said once: \`down\` too, so \`omabox down\` there takes that box down. A
 \`down\` whose name has no box, while the session has boxes up started elsewhere, names each with the
 \`down -b\` that takes it, and exits 1.
-@+ up run shot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip
+@+ up run shot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip brief
 -b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
 too (omabox -b NAME windows).
 @+ shot record calibrate check
@@ -240,6 +241,15 @@ From the host, the box's HOME (/home/sbx in it) is <dir>/home, \`omabox path --h
 /run/user/\$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, \`omabox path
 --run\`. An agent reads and writes box files with its own file tools on the path --home prints. The host's own
 /run/user/\$UID is the real session's: never read a box app's state there.
+@ brief
+\`omabox brief -b NAME\` is for an agent that hands box work to a subagent: paste its output into
+the subagent's prompt and the subagent needs no skill. It names the box, its size and its windows
+(each with a --window SEL that finds it alone, six at most), then the rules: -b NAME on every call,
+one literal command per call, look, act once, look again, never resend unseen input, no sleep,
+never the real desktop, the box HOME's host path for the file tools, scripts there for several
+shell steps, stay in your worktree; and to load the skill when that is not enough. With no box up,
+the same for a box the subagent starts itself (up --new), and a note on stderr. Exit 0 but for a
+usage error.
 @ run
 \`omabox run\` with no box up starts a throwaway box for the command, with the current repo
 mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
@@ -13904,6 +13914,72 @@ cmd_which() {
   exit 1
 }
 
+# omabox brief (#271): what a subagent needs to drive one box, in ~15 lines its parent pastes into
+# its prompt, so it does not load the whole skill (63 of 106 skill loads were subagents', each for a
+# handful of commands). The box's name, size and windows, each with a selector that finds it alone,
+# then the rules: -b on every call, the loop, never resending unseen input, no sleep, never the real
+# desktop, and the worktree check's five (reference.md, "For subagents in an isolated worktree").
+# With no box up: the same rules for a box the subagent starts itself (up --new), said on stderr.
+cmd_brief() {
+  local name=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -b|--box) optarg "$@"; name=$2; shift ;;
+      -*) unknown_opt brief "$1" ;;
+      *) unexpected brief "$1" ;;
+    esac
+    shift
+  done
+  select_box "$name"
+  local b=NAME home="the path omabox -b NAME path --home prints" mons="" wins="" first last
+  if box_alive; then
+    need_box
+    b=$NAME home=$D/home
+    mons=$(hypr_json monitors) || exit $?
+    wins=$(box_windows) || exit $?
+  else
+    say "brief: no box '$NAME' is up: this brief is for a box the subagent starts itself (omabox up --new);" \
+      "with one up, omabox brief -b NAME names it and its windows"
+  fi
+  if [ -n "$mons" ]; then
+    first=$(jq -r --arg b "$b" "($(main_screen)) as \$s | (map(select(.disabled | not)) | length - 1) as \$n
+      | \"You drive omabox box '\(\$b)' (\(if \$s then \"\(\$s.width)x\(\$s.height), scale \(\$s.scale * 100 | round / 100)\" else \"its main screen away\" end)\"
+        + (if \$n > 0 then \", \(\$n) more monitor\(if \$n > 1 then \"s\" else \"\" end): monitor list\" else \"\" end)
+        + \"): a private Omarchy desktop, not the user's. Its windows (--window SEL, size at x,y):\"" <<<"$mons")
+    # Each window by the word that finds it alone (its class's last part, as the selector reads a
+    # word: the class, its last dot part, or part of a title), else its address; 6 at most.
+    last=$(jq -r --arg b "$b" '. as $all
+      | def word: (.class // "" | ascii_downcase | split(".") | last // "");
+        def finds($w): [$all[] | (.class // "" | ascii_downcase) as $c | select($c == $w or ($c | split(".") | last) == $w
+          or (.title // "" | ascii_downcase | contains($w)))] | length == 1;
+        def sel: word as $w | if ($w | test("^[a-z0-9][a-z0-9_.-]*$")) and $w != "active" and ($w | test("^0x") | not) and finds($w) then $w else .address end;
+      if length == 0 then "  none yet (omabox -b \($b) run -d --wait -- APP opens one)"
+      else (.[:6][] | "  \(sel)  \(.title // "" | if length > 40 then .[:39] + "…" else . end | tojson)  \(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])  "
+          + (if .onscreen | not then "off-screen (workspace \(.workspace))" elif .cover != [] then "covered" else "on-screen" end)
+          + (if .active then ", active" else "" end)),
+        (if length > 6 then "  and \(length - 6) more: omabox -b \($b) windows" else empty end) end' <<<"$wins")
+    printf '%s\n%s\n' "$first" "$last"
+  else
+    echo "You drive an omabox box: a private Omarchy desktop, not the user's. Start yours: omabox up --new [--plugin PATH]"
+    echo "(all its options there); it prints its name (box-3): that is NAME below. It has no windows yet."
+  fi
+  local own="The box is your parent's: leave it up."
+  [ "$b" != NAME ] || own="The box is yours: omabox down -b NAME when done."
+  cat <<EOF
+Every call: omabox -b $b CMD ..., one literal command per call: no \$VAR, \$(...), pipes, && or ;. Look a value up, then type it.
+The loop: look, act once, look again. Text first (omabox -b $b windows, tree --find TEXT --window SEL); pixels: shot --window SEL prints a PNG path: Read it.
+Act: run -d --wait -- APP; keys --window SEL --wait -t TEXT Return; click --window SEL X Y (window coordinates, as in its shot); after a -g or --fit shot, click --in THAT.png X Y.
+Exit 0 from keys or click means sent, not landed: never resend input you have not seen land (124 after --wait: it WAS sent; shot first).
+No sleep: the action's --wait, wait still, wait change, wait window SEL [--gone], wait until -- CMD (never wait cmd); in a video, record hold 2s.
+Never the real desktop: no hyprctl, grim, wtype, ydotool or GUI app of your own; omabox -b $b hyprctl ..., omabox -b $b run -- CMD instead.
+Box files: the box's /home/sbx is $home on the host: Read, Write and Edit there, never \$(omabox path) in a command.
+Several shell steps in the box: write them to a script there with your file tool, then omabox -b $b run -- sh /home/sbx/F.sh.
+Stay in your worktree: no cd out of it, no git on another checkout (absolute paths instead). Scroll with scroll X Y DY --source wheel.
+$own Report what you saw, and what a box cannot show (real hardware, the installed package).
+One command's options: omabox help CMD. If this brief is not enough, load the omabox skill.
+EOF
+}
+
 # --- ai-jail: the broker ---------------------------------------------------------------------------
 # An agent inside ai-jail cannot enter a box (the jail's seccomp filter refuses setns and unshare), so
 # its omabox hands each command to the broker outside, over a socket its ~/.ai-jail maps in
@@ -14477,7 +14553,7 @@ broker_init() {
 broker_check() {
   local cmd=$1; shift
   case $cmd in
-    up|run|shot|screenshot|pixel|windows|tree|keys|click|scroll|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|monitor|gpu|cpu|audio|env|path|down|ls|list) ;;
+    up|run|shot|screenshot|pixel|windows|tree|keys|click|scroll|pointer|drag|wait|hyprctl|lua|log|logs|gdb|events|restart-shell|reload|mode|output|monitor|gpu|cpu|audio|env|path|down|ls|list|brief) ;;
     # record (#224): its files only through fds the caller's omabox opened (cmd_record checks them).
     record) ;;
     # ports (#93): the jail's own boxes (list_names), with the host side named by state only (cmd_ports).
@@ -14951,6 +15027,7 @@ declare -A CMD_OPTS=(
   [path]="-b= --box= --logs --run --home --json"
   [down]="-b= --box= --all --orphans"
   [ls]="--json" [saves]="--json" [config]="--json" [--version]="--json" [which]="--json"
+  [brief]="-b= --box="
   [save]="-b= --box= --force -f"
   [clip]="-b= --box= --from-box"
   [setup]="--aquamarine --force --remove --feedback-skill --no-feedback-skill"
@@ -14958,7 +15035,7 @@ declare -A CMD_OPTS=(
 # The commands, for an unknown one's nearest (aliases: screenshot, logs, list, version).
 COMMANDS="up run shot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl
   lua log events peek restart-shell reload mode output monitor gdb gpu cpu audio ports env path down ls which save saves
-  config guard host clip broker setup help version"
+  config guard host clip broker brief setup help version"
 # CMD's options, one a word (CMD as given: an alias is its command's); a failure when it takes none.
 cmd_opts() {
   local c=$1
@@ -15027,7 +15104,7 @@ eq_split() {
 # Done before anything reads the command, the broker's policy and the relay included: they see the
 # command, with -b in the one place every command's parser takes it. `help` and `--version` ignore it.
 # Sets ARGS.
-BOX_CMDS=" up run shot screenshot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip "
+BOX_CMDS=" up run shot screenshot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log logs gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip brief "
 global_box() {
   ARGS=("$@")
   case ${1:-} in -b|--box|--box=*) ;; *) return 0 ;; esac
@@ -15145,6 +15222,7 @@ main() {
     down) cmd_down "$@" ;;
     ls|list) cmd_ls "$@" ;;
     which) cmd_which "$@" ;;
+    brief) cmd_brief "$@" ;;
     save) cmd_save "$@" ;;
     saves) cmd_saves "$@" ;;
     config) cmd_config "$@" ;;

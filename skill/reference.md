@@ -79,6 +79,18 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | `which --json` | `pid, box, by` (pidns or env; `box` null: not in one) |
 | `--version --json` | `version, aquamarine` (`kind, version, fixed, message`) |
 
+## Handing box work to a subagent
+
+`omabox brief -b NAME` prints what a subagent needs to drive that box, ~15 lines (~450 tokens,
+against the skill's ~3 500): the box's name, size and scale, its windows one a line (each by a
+`--window` word that finds it alone, else its address; six at most), then the rules: `-b NAME` on
+every call, one literal command per call, look, act once, look again, never resend input not seen
+landing, no sleep, never the real desktop, the box HOME's host path, and the five below. Paste it
+whole into the subagent's prompt: the subagent needs no skill, and the brief's last line tells it to
+load the skill when the brief is not enough. Run it right before delegating (the windows are as
+they were then). With no box up it prints the same rules for a box the subagent starts itself (`up
+--new`, down when done), and says so on stderr; exit 0 either way.
+
 ## For subagents in an isolated worktree
 
 Claude Code checks each Bash call of a worktree-isolated subagent and refuses what it cannot follow:

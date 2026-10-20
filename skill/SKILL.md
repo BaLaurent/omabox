@@ -42,12 +42,13 @@ a first-run screen offers; use a test one or ask. An app that talks to, starts o
 servers: `omabox up --net isolated [--allow 8081]` (only those host ports). ref: Network.
 
 Your box is named after the repo (or worktree) and your session, so no other session shares it; it
-goes down when your agent exits: `omabox down` when done, and before `/clear`. Subagents share it; for
+goes down when your agent exits (`omabox down` before `/clear`). Subagents share it; for
 one of its own, `omabox up --new [--plugin …]` starts a box under a free name and prints it (`box-3`):
 all its options on that call, then `-b box-3` on every later call, typed out (your shell keeps no
 variables), and it outlives you: `omabox down -b box-3`. A box the user started: `-b NAME` (`omabox
-ls`). In a worktree-isolated Claude Code subagent: one literal `omabox -b NAME …` per call;
-ref: For subagents in an isolated worktree. ref: Project instructions, in detail.
+ls`). Box work for a subagent: `omabox brief -b NAME`'s output in its prompt (no skill needed). A
+worktree-isolated subagent: ref: For subagents in an isolated worktree. ref: Project
+instructions, in detail.
 
 ## The loop
 
@@ -94,7 +95,7 @@ ref: Waiting, in detail.
 Coordinates are screenshot pixels: after a `-g`, `--fit` or `--zoom` shot (said on stderr: never
 discard it) click with `--in THAT.png X Y`, never your own arithmetic. A shot bigger than the model
 sees is scaled down for it, and some models read points in that smaller image (Haiku 4.5: 0.76x):
-off a whole screen or big window, `shot --fit 1456` and `click --in` it,
+off a whole screen or big window, `shot --fit 1456`,
 any model; still missing: `calibrate`. **Shots are most of a session's context**:
 the smallest that shows it (`--window`, `-g`, `--fit 1280`); what an action changed
 `shot --changed`; a colour `pixel`, a transition `shot --burst N --sheet`; against a baseline `check`.

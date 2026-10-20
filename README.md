@@ -133,6 +133,7 @@ omabox events --since 30s --grep urgent   # Hyprland's events, stamped; --mark, 
 omabox down                            # kill everything in the box
 omabox ls                              # boxes, mode, size, state, plugins
 omabox which 12345                     # the box a host pid is in, a bar like yours in pgrep
+omabox brief -b box-3                  # ~15 lines for a subagent's prompt: the box, its windows, the rules
 ```
 
 - **Names**: a box is named after the current git repo. Inside a Claude Code or Codex session (or

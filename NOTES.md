@@ -8193,6 +8193,33 @@ from them.
     --json` with the allowed row. Tests: t_isolated (ports' allowed row; a box server on the port
     fails; run -d of a fast failure, of `true` with and without -q, of a launcher); t_replace's
     ended job now sleeps 1.5 s, past the 0.3 s (the check had dropped its record before --replace).
+395. **`omabox brief`: what a subagent needs, without the skill** (2026-10-20, #271). 63 of 106
+    skill loads in the 10-09..10-17 sessions were subagents', most sent to use a handful of commands
+    in a box their parent had up, each loading the whole SKILL.md (~14 000 chars, ~3 500 tokens),
+    again in every parallel one. `omabox brief [-b NAME]` prints what such a subagent needs, for the
+    parent to paste into its prompt: a line naming the box, its main screen's size and scale (and
+    how many more monitors), its windows one a line (a `--window` word, the title cut to 40 chars,
+    size at x,y, on-screen/covered/off-screen and active; six at most, then "and N more"), then 11
+    lines of rules with the box's name written in: `-b NAME` on every call and one literal command
+    per call; the loop; sent is not landed, never resend; no sleep (`--wait`, `wait still/change/
+    window/until`, never `wait cmd`, `record hold`); never the real desktop; the box HOME's host
+    path for Read/Write/Edit; a script there for several shell steps; stay in the worktree (with
+    `scroll --source wheel`); the box is the parent's (leave it up); `help CMD`, and load the skill
+    when this is not enough. Those are #272's five worktree rules (reference.md) and the skill's
+    "Driving an app" core. The window word is the class's last dot part when the selector's own
+    reading of a word (class, its last part, part of a title) finds that window alone; else its
+    address (two foots are both `0x…`). Size: ~1 750-1 900 chars (~450 tokens, 13-14 lines with one
+    or two windows, 20 at most), an eighth of SKILL.md. *Decided*: with no box up it prints the same
+    rules for a box the subagent starts itself (`up --new`, NAME as the placeholder, `down -b NAME`
+    when done) and says so on stderr, exit 0, rather than refusing: a parent can hand it over
+    before any box exists. *Decided*: no `--json` (the brief is prompt text; `ls --json` and
+    `windows --json` carry its data). A jailed agent may run it (read-only, through the broker).
+    SKILL.md names it in one line (13 997 B; cut to fit: "`click --in` it" after `--fit 1456`,
+    which the sentence before says; "`omabox down` when done", which the loop says; the worktree
+    line's "one literal `omabox -b NAME …` per call", the first of the rules its ref holds). Tests:
+    t_unit_brief (no box: the rules, ≤ 20 lines, `-b NAME`, stderr note, `-b` before the command,
+    `--json` and a word refused), t_brief (none yet; one foot by its app id, size and scale, HOME's
+    host path; two of one class by address).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

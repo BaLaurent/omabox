@@ -7,6 +7,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Added
 
+- **`omabox brief -b NAME`** prints ~15 lines a parent agent pastes into a subagent's prompt
+  instead of the subagent loading the whole skill (a quarter of its size or less): the box's name,
+  size and windows, each window with a `--window` word that finds it alone, then the rules (`-b NAME`
+  on every call, one literal command per call, look, act once, look again, never resend unseen
+  input, no sleep, never the real desktop, the box HOME's host path for file tools, scripts there
+  for several shell steps, stay in your worktree) and when to load the skill after all. The skill
+  tells a parent that delegates box work to use it
+  ([#271](https://github.com/diogochaves/omabox/issues/271)).
 - **`--opt=value`** wherever an option takes a value, in every command (`shot --window=firefox
   --fit=1456`, `omabox --box=x windows`, `pointer move X Y --steps=5`): as `--opt value`. An option
   that takes none refuses one (`--json=1`, exit 2); a value given as a separate word stays as it is
