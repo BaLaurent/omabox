@@ -10,6 +10,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - The skill's reference says a box turns PipeWire's realtime module off for its clients, which hides
   a realtime-limit bug, and how to run one client without that
   ([#305](https://github.com/diogochaves/omabox/issues/305)).
+- The reference says plainly that wgpu apps (eframe's default renderer, iced, Bevy) do not start in
+  a box on NVIDIA, and what to do: a GL renderer, or a box on the AMD/Mesa GPU
+  ([#306](https://github.com/diogochaves/omabox/issues/306)).
 
 ### Fixed
 

@@ -425,6 +425,11 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   pmon`, `source` in `--json`): whole seconds, % of the GPU each process was seen using once a second;
   a light process can read 0, and one saturating the GPU leaves the others at 0. Compare runs, not
   absolute figures, there.
+- **wgpu apps (eframe's default renderer, iced, Bevy) do not start in a box on NVIDIA**:
+  `RequestAdapterError(NotFound { active_backends: VULKAN | GL })`; wgpu does not fall back to GL
+  there. Build the app with a GL renderer (eframe's `glow`), or run it in a box on the AMD/Mesa render
+  node, whose Vulkan (RADV) a box has: `OMABOX_RENDER_NODE=/dev/dri/renderDN omabox up --new`
+  (`omabox config gpu` lists them).
 - **Apps in a box that render in software** (llvmpipe; on NVIDIA they draw on the GPU, but Vulkan
   there still fails). Their CPU and frame cost measured there is software rendering's, and `gpu`
   counts none of their drawing. `up` says so once, `ls` and `gpu`/`cpu` show an `apps: llvmpipe, in software` line,
