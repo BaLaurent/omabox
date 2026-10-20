@@ -7769,6 +7769,18 @@ from them.
     a record from before has only argv[0], compared as written. In a box: `sleep 601` then
     `--replace -- sleep 602` names the first (t_replace; t_unit_replace_others).
 
+377. **`down` where the derived name has no box names the session's boxes** (2026-10-20, #262).
+    A box's default name comes from the directory, so a session that started its box in a scratch
+    folder (`default-SESSION`) and later ran `omabox down` in a worktree got "no box
+    '<worktree>-SESSION'", exit 0, and its box stayed up while the agent believed it had cleaned up.
+    `down` with no name now, when no box has the derived name but boxes carrying this session's id
+    are up (`session_boxes`, finding 200's test: the agent session's id in the name; a box from
+    `up --new` has none and is not named), says each with where `up` ran and its down: `no box 'X';
+    this session has 'Y' (started in ~/…): omabox down -b Y`, and exits 1. `up` now records that
+    directory in box.json (`dir`; not for a jailed caller); a box from before shows none. A plain
+    "no box" (no session box up, or a name given) still exits 0. No `down --mine` (decided). Real
+    box: up from a scratch folder, `omabox down` in this repo named it, exit 1 (t_unit_agent_session).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

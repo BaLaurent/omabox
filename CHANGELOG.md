@@ -131,6 +131,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   of this command". It now says which job of that program still runs and how to deal with it:
   `--replace: no earlier job with these arguments; ./build/app (pid 115, --demo details) still runs:
   stop it, or --replace with its arguments`. The skill's line says "the same command and arguments".
+- **`omabox down` names your session's box when the directory's name has none.** A box is named
+  after the directory a command runs in, so a box started in a scratch folder and a `down` run later
+  in a worktree said only "no box '…'" and exited 0, leaving the box up. When your session has boxes
+  up under other names, `down` now names each, where it was started and the command that takes it
+  down (`this session has 'default-…' (started in ~/…): omabox down -b default-…`), and exits 1.
 
 ## 0.7.0 — 2026-10-16
 

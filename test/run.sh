@@ -3910,6 +3910,27 @@ t_unit_agent_session() {
   # too (it passed the derived name as if given, and `omabox down` outside a repo found no box).
   check_eq "down with no name: select_box derives it (gets none)" "got:[]" \
     "$(sel "$P-r-$sid" down 'select_box() { echo "got:[${1-}]"; exit 0; }; cmd_down' | tail -1)"
+  # #262: `down` in another directory (its derived name has no box) while the session's boxes are up
+  # under other names: each named with where `up` ran (box.json's dir) and its down -b, and exit 1.
+  # dn UP DIR ARGS...: cmd_down ARGS from DIR with the boxes in UP up, then its status
+  dn() {
+    local up=$1 wd=$2; shift 2
+    (cd "$wd" && env -u OMABOX -u OMABOX_SESSION -u CODEX_THREAD_ID XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
+      bash -c 'source "$1"; up=$2; MAIN_CMD=down; shift 2
+        box_state() { if [[ " $up " == *" $NAME "* ]]; then echo up; else echo dead; fi; }
+        rc=0; cmd_down "$@" || rc=$?; echo "rc=$rc"' _ "$lib" "$up" "$@" 2>&1)
+  }
+  jq -n --arg d "$HOME/code/proj" '{dir: $d}' > "$sr/omabox/$P-r-$sid/box.json"
+  check_eq "down where no box has the derived name: the session's box named, with its down -b (#262)" \
+    "omabox: no box '$P-as-$sid'; this session has '$P-r-$sid' (started in ~/code/proj): omabox down -b $P-r-$sid"$'\n'"rc=1" \
+    "$(dn "$P-r-$sid $P-r-0000beef" "$repo")"
+  check_match "...two: both, each with its down (one from before dir was kept: no 'started in')" \
+    "^omabox: no box '$P-as-$sid'; this session has '$P-(r|q)-$sid'[^;]*: omabox down -b $P-(r|q)-$sid; '$P-(r|q)-$sid'.*: omabox down -b $P-(r|q)-$sid"$'\n'"rc=1\$" \
+    "$(dn "$P-r-$sid $P-q-$sid" "$repo")"
+  check_match "......the old one without a dir" "'$P-q-$sid': omabox down -b $P-q-$sid" "$(dn "$P-r-$sid $P-q-$sid" "$repo")"
+  check_eq "...none of the session's up: no box, as before (exit 0)" "omabox: no box '$P-as-$sid'"$'\n'"rc=0" "$(dn "$P-r-0000beef" "$repo")"
+  check_eq "...a name given: as before" "omabox: no box 'nope'"$'\n'"rc=0" "$(dn "$P-r-$sid" "$repo" -b nope)"
+  rm -f "$sr/omabox/.down-"*
 }
 
 # #220: a box at --idle 0 with no agent or owner had no reaper, and `ls` could not tell one left behind

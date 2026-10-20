@@ -183,7 +183,9 @@ session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off. A gi
 by its own folder, so each worktree has its own box. -b NAME also goes before the command
 (omabox -b NAME windows), for every command that takes it. Outside any repo (a scratch dir) the name
 is default-SESSION; with no box of that name, every command but \`up\` uses the session's one box
-started from its repo, said once: \`down\` too, so \`omabox down\` there takes that box down.
+started from its repo, said once: \`down\` too, so \`omabox down\` there takes that box down. A
+\`down\` whose name has no box, while the session has boxes up started elsewhere, names each with the
+\`down -b\` that takes it, and exits 1.
 @ path
 From the host, the box's HOME (/home/sbx in it) is <dir>/home and its /run/user/\$UID (its
 XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, \`omabox path --run\`. The host's own
@@ -3884,7 +3886,7 @@ cmd_up() {
     --argjson linked "$(printf '%s\n' "${LINKED_PLUGINS[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --argjson overlays "$(printf '%s\n' "${overlays[@]}" | jq -R 'select(. != "")' | jq -s .)" \
     --arg ws "$ws" --arg confirm "$confirm" --arg confirm_from "$confirm_from" --argjson wayland_screen "$wayland_screen" \
-    --arg jail "$(! in_jail || jail_get .id)" --arg from "$FROM" --arg hyprland "$hyprland" --arg quickshell "$quickshell" --arg omarchy "$omarchy" \
+    --arg jail "$(! in_jail || jail_get .id)" --arg dir "$(in_jail || printf '%s' "$PWD")" --arg from "$FROM" --arg hyprland "$hyprland" --arg quickshell "$quickshell" --arg omarchy "$omarchy" \
     --argjson xwayland "$xwayland" --argjson autoreload "$autoreload" --argjson shell "$shell" \
     --arg omarchy_version "$(if [ -n "$omarchy" ]; then v=$(git_rev "$omarchy"); echo "dev${v:+ $v}"; else omarchy_version; fi)" \
     --arg aq_kind "$AQ_KIND" --arg aq_ver "$AQ_VER" --arg aq_main "${AQ_MAIN:-}" --argjson aq_fixed "$([ "$AQ_FIXED" = 1 ] && echo true || echo false)" \
@@ -3907,6 +3909,7 @@ cmd_up() {
       + (if $theme != "" then {theme: $theme} else {} end)
       + (if ($mspecs | length) > 0 then {monitor_specs: $mspecs} else {} end)
       + (if $jail != "" then {jail: $jail} else {} end)
+      + (if $dir != "" then {dir: $dir} else {} end)
       + (if $from != "" then {from: $from} else {} end)
       + (if $hyprland != "" then {hyprland: $hyprland} else {} end)
       + (if $quickshell != "" then {quickshell: $quickshell} else {} end)
@@ -12706,6 +12709,21 @@ write_confirm_flag() {
 # an `up` that has not reached its lock yet reads it, a minute at most (its flock -w 60): one older
 # than 10 minutes is read by nobody, and goes (#158). Written before the down lets go of the name's
 # lock (finding 237): an `up` waiting on it reads it as soon as it has the lock.
+# `down` found no box under the name: said. A name derived here (no -b) while this agent session has
+# boxes up under others, started from other directories (#262; session_boxes: its id in their names),
+# names each and the down that takes it, and fails: the agent's box is still up. down_none
+down_none() {
+  local mine="" n dir has=""
+  [ "${NAME_DERIVED:-0}" = 0 ] || mine=$(session_boxes) || mine=""
+  [ -n "$mine" ] || { say "no box '$NAME'"; return 0; }
+  for n in $mine; do
+    dir=$(D=$BOXES/$n meta dir) || dir=""
+    case $dir in "$HOME"|"$HOME"/*) dir="~${dir#"$HOME"}" ;; esac
+    has+="${has:+; }'$n'${dir:+ (started in $dir)}: omabox down -b $n"
+  done
+  say "no box '$NAME'; this session has $has"
+  return 1
+}
 down_mark() {
   [ -n "${DOWN_IF_CREATED:-}" ] || { mkdir -p "$BOXES" && proc_start $$ > "$BOXES/.down-$NAME"; } 2>/dev/null || true
   prune_marks
@@ -12750,7 +12768,7 @@ cmd_down() {
     # look and read no marker is waited for below.
     if [ ! -d "$D" ] && [ ! -e "$BOXES/.lock-$NAME" ]; then
       down_mark
-      [ -d "$D" ] || [ -e "$BOXES/.lock-$NAME" ] || { say "no box '$NAME'"; continue; }
+      [ -d "$D" ] || [ -e "$BOXES/.lock-$NAME" ] || { down_none || rc=1; continue; }
     fi
     mkdir -p "$BOXES"
     local lock lk=$BOXES/.lock-$NAME
@@ -12760,7 +12778,7 @@ cmd_down() {
     # A box gone takes its lock file with it, removed while held (#158): names are seldom used twice
     # (the suite's t<pid>-…, a session's …-run<N>), and each kept one a file in the runtime dir.
     # Its marker before the lock goes (finding 237): an `up` waiting on it then reads it.
-    [ -d "$D" ] || { down_mark; rm -f "$lk"; exec {lock}>&-; say "no box '$NAME'"; continue; }
+    [ -d "$D" ] || { down_mark; rm -f "$lk"; exec {lock}>&-; down_none || rc=1; continue; }
     # The reaper decided on the box it watched, then waited here: an `up` holding the lock may have
     # started a new box under the name (finding 74). Not that one.
     if [ -n "${DOWN_IF_CREATED:-}" ] && [ "$(meta created)" != "$DOWN_IF_CREATED" ]; then exec {lock}>&-; continue; fi
