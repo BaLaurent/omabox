@@ -1018,9 +1018,9 @@ t_unit_cli_contract() {
        done)"
 }
 
-# #273 part C: the --json shapes that need no box (each a jq check: the fields a script reads), the
-# warnings for what 1.0 changes (F8: a region beside --window; keys --delay), and --json where it
-# does not go.
+# #273 part C: the --json shapes that need no box (each a jq check: the fields a script reads), what
+# 1.0 changed (F8: a region beside --window is the window's; keys --delay refused), and --json where
+# it does not go.
 t_unit_json() {
   local d=$TMP/ujson j rc; mkdir -p "$d"
   j=$("$CLI" --version --json)
@@ -1070,14 +1070,15 @@ t_unit_json() {
   check_eq "saves --json: size_kb a number, size a string" "true true" \
     "$(sv saves --json | jq -r --arg s "$P-js" '.[] | select(.name == $s) | "\((.size_kb | type == "number") and .size_kb >= 290) \(.size | type == "string")"')"
   rm -rf -- "${TMP:?}/data/omabox/saves/$P-js"
-  # F8 (#273): a region beside --window is still the screen's, warned; without --window, nothing.
-  check_match "wait still --window --ignore: warned, the screen's until 1.0" \
-    "warning: wait still with --window: --ignore taken in the screen's coordinates \(the layout's\) until 1.0, which takes the window's own" \
+  # F8 (#273, #287): since 1.0 a region beside --window is the window's own, with no warning (0.9's).
+  check_eq "wait still --window --ignore: no warning (only the box asked)" "omabox: no box '$P-nobox' is up (start one with: omabox up $P-nobox)" \
     "$("$CLI" wait still --window foo --ignore "1,1 2x2" -b "$P-nobox" 2>&1)"
-  check_match "click --window --wait -g --ignore: warned" "warning: click --wait with --window: -g and --ignore taken in the screen's" \
-    "$("$CLI" click --window foo --wait -g "0,0 9x9" --ignore "1,1 2x2" 1 1 -b "$P-nobox" 2>&1)"
-  check_fails "...wait still --ignore without --window: no warning" grep -q warning <<<"$("$CLI" wait still --ignore "1,1 2x2" -b "$P-nobox" 2>&1)"
-  check_fails "...click --window --wait with no region: none" grep -q warning <<<"$("$CLI" click --window foo --wait 1 1 -b "$P-nobox" 2>&1)"
+  check_fails "...click --window --wait -g --ignore: none" grep -q warning <<<"$("$CLI" click --window foo --wait -g "0,0 9x9" --ignore "1,1 2x2" 1 1 -b "$P-nobox" 2>&1)"
+  check_eq "settle_in_window: -g's and --ignore's regions moved by the window's place, the cursor's (--ignore) and the rest kept" \
+    "--region 110,55,9,9 --mask 101,51,2,2 --quiet 300 --ignore 5,5,64,64 --strict|100 50" \
+    "$(lib eval 'SETTLE_ARGS=(--region 10,5,9,9 --mask 1,1,2,2 --quiet 300 --ignore 5,5,64,64 --strict); settle_in_window 100 50; echo "${SETTLE_ARGS[*]}|$SETTLE_ORIGIN"')"
+  check_eq "...a settle_opts_check given a --window marks it, none does not" "1 0" \
+    "$(lib eval 'SETTLE_WAIT=1; settle_opts_check 1; a=$SETTLE_WINDOW; SETTLE_WINDOW=0; settle_opts_check 0; echo "$a $SETTLE_WINDOW"')"
   local out; out=$("$CLI" keys --delay 5 a -b "$P-nobox" 2>&1); rc=$?
   check_match "keys --delay: refused (2), naming -s DURATION (#287)" "^2\|omabox: keys --delay is refused since 1\.0: for a pause between keys, -s DURATION" "$rc|$out"
   # The promise written down: each command that takes --json has its row in the reference's JSON table.
@@ -10192,7 +10193,7 @@ t_monitors_wait_nvidia() {
   monitors_wait_on "$n" "$P-monwnv"
 }
 monitors_wait_on() {
-  local n=$1 B=$2 out rc g w when c gx gy gw gh i
+  local n=$1 B=$2 out rc g w when c gx gy gw gh i gn tx ty
   env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --no-shell --net isolated --monitor 1280x720,scale=1.6 \
     --monitor 1080x1920,below >/dev/null 2>&1 || { no "up with two more monitors" "failed"; return; }
   ob pointer -b "$B" -- move 2300 200 >/dev/null
@@ -10212,8 +10213,13 @@ monitors_wait_on() {
     check_eq "a cell changing on the second monitor: wait still 124$when" 124 "$rc"
     check "...named as an --ignore in the layout, a cell inside its window ($g in $w)$when" cell_in "$g" "$w"
     check_eq "...--ignore it: still$when" 0 "$(ob wait -b "$B" still --ignore "$g" >/dev/null; echo $?)"
-    check_eq "...--window on it: 124, and still with --ignore$when" "124 0" \
-      "$(ob wait -b "$B" still --window 'title:^N$' --timeout 1500ms >/dev/null; echo $?) $(ob wait -b "$B" still --window 'title:^N$' --ignore "$g" >/dev/null; echo $?)"
+    # (#287, F8: beside --window, --ignore is the window's own; the 124 names it so)
+    out=$(ob wait -b "$B" still --window 'title:^N$' --timeout 1500ms); rc=$?
+    gn=$(sed -n 's/.*(the window.s \([^)]*\)): --ignore "\([^"]*\)".*/\2/p' <<<"$out")
+    read -r gx gy gw gh <<<"${g//[,x]/ }"
+    check_eq "...--window on it: 124, naming the --ignore in the window's coordinates$when" \
+      "124 $((gx - ${w%% *})),$((gy - $(cut -d' ' -f2 <<<"$w"))) ${gw}x${gh}" "$rc $gn"
+    check_eq "...still with that --ignore$when" 0 "$(ob wait -b "$B" still --window 'title:^N$' --ignore "$gn" >/dev/null; echo $?)"
     # One digit to the next, inside $g (all the digits over 2 s): a narrow pair is a pixel narrower.
     out=$(ob wait -b "$B" change -g "1920,0 800x450" --json)
     c=$(jq -r '"\(.result) \(.change.x),\(.change.y) \(.change.w)x\(.change.h)"' <<<"$out")
@@ -10227,16 +10233,22 @@ monitors_wait_on() {
       check_eq "run -d --wait of a window on the third monitor: settled" 0 \
         "$(ob run -b "$B" -d --wait --ignore "$g" -- foot -T T sh -c 'cat > /tmp/typed' >/dev/null 2>&1; echo $?)"
     fi
-    out=$(ob keys -b "$B" --window 'title:^T$' --wait --ignore "$g" -t x); rc=$?
+    # Beside --window T, --wait's --ignore and -g are T's own coordinates (F8): N's cell and the
+    # third monitor, moved by T's place.
+    read -r tx ty < <(ob windows -b "$B" --json | jq -r '.[] | select(.title == "T") | "\(.at[0]) \(.at[1])"')
+    out=$(ob keys -b "$B" --window 'title:^T$' --wait --ignore "$((gx - tx)),$((gy - ty)) ${gw}x${gh}" -t x); rc=$?
     check_eq "keys --wait into a window on the third monitor: settled$when" 0 "$rc"
     check_match "...on a change there (from 1920,450)$when" "last change .* at (19[2-9][0-9]|2[0-9]{3}),(4[5-9][0-9]|[5-9][0-9]{2}|[0-9]{4}) " "$out"
     check_eq "...with -g on that monitor: settled$when" 0 \
-      "$(ob keys -b "$B" --window 'title:^T$' --wait -g "1920,450 1080x1920" -t y >/dev/null; echo $?)"
+      "$(ob keys -b "$B" --window 'title:^T$' --wait -g "$((1920 - tx)),$((450 - ty)) 1080x1920" -t y >/dev/null; echo $?)"
     [ -n "$when" ] || ob output -b "$B" drop --for 500ms >/dev/null
   done
   ob keys -b "$B" --window 'title:^T$' Return >/dev/null
   check "what was typed reached it" until_ok 5 bash -c "[ \"\$('$CLI' run -b '$B' -- cat /tmp/typed)\" = xyxy ]"
-  check_match "wait --window --ignore outside the window: said, screen coordinates" "outside the region watched: it takes the screen's coordinates" \
+  check_match "wait --window --ignore outside the window: said, in its own coordinates" \
+    "--ignore \"5000,10 8x11\" is outside window .* \([0-9]+x[0-9]+, in its own coordinates\): it leaves nothing out" \
+    "$(ob wait -b "$B" still --window 'title:^N$' --ignore "5000,10 8x11" --timeout 500ms 2>&1 >/dev/null)"
+  check_eq "...one inside it (its own 10,10): nothing said" "" \
     "$(ob wait -b "$B" still --window 'title:^N$' --ignore "10,10 8x11" --timeout 500ms 2>&1 >/dev/null)"
   ob down "$B" >/dev/null
 }

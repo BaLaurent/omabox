@@ -560,11 +560,12 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   (`kind` window, layer or none, `window`, `namespace`, `at`: what got the input; `certain` false
   when a full-screen layer may have taken it instead; on a 124 or with --json); `events_since` (`omabox events --since N`: everything from just before the input). `wait
   still|change` has no action and none of these.
-- The screen watched is every monitor of the box. `-g`, `--window`, `--ignore` and the regions the line
-  names are the layout's coordinates, as for a plain `click` and `shot -g`. Beside `--window`, `-g`
-  and `--ignore` are still the layout's in 0.9, with a warning (one outside the region watched is
-  said): 1.0 takes them in the window's own coordinates, as `click --window` takes X Y. Until then a
-  script that must not change meaning watches with `-g` (the window's place) instead of `--window`.
+- The screen watched is every monitor of the box. `-g` and `--ignore` are the layout's coordinates,
+  as for a plain `click` and `shot -g`; beside `--window`, the window's own (0,0 its top left corner),
+  as `click --window` takes X Y (0.9 took the layout's, with a warning). The regions the line names
+  are the layout's; a 124's suggested `--ignore` is the window's when `--window` was given. One
+  `--ignore` outside the region watched is said. To watch a part of the screen whatever the window,
+  `-g` without `--window`.
 - `--ignore "X,Y WxH"` (up to 16; `--strict` keeps them) leaves out an animation that never stops. A 124
   "still changing" whose late changes were all in one small region ends with `--ignore "X,Y WxH" if
   that is an animation`: add it if the shot shows a spinner or a glow there, not the app under test.

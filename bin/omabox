@@ -611,9 +611,9 @@ change there, for an app that redraws later, by itself (a sync, a timer): then \
 GEOM]... [--json]: a change within --start (5s for run -d), then quiet. --ignore "X,Y WxH" (up to 16)
 leaves out an animation that never stops (a spinner, a glow); a 124 "still changing" names it when
 one small region kept changing. -g watches only that part of the screen. The screen is every monitor;
--g, --window and --ignore pick parts of it, all in the layout's coordinates (as a plain click's).
-Beside --window, -g and --ignore are still the layout's in 0.9, with a warning: 1.0 reads them in
-the window's own, as --window's X Y and shot -g are.
+-g and --ignore are in the layout's coordinates (as a plain click's), and beside --window in the
+window's own (0,0 its top left corner), as --window's X Y and shot -g are. To watch a part of the
+screen whatever the window, -g without --window.
 Their line then adds what changed on the desktop since just before the input: a window opened or
 closed, a layer drawn or hidden, focus, a title, the workspace (3 at most, then "+N more (omabox
 events --since OFFSET)"); a 124 says where the input went (the focused window, a layer holding the
@@ -9637,6 +9637,11 @@ cmd_keys() {
     kl=$(kb_layers)
     [ -z "$kl" ] || die "keys --window: a layer ($kl) has the keyboard: the keys would go to it, not to $(win_desc "$w"); nothing sent (close it first, e.g. keys Escape: twice in a launcher with text in its field)"
     if [ "$(jq -r .active <<<"$w")" = true ]; then win_refocus "$w"; else win_raise "$w"; fi
+    # --wait's -g and --ignore: the window's own coordinates, where it is once focused (F8).
+    if [ "$SETTLE_WAIT" = 1 ]; then
+      w=$(win_select "$(box_windows)" "$(jq -r .address <<<"$w")") || exit $?
+      settle_in_window "$(jq -r '.at[0]' <<<"$w")" "$(jq -r '.at[1]' <<<"$w")"
+    fi
   fi
   kb_tool
   local kb=("${KB[@]}" "$@")
@@ -9835,6 +9840,8 @@ cmd_click() {
   fi
   if [ ${#sels[@]} -gt 0 ]; then
     p=$(win_point "$raise" "$x" "$y" "${sels[@]}")
+    # (--wait's -g and --ignore beside --window: the window's own, moved as X Y is, F8)
+    [ "$SETTLE_WINDOW" = 0 ] || settle_in_window $((${p% *} - x)) $((${p#* } - y))
     read -r x y <<<"$p"
   fi
   local seq=(move "$x" "$y" click "$btn")
@@ -9910,6 +9917,7 @@ cmd_scroll() {
   fi
   if [ ${#sels[@]} -gt 0 ]; then
     p=$(win_point "$raise" "$x" "$y" "${sels[@]}")
+    [ "$SETTLE_WINDOW" = 0 ] || settle_in_window $((${p% *} - x)) $((${p#* } - y))
     read -r x y <<<"$p"
   fi
   local ext; ext=$(extent)
@@ -10129,7 +10137,12 @@ cmd_drag() {
       p=$(shot_point "$in" "$x" "$y")
       if [[ $p == window* ]]; then read -r _ a x y <<<"$p"; wsel=("$a"); else read -r _ x y <<<"$p"; fi
     fi
-    if [ ${#wsel[@]} -gt 0 ]; then p=$(win_point "$raise" "$x" "$y" "${wsel[@]}") || exit $?; read -r x y <<<"$p"; fi
+    if [ ${#wsel[@]} -gt 0 ]; then
+      p=$(win_point "$raise" "$x" "$y" "${wsel[@]}") || exit $?
+      # (--wait's -g and --ignore beside --window: the window's own, F8; where it is at the start)
+      [ "$SETTLE_WINDOW" = 0 ] || [ "$i" != 0 ] || settle_in_window $((${p% *} - x)) $((${p#* } - y))
+      read -r x y <<<"$p"
+    fi
     pts+=("$x" "$y")
   done
   local x1=${pts[0]} y1=${pts[1]} x2=${pts[2]} y2=${pts[3]} seq
@@ -10718,8 +10731,13 @@ settle_end() {
       if [ "$la" != - ] && [ -n "$area" ]; then
         IFS=, read -r _ _ lw lh <<<"$la"
         if [ $((4 * lw * lh)) -le "$area" ]; then
+          # (in the window's own coordinates when the --ignore given was, F8)
+          local o=${SETTLE_ORIGIN:-0 0} lo
+          lo=$(awk -F, -v ox="${o% *}" -v oy="${o#* }" '{ printf "%s,%s %sx%s", $1 - ox, $2 - oy, $3, $4 }' <<<"$la")
           la=$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"$la")
-          msg+="; from $(ms_s $((f[t] / 2))) on it changed only at $la: --ignore \"$la\" if that is an animation"
+          if [ -n "$SETTLE_ORIGIN" ]; then
+            msg+="; from $(ms_s $((f[t] / 2))) on it changed only at $la (the window's $lo): --ignore \"$lo\" if that is an animation"
+          else msg+="; from $(ms_s $((f[t] / 2))) on it changed only at $la: --ignore \"$la\" if that is an animation"; fi
         fi
       fi ;;
     *) msg=$reason ;;
@@ -10792,7 +10810,7 @@ settle_sent() {
 # --wait on keys, click and run -d: its options, taken where the command parses its own. Sets
 # SETTLE_WAIT, SETTLE_ARGS (for omabox-still), SETTLE_JSON, and SETTLE_TOOK: how many words it took (0:
 # not one of these). Not in $(...): it sets globals. settle_opt OPT [VALUE]
-SETTLE_ARGS=() SETTLE_JSON=0 SETTLE_WAIT=0 SETTLE_TOOK=0 SETTLE_REGION=0
+SETTLE_ARGS=() SETTLE_JSON=0 SETTLE_WAIT=0 SETTLE_TOOK=0 SETTLE_REGION=0 SETTLE_WINDOW=0 SETTLE_ORIGIN=""
 settle_opt() {
   local ms g
   SETTLE_TOOK=1
@@ -10812,17 +10830,12 @@ settle_opt() {
     *) SETTLE_TOOK=0 ;;
   esac
 }
-# settle_opts_check [WINDOWS]: WINDOWS, how many --window selectors the command was given.
+# settle_opts_check [WINDOWS]: WINDOWS, how many --window selectors the command was given. With one,
+# -g and --ignore are the window's own coordinates (SETTLE_WINDOW=1): settle_in_window moves them.
 settle_opts_check() {
   [ "$SETTLE_WAIT" = 1 ] || { [ ${#SETTLE_ARGS[@]} = 0 ] && [ "$SETTLE_JSON" = 0 ]; } ||
     die "--start, --quiet, --timeout, --strict, --ignore, -g and --json go with --wait"
-  if [ "${1:-0}" != 0 ]; then
-    local a what=""
-    for a in ${SETTLE_ARGS[@]+"${SETTLE_ARGS[@]}"}; do
-      case $a in --region) what+=${what:+ and }-g ;; --mask) [[ $what == *--ignore* ]] || what+=${what:+ and }--ignore ;; esac
-    done
-    [ -z "$what" ] || win_region_warn "$MAIN_CMD --wait" "$what"
-  fi
+  [ "${1:-0}" = 0 ] || SETTLE_WINDOW=1
   # An --ignore that misses -g's region leaves nothing out: said, as wait does (#162).
   local i region=""
   for ((i = 0; i < ${#SETTLE_ARGS[@]} - 1; i++)); do [ "${SETTLE_ARGS[i]}" != --region ] || region=${SETTLE_ARGS[i + 1]}; done
@@ -10832,11 +10845,19 @@ settle_opts_check() {
     say "--ignore \"$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"${SETTLE_ARGS[i + 1]}")\" is outside -g's region: it leaves nothing out there"
   done
 }
-# #273 (audit F8): with --window every coordinate is the window's own (click's X Y, shot's -g and
-# --ignore, check point's), but wait's and --wait's regions beside --window are still the screen's
-# (the layout's): 0.9 warns, 1.0 reads them in the window's. win_region_warn LABEL WHAT
-win_region_warn() {
-  say "warning: $1 with --window: $2 taken in the screen's coordinates (the layout's) until 1.0, which takes the window's own, as for --window's X Y and shot -g (omabox help wait)"
+# F8 (#273 audit, #287): with --window every coordinate is the window's own, 0,0 its top left corner
+# (click's X Y, shot's -g and --ignore, check point's, and since 1.0 wait's --ignore and --wait's -g
+# and --ignore; 0.9 took those in the screen's, warned). The caller's regions (--region, --mask; the
+# cursor's are --ignore, added in the screen's) moved by the window's place X Y, which settle_end's
+# suggested --ignore takes off again. settle_in_window X Y
+settle_in_window() {
+  local i x y w h
+  SETTLE_ORIGIN="$1 $2"
+  for ((i = 0; i < ${#SETTLE_ARGS[@]} - 1; i++)); do
+    case ${SETTLE_ARGS[i]} in --region|--mask) ;; *) continue ;; esac
+    IFS=, read -r x y w h <<<"${SETTLE_ARGS[i + 1]}"
+    SETTLE_ARGS[i + 1]="$((x + $1)),$((y + $2)),$w,$h"
+  done
 }
 # Whether two X,Y,W,H rectangles overlap. rects_meet A B
 rects_meet() {
@@ -10991,7 +11012,6 @@ cmd_wait() {
     *) unknown_word wait condition "$cond" "(still, change, window SEL, layer NAMESPACE or until -- CMD)" still change window layer until ;;
   esac
   [ "$cond" != change ] || [ -z "$quiet" ] || die "wait change: no --quiet (that is still's)"
-  [ "$cond" = window ] || [ ${#sels[@]} = 0 ] || [ ${#masks[@]} = 0 ] || win_region_warn "wait $cond" --ignore
   select_box "$name"; need_box; shell_note
   case $cond in
     window)
@@ -11006,7 +11026,7 @@ cmd_wait() {
       else poll_until "layer $ns" "no layer $ns" 2 "$tmo" "$json" layer_probe present "$ns"; fi ;;
     until) poll_until "command succeeded" "command still failing" 1 "$tmo" "$json" until_probe "${run[@]}" ;;
     still|change)
-      local args=(--timeout "$tmo" "${masks[@]}") region="" p
+      local args=(--timeout "$tmo") region="" p
       [ -z "$quiet" ] || args+=(--quiet "$quiet")
       [ $strict = 0 ] || args+=(--strict)
       if [ -n "$geom" ]; then
@@ -11020,13 +11040,20 @@ cmd_wait() {
         region=$(jq -r '"\(.at[0]),\(.at[1]),\(.size[0]),\(.size[1])"' <<<"$w")
       fi
       [ -z "$region" ] || args+=(--region "$region")
-      # --ignore is the screen's (the layout's) coordinates, with --window too: one that misses the
-      # region watched leaves nothing out, said rather than silent (#162).
-      local i
+      # --ignore: the screen's coordinates (the layout's), or with --window the window's own (F8,
+      # #287; 0.9 took the screen's): moved by its place. One that misses the region watched leaves
+      # nothing out, said rather than silent (#162).
+      local i x y mw mh ox="" oy="" where="the region watched"
+      if [ ${#sels[@]} -gt 0 ]; then
+        IFS=, read -r ox oy mw mh <<<"$region"; SETTLE_ORIGIN="$ox $oy"
+        where="window $(win_desc "$w") (${mw}x${mh}, in its own coordinates)"
+      fi
       for ((i = 1; i < ${#masks[@]}; i += 2)); do
+        if [ -n "$ox" ]; then IFS=, read -r x y mw mh <<<"${masks[i]}"; masks[i]="$((x + ox)),$((y + oy)),$mw,$mh"; fi
         [ -z "$region" ] || rects_meet "${masks[i]}" "$region" ||
-          say "wait: --ignore \"$(awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"${masks[i]}")\" is outside the region watched: it takes the screen's coordinates, not the window's"
+          say "wait: --ignore \"$(awk -F, -v ox="${ox:-0}" -v oy="${oy:-0}" '{ printf "%s,%s %sx%s", $1 - ox, $2 - oy, $3, $4 }' <<<"${masks[i]}")\" is outside $where: it leaves nothing out"
       done
+      args+=(${masks[@]+"${masks[@]}"})
       p=$(cursor_now) || exit $?; [ -z "$p" ] || args+=(--ignore "$(cursor_rect "$p")")
       settle_begin "$cond" "${args[@]}"
       local rc=0; settle_end "$cond" "$json" "" || rc=$?
