@@ -3,7 +3,16 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 0.9.0 — 2026-10-20
+
+The last release before 1.0. `omabox help CMD` is short, the command's lines and options
+(`--long` for the prose), and `omabox brief` prints what a subagent needs in place of the whole
+skill. New: `wait until` (the new name of `wait cmd`), `path --home`, `tree --layer` for the
+shell's bar and panels, `record --for` and `record hold`, and the time on each `log shell` line.
+Every duration option takes one grammar, every option takes `--opt=value`, `--json` is there where
+it was missing, and exit codes mean one thing in every command (`omabox help exit-codes`): called
+wrong is exit 2 with the nearest option or command named, and `run`'s own failures are 125. The
+forms under Deprecated still work, with a warning; 1.0 refuses them.
 
 ### Added
 
@@ -46,7 +55,6 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   or later (or `up --quickshell` a build), and shows only items that set an `Accessible.role`: a
   layer without any says it "publishes no accessible items", as Omarchy's own bar does today
   ([#254](https://github.com/diogochaves/omabox/issues/254)).
-
 - **`--json` on what lacked it** ([#273](https://github.com/diogochaves/omabox/issues/273)):
   `check run` and `check diff` (each checkpoint's result, regions, holes and tree changes, the
   report; for CI), `shot` (the path, what it covers, in which coordinates, the image's size and
