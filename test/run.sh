@@ -5621,6 +5621,20 @@ t_unit_check() {
   check_match "omabox -b NAME check run: refused too, -b is check point's" "-b NAME goes with check point" "$(ob -b x check run -- true 2>&1)"
   check_match "omabox -b NAME check point: the box is asked for" "no box '$P-uckb' is up" "$(OMABOX_CHECK_OUT=$d/o ob -b "$P-uckb" check point a 2>&1)"
   check_match "check: help names its commands" "omabox check run" "$(ob help check 2>&1)"
+  # Its refusals and setup errors exit 2, never 1, its "changed" (#281).
+  local how hargs
+  for how in "check bogus" "check run --bogus" "check run --base $d -- " "check diff $d/nonexistent.png $d/a.png" "check diff --speck x" \
+    "check point ../x" "check point --ignore 1,2" "check point -b $P-uckb a" "-b x check diff a b"; do
+    rc=0; read -r -a hargs <<<"$how"; OMABOX_CHECK_OUT=$d/o ob "${hargs[@]}" >/dev/null 2>&1 || rc=$?
+    check_eq "omabox $how: exit 2 (not 1, changed)" 2 "$rc"
+  done
+  # --ignore (#281): in the window's own coordinates (or the screen's), like -g; into the shot's pixels.
+  check_eq "check_ignore_px: a crop at 100,0 at scale 1: less its origin" "50 5 20 10" "$(lib check_ignore_px 100 0 400 26 400 26 150 5 20 10)"
+  check_eq "...at scale 2: twice that" "100 10 40 20" "$(lib check_ignore_px 100 0 400 26 800 52 150 5 20 10)"
+  check_eq "...at 1.5, rounded outwards (1.5 to 6)" "1 1 5 5" "$(lib check_ignore_px 0 0 100 100 150 150 1 1 3 3)"
+  check_eq "...cut to the shot" "0 0 10 26" "$(lib check_ignore_px 100 0 400 26 400 26 90 -5 20 40)"
+  rc=0; out=$(lib check_ignore_px 100 0 400 26 400 26 900 0 10 10) || rc=$?
+  check_eq "...none of it in the shot: fails" "|1" "$out|$rc"
   check_eq "check: no box was made" "" "$(ob ls 2>/dev/null | grep -F "$P-uck" || true)"
 }
 
@@ -5642,6 +5656,14 @@ t_clean() {
   ob check point -b "$B" -o "$TMP/clnp" desk >/dev/null 2>&1
   check_eq "...check point looks for holes there (finding 362), and the stock bar has none" "holes checked|" \
     "$(grep '^holes' "$TMP/clnp/desk.point" 2>&1)|$(grep '^hole ' "$TMP/clnp/desk.point" || true)"
+  # #281: full size whatever the user's shot-fit; --ignore in the screen's coordinates, as -g.
+  OMABOX_SHOT_FIT=800 ob check point -b "$B" -o "$TMP/clnp" fit >/dev/null 2>&1
+  check_eq "...check point's shot is full size under OMABOX_SHOT_FIT=800 (a baseline is the same everywhere)" "1920x1080" \
+    "$(magick identify -format '%wx%h' "$TMP/clnp/fit.png" 2>&1)"
+  out=$(ob check point -b "$B" -o "$TMP/clnp" ign -g "100,0 400x26" --ignore "150,5 20x10" --ignore "900,0 10x10" 2>&1)
+  check_eq "...--ignore in the screen's coordinates: less the region's origin in its .point" "ignore 50 5 20 10" \
+    "$(grep '^ignore' "$TMP/clnp/ign.point" 2>&1)"
+  check_match "...one outside the region: said, left out" '--ignore "900,0 10x10" has nothing in the shot' "$out"
   check_eq "...the clock's format is a literal" "'Friday 12:00'" \
     "$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' "$H/.config/omarchy/shell.json")"
   out=$(ob run -b "$B" -- date +%s 2>&1)
@@ -5709,6 +5731,7 @@ omabox check point demo --window 'title:^Check demo$'
 omabox check point democrop --window 'title:^Check demo$' -g "0,0 200x80"
 omabox check point screen
 [ -z "${EXTRA:-}" ] || omabox check point extra -g "0,0 200x26"
+[ -z "${EXTRA:-}" ] || omabox check point extraign --window 'title:^Check demo$' -g "100,100 200x100" --ignore "110,110 30x30"
 SH
   chmod +x "$d/scenario.sh"
   export OMABOX_CHECK_NAME=$P-chk
@@ -5726,8 +5749,9 @@ SH
   check_match "...the random label: unstable, every run differing" $'unstable demo: every run differed[^\n]*\n  [0-9]+,[0-9]+ [0-9]+x[0-9]+' "$out"
   check "...the baseline's files" test -s "$d/base/demo.png" -a -s "$d/base/demo.tree.json" -a -s "$d/base/demo.unstable" -a -s "$d/base/check.json"
   check_eq "...no holes: the window's rounded corners are not one" "|holes checked" "$(grep -E '^holes ' <<<"$out" || true)|$(grep '^holes' "$d/base/screen.point")"
-  rc=0; out=$(ob check run --base "$d/base" -o "$d/b" -- "$d/scenario.sh" 2>&1) || rc=$?
-  check_eq "check, nothing changed: same, the label left out, exit 0" $'same     desk\nsame     demo\nsame     democrop\nsame     screen|0' \
+  # (OMABOX_SHOT_FIT: a user's shot-fit changes no checkpoint's shot, #281)
+  rc=0; out=$(OMABOX_SHOT_FIT=800 ob check run --base "$d/base" -o "$d/b" -- "$d/scenario.sh" 2>&1) || rc=$?
+  check_eq "check, nothing changed (OMABOX_SHOT_FIT=800 set): same, the label left out, exit 0" $'same     desk\nsame     demo\nsame     democrop\nsame     screen|0' \
     "$(grep -E '^(same|changed|new|missing) ' <<<"$out" | sed 's/ (.*//')|$rc"
   check_match "...counted" 'check: 4 of 4 same; ' "$out"
   # (--speck 32: the hole a speck to the shots' comparison; each checkpoint's own speck, measured at
@@ -5760,7 +5784,9 @@ SH
     "$([ -e "$d/b/report.png" ] && echo yes || echo no) $(compgen -G "$d/[bc]/report.plan*" >/dev/null && echo yes || echo no)"
   rc=0; out=$(EXTRA=1 ob check run --base "$d/base" -o "$d/e" -- "$d/scenario.sh" 2>&1) || rc=$?
   check_match "a checkpoint the baseline lacks: new, exit 1" "new      extra: no baseline.*\|1$" "$out|$rc"
-  check_match "...counted" 'check: 4 of 5 same, 1 new; ' "$out"
+  check_match "...counted" 'check: 4 of 6 same, 2 new; ' "$out"
+  check_eq "...--window -g --ignore: in the window's coordinates, less the crop's origin (#281)" "ignore 10 10 30 30" \
+    "$(grep '^ignore' "$d/e/run1/extraign.point" 2>&1)"
   rc=0; out=$(ob check run --base "$d/base" -o "$d/f" -- false 2>&1) || rc=$?
   check_eq "a scenario that fails: exit 3" 3 "$rc"
   check_eq "no check box left" "" "$(ob ls 2>/dev/null | grep -F "$P-chk" || true)"

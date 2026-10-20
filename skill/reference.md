@@ -121,7 +121,7 @@ omabox wait --timeout 20s window myapp
 omabox check point main --window myapp
 omabox check point toolbar --window myapp -g "0,0 800x48"   # a part of it, in its coordinates
 omabox keys --window myapp --wait ctrl+comma
-omabox check point settings --window myapp --ignore "10,400 120x20"   # its own clock: left out
+omabox check point settings --window myapp --ignore "10,400 120x20"   # its own clock: left out (window coordinates)
 ```
 
 The scenario runs on the host with `OMABOX` naming its box, so a bare `omabox` command goes there
@@ -129,7 +129,9 @@ The scenario runs on the host with `OMABOX` naming its box, so a bare `omabox` c
 path)/home`, or through stdin: `omabox run -- bash -s < setup.sh` runs a script of yours in the box.
 Seed data before the app starts: a redraw it does on its own can finish before a `wait change` after
 it starts, and that wait then times out; else `omabox wait still`. `check point` waits until the
-shot is still (15 s, `--timeout`; then takes it anyway, noted). A popup (a bar widget's, a menu)
+shot is still (15 s, `--timeout`; then takes it anyway, noted), full size whatever `shot-fit`.
+`--ignore "X,Y WxH"` is in `-g`'s coordinates: the window's with `--window` (a crop's too), else
+the screen's. A popup (a bar widget's, a menu)
 goes over an empty workspace for its checkpoint: holes (below) show only where the wallpaper is
 behind.
 
@@ -176,7 +178,8 @@ missing`). When anything changed, Read the `report:` image first: one
 image, ~150-800 image tokens, each change cropped from the baseline beside this run (red: pixels,
 blue: a move only the tree has), with its checkpoint, region and tree line; what did not fit is
 named. `ID.diff.png` is the whole shot marked (~1.5k tokens each): for the context a crop lacks. Exit
-0 all same, 1 not, 3 the scenario failed (its log named), 4 no baseline. A change you meant:
+0 all same, 1 not, 2 called wrongly or could not run (an option, a file, no box, no magick), 3 the
+scenario failed (its log named), 4 no baseline. A change you meant:
 `--approve` again. Shots are compared exactly, leaving out specks: parts of the difference smaller
 than each checkpoint's own speck, measured at `--approve` as twice the largest stray part between
 its runs (Qt Quick's text varies by a few pixels a glyph from one start to the next: 22 px for an
@@ -188,7 +191,7 @@ caught. `--speck N` sets one for all
 Baselines are per GPU: another GPU, omabox, Hyprland, Omarchy, theme, size, locale or timezone is
 said in the report. The Omarchy shell and its plugins have no tree: their checks are pixels only. `omabox check
 diff A.png B.png [--ignore G] [--speck N] [--report R.png]` compares two shots of yours the same way
-(32 px specks unless `--speck`; exit 0 same, 1 not). Not inside ai-jail yet.
+(32 px specks unless `--speck`; exit 0 same, 1 not, 2 an error). Not inside ai-jail yet.
 
 Each checkpoint is also searched for holes: the `#ff00ff` wallpaper showing through inside a window,
 the bar or a popup (a transparent part, a gap, a card that forgot its background), and in a

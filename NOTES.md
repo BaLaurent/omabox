@@ -7780,6 +7780,27 @@ from them.
     directory in box.json (`dir`; not for a jailed caller); a box from before shows none. A plain
     "no box" (no session box up, or a name given) still exits 0. No `down --mine` (decided). Real
     box: up from a scratch folder, `omabox down` in this repo named it, exit 1 (t_unit_agent_session).
+378. **`check`: refusals exit 2, checkpoint shots full size, `--ignore` in -g's space** (2026-10-20,
+    #281; before `check`'s first release, so no deprecation). The CLI audit (#273) found three things
+    a CI step would trip on. (1) Every refusal and setup error under `check` (an unknown option, a
+    missing file, no magick, no box, a box that did not start) exited 1, `check`'s "changed": a typo
+    read as a visual change. `die` now exits `$DIE_RC` (1 by default), and `cmd_check` sets it to 2;
+    3 and 4 of `check run` are unchanged. (2) `check point` took its shots, and the screen shot for a
+    region's holes, through `shot` without `--fit`, so the user's `config shot-fit` or
+    `$OMABOX_SHOT_FIT` scaled them (verified in a clean box: `OMABOX_SHOT_FIT=800` made a checkpoint
+    of the screen 800x450 and one of the bar 800x10): a baseline approved on one machine was "size
+    1920x1080 -> 800x450" on another. Both now pass `--fit 0`. (3) `check point --ignore` took image
+    pixels (scaled, from the crop's corner), while `-g` beside it, and every other region with
+    `--window`, is in the window's own coordinates. It is now -g's space: the window's with
+    `--window` (a crop's origin taken off), else the screen's; after the shot, `check_ignore_px`
+    turns each region into the shot's pixels from its `shots.tsv` record (what it covers, at what
+    size), rounded outwards and cut to the shot; one with nothing in the shot is said and left out.
+    The `.point` keeps `ignore X Y W H` in the shot's pixels, as before, so the comparison, the tree
+    masks (finding 365) and the holes filter read it unchanged. `check diff` keeps image pixels (two
+    files, no box). Real box: a crop of the bar at 100,0 with `--ignore "150,5 20x10"` recorded
+    `ignore 50 5 20 10`; t_clean, t_check (`OMABOX_SHOT_FIT=800` on a check against a baseline
+    approved without it: all same; a window crop's `--ignore`), t_unit_check (exit 2 for nine
+    refusals; the conversion at scales 1, 1.5 and 2).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

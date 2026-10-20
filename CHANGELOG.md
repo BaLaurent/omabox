@@ -26,7 +26,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   is kept, a wrong screen too). `check point --window SEL -g "X,Y WxH"` checks a part of a window,
   in its coordinates, with the tree of that part. The last line counts same, changed, new and
   missing checkpoints, each run says how long its box took to start, and a check with no baseline
-  exits 4. Each checkpoint is searched for holes too: the clean wallpaper showing through inside a
+  exits 4; one called wrongly or that cannot run (an unknown option, a missing file, no box, no
+  magick) exits 2, never 1, its "changed". Checkpoints are shot full size whatever your `shot-fit`,
+  so a baseline is the same image on every machine, and `--ignore "X,Y WxH"` is in `-g`'s
+  coordinates: the window's with `--window`, else the screen's. Each checkpoint is searched for holes too: the clean wallpaper showing through inside a
   window, the bar or a popup (a transparent part, a gap, a surface that did not draw), not around
   them or at rounded corners; `--approve` says each, and a check fails on any the baseline lacks.
   `check diff A.png B.png` compares two shots of yours the same way (`--report` too).

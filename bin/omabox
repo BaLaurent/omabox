@@ -485,16 +485,17 @@ none: "no accessibility tree", exit 1.
 @ check
 \`check\` compares an app's or a plugin's look with a baseline, so a person need not look. A SCENARIO
 is a script of yours that sets the box up, drives it with omabox commands and calls \`omabox check
-point ID\` where a shot should match (once still: the screen, -g, --window SEL with its tree; --ignore
-leaves a region out); \`check run\` gives it a fresh \`up --clean\` box each run (UP OPTIONS; OMABOX
+point ID\` where a shot should match (once still, full size whatever shot-fit: the screen, -g,
+--window SEL with its tree; --ignore leaves a region out, in -g's coordinates: the window's with
+--window, else the screen's); \`check run\` gives it a fresh \`up --clean\` box each run (UP OPTIONS; OMABOX
 names the box). --approve runs it 3 times and writes the baseline to --base DIR (./omabox-check):
 what most runs showed, where they differed "unstable" and left out from then on, and baseline.png,
 every checkpoint kept in one image (or pages): look at it before you keep the baseline (a wrong
 screen most runs showed is kept too). Without --approve it runs once and says for each checkpoint
 same, changed (each region "at X,Y WxH", the tree's changes; "as ID" for one an earlier one
 had), holes, new or missing; when any changed, look at
-report.png first (each change cropped beside its baseline). Exit 0 all same, 1 not, 3 the scenario
-failed, 4 no baseline. Shots are compared exactly but for specks (stray parts smaller than the
+report.png first (each change cropped beside its baseline). Exit 0 all same, 1 not, 2 called wrongly or
+could not run (an option, a file, no box, no magick), 3 the scenario failed, 4 no baseline. Shots are compared exactly but for specks (stray parts smaller than the
 approve runs differed by, said under "same"), and searched for holes (the #ff00ff wallpaper inside a
 window, the bar or a popup). \`check diff A B\` compares two shots of yours the same way. More (times
 and dates, specks, holes): the omabox skill's reference.md, "Visual checks". Not inside ai-jail yet.
@@ -712,7 +713,8 @@ app first for a clean save. Saves live in ~/.local/share/omabox/saves until \`sa
 EOF
 }
 
-die() { echo "omabox: $*" >&2; exit 1; }
+# DIE_RC: the exit code of a refusal; 1 by default, 2 under `check` (its 1 is "changed", #281).
+die() { echo "omabox: $*" >&2; exit "${DIE_RC:-1}"; }
 optarg() { [ $# -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"; }   # optarg "$@" before reading $2
 say() { echo "omabox: $*" >&2; }
 # GNU find goes back to the dir it started in when it ends, and exits 1 when that is one the user
@@ -8072,6 +8074,9 @@ check_new_holes() {
 }
 
 cmd_check() {
+  # Every refusal and setup error of check exits 2: its 1 is "changed", and a CI step read a typo or a
+  # missing magick as a visual change (#281). 3 and 4 (check run) are said where they happen.
+  DIE_RC=2
   # omabox -b NAME check point ...: the box for a checkpoint (run makes its own, diff reads files).
   local name=""
   if [ "${1:-}" = -b ] || [ "${1:-}" = --box ]; then optarg "$@"; name=$2; shift 2; fi
@@ -8158,6 +8163,22 @@ check_diff_report() {
   rm -f -- "${1:?}"
 }
 
+# A checkpoint's --ignore region in its shot's pixels (#281): given in the window's own coordinates
+# (with --window) or the screen's, like -g; the shot covers LW x LH from OX,OY as an IW x IH image.
+# "X Y W H", cut to the shot and rounded outwards; fails when none of it is in the shot.
+# check_ignore_px OX OY LW LH IW IH X Y W H
+check_ignore_px() {
+  local ox=$1 oy=$2 lw=$3 lh=$4 iw=$5 ih=$6 x=$7 y=$8 x2=$(($7 + $9)) y2=$(($8 + ${10}))
+  ((x > ox)) || x=$ox
+  ((y > oy)) || y=$oy
+  ((x2 < ox + lw)) || x2=$((ox + lw))
+  ((y2 < oy + lh)) || y2=$((oy + lh))
+  ((x2 > x && y2 > y)) || return 1
+  x=$(((x - ox) * iw / lw)) y=$(((y - oy) * ih / lh))
+  x2=$((((x2 - ox) * iw + lw - 1) / lw)) y2=$((((y2 - oy) * ih + lh - 1) / lh))
+  echo "$x $y $((x2 - x)) $((y2 - y))"
+}
+
 # check point ID: a checkpoint of a `check run` scenario: once the screen is still, a shot (and the
 # window's tree, with --window) into the run's folder ($OMABOX_CHECK_OUT, or -o DIR). --window SEL
 # -g GEOM: a crop of the window, in its own coordinates (as `shot --window -g`), its tree the
@@ -8170,7 +8191,7 @@ check_point() {
       -w|--window) optarg "$@"; sels+=("$2"); shift ;;
       --active) sels+=(active) ;;
       -g) optarg "$@"; geom_parse "$2" >/dev/null || die "check point: -g is \"X,Y WxH\", got $2"; geom=$2; shift ;;
-      --ignore) optarg "$@"; g=$(geom_parse "$2") || die "check point: --ignore is \"X,Y WxH\" (in the shot's pixels), got $2"; masks+=("$g"); shift ;;
+      --ignore) optarg "$@"; g=$(geom_parse "$2") || die "check point: --ignore is \"X,Y WxH\" (with --window in its coordinates, else the screen's), got $2"; masks+=("$g"); shift ;;
       --timeout) optarg "$@"; tmo=$2; shift ;;
       -o) optarg "$@"; out=$2; shift ;;
       -h|--help) usage check; return ;;
@@ -8198,9 +8219,32 @@ check_point() {
     *) die "check point $id: $(tail -n 1 "$out/$id.wait")" ;;
   esac
   rm -f -- "${out:?}/${id:?}.wait"
-  OMABOX_SHOT_NO_BASELINE=1 "$self" -b "$NAME" shot ${sargs[@]+"${sargs[@]}"} -o "$out/$id.png" >/dev/null 2>"$out/$id.shot" ||
+  # Full size (--fit 0), whatever the user's shot-fit or $OMABOX_SHOT_FIT: a baseline is the same
+  # image on every machine (#281).
+  OMABOX_SHOT_NO_BASELINE=1 "$self" -b "$NAME" shot ${sargs[@]+"${sargs[@]}"} --fit 0 -o "$out/$id.png" >/dev/null 2>"$out/$id.shot" ||
     die "check point $id: the shot failed: $(tail -n 1 "$out/$id.shot")"
   rm -f -- "${out:?}/${id:?}.shot"
+  # --ignore regions, given in the window's coordinates (with --window) or the screen's, as -g, into
+  # the shot's pixels (#281): what the shot covers is in its record (shots.tsv, shot_record).
+  if [ ${#masks[@]} -gt 0 ]; then
+    local rec kind geo lw lh iw ih ox=0 oy=0 org m x y w h px=() space="the screen's coordinates"
+    rec=$(P=$(readlink -f -- "$out/$id.png") awk -F'\t' '$1 == ENVIRON["P"]' "$D/shots.tsv" 2>/dev/null | tail -n 1) || rec=""
+    IFS=$'\t' read -r _ _ _ kind geo <<<"$rec"
+    IFS='x ' read -r lw lh iw ih <<<"${geo:-}"
+    [[ "$lw $lh $iw $ih" =~ ^[1-9][0-9]*\ [1-9][0-9]*\ [1-9][0-9]*\ [1-9][0-9]*$ ]] ||
+      { rm -f -- "${out:?}/${id:?}.png"; die "check point $id: no record of what its shot covers, for --ignore (a path with a tab or newline?)"; }
+    case ${kind:-} in
+      window\ *\ *) read -r _ _ org _ <<<"$kind"; ox=${org%,*} oy=${org#*,} ;;
+      screen\ *) org=${kind#screen }; ox=${org%,*} oy=${org#*,} ;;
+    esac
+    [ ${#sels[@]} = 0 ] || space="the window's coordinates"
+    for g in "${masks[@]}"; do
+      # shellcheck disable=SC2086 # X Y W H
+      if m=$(check_ignore_px "$ox" "$oy" "$lw" "$lh" "$iw" "$ih" $g); then px+=("$m")
+      else read -r x y w h <<<"$g"; say "check point $id: --ignore \"$x,$y ${w}x$h\" has nothing in the shot ($space; it covers ${lw}x$lh at $ox,$oy): left out"; fi
+    done
+    masks=(${px[@]+"${px[@]}"})
+  fi
   local tree=none
   if [ ${#sels[@]} -gt 0 ]; then
     rc=0; "$self" -b "$NAME" tree "${wargs[@]}" --json > "$out/$id.tree.json" 2>/dev/null || rc=$?
@@ -8227,7 +8271,7 @@ check_point() {
       read -r iw ih < <(png_size "$out/$id.png") || iw=$w
       # The region in the screen shot's pixels (both are in the highest scale's: the region's image
       # is W times that scale wide).
-      if OMABOX_SHOT_NO_BASELINE=1 "$self" -b "$NAME" shot -o "$out/$id.screen.png" >/dev/null 2>&1; then
+      if OMABOX_SHOT_NO_BASELINE=1 "$self" -b "$NAME" shot --fit 0 -o "$out/$id.screen.png" >/dev/null 2>&1; then
         hres=$(check_holes "$out/$id.screen.png" screen "$((x * iw / w)) $((y * iw / w)) $iw $((h * iw / w))") || hoff="could not read the shot (magick)"
       else
         hoff="the screen's shot failed"
