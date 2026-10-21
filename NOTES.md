@@ -8650,6 +8650,29 @@ from them.
     overlay cover. The contract checks the mark's file and ids and the cover's layer. Tests: t_theme,
     t_unit_omarchy45 (`intro_cover`), t_unit_omarchy_contract.
 
+416. **On Omarchy 4.5 a box's screen came up on workspace 11** (2026-10-21, #292; verified in a box).
+    4.5 gives each monitor a block of ten workspaces (`default/hypr/monitor-workspaces.lua`), keyed by
+    its identity (make, model and serial; a box's outputs have none, so their name) and kept in
+    `~/.local/state/omarchy/monitor-workspaces`. Hyprland's `FALLBACK`, its only output before the
+    box's `HEADLESS-2` is made, was there at `hyprland.start` and took block 0 (`0<TAB><TAB>FALLBACK`),
+    so the box's screen got 11-20, and `hyprctl dispatch workspace 2` went to a block no screen of the
+    box owned. An interactive box closed with confirm-close on and opened again (a new output,
+    WAYLAND-2) got a block of its own: its workspaces 1 and 2 were renumbered 22 and 23, and the
+    reopened window showed an empty one (t_guard: `want [2] got [22]`). NVIDIA boxes (WAYLAND-1) the
+    same as headless ones. Filed as upstream#171 (FALLBACK should own no block). **Fix**:
+    `share/session.sh` writes the file at every start: the main screen (HEADLESS-2, or WAYLAND-1 for an
+    interactive or NVIDIA box) and FALLBACK both on block 0, so FALLBACK, which only stands in for the
+    screen while it is away, holds its workspaces under their numbers (`output drop`: 1 and 2 stay 1
+    and 2 on FALLBACK, back on the screen after `output back`). confirm-close opens the new window
+    under the closed one's name (`hyprctl output create wayland NAME`; hyprctl exits 0 with "Name
+    already taken", so its answer is read), so it keeps that window's block. `monitor add`'s monitors
+    get the next blocks as they come (HEADLESS-3 on 11-20), as a second monitor on a 4.5 desk. A save's
+    file (`up --from`) is replaced: its box's. Seen, not changed: after `output back` the screen shows
+    an empty workspace 3, Hyprland's next free number, with 1 and 2 back on it (Omarchy leaves a new
+    monitor's own workspace in view). Host placement (workspace 9, `special`) is unchanged: an
+    Open item. Tests: t_output (the main screen on 1, a monitor on 11), t_guard
+    (confirm-close keeps 1 and 2), t_unit_omarchy_contract (the file's format).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

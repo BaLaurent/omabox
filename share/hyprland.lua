@@ -232,7 +232,7 @@ if interactive then
   end
   write_layout()
   hl.on("monitor.layout_changed", function() if gen == omabox_close_gen then write_layout() end end)
-  hl.on("monitor.removed", function()
+  hl.on("monitor.removed", function(gone)
     if gen ~= omabox_close_gen then return end
     if #hl.get_monitors() > 0 then restore(); return end
     if shown then
@@ -242,7 +242,12 @@ if interactive then
     if read(run .. "/omabox.confirm-close") == "on" and not read(run .. "/omabox.close-asking") then
       local f = io.open(run .. "/omabox.close-asking", "w")
       if f then f:write("1\n"); f:close() end
-      hl.exec_cmd("/opt/omabox/share/confirm-close.sh")
+      -- The new window under the closed one's name (#292, finding 416): Omarchy 4.5 gives each
+      -- output name its own block of workspaces, and a window under a new name got the next block,
+      -- its workspaces 1 and 2 renumbered 22 and 23.
+      local name = gone and gone.name or ""
+      if name == "FALLBACK" or not name:match("^[%w_-]+$") then name = "" end
+      hl.exec_cmd("/opt/omabox/share/confirm-close.sh " .. name)
     else
       -- Closed on purpose: the box's reaper on the host then clears it, instead of leaving it
       -- "dead" as a crash would be (with its logs) (finding 71).

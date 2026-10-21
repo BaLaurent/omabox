@@ -12727,6 +12727,12 @@ output_on() {
   local list='map({name, mode, scale, x, y}) | sort_by(.name)'
   ml=$(ob monitor -b "$B" list --json | jq -c "$list")
   check_eq "two monitors, the second below at 1.6" "[{\"name\":\"$m0\",\"mode\":\"1280x720@60\",\"scale\":1,\"x\":0,\"y\":0},{\"name\":\"$m1\",\"mode\":\"1280x800@60\",\"scale\":1.6,\"x\":0,\"y\":720}]" "$ml"
+  # Omarchy 4.5's per-monitor workspaces (#292, finding 416): the main screen on 1-10 (FALLBACK, the
+  # stand-in output at the start, took that block), the monitor on its own block (11-20).
+  if [ -f /usr/share/omarchy/default/hypr/monitor-workspaces.lua ]; then
+    check_eq "per-monitor workspaces: the main screen on 1, the monitor on 11" "$m0 1|$m1 11" \
+      "$(ob hyprctl -b "$B" -j monitors | jq -r '[.[] | select(.name != "FALLBACK") | "\(.name) \(.activeWorkspace.id)"] | sort | join("|")')"
+  else skip "per-monitor workspaces (#292)" "this Omarchy has none"; fi
   before=$(ob mode -b "$B")
   check_match "output back with nothing dropped: refused" "has its screen" "$(ob output -b "$B" back 2>&1)"
   out=$(ob output -b "$B" drop 2>&1); rc=$?

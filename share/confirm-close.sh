@@ -15,8 +15,12 @@ jq() { /usr/bin/jq "$@"; }
 quit() { echo 1 > "$XDG_RUNTIME_DIR/omabox.closed"; hyprctl dispatch 'hl.dsp.exit()' >/dev/null 2>&1; exit 0; }
 keep() { rm -f "$XDG_RUNTIME_DIR/omabox.close-asking"; exit 0; }
 
-# A host that cannot give a new window (the session is ending): nothing to ask on, so end.
-hyprctl output create wayland >/dev/null 2>&1 || quit
+# A host that cannot give a new window (the session is ending): nothing to ask on, so end. The new
+# window under the closed one's name ($1, from hyprland.lua), so it keeps that window's workspaces
+# (#292: Omarchy 4.5 numbers them by the output's name); unnamed if that name is refused (hyprctl
+# exits 0 either way: "Name already taken" instead of "ok").
+{ [ -n "${1:-}" ] && [ "$(hyprctl output create wayland "$1" 2>/dev/null)" = ok ]; } ||
+  hyprctl output create wayland >/dev/null 2>&1 || quit
 # The host's exec rule (render_unfocused) went with the old window: this one is not drawn while
 # hidden. omabox.reopened lets `shot` say so (finding 90).
 echo 1 > "$XDG_RUNTIME_DIR/omabox.reopened"

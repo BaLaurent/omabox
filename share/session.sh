@@ -170,6 +170,19 @@ fi
 command -v omarchy-theme-set-gnome >/dev/null &&
   { without_host_fd omarchy-theme-set-gnome > "$HOME/theme-gnome.log" 2>&1 & }
 
+# Omarchy 4.5's per-monitor workspaces (#292, finding 416): each monitor owns a block of ten (1-10,
+# 11-20, ...) by its identity, a box's being its output's name (no make, model or serial), kept in
+# ~/.local/state/omarchy/monitor-workspaces. Hyprland's FALLBACK, its only output before the box's
+# screen is made, took block 0 at the start: a headless box came up on workspace 11, and an agent's
+# `workspace 2` went to a block no screen of the box had. The main screen and FALLBACK (which stands in
+# for it only while it is away: `output drop`, an interactive box's closed window) share block 0;
+# `monitor add`'s get the next ones as they come, as a second monitor does on a desk. Written at every
+# start (a save's, `up --from`, is its box's from before); the merged list Omarchy clears itself.
+mw_main=HEADLESS-2
+[ "${OMABOX_INTERACTIVE:-0}" != 1 ] && [ "${OMABOX_WAYLAND_SCREEN:-0}" != 1 ] || mw_main=WAYLAND-1
+mkdir -p "$HOME/.local/state/omarchy" && rm -f -- "$HOME/.local/state/omarchy/monitor-workspaces" &&
+  printf '0\t%s\t%s\n0\t\tFALLBACK\n' "$mw_main" "$mw_main" > "$HOME/.local/state/omarchy/monitor-workspaces"
+
 # `up --hyprland PATH` (finding 116): which build runs, in box.log (this script's stderr), as that
 # build says once it is up: the first line of `hyprctl version` (version, commit, dirty or clean).
 if [ -n "${OMABOX_HYPRLAND:-}" ]; then
