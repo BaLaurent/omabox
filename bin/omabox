@@ -2937,6 +2937,11 @@ seed_home() {
       mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
     fi
     clean_has wallpaper || base64 -d <<<"$CLEAN_WALLPAPER_PNG" > "$h/.config/omabox/clean-wallpaper.png"
+    # Omarchy 4.5 keeps its notifications (#293, finding 419): the toasts on screen, the history and
+    # Do Not Disturb, in ~/.local/state/omarchy/notifications, read back when the shell starts. A save's
+    # (`up --from`) brought its old toasts back over the first shot. A clean box starts with none.
+    home_unlink "$h" .local/state/omarchy/notifications
+    rm -rf -- "${h:?}/.local/state/omarchy/notifications"
   fi
   # The user's current theme, or with `up --theme NAME` none of it (finding 245): the box's session
   # runs omarchy-theme-set NAME before Hyprland starts, which makes all three. A save's go first, so

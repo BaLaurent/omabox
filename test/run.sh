@@ -6474,6 +6474,22 @@ t_clean() {
   check_match "...no pointer" '^hidden' "$(cat "$(ob path -b "$B")/pointer" 2>&1)"
   check_match "up again with another --keep: refused, saying what it keeps" "--keep clock \\(it keeps nothing\\)" \
     "$(ob up "$B" --clean --keep clock 2>&1)"
+  # Omarchy 4.5 keeps notifications in the HOME (#293, finding 419): a save's toast comes back over a
+  # box --from it, but not over a clean one.
+  local nst=.local/state/omarchy/notifications
+  if grep -qsF '"/.local/state/omarchy/notifications"' /usr/share/omarchy/shell/plugins/notifications/Service.qml; then
+    ob run -b "$B" -- notify-send "$P-toast" >/dev/null 2>&1
+    # shellcheck disable=SC2329 # called through until_ok
+    kept_toast() { grep -qsF "$P-toast" "$1/$nst/live.json"; }
+    check "a toast is kept in the box HOME's $nst/live.json" until_ok 10 kept_toast "$H"
+    sv save "$P-clns" -b "$B" >/dev/null 2>&1
+    check "down" ob down "$B"
+    UP_OUT=$(sv up "$B" --clean --from "$P-clns" 2>&1) || no "up --clean --from a save with a toast" "$UP_OUT"
+    check_fails "...up --clean --from it: none of the save's notifications" grep -rqsF "$P-toast" "$(ob path -b "$B")/home/$nst"
+    sv saves rm "$P-clns" >/dev/null 2>&1
+  else
+    skip "a clean box starts with no notifications kept (#293)" "this Omarchy keeps none in $nst"
+  fi
   check "down" ob down "$B"
   check "up --clean --keep animations,wallpaper,pointer,clock,locale --net connected" \
     env LC_TIME=pt_BR.UTF-8 "$CLI" up "$K" --clean --keep animations,wallpaper,pointer,clock,locale --net connected

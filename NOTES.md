@@ -8709,6 +8709,14 @@ from them.
     400, a copy made by `up`) no longer stay byte-equal; t_clean compares the defaults with that copy.
     Tests: t_unit_bar_filter, t_unit_omarchy_contract, t_clean.
 
+419. **On Omarchy 4.5 a save's toasts came back over `up --clean --from` it** (2026-10-21, #293;
+    verified in a box). 4.5's notifications keep their state in `~/.local/state/omarchy/notifications`
+    (live.json: the toasts on screen; history.json; quiet.json: Do Not Disturb), read back at every
+    shell start: `restart-shell` and a box `--from` a save show the toasts that were up, and the
+    history has the save's. **Fix**: `up --clean` removes that folder (links on the way first): a
+    clean box starts with none. A box `--from` a save without --clean, and `restart-shell`, keep them,
+    as a desk does. Tests: t_clean.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
