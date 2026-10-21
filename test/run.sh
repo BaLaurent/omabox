@@ -1715,8 +1715,17 @@ t_unit_config() {
   cfg() { HOME=$h "$CLI" config "$@" 2>&1; }
   check_eq "defaults" "workspace=9 confirm-close=off bar-icon=always gpu=auto shot-fit=off" "$(cfg | tr '\n' ' ' | sed 's/ $//')"
   check_eq "set a workspace" workspace=4 "$(cfg workspace 4)"
-  check_eq "special is the scratchpad" workspace=special:scratchpad "$(cfg workspace special)"
-  check_eq "special:NAME" workspace=special:omabox "$(cfg workspace special:omabox)"
+  # Omarchy 4.5's scratchpad is its Quake console (#292, finding 423): `special` still works, saying
+  # so in a line, on a host whose tree has default/hypr/qconsole.lua; not before (omarchy<4.5).
+  local o45=$TMP/conf-o45 o40=$TMP/conf-o40; mkdir -p "$o45/default/hypr" "$o40/default/hypr"; : > "$o45/default/hypr/qconsole.lua"
+  check_eq "special is the scratchpad" workspace=special:scratchpad "$(OMARCHY_PATH=$o40 cfg workspace special)"
+  check_eq "...on 4.5 (a qconsole.lua): one line that it is the Quake console, then the same" \
+    "omabox: note: on this Omarchy the scratchpad is its Quake console: a half-height panel that starts the default agent when it opens empty; special:omabox gives box windows a special workspace of their own, full size|workspace=special:scratchpad" \
+    "$(OMARCHY_PATH=$o45 cfg workspace special | paste -sd '|')"
+  check_eq "special:NAME (special:omabox, the widget's own): no note" workspace=special:omabox "$(OMARCHY_PATH=$o45 cfg workspace special:omabox)"
+  check_eq "ws_text: a special workspace says how it shows and hides" \
+    "special workspace omabox, which the bar widget's Show opens and a workspace switch hides|the scratchpad (SUPER+S shows it)|workspace 9" \
+    "$(for w in special:omabox special:scratchpad 9; do lib ws_text "$w"; done | paste -sd '|')"
   check_eq "confirm-close yes reads on" confirm-close=on "$(cfg confirm-close yes | tail -1)"
   check_eq "bar-icon auto" bar-icon=auto "$(cfg bar-icon auto)"
   check_fails "bar-icon takes auto or always" env HOME="$h" "$CLI" config bar-icon sometimes
@@ -11466,6 +11475,52 @@ t_guard() {
   ob down "$B" >/dev/null
 }
 
+# special:omabox (#292, finding 423), the widget's "Its own", in a box standing in for the host (finding
+# 26): an interactive box's window there is full size (not the half-height panel Omarchy 4.5's
+# scratchpad, its Quake console, makes of a lone window), opens with no focus and no workspace change,
+# is opened by the widget's Show (peek --focus) and hidden by a workspace switch, and keeps drawing
+# while hidden and after it is shown again; a peek window goes there too.
+t_special_ws() {
+  local B=$P-sw out; local in=("$CLI" run -b "$B" --)
+  up_ok "$B" --no-shell --net isolated || { no "up (the stand-in host)" "$UP_OUT"; return; }
+  # shellcheck disable=SC2329 # called through until_ok
+  shown() { [ "$(ob hyprctl -b "$B" -j monitors | jq -r '.[0].specialWorkspace.name')" = "$1" ]; }
+  out=$("${in[@]}" "$CLI" up sw --interactive --no-shell --workspace special:omabox 2>&1) || { no "up --interactive --workspace special:omabox" "$out"; ob down "$B" >/dev/null; return; }
+  check_match "up --interactive --workspace special:omabox: says how it shows and hides" \
+    "is a window on special workspace omabox, which the bar widget's Show opens and a workspace switch hides" "$out"
+  check_eq "...its window on special:omabox" special:omabox "$(ob hyprctl -b "$B" -j clients | jq -r '.[] | select(.class == "aquamarine") | .workspace.name')"
+  check "...full size (not a half-height panel)" bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"aquamarine\") | .size[0] > 1800 and .size[1] > 1000'"
+  check "...not shown, nothing focused, the stand-in still on 1" bash -c "'$CLI' hyprctl -b '$B' -j monitors | jq -e '.[0].specialWorkspace.name == \"\" and .[0].activeWorkspace.name == \"1\"' && '$CLI' hyprctl -b '$B' -j activewindow | jq -e '.class == null'"
+  "${in[@]}" "$CLI" run -b sw -d -- foot -T clock sh -c 'while :; do date +%T.%N; sleep 0.2; done' >/dev/null 2>&1
+  "${in[@]}" "$CLI" wait -b sw window clock >/dev/null 2>&1
+  # shellcheck disable=SC2329 # called through check
+  drawn() { "${in[@]}" "$CLI" shot -b sw -o /tmp/sw-a.png >/dev/null 2>&1 && sleep 1 && "${in[@]}" "$CLI" shot -b sw -o /tmp/sw-b.png >/dev/null 2>&1 &&
+    "${in[@]}" sh -c '! cmp -s /tmp/sw-a.png /tmp/sw-b.png'; }
+  check "...drawn while hidden: two shots a second apart differ" drawn
+  "${in[@]}" "$CLI" peek -b sw --focus >/dev/null 2>&1
+  check "Show (peek --focus) opens special:omabox" until_ok 5 shown special:omabox
+  check_eq "...and focuses the box's window" aquamarine "$(ob hyprctl -b "$B" -j activewindow | jq -r .class)"
+  ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '2' })" >/dev/null
+  check "a workspace switch hides it" until_ok 5 shown ""
+  check "...still drawn while hidden" drawn
+  "${in[@]}" "$CLI" peek -b sw --focus >/dev/null 2>&1
+  check "Show again: shown over workspace 2" until_ok 5 shown special:omabox
+  # The stand-in's own screen, where the window is: it moves with the clock (frames reach the host).
+  ob shot -b "$B" -g "0,0 960x1080" -o "$TMP/sw-1.png" >/dev/null 2>&1; sleep 1
+  ob shot -b "$B" -g "0,0 960x1080" -o "$TMP/sw-2.png" >/dev/null 2>&1
+  check "...and up to date there: two shots of the stand-in a second apart differ" bash -c "! cmp -s '$TMP/sw-1.png' '$TMP/sw-2.png'"
+  ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '1' })" >/dev/null
+  "${in[@]}" "$CLI" down sw >/dev/null 2>&1
+  # A peek window there too: full size, hidden until shown.
+  "${in[@]}" "$CLI" up swp --no-shell --idle 0 >/dev/null 2>&1
+  out=$("${in[@]}" "$CLI" peek -b swp --workspace special:omabox 2>&1)
+  check_match "peek --workspace special:omabox: says how it shows and hides" "on special workspace omabox, which the bar widget's Show opens" "$out"
+  check "...its window on special:omabox, full size" until_ok 10 bash -c "'$CLI' hyprctl -b '$B' -j clients | jq -e '.[] | select(.class == \"omabox-peek\") | .workspace.name == \"special:omabox\" and .size[0] > 1800 and .size[1] > 1000'"
+  check "...not shown" shown ""
+  "${in[@]}" "$CLI" down --all >/dev/null 2>&1
+  ob down "$B" >/dev/null
+}
+
 # `omabox clip` (issue #23, finding 119) with a box standing in for the host (finding 26) and interactive
 # boxes nested in it: the clipboard is the stand-in's, never the user's. No agent runs in the box, so
 # what clip refuses there is what it refuses, not the suite's own caller.
@@ -14773,7 +14828,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

@@ -7,6 +7,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 Boxes on Omarchy 4.5.
 
+### Changed
+
+- **Where box windows open**: the widget's Settings offers workspaces 1-10 and **Its own
+  (special:omabox)**, a special workspace of omabox's: full size, opened by the widget's Show, hidden
+  by a workspace switch. It no longer offers the scratchpad, which Omarchy 4.5 made its Quake console
+  (a half-height panel that starts the default agent when it opens empty). `special` still works
+  (`--workspace`, `omabox config workspace`), and a config that names it is kept and shown as it is;
+  on 4.5 `omabox` says what the scratchpad is now. The README gives a key binding for `special:omabox`
+  ([#292](https://github.com/diogochaves/omabox/issues/292)).
+
 ### Fixed
 
 - **The first shot after `up` could be a black screen**: 4.5's shell covers every screen for a new

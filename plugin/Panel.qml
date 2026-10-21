@@ -88,12 +88,16 @@ Panel {
   readonly property bool shown: !(inBox && noCommand) && (hasBoxes || alwaysShown)
   readonly property string workspaceLabel: {
     var w = String(cliConfig.workspace || "9")
-    return w === "special:scratchpad" ? "the scratchpad" : w.indexOf("special:") === 0 ? "special:" + w.slice(8) : "workspace " + w
+    return w === "special:scratchpad" ? "the scratchpad" : w === "special:omabox" ? "its own special workspace (Show opens it)"
+      : w.indexOf("special:") === 0 ? "special:" + w.slice(8) : "workspace " + w
   }
   readonly property var workspaceOptions: {
     var o = []
     for (var i = 1; i <= 10; i++) o.push({ value: String(i), label: "Workspace " + i })
-    o.push({ value: "special:scratchpad", label: "Scratchpad (SUPER+S)" })
+    // A special workspace of omabox's own (#292): full size, opened by Show, hidden by a workspace
+    // switch. Not the scratchpad, which Omarchy 4.5 made its Quake console (a half-height panel that
+    // starts the default agent); a config that names it is still shown, below, as it is.
+    o.push({ value: "special:omabox", label: "Its own (special:omabox)" })
     var cur = String(cliConfig.workspace || "9")
     if (!o.some(function(x) { return x.value === cur }))   // set by hand: shown as it is
       o.push({ value: cur, label: cur.indexOf("special:") === 0 ? "Special: " + cur.slice(8) : "Workspace " + cur })
@@ -861,7 +865,7 @@ Panel {
             spacing: Style.space(6)
 
             SettingText { text: "Where windows open"; bold: true }
-            SettingText { text: "Interactive boxes and peek windows, never focused when they open. The scratchpad is SUPER+S."; dim: true }
+            SettingText { text: "Interactive boxes and peek windows, never focused when they open. Its own: Show opens it, switching workspace hides it."; dim: true }
             Dropdown {
               id: wsDropdown
               width: parent.width

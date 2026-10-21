@@ -670,8 +670,10 @@ EVENT>>DATA part (grep -E). --until: the first matching event from --since (or f
 exit 0, 124 none by --timeout, 1 the box went down; -f (or --follow) follows until the box goes down.
 @ up peek config
 Interactive boxes and peek windows open on workspace 9, without focus: \`omabox config workspace WS\`
-(1-99, special = Omarchy's scratchpad on SUPER+S, special:NAME) or --workspace. A peek window shows
-click, pointer and keys for ~3 s (a ring, key captions, --pass values as *); never the box's own frames.
+(1-99; special:omabox, a special workspace of omabox's own: the bar widget's Show opens it, a
+workspace switch hides it; special:NAME; special = Omarchy's scratchpad on SUPER+S, on 4.5 its Quake
+console) or --workspace. A peek window shows click, pointer and keys for ~3 s (a ring, key captions,
+--pass values as *); never the box's own frames.
 @ up config
 Closing an interactive box's window ends the box; \`omabox config confirm-close on\` asks first (a
 second close is a yes).
@@ -967,7 +969,8 @@ conf_check() {
   esac
 }
 # Where interactive and peek windows open: a workspace 1-99, `special` (Omarchy's scratchpad, which
-# SUPER+S shows) or special:NAME. It goes into the host's Lua: nothing but these shapes passes.
+# SUPER+S shows) or special:NAME (special:omabox, the widget's "Its own": #292, finding 423). It goes
+# into the host's Lua: nothing but these shapes passes.
 ws_check() {
   case $1 in
     special) echo special:scratchpad ;;
@@ -978,9 +981,17 @@ ws_check() {
 ws_text() {
   case $1 in
     special:scratchpad) echo "the scratchpad (SUPER+S shows it)" ;;
-    special:*) echo "special workspace ${1#special:}" ;;
+    special:*) echo "special workspace ${1#special:}, which the bar widget's Show opens and a workspace switch hides" ;;
     *) echo "workspace $1" ;;
   esac
+}
+# ws_note WS: one line when WS is the scratchpad on an Omarchy whose scratchpad is its Quake console
+# (4.5: default/hypr/qconsole.lua, told by the host's tree, never its version; #292, finding 423):
+# there a lone window is boxed into a half-height panel, and the console starts the default agent
+# when it opens empty. `special` stays accepted (the 1.x promise).
+ws_note() {
+  [ "$1" = special:scratchpad ] && [ -f "${OMARCHY_PATH:-/usr/share/omarchy}/default/hypr/qconsole.lua" ] || return 0
+  say "note: on this Omarchy the scratchpad is its Quake console: a half-height panel that starts the default agent when it opens empty; special:omabox gives box windows a special workspace of their own, full size"
 }
 conf_get() {
   local v=""
@@ -4054,6 +4065,7 @@ cmd_up() {
   # later `omabox config confirm-close` changes this box too.
   local confirm_from=flag
   [ -n "$ws" ] || ws=$(conf_get workspace)
+  [ $interactive = 0 ] || ws_note "$ws"
   [ -n "$confirm" ] || { confirm=$(conf_get confirm-close); confirm_from=config; }
   # host: connected's name from before every box had a network of its own (finding 89). A nested
   # connected box (its host is a box) cannot have a connected pasta (a box has no /dev/net/tun), so
@@ -13446,6 +13458,7 @@ cmd_peek() {
     say "box '$NAME' already has a peek window${monitor:+ of $monitor}"; return
   fi
   [ -n "$ws" ] || ws=$(conf_get workspace)
+  ws_note "$ws"
   [ -x "$PEEK" ] || die "peek: missing $PEEK: run install.sh"
   # peek itself runs on the host (it is a window there) and connects to the box's socket from the
   # host's side of its runtime dir, which the box can write: only a real socket, no symlink (finding
@@ -14248,6 +14261,7 @@ cmd_config() {
     2) if [ "${args[1]}" = default ]; then conf_set "$k"; v=$(conf_default "$k")
        else conf_set "$k" "$v"; fi
        [ "$k" = confirm-close ] && confirm_live "$v"
+       [ "$k" != workspace ] || ws_note "$v"
        if [ "$k" = gpu ] && [ "$v" != auto ]; then
          local n m=""; for n in $(render_nodes); do gpu_is "$n" "$v" && { m=$n; break; }; done
          [ -n "$m" ] || say "note: no usable GPU here is $v now: boxes render on the first one until it is (omabox config gpu lists them)"
@@ -14260,7 +14274,7 @@ cmd_config() {
 }
 conf_help() {
   case $1 in
-    workspace) echo "1-99, special (the scratchpad, SUPER+S) or special:NAME" ;;
+    workspace) echo "1-99, special (the scratchpad, SUPER+S) or special:NAME (special:omabox: a special workspace of omabox's own)" ;;
     confirm-close) echo "on or off" ;;
     bar-icon) echo "always (the default) or auto (only while boxes exist)" ;;
     gpu) echo "auto (the default: the first GPU), nvidia, amd, intel (or a driver: nouveau, amdgpu, radeon, i915, xe) or a PCI slot (0000:03:00.0); headless boxes only; omabox config gpu lists them" ;;

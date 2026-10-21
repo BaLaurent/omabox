@@ -8769,6 +8769,29 @@ from them.
     the tests, carries `omarchy<4.5` for #312. Checked: `test/run.sh unit` on the installed 4.5.0rc1,
     the RC tree and the v4.0.6 tree; the three box tests on 4.5 and with the v4.0.6 tree.
 
+423. **Host placement on Omarchy 4.5: `special:omabox`** (2026-10-21, #292; *decided* by Diogo; verified
+    in a 4.5 box standing in for the host, finding 26). On a 4.5 desk a number is the first monitor's
+    workspace of that number (finding 416), a workspace in floating mode floats a box's window with a
+    titlebar like any other, and the scratchpad (`special`) is Omarchy's Quake console
+    (`default/hypr/qconsole.lua`): a lone window there is boxed into a half-height panel (1080x540 on
+    1920x1080) and the console starts `omarchy-agent` when it opens empty. The default stays 9. The
+    widget offers workspaces 1-10 and "Its own (special:omabox)" and drops "Scratchpad (SUPER+S)"; a
+    config naming another value (the scratchpad too) is shown as it is. `special` stays accepted (the
+    1.x promise); `ws_note` says one line about the console when it is set (`config workspace`, or what
+    `up --interactive` and `peek` use) on a host whose tree has `qconsole.lua` (told by the tree, never
+    the version: `${OMARCHY_PATH:-/usr/share/omarchy}`). `ws_text` says how a special workspace shows
+    and hides ("special workspace omabox, which the bar widget's Show opens and a workspace switch
+    hides"). Checked in the stand-in (stock bar, 1920x1080, Omarchy 4.5.0rc1's config): an
+    interactive box with `config workspace special:omabox` opened unfocused on special:omabox at
+    1896x1030 (the whole workspace), the stand-in left on 1; its own shots a second apart differed
+    while hidden (a clock in foot); `peek --focus` (the widget's Show) opened the special over the
+    current workspace and focused the window, with the clock current; a workspace switch (dispatch and
+    SUPER+2) hid it, and Show opened it again over workspace 2, current; a headless box's peek window
+    went there too, full size, and showed current frames after a hide and a show. The README's
+    binding, `o.bind("SUPER + ALT + B", …, hl.dsp.workspace.toggle_special("omabox"))`, added at run
+    time, toggled it; SUPER+ALT+B is bound to nothing else in 4.5's defaults (`hyprctl binds`). The
+    floating mode is documented, not changed. Tests: t_special_ws (new), t_unit_config.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -8787,14 +8810,9 @@ of them, nor wayvnc (finding 34). It needs labwc.
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
 
-- Omarchy 4.5 on the host (#292, findings 415-420): interactive and peek windows still open on a bare
-  workspace number (9), which 4.5 reads as that workspace of the first monitor's block (on one
-  monitor, the same as before); on a floating workspace (SUPER+L) the box's window floats with a
-  titlebar despite `float = false`; and `special` (the scratchpad) is now the Quake console, a
-  half-height dimmed panel that starts `omarchy-agent` when it opens empty. Named workspaces and
-  named specials keep neither numbering nor the floating mode: whether host placement moves to one
-  is a design decision, not made. Boxes run no OWE daemon: no video wallpapers or intros (an opt-in
-  `up --owe` for footage would be #309).
+- Omarchy 4.5 on the host (#292, findings 415-423): the default stays workspace 9 (the first
+  monitor's); `special:omabox` is offered for a place of omabox's own (finding 423). Boxes run no OWE
+  daemon: no video wallpapers or intros (an opt-in `up --owe` for footage would be #309).
 - 1.0.1 runs on Omarchy 4.0.x and 4.5 (finding 422); 1.1 drops 4.0 (#312): every 4.0-only spot
   carries `omarchy<4.5` (`grep -rn 'omarchy<4.5'`).
 

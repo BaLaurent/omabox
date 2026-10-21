@@ -275,9 +275,22 @@ after `omabox restart-shell` (the shell) or `omabox hyprctl reload` (the config)
 Settings live in `~/.config/omabox/config`: `omabox config` lists them, the widget's gear changes
 them, and `omabox config KEY default` puts one back.
 
-- `workspace WS`: where interactive and peek windows open, always without focus: `1`-`99`,
-  `special` (Omarchy's scratchpad: SUPER+S shows and hides it) or `special:NAME` (bind a key to it
-  yourself). Per box: `up --interactive --workspace WS`, `peek --workspace WS`. The default is 9.
+- `workspace WS`: where interactive and peek windows open, always without focus. The default is 9;
+  per box: `up --interactive --workspace WS`, `peek --workspace WS`.
+  - `1`-`99`: a workspace. Omarchy 4.5 gives each monitor ten of its own; a number is the first
+    monitor's.
+  - `special:omabox` (the widget's **Its own**): a special workspace of omabox's. A window there is
+    full size, the widget's **Show** opens it over the workspace you are on, and switching workspace
+    hides it; a box keeps drawing while hidden. To toggle it with a key, add a line like this one to
+    `~/.config/hypr/bindings.lua` (SUPER+ALT+B is only an example, free in Omarchy 4.5's defaults):
+    `o.bind("SUPER + ALT + B", "Box windows", hl.dsp.workspace.toggle_special("omabox"))`.
+  - `special:NAME`: another special workspace (bind a key to it yourself).
+  - `special`: Omarchy's scratchpad (SUPER+S shows and hides it). On Omarchy 4.5 it is the Quake
+    console: a half-height panel that starts the default agent when it opens empty, so a lone box
+    window there is boxed into it; `omabox` says so when it is set.
+
+  On a workspace in floating mode (Omarchy 4.5: SUPER+L cycles to it), a box's window floats with a
+  titlebar, like any window there.
 - `confirm-close on`: closing an interactive box's window asks first. The box opens a new window
   where you are, with Omarchy's menu ("Shut down" / "Keep it running"); closing that window too is a
   yes. It applies to running boxes as well. Per box: `--confirm-close` or `--no-confirm-close` on
