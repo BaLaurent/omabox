@@ -2437,6 +2437,25 @@ t_unit_bar_filter() {
     '{"left":[{"id":"omarchy.menu"},{"id":"omarchy.workspaces"},{"id":"omarchy.system-update"}],"center":[],"right":[{"id":"omarchy.tray"}]}' \
     "$(bar '[]' '[]' "$user")"
   check_eq "...the dropped centre anchor gone" null "$(bar '[]' '[]' "$user" .bar.centerAnchor)"
+  # Omarchy 4.5's split centre (#293, finding 418): with SPLIT, the anchor's flanks move to centerBegin
+  # and centerEnd first, as migration 1791969355 does on a desk, then the filter.
+  # shellcheck disable=SC2329 # called below
+  bars() { lib shell_json_filter "$1" true '[]' true <<<"$2" | jq -c "${3:-.bar}"; }
+  local anc='{"bar":{"centerAnchor":"omarchy.clock","layout":{"center":["x.a",{"id":"omarchy.indicators"},{"id":"omarchy.clock"},{"id":"omarchy.weather"}],"centerEnd":[{"id":"omarchy.tray"}]}}}'
+  check_eq "split: what flanked the anchor in centerBegin and centerEnd, the anchor alone in center, no centerAnchor" \
+    '{"layout":{"center":[{"id":"omarchy.clock"}],"centerEnd":[{"id":"omarchy.weather"},{"id":"omarchy.tray"}],"centerBegin":["x.a",{"id":"omarchy.indicators"}],"left":[{"id":"omarchy.workspaces"}]}}' \
+    "$(bars '["x.a"]' "$anc")"
+  check_eq "...a plugin left out filtered after the split" '[{"id":"omarchy.indicators"}]' "$(bars '[]' "$anc" .bar.layout.centerBegin)"
+  check_eq "...without SPLIT (an older Omarchy) the anchor stays" '"omarchy.clock"' \
+    "$(lib shell_json_filter '[]' true '[]' <<<"$anc" | jq -c .bar.centerAnchor)"
+  check_eq "...a replacement bar's layout left as it was written" '"omarchy.clock"' \
+    "$(bars '[]' "$(jq -c '.bar.id = "x.bar"' <<<"$anc")" .bar.centerAnchor)"
+  check_eq "...an anchor not in the centre: only dropped" '[{"id":"omarchy.clock"}]' \
+    "$(bars '[]' '{"bar":{"centerAnchor":"x.gone","layout":{"center":[{"id":"omarchy.clock"}]}}}' .bar.layout.center)"
+  check_eq "widget_section on a split centre: centre, none and junk to centerEnd, a section kept" "centerEnd centerEnd centerEnd tray left" \
+    "$(for x in center '' bottom tray left; do lib widget_section "$x" true; done | paste -sd ' ')"
+  check_eq "...before the split: the centre unless named" "center center bottom" \
+    "$(for x in '' center bottom; do lib widget_section "$x" false; done | paste -sd ' ')"
   local pager='{"bar":{"layout":{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"x.pager","n":1},"y.pager",{"id":"x.other"}]}}}'
   check_eq "a left-out plugin's workspace widget: omarchy.workspaces in its place, once" \
     '{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"omarchy.workspaces"}]}' \
@@ -6441,8 +6460,12 @@ t_clean() {
     "$(jq -r '.bar.layout[][] | select(.id == "omarchy.clock") | .format' "$H/.config/omarchy/shell.json")"
   # Finding 400: the shell reads Omarchy's defaults and the user's file each on its own; when the
   # defaults came first under load, the bar was built from them and the frozen format was lost.
+  # (As `up` wrote it: Omarchy 4.5's shell writes a widget's settings into the HOME's file once it runs,
+  # omarchy.elsewhen's cities.)
   check_eq "...and the shell's defaults are the box's shell.json, so either may load first" "same" \
-    "$(ob run -b "$B" -- cat /usr/share/omarchy/config/omarchy/shell.json 2>&1 | cmp -s - "$H/.config/omarchy/shell.json" && echo same || echo differ)"
+    "$(ob run -b "$B" -- cat /usr/share/omarchy/config/omarchy/shell.json 2>&1 | cmp -s - "$(ob path -b "$B")/shell-defaults.json" && echo same || echo differ)"
+  check_eq "...which is the box's own (its bar's left side the same)" null \
+    "$(jq -c --slurpfile b "$H/.config/omarchy/shell.json" '.bar.layout.left as $l | if $l == $b[0].bar.layout.left then null else $l end' "$(ob path -b "$B")/shell-defaults.json" 2>&1)"
   out=$(ob run -b "$B" -- date +%s 2>&1)
   check "...and the box's processes on the real clock (the bar's text alone is frozen)" test "$(( $(date +%s) - ${out:-0} ))" -lt 30
   check_eq "...animations off" false "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"

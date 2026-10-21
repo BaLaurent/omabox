@@ -8688,6 +8688,27 @@ from them.
     still applied after it returns unless `OMARCHY_THEME_WAIT=1`, as on a desk. The contract checks
     that theme-set and the shell call the script by name. Tests: t_theme, t_unit_omarchy45.
 
+418. **On Omarchy 4.5 a desk's `bar.centerAnchor` and a widget's `center` no longer place what they
+    did** (2026-10-21, #293; the contract failed on the installed 4.5.0rc1). 4.5 splits the bar's
+    centre into `centerBegin`, `center` (a box centred on the bar) and `centerEnd`, adds a `tray`
+    section, and drops `centerAnchor` (migration `1791969355` moves what flanked the anchor to the
+    sections either side). A box runs no migrations: a desk's shell.json from an older Omarchy, in a
+    box on a 4.5 tree (`up --omarchy`), kept its anchor, and its centre came out as one group. And
+    `place_plugin` put a mounted widget naming `center`, or no section, into `center`, beside the
+    clock in its box, pushing the clock off the middle, where 4.5's registry puts it in `centerEnd`.
+    **Fix**: when the box's Omarchy has the split (`center_split`: its Bar.qml reads `centerBegin`),
+    the box's shell.json (desk, `--desk-shell` and the stock one alike) gets the migration's jq first
+    (`CENTER_SPLIT_JQ`, only for Omarchy's own bar), and `widget_section` sends `center`, none or no
+    section to `centerEnd`. On an older Omarchy, both as before. The contract drops `centerAnchor` and
+    checks `centerBegin`, `centerEnd`, the sections list with `tray`, the registry's `centerEnd`, and
+    the migration. Checked in a box on 4.5: a desk stand-in with `centerAnchor: omarchy.clock` and
+    indicators, clock, weather in `center` came up with the clock alone in the middle, the others in
+    `centerBegin` and `centerEnd`; a mounted widget naming no section was placed in `centerEnd`, the
+    clock still centred. Seen too: a 4.5 shell writes a widget's settings into the HOME's shell.json
+    once it runs (omarchy.elsewhen's `cities`), so a clean box's file and its shell's defaults (finding
+    400, a copy made by `up`) no longer stay byte-equal; t_clean compares the defaults with that copy.
+    Tests: t_unit_bar_filter, t_unit_omarchy_contract, t_clean.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

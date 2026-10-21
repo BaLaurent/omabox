@@ -2631,14 +2631,17 @@ workspace_widgets() {
 # plugins (ids in $1), the built-in notifications back on unless a mounted plugin serves them ($2),
 # idle held off. A bar left with no workspace numbers gets omarchy.workspaces (issue #21): where a
 # workspace widget of a plugin left out of the box was, else after the menu at the start of `left`,
-# as Omarchy's default bar has it. Not when a mounted plugin is one ($3: workspace_widgets).
+# as Omarchy's default bar has it. Not when a mounted plugin is one ($3: workspace_widgets). With $4
+# true (center_split: an Omarchy that splits the bar's centre) a centerAnchor split first, as Omarchy's
+# migration does on a desk (CENTER_SPLIT_JQ).
 shell_json_filter() {
-  jq --argjson keep "$1" --argjson notify "$2" --argjson pagers "$3" '
+  jq --argjson keep "$1" --argjson notify "$2" --argjson pagers "$3" --argjson split "${4:-false}" "$CENTER_SPLIT_JQ"'
       def wid: if type == "object" then .id else . end;
       def keep: wid as $i | ($i | startswith("omarchy.")) or ($keep | index($i));
       def pager: wid as $i | $pagers | index($i);
       def ws: {id: "omarchy.workspaces"};
-      if $notify and .disabledPlugins then .disabledPlugins -= ["omarchy.notifications"] else . end
+      if $split then center_split else . end
+      | if $notify and .disabledPlugins then .disabledPlugins -= ["omarchy.notifications"] else . end
       | .idle = {screensaver: 1000000, lock: 1000000}
       | if (.bar.layout? | type) == "object"
           and ([.bar.layout[]?[]? | wid] | index("omarchy.workspaces") | not)
@@ -2654,6 +2657,42 @@ shell_json_filter() {
       | (.bar.centerAnchor? // "") as $a
       | if $a != "" and (($a | startswith("omarchy.")) or ($keep | index($a)) | not)
         then del(.bar.centerAnchor) else . end'
+}
+
+# Omarchy 4.5 split the bar's centre (migration 1791969355, #293, finding 418): `center` is a box
+# centred on the bar with `centerBegin` and `centerEnd` hanging off its edges, and `bar.centerAnchor`
+# (the one centre widget pinned to the middle, the rest flanking it) is no longer read. A desk on an
+# older Omarchy, in a box running a 4.5 tree (`up --omarchy`), kept its anchor, which no migration
+# runs on in a box: its centre came out as one group. center_split, the migration's jq: what flanked
+# the anchor moves to the sections either side. Only for Omarchy's own bar (a replacement reads the
+# layout it was written for). center_split (shell): whether the box's Omarchy (--omarchy's tree, else
+# the installed one) has the split, as true or false.
+# shellcheck disable=SC2016 # jq, not shell
+CENTER_SPLIT_JQ='def center_split:
+  def entry_id: if type == "object" then (.id // "" | tostring) else tostring end;
+  def list: if type == "array" then . else [] end;
+  if (.bar | type) == "object" and (.bar | has("centerAnchor")) and ((.bar.id // "" | tostring) | IN("", "omarchy.bar"))
+  then (.bar.centerAnchor | if type == "string" then . else "" end) as $anchor
+    | (if (.bar.layout | type) == "object" then .bar.layout.center | list else [] end) as $center
+    | (first(range(0; $center | length) | select($anchor != "" and ($center[.] | entry_id) == $anchor)) // null) as $index
+    | if $index != null then
+        .bar.layout.centerBegin = (.bar.layout.centerBegin | list) + $center[0:$index]
+        | .bar.layout.center = [$center[$index]]
+        | .bar.layout.centerEnd = $center[$index + 1:] + (.bar.layout.centerEnd | list)
+      else . end
+    | del(.bar.centerAnchor)
+  else . end;'
+# widget_section SECTION SPLIT: where a mounted widget whose manifest names SECTION (or none) goes.
+# On a split centre (SPLIT true, 4.5) one naming the centre, none or no section goes beside the clock,
+# in centerEnd, as Omarchy's registry places it (finding 418): `center` is the box the clock is centred
+# in, which another widget there pushes off the middle. Before it, the centre.
+widget_section() {
+  if [ "$2" = true ]; then
+    case $1 in left|centerBegin|centerEnd|right|tray) echo "$1" ;; *) echo centerEnd ;; esac
+  else echo "${1:-center}"; fi
+}
+center_split() {
+  if grep -qs centerBegin "${omarchy:-/usr/share/omarchy}/shell/plugins/bar/Bar.qml"; then echo true; else echo false; fi
 }
 
 # place_plugin ID SECTION KINDS MOUNTED < shell.json: a mounted plugin where its manifest says, unless
@@ -2858,6 +2897,7 @@ seed_home() {
   local notify=true
   for p in "${PLUGINS[@]}"; do grep -rqs --include='*.qml' NotificationServer "${p#*$'\t'}" && notify=false; done
   local pagers; pagers=$(printf '%s\n' "${PLUGINS[@]}" | workspace_widgets) || pagers='[]'
+  local split; split=$(center_split)
   # --desk-shell (#206): the desk's shell.json as it is, every plugin of the desk's in it where the desk
   # has it (one the desk has off stays off), only idle held off (no real input in a box: finding 10).
   # Of the plugins, only a --plugin the desk does not have is placed where its manifest says.
@@ -2865,7 +2905,8 @@ seed_home() {
     # omabox's widget, left out of the box (desk_plugins), out of every list that places it (the bar, a
     # plugin's own layout, its settings entry) too, unless a --plugin mounts it.
     # shellcheck disable=SC2016 # jq, not shell
-    jq --argjson keep "$ids" '.idle = {screensaver: 1000000, lock: 1000000}
+    jq --argjson keep "$ids" --argjson split "$split" "$CENTER_SPLIT_JQ"'.idle = {screensaver: 1000000, lock: 1000000}
+      | if $split then center_split else . end
       | if $keep | index("chaves.omabox") then . else
           walk(if type == "array" then map(select((if type == "object" then .id else . end) != "chaves.omabox")) else . end)
           | if .bar.centerAnchor? == "chaves.omabox" then del(.bar.centerAnchor) else . end end' \
@@ -2873,15 +2914,15 @@ seed_home() {
       say "--desk-shell: no shell.json in $DESK (or not JSON): the box's shell starts from an empty one"
       echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"; }
   else
-    shell_json_filter "$ids" $notify "$pagers" < "$shell_json" > "$h/.config/omarchy/shell.json" 2>/dev/null ||
+    shell_json_filter "$ids" $notify "$pagers" "$split" < "$shell_json" > "$h/.config/omarchy/shell.json" 2>/dev/null ||
       echo '{"version":1,"idle":{"screensaver":1000000,"lock":1000000}}' > "$h/.config/omarchy/shell.json"
-    [ "$STOCK_BAR" = 1 ] || bar_seed_note "$desk" "$ids" $notify "$pagers"
+    [ "$STOCK_BAR" = 1 ] || bar_seed_note "$desk" "$ids" $notify "$pagers" "$split"
   fi
   for p in "${PLUGINS[@]}"; do
     id=${p%%$'\t'*}; dir=${p#*$'\t'}
     [[ " ${DESK_IDS:-} " != *" $id "* ]] || continue
     kinds=$(jq -c '.kinds // []' "$dir/manifest.json")
-    section=$(jq -r '.barWidget.defaultSection // "center"' "$dir/manifest.json")
+    section=$(widget_section "$(jq -r '.barWidget.defaultSection // ""' "$dir/manifest.json")" "$split")
     place_plugin "$id" "$section" "$kinds" "$ids" < "$h/.config/omarchy/shell.json" > "$h/.config/omarchy/shell.json.new"
     mv "$h/.config/omarchy/shell.json.new" "$h/.config/omarchy/shell.json"
   done
@@ -3087,12 +3128,12 @@ seed_fonts() {
 # when the desk's shell.json made fit for the box (shell_json_filter) has another `bar` than Omarchy's
 # made fit the same way (position, sections, widgets, their formats); and its shell.toml, when that
 # sets anything (sizes, fonts), named by its tables. Names only, never a value. Nothing when the desk's
-# bar is Omarchy's own: the box looks as --stock-bar's would. bar_seed_note DESK KEEP NOTIFY PAGERS
+# bar is Omarchy's own: the box looks as --stock-bar's would. bar_seed_note DESK KEEP NOTIFY PAGERS [SPLIT]
 bar_seed_note() {
   local desk=$1 stock=${omarchy:-/usr/share/omarchy}/config/omarchy/shell.json mine theirs tables what=() shown
   if [ -f "$desk/shell.json" ] && [ -f "$stock" ]; then
-    mine=$(shell_json_filter "$2" "$3" "$4" < "$desk/shell.json" 2>/dev/null | jq -cS '.bar // null' 2>/dev/null) || mine=""
-    theirs=$(shell_json_filter "$2" "$3" "$4" < "$stock" 2>/dev/null | jq -cS '.bar // null' 2>/dev/null) || theirs=""
+    mine=$(shell_json_filter "$2" "$3" "$4" "${5:-false}" < "$desk/shell.json" 2>/dev/null | jq -cS '.bar // null' 2>/dev/null) || mine=""
+    theirs=$(shell_json_filter "$2" "$3" "$4" "${5:-false}" < "$stock" 2>/dev/null | jq -cS '.bar // null' 2>/dev/null) || theirs=""
     [ -z "$mine" ] || [ "$mine" = null ] || [ "$mine" = "$theirs" ] || what+=("shell.json layout")
   fi
   if [ -f "$desk/shell.toml" ] && grep -qvE '^[[:space:]]*(#.*)?$' "$desk/shell.toml" 2>/dev/null; then
