@@ -2737,9 +2737,45 @@ omarchy_contract() {
   oc "barWidget.defaultSection (seed_home places a mounted widget by it)" "not read by services/PluginRegistry.qml" \
     oc_has "$s/services/PluginRegistry.qml" defaultSection
   # shell.json keys seed_home writes: read by the shell under these names.
-  for e in disabledPlugins:services/PluginRegistry.qml centerAnchor:plugins/bar/Bar.qml screensaver:plugins/services/idle/Service.qml; do
-    oc "shell.json ${e%%:*} (shell_json_filter)" "not read in shell/${e#*:}" oc_has "$s/${e#*:}" "${e%%:*}"
+  for e in disabledPlugins:services/PluginRegistry.qml centerBegin:plugins/bar/Bar.qml centerEnd:plugins/bar/Bar.qml screensaver:plugins/services/idle/Service.qml; do
+    oc "shell.json ${e%%:*} (shell_json_filter, center_split)" "not read in shell/${e#*:}" oc_has "$s/${e#*:}" "${e%%:*}"
   done
+  # The bar's sections since 4.5 (#293, finding 418): place_plugin places a widget in one by its
+  # manifest, and one naming the centre (or none, or no section) in centerEnd, as the registry does;
+  # center_split is the migration that ended centerAnchor.
+  oc "the bar's sections: left, centerBegin, center, centerEnd, right, tray (place_plugin)" "not Util.barSections in shell/Commons/Util.qml" \
+    oc_has "$s/Commons/Util.qml" 'barSections: ["left", "centerBegin", "center", "centerEnd", "right", "tray"]'
+  oc "a widget's defaultSection center, none or no section: centerEnd (place_plugin does the same)" \
+    "PluginRegistry.qml's defaultBarWidgetSection says otherwise now" \
+    oc_has "$s/services/PluginRegistry.qml" 'section !== "center" ? section : "centerEnd"'
+  oc "migration 1791969355 splits the centre at bar.centerAnchor (center_split is its jq)" "no migrations/1791969355.sh splitting centerAnchor" \
+    oc_has "$o/migrations/1791969355.sh" '.bar.centerAnchor'
+  # The start-up cover (#291, finding 415): skipped when the session-id file holds the session's id
+  # (share/shell.sh writes it), and else waited out by its layer (wait_ready, intro_cover).
+  oc "the shell's start-up cover is skipped when ~/.local/state/omarchy/background-intro.session-id holds OMARCHY_SESSION_ID or HYPRLAND_INSTANCE_SIGNATURE (share/shell.sh)" \
+    "BackgroundIntro.qml tells a new login another way: every box starts under a black cover again" \
+    bash -c 'grep -qF "/.local/state/omarchy/background-intro.session-id" "$1" && grep -qF "(Quickshell.env(\"OMARCHY_SESSION_ID\") || Quickshell.env(\"HYPRLAND_INSTANCE_SIGNATURE\"))" "$1"' _ "$s/services/BackgroundIntro.qml"
+  oc "the start-up cover is a layer omarchy-background on the Overlay level (wait_ready waits it out)" \
+    "not so in services/BackgroundIntro.qml" \
+    bash -c 'grep -qF "WlrLayershell.layer: WlrLayer.Overlay" "$1" && grep -qF "WlrLayershell.namespace: \"omarchy-background\"" "$1"' _ "$s/services/BackgroundIntro.qml"
+  # Intros (finding 417): share/bin's omarchy-theme-bg-boot-intro says there is none without the OWE
+  # daemon, which omarchy-theme-set and the shell ask by name.
+  oc "omarchy-theme-set asks omarchy-theme-bg-boot-intro --resolve-only for an intro, by name (share/bin's stand-in)" \
+    "it picks the intro another way: in a box it reloads Hyprland after it returns again" \
+    oc_has "$o/bin/omarchy-theme-set" '$(omarchy-theme-bg-boot-intro --resolve-only '
+  oc "the shell runs omarchy-theme-bg-boot-intro by name (share/bin's stand-in)" "not so in services/BackgroundIntro.qml" \
+    oc_has "$s/services/BackgroundIntro.qml" 'command: ["omarchy-theme-bg-boot-intro"]'
+  # Per-monitor workspaces (#292, finding 416): share/session.sh seeds the blocks.
+  oc "monitor-workspaces.lua reads blocks from ~/.local/state/omarchy/monitor-workspaces, BLOCK<TAB>CONNECTOR<TAB>IDENTITY (share/session.sh seeds it)" \
+    "not so in default/hypr/monitor-workspaces.lua: a box's screen is on workspaces 11-20 again" \
+    bash -c 'grep -qF "STATE_DIR .. \"/monitor-workspaces\"" "$1" && grep -qF "line:match(\"^(%d+)\\t([^\\t]*)\\t(.+)\$\")" "$1"' _ "$o/default/hypr/monitor-workspaces.lua"
+  # Notifications kept across starts (#293, finding 419): up --clean clears them.
+  oc "the shell keeps notifications in ~/.local/state/omarchy/notifications (up --clean clears it)" \
+    "not in plugins/notifications/Service.qml" oc_has "$s/plugins/notifications/Service.qml" '"/.local/state/omarchy/notifications"'
+  # --omarchy's xkb (finding 420).
+  oc "Omarchy's keyboard option omarchy:shift_caps_compose is in its etc/xkb (up --omarchy lays a tree's over /etc/xkb)" \
+    "default/hypr/input.lua names it but etc/xkb/symbols/omarchy is not there" \
+    bash -c '! grep -qF "omarchy:shift_caps_compose" "$1/default/hypr/input.lua" || [ -f "$1/etc/xkb/symbols/omarchy" ] || [ -f /etc/xkb/symbols/omarchy ]' _ "$o"
   # A shell that fits bar icons (Ui/BarIconContent.qml) says how wide it painted the widget's mark: the
   # count goes beside it (plugin/Panel.qml, #219). Holds too in a shell without fitted icons.
   oc "BarIconButton's componentPaintedWidth, where bar icons are fitted (the widget's count, #219)" \
@@ -2771,6 +2807,46 @@ t_unit_omarchy_contract() {
     "omarchy-shell shell moveBarWidget, 2 argument(s) (skill): takes 1 argument(s) now|layer omarchy-bar (up waits for it): no WlrLayershell.namespace \"omarchy-bar\" under shell/" \
     "$(omarchy_contract "$t" | awk -F'\t' '$2 != "" { print $1 ": " $2 }' | paste -sd '|')"
   rm -rf "$t"
+}
+
+# Omarchy 4.5 (#291, #293): the start-up cover told from the wallpaper (intro_cover), what an --omarchy
+# tree runs that the host lacks (omarchy_host_gaps), and share/bin's omarchy-theme-bg-boot-intro, which
+# says there is no intro while no OWE daemon runs and else is Omarchy's.
+t_unit_omarchy45() {
+  local d=$TMP/o45 out
+  rm -rf "$d"; mkdir -p "$d/run/owe" "$d/om/bin"
+  check_eq "intro_cover: an Overlay omarchy-background layer, its geometry" "0,0 800x600" \
+    "$(lib intro_cover <<<'{"M":{"levels":{"0":[{"namespace":"omarchy-background","x":0,"y":0,"w":800,"h":600}],"3":[{"namespace":"omarchy-background","x":0,"y":0,"w":800,"h":600}]}}}')"
+  check_fails "...none: the wallpaper alone (Background level) is no cover" lib intro_cover \
+    <<<'{"M":{"levels":{"0":[{"namespace":"omarchy-background","x":0,"y":0,"w":800,"h":600}],"3":[{"namespace":"omarchy-notifications"}]}}}'
+  # A tree that uses all three, on a host without them (stubbed), then with them.
+  mkdir -p "$d/t/bin" "$d/t/default/hypr"
+  printf '#!/bin/bash
+owe status
+' > "$d/t/bin/omarchy-theme-bg-boot-intro"
+  printf '#!/bin/bash
+omasnap --region
+' > "$d/t/bin/omarchy-capture-screenshot"
+  printf 'local TITLEBARS = "%s"\n' /usr/lib/omarchy-hyprland-titlebars/titlebars.so > "$d/t/default/hypr/workspace-modes.lua"
+  out=$(bash -c 'source "$1"; have_cmd() { return 1; }; TITLEBARS_SO=$2/none.so
+    sed -i "s|/usr/lib/omarchy-hyprland-titlebars/titlebars.so|$TITLEBARS_SO|" "$2/t/default/hypr/workspace-modes.lua"; omarchy_host_gaps "$2/t"' _ "$TMP/lib/bin/omabox" "$d" | paste -sd '|')
+  check_eq "omarchy_host_gaps: each the tree uses and the host lacks, saying what goes" \
+    "owe: no video wallpapers and no theme intros|omasnap: no Omasnap screenshots|omarchy-hyprland-titlebars: no titlebars on floating workspaces" "$out"
+  check_eq "...none with them installed" "" \
+    "$(bash -c 'source "$1"; have_cmd() { return 0; }; TITLEBARS_SO=$2/t/bin/omarchy-capture-screenshot; omarchy_host_gaps "$2/t"' _ "$TMP/lib/bin/omabox" "$d")"
+  check_eq "...none for a tree that uses none (an older Omarchy)" "" \
+    "$(bash -c 'source "$1"; have_cmd() { return 1; }; TITLEBARS_SO=/nonexistent; omarchy_host_gaps "$2/om"' _ "$TMP/lib/bin/omabox" "$d")"
+  # The stand-in: Omarchy's script stubbed to say what it was asked.
+  printf '#!/bin/sh
+echo "real $*"
+' > "$d/om/bin/omarchy-theme-bg-boot-intro"; chmod +x "$d/om/bin/omarchy-theme-bg-boot-intro"
+  bi() { env OMARCHY_PATH="$d/om" XDG_RUNTIME_DIR="$d/run" "$ROOT/share/bin/omarchy-theme-bg-boot-intro" "$@"; echo "rc=$?"; }
+  check_eq "boot-intro stand-in, no OWE daemon: no intro to resolve, none to prepare" "rc=0|rc=0|rc=0" \
+    "$( { bi --resolve-only /x.jpg; bi --resolve-startup; bi --prepare-theme nord; } | paste -sd '|')"
+  check_eq "...the start (no argument) and a switch still Omarchy's" "real |rc=0|real --theme-switch a b|rc=0" "$( { bi; bi --theme-switch a b; } | paste -sd '|')"
+  python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$d/run/owe/owed.sock"
+  check_eq "...with a daemon's socket: Omarchy's for all" "real --resolve-only /x.jpg|rc=0" "$(bi --resolve-only /x.jpg | paste -sd '|')"
+  rm -rf "$d"
 }
 
 # rm_box and sweep_homes (#264): a HOME holding a read-only dir (an app's), and a runtime dir whose
@@ -11861,6 +11937,25 @@ t_theme() {
   check_eq "...no theme in box.json" null "$(jq .theme "$D/box.json")"
   ob down "$B2" >/dev/null 2>&1
   sv saves rm "$S" >/dev/null 2>&1
+  # Omarchy 4.5's intros (#291, finding 415; #293, finding 417): a theme with one (catppuccin's
+  # wallpapers have intros/) kept a black start-up cover over the box for ~5 s after `up`, and
+  # omarchy-theme-set to another reloaded Hyprland ~1 s after it returned.
+  local it=catppuccin it2=everforest B4=$P-th4
+  if [ -d "/usr/share/omarchy/themes/$it/backgrounds/intros" ] && [ -d "/usr/share/omarchy/themes/$it2/backgrounds/intros" ] &&
+     grep -qsF background-intro.session-id /usr/share/omarchy/shell/services/BackgroundIntro.qml; then
+    up_ok "$B4" --net isolated --stock-bar --theme "$it" || { no "up --theme $it" "$UP_OUT"; return; }
+    check_fails "up --theme $it (it has intros): no start-up cover once up is back" bash -c "'$CLI' hyprctl -b '$B4' -j layers | jq -e '[.[].levels[\"3\"][]? | select(.namespace == \"omarchy-background\")] | length > 0'"
+    check_eq "...the session marked as had (share/shell.sh)" \
+      "$(ob run -b "$B4" -- sh -c 'echo "$HYPRLAND_INSTANCE_SIGNATURE"' 2>&1)" \
+      "$(cat "$(ob path -b "$B4")/home/.local/state/omarchy/background-intro.session-id" 2>&1)"
+    ob events -b "$B4" --mark "$P-ts" >/dev/null 2>&1
+    ob run -b "$B4" -- omarchy-theme-set "$it2" >/dev/null 2>&1
+    check "...omarchy-theme-set $it2 (intros too): Hyprland reloaded before it returned (no OWE in a box: no intro)" \
+      ob events -b "$B4" --since "$P-ts" --until configreloaded --timeout 300ms
+    ob down "$B4" >/dev/null 2>&1
+  else
+    skip "the start-up cover and intros of Omarchy 4.5 (#291)" "this Omarchy has no intro themes, or no start-up cover"
+  fi
   # An omarchy-theme-set that fails in the box ends it, saying why.
   copy_omarchy "$T"
   rm -f "$T/bin/omarchy-theme-set"; printf '#!/bin/sh\necho "broken on purpose" >&2\nexit 3\n' > "$T/bin/omarchy-theme-set"; chmod +x "$T/bin/omarchy-theme-set"
@@ -14588,7 +14683,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_inotifywait t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_brief t_link_out t_run_cwd t_clean t_check)
