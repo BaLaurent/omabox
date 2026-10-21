@@ -8673,6 +8673,21 @@ from them.
     Open item. Tests: t_output (the main screen on 1, a monitor on 11), t_guard
     (confirm-close keeps 1 and 2), t_unit_omarchy_contract (the file's format).
 
+417. **On Omarchy 4.5 `omarchy-theme-set` in a box reloaded Hyprland ~1 s after it returned**
+    (2026-10-21, #293; verified in a box). Switching to a theme whose wallpaper has an intro, with
+    animations on, 4.5's `omarchy-theme-set` takes its intro path: it returns at once and, in the
+    background, asks OWE to play the intro, then reloads Hyprland. A box runs no OWE daemon (the
+    per-user `owed` unit), so the intro fails and the reload comes ~1 s later: `run --
+    omarchy-theme-set everforest` returned after 247 ms, `wait still` was satisfied at 1.1 s, the
+    `configreloaded` event came at 1.2 s, so a shot after `wait still` could have the old theme's
+    borders. **Fix**: `share/bin/omarchy-theme-bg-boot-intro`, first on the box's PATH, answers
+    `--resolve-only`, `--resolve-startup` and `--prepare-theme` with no intro while there is no
+    `$XDG_RUNTIME_DIR/owe/owed.sock`, and is Omarchy's script for everything else (and for all of it
+    once a daemon runs): `omarchy-theme-set` takes its plain path, which reloads Hyprland before it
+    returns (configreloaded 7 ms before the return). The theme's other app configs (GTK, browsers) are
+    still applied after it returns unless `OMARCHY_THEME_WAIT=1`, as on a desk. The contract checks
+    that theme-set and the shell call the script by name. Tests: t_theme, t_unit_omarchy45.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

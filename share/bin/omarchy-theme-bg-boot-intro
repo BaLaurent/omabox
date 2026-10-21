@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# omabox stand-in for omarchy-theme-bg-boot-intro, first on the box's PATH (#293, finding 417).
+# Omarchy 4.5 plays a theme's intro video through its OWE daemon (owed, a per-user unit no box
+# starts). omarchy-theme-set asks this script for the intro (--resolve-only) and, given one, takes
+# its intro path: it returns at once and reloads Hyprland in the background once the intro would
+# have played, ~1 s later in a box, after `omabox wait still` had already passed: a shot then showed
+# the old theme's borders. With no daemon to play it there is no intro: said so here, and the theme
+# switch is the plain one, the reload done before omarchy-theme-set returns. With a daemon (a box
+# that runs one), and for every other use, Omarchy's own.
+real=${OMARCHY_PATH:-/usr/share/omarchy}
+real=${real%/}/bin/omarchy-theme-bg-boot-intro
+if [ ! -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/owe/owed.sock" ]; then
+  case ${1:-} in
+    --resolve-only|--resolve-startup|--prepare-theme) exit 0 ;;
+  esac
+fi
+exec "$real" "$@"
