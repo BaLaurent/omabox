@@ -66,11 +66,11 @@ the words inside `message` are not part of it. Snake_case everywhere; rectangles
 | Command | Shape |
 |---|---|
 | `up --json`, `ls --json` | a box (an array of them for `ls`): `name, state, mode, size, scale, created, dir, net, allowed, addrs, idle, plugins, plugin_status, bar, theme, render, monitors, hyprland_version, quickshell_version, omarchy_version, aquamarine, clean, starter, hung, peeking, keys_to_box, shell_state, shell_crashes, orphan` and more |
-| `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, certain` (false: a full-screen layer, which takes input only where its items are, so it may not cover the window at all) |
+| `windows --json` | an array: `address, stableId, class, title, initialClass, initialTitle, pid, workspace, x, y, w, h, at, size, floating, fullscreen, xwayland, active, onscreen, cover, layers` (Hyprland's own names kept: selectors use them); each of `layers`: `namespace, pid, layer, x, y, w, h, at, size, certain` (false: a layer spanning the screen, which may take input only where its items are, so it may not cover the window at all) |
 | `tree --json` | an array of nodes: `depth, role, name, states`, and `text, value, x, y, w, h, path` when known |
 | `pixel --json` | a line each point: `x, y, hex, r, g, b` |
 | `lua --json` | a line each value Lua returned (any JSON value) |
-| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/until add `detail`; an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a full-screen layer over the point may have taken it), `events_since` (an `events --since` offset) |
+| `wait --json`, `--wait --json` | `result, condition, message, elapsed`; still/change/settle add `first_change, last_change, change, late_changes, ignored, frames`; window/layer/until add `detail`; an action's `--wait` adds `changes` (an array, `[]` none, null not read: each `kind`, more kinds may come, ignore unknown ones), `target` (`kind` window, layer or none, `window, namespace, at, certain`: false when a layer spanning the screen over the point may have taken it), `events_since` (an `events --since` offset) |
 | `events --json` | a line each event: `time, event, data`; `--mark --json`: `mark, offset` |
 | `shot --json` | `path, kind` (screen, region, monitor, window), `region` (the part taken: layout coordinates, a window's own for a window), `image` (`w, h`), `scale` (image px per layout px), `window, monitor, fit, zoom, changed` (`--changed`: `result` changed, nothing or whole, `since, why`) |
 | `check run --json` | `result` (same, changed), `base, shots, report, setup, counts, checkpoints` (each `id, result, as, size, regions, holes, tree, specks, marked, approved_holes, still`); exit 3 or 4: `result` failed or no_baseline |
@@ -328,7 +328,7 @@ with `--keep wallpaper` or after a theme set in the box.
 | Clicks land up and to the left of what you read, more so further from 0,0 | You read points in the scaled-down image you were shown: `shot --fit 1456` and `click --in` it; `omabox calibrate` measures the size for you (Shots). |
 | The window is not in the shot (covered, other workspace) | `shot --window SEL`; `click --window` raises it. |
 | `click --window` says "a layer surface "NS" … is over X,Y" (or `--no-raise` refuses it) | A panel or menu is over that point and takes the click where it takes input (only its rectangle is known). `omabox wait layer NS --gone`, then click again. |
-| `click --window` says "a full-screen layer "NS" … is up … may go to it" | A layer covering the whole screen (Omarchy's notifications) takes input only on its items: a click on a toast goes to the toast, elsewhere to the window. Not refused under `--no-raise`. Clicking where a toast is: `omabox wait layer NS --gone` first. |
+| `click --window` says "a layer spanning the screen, "NS" … is up … may go to it" | A layer covering the screen, or its whole height or width (Omarchy's notifications and, on 4.5, its dock), takes input only on its items: a click on a toast goes to the toast, elsewhere to the window. Not refused under `--no-raise`. Clicking where a toast is: `omabox run -- omarchy-shell notifications dismissAll` first (Omarchy 4.5 keeps the layer up with no toast, so `wait layer NS --gone` would not return). |
 | `unknown: … not rendered` (exit 1) | An interactive box started by an older omabox, or whose window confirm-close replaced, is not drawn while hidden: ask the user; never show its window yourself. |
 | `box 'x' is already up, without what you asked for: …` (exit 1) | It lacks those options. Yours: `omabox down` it, then `up` again. Not yours: `omabox up --new` with those options (it starts the box), then `-b box-N` as it printed. |
 | `setsid: failed to execute APP` | The box has the host's programs only (`foot`, not `alacritty`). |
@@ -563,8 +563,8 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
 - A 124 adds where the input went and whether anything moved: `the keys went to foot "K" (focused)`
   or `to layer omarchy-menu (it has the keyboard)`, `the click at 960,540 was on zenity "Info" (its
   129,113)` (its own coordinates, as `click --window` takes them) or `on layer omarchy-bar`, with
-  `, or possibly on layer omarchy-notifications` while a full-screen layer is up (it takes input only
-  on its toasts), `no window from pid 1240 yet` (run -d); then `no window, layer or focus changed`, or what did (a window
+  `, or possibly on layer omarchy-notifications` while a layer spanning the screen is up (it takes
+  input only on its toasts), `no window from pid 1240 yet` (run -d); then `no window, layer or focus changed`, or what did (a window
   opened off screen). When it says both, look (`windows`, `tree`, a shot) before sending again; the
   input was sent. `unknown` (1) adds nothing. The exit code is the screen's, never the desktop's.
 - `--json` adds `changes` (every change, up to 50: `window_opened` `{window, focused}`,
@@ -573,7 +573,7 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   `{window, floating, fullscreen}`; a window is `address, class, title, workspace`; more kinds may
   come: ignore unknown ones), `[]` for none, `null` when the desktop could not be read; `target`
   (`kind` window, layer or none, `window`, `namespace`, `at`: what got the input; `certain` false
-  when a full-screen layer may have taken it instead; on a 124 or with --json); `events_since` (`omabox events --since N`: everything from just before the input). `wait
+  when a layer spanning the screen may have taken it instead; on a 124 or with --json); `events_since` (`omabox events --since N`: everything from just before the input). `wait
   still|change` has no action and none of these.
 - The screen watched is every monitor of the box. `-g` and `--ignore` are the layout's coordinates,
   as for a plain `click` and `shot -g`; beside `--window`, the window's own (0,0 its top left corner),

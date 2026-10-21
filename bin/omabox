@@ -387,9 +387,9 @@ window's own pixels, covered or on another workspace too; \`click --window\` tak
 coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
 a layer surface over that point (a notification toast, a panel) is said on stderr, the click sent
 (it goes to the layer where the layer takes input; only its rectangle is known), and --no-raise
-refuses (\`wait layer NAMESPACE --gone\` waits one out); a full-screen one (Omarchy's notifications,
-input on their toasts only) is said as one the input may go to, never refused; \`windows\` lists them
-under its table.
+refuses (\`wait layer NAMESPACE --gone\` waits one out); one spanning the screen (Omarchy's
+notifications and dock, input on their items only) is said as one the input may go to, never
+refused; \`windows\` lists them under its table.
 \`keys --window\` focuses it, then types.
 @ keys
 \`keys --window\` focuses the window (the active one again), then types; while a layer holds the
@@ -6141,18 +6141,32 @@ run_gone() {
 
 # --- windows -------------------------------------------------------------------------------------
 
-# Whether a layer surface ({x, y, w, h}, as `hyprctl -j layers` gives it) covers the whole of its
-# output, MONITOR the name `layers` keys it by, MONITORS `hyprctl -j monitors` (#263, finding 398):
-# Hyprland gives a layer's rectangle, not where it takes input, and a full-screen one (Omarchy's
-# notifications, which take input on their toasts only) may cover a point or not. An output not
-# found: false. Its size is the monitor's mode over its scale, turned with its transform.
+# Whether a layer surface ({x, y, w, h}, as `hyprctl -j layers` gives it) may take input on part of
+# it only, MONITOR the name `layers` keys it by, MONITORS `hyprctl -j monitors` (#263, finding 398;
+# #311, finding 421): Hyprland gives a layer's rectangle, not where it takes input. A layer covering
+# its whole output (Omarchy 4.0's notifications, the launcher), or spanning its height or width (all
+# of it outside the edges the output reserves, for a bar) without reserving the screen edge it sits
+# on (Omarchy 4.5's notifications, a 465 px column kept mapped while idle; its dock, a strip along
+# the bottom, beside a vertical bar too: Quickshell canvases whose input mask is their items), may
+# cover a point or not. A strip on a screen edge the output reserves is taken for a bar, which takes
+# input all over: not this (a canvas on the same edge as a bar is missed so). An output not found, or
+# one whose reserved edges are not known: only a whole one. Its size is the monitor's mode over its
+# scale, turned with its transform.
 # shellcheck disable=SC2016 # jq, not shell
-LAYER_WHOLE_JQ='
-  def whole($m; $mon): (first($m[]? | select(.name == $mon)) // null) as $o
+LAYER_SPAN_JQ='
+  def spans($m; $mon): (first($m[]? | select(.name == $mon)) // null) as $o
     | if $o == null or ($o.width // null) == null then false else
         (if ($o.transform // 0) % 2 == 1 then [$o.height, $o.width] else [$o.width, $o.height] end
          | map(. / ($o.scale // 1))) as [$mw, $mh]
-        | .x <= $o.x and .y <= $o.y and .x + .w >= $o.x + $mw - 1 and .y + .h >= $o.y + $mh - 1 end;'
+        | ($o.reserved // null) as $r
+        | if .x <= $o.x and .x + .w >= $o.x + $mw - 1 and .y <= $o.y and .y + .h >= $o.y + $mh - 1 then true
+          elif $r == null then false
+          else
+          (.x <= $o.x + $r[0] and .x + .w >= $o.x + $mw - $r[2] - 1) as $fw
+          | (.y <= $o.y + $r[1] and .y + .h >= $o.y + $mh - $r[3] - 1) as $fh
+          | if $fh then (if .x <= $o.x then $r[0] == 0 elif .x + .w >= $o.x + $mw - 1 then $r[2] == 0 else true end)
+            elif $fw then (if .y <= $o.y then $r[1] == 0 elif .y + .h >= $o.y + $mh - 1 then $r[3] == 0 else true end)
+            else false end end end;'
 
 # The box's mapped windows (finding 81), in hyprctl's order, which is the stacking order: later on
 # top, except that floating windows are above tiled ones, fullscreen above the rest and a special
@@ -6165,11 +6179,11 @@ LAYER_WHOLE_JQ='
 # fullscreen (`fullscreen` 2; 1 is maximized), where Hyprland passes it by; an overlay one always does.
 # Only their rectangle is known, not the part that takes input (Omarchy's toasts sit in a full-screen
 # overlay that takes input on the toasts only); a 1x1 one is a hidden menu (finding 146), left out.
-# Each layer's `certain` (#263, finding 398) is false when its rectangle covers its whole output
-# (LAYER_WHOLE_JQ): such a layer may take input only on part of it, so it may cover a point or not.
+# Each layer's `certain` (#263, finding 398) is false when it spans its output (LAYER_SPAN_JQ): such a
+# layer may take input only on part of it, so it may cover a point or not.
 # win_annotate CLIENTS MONITORS ACTIVEWINDOW [LAYERS]
 # shellcheck disable=SC2016 # jq, not shell
-WIN_JQ="$LAYER_WHOLE_JQ"'
+WIN_JQ="$LAYER_SPAN_JQ"'
   def overlaps($o): .at[0] < $o.at[0] + $o.size[0] and $o.at[0] < .at[0] + .size[0]
     and .at[1] < $o.at[1] + $o.size[1] and $o.at[1] < .at[1] + .size[1];
   def above($o; $t):
@@ -6180,7 +6194,7 @@ WIN_JQ="$LAYER_WHOLE_JQ"'
     else $o.z > $t.z end;
   [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {}
    | (.["2"] // [] | map(. + {layer: "top"})), (.["3"] // [] | map(. + {layer: "overlay"}))
-   | .[] | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h], certain: (whole($m; $mon) | not)}] as $L
+   | .[] | select(.w > 1 and .h > 1) | {namespace, pid, layer, at: [.x, .y], size: [.w, .h], certain: (spans($m; $mon) | not)}] as $L
   | ([$m[] | .activeWorkspace.id, .specialWorkspace.id] | map(select(. != 0))) as $shown
   | [$c | map(select(.mapped)) | to_entries[] | .value + {z: .key}
      | .onscreen = (.workspace.id as $w | any($shown[]; . == $w) and (.hidden | not))] as $all
@@ -6277,7 +6291,8 @@ win_blocked() {
 
 # The layer surface over a point of a window (window coordinates), as "certain|possible NAMESPACE
 # LAYER WxH at X,Y" (the namespace JSON-quoted), or nothing: the topmost one whose rectangle takes
-# input there for certain, else the topmost full-screen one, which may (#263, finding 398).
+# input there for certain, else the topmost one spanning its output, which may (#263, findings 398,
+# 421).
 # win_layer WINDOW X Y
 win_layer() {
   jq -r --argjson x "$2" --argjson y "$3" '(.at[0] + $x) as $px | (.at[1] + $y) as $py
@@ -6324,9 +6339,9 @@ if not ok then error(err, 0) end" 2>&1) || true
 # The screen point for window coordinates X,Y of the window SEL picks, raised first when it is not on
 # screen or something covers that point (unless RAISE is 0); a point still covered is refused, naming
 # what covers it. A layer surface over the point (win_layer, #263) is said on stderr, and refused when
-# RAISE is 0 (--no-raise): raising the window does not put it above one. A full-screen one (Omarchy's
-# notifications: input on its toasts only) may or may not be over it: said as such, never refused
-# (finding 398). RAISE `pointer` (pointer --window, which never raises) refuses a covering window and
+# RAISE is 0 (--no-raise): raising the window does not put it above one. One spanning its output
+# (Omarchy's notifications and dock: input on their items only) may or may not be over it: said as
+# such, never refused (findings 398, 421). RAISE `pointer` (pointer --window, which never raises) refuses a covering window and
 # only says a layer. win_point RAISE X Y SEL... → "SX SY"
 win_point() {
   local raise=$1 x=$2 y=$3 w desc why; shift 3
@@ -6354,7 +6369,8 @@ win_point() {
     how=${lay%% *} lay=${lay#* }
     ns=$(jq -r '.' <<<"${lay%% *}" 2>/dev/null) || ns=""
     if [ "$how" = possible ]; then
-      say "a full-screen layer ${lay%% *} (${lay#* }) is up over window $desc: input at $x,$y may go to it if one of its items (a toast) is there; elsewhere it goes to the window${ns:+ (omabox wait layer $ns --gone waits it out)}"
+      # Not `wait layer --gone`: Omarchy 4.5 keeps its notifications and dock mapped while idle.
+      say "a layer spanning the screen, ${lay%% *} (${lay#* }), is up over window $desc: input at $x,$y may go to it if one of its items (a toast, a dock icon) is there; elsewhere it goes to the window$([ "$ns" != omarchy-notifications ] || echo " (omabox run -- omarchy-shell notifications dismissAll clears the toasts)")"
     else
       lay="a layer surface ${lay%% *} (${lay#* }) is over $x,$y of window $desc: where it takes input (a notification, a panel), input there goes to it, not to the window"
       [ "$raise" != 0 ] || die "$lay (refused under --no-raise; without it, this is a warning${ns:+; omabox wait layer $ns --gone waits it out})"
@@ -6395,13 +6411,13 @@ cmd_windows() {
   windows_layers <<<"$wins"
 }
 # The layer surfaces over windows (#263), one line each under windows' table, naming the windows; a
-# full-screen one as possibly over them (finding 398).
+# one spanning its output as possibly over them (findings 398, 421).
 windows_layers() {
   jq -r '[.[] | .address as $a | .layers[]? | {k: [.namespace, .layer, .at, .size, (.certain != false)], a: $a}]
     | group_by(.k)[] | .[0].k as [$n, $l, $at, $sz, $c]
     | "layer \($n | tojson) (\($l) \($sz[0])x\($sz[1]) at \($at[0]),\($at[1])) "
       + if $c then "is over \(map(.a) | join(", ")): where it takes input, input there goes to it"
-        else "is full-screen, possibly over \(map(.a) | join(", ")): input goes to it only where one of its items (a toast) is, elsewhere to the window" end'
+        else "spans the screen, possibly over \(map(.a) | join(", ")): input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window" end'
 }
 # windows' rows from box_windows' JSON on stdin, padded in jq (finding 174): through @tsv and a tab
 # IFS, an empty class collapsed (the title under CLASS) and a title's quotes were escaped twice. The
@@ -10800,12 +10816,12 @@ desk_facts() {
 # keyboard (kb_layers); $pid run -d's job. A point is on what takes the pointer there first: an
 # overlay layer, then a top one, then the topmost window drawn there (WIN_JQ's stacking), then a
 # bottom layer, then a background one (the topmost first). Only a layer's rectangle is known, not the
-# part that takes input (WIN_JQ): a top or overlay one covering its whole output (LAYER_WHOLE_JQ:
-# Omarchy's notifications) may have taken it or not, so the target is what is under it, `certain`
-# false, and the sentence adds "or possibly on layer NS" (finding 398). One that is not full-screen
+# part that takes input (WIN_JQ): a top or overlay one spanning its output (LAYER_SPAN_JQ: Omarchy's
+# notifications) may have taken it or not, so the target is what is under it, `certain` false, and
+# the sentence adds "or possibly on layer NS" (findings 398, 421). One that does not span its output
 # wins over it.
 # shellcheck disable=SC2016 # jq, not shell
-DESK_TARGET_JQ="$LAYER_WHOLE_JQ"'
+DESK_TARGET_JQ="$LAYER_SPAN_JQ"'
   def cut: if length > 40 then .[:39] + "…" else . end;
   def win: {address, class, title, workspace: ((.workspace | objects | .name) // .workspace)};
   def name: (if (.class // "") == "" then "a window" else .class end) + " \"\(.title // "" | cut)\"";
@@ -10825,12 +10841,12 @@ DESK_TARGET_JQ="$LAYER_WHOLE_JQ"'
       | def at($o): $x >= $o.x and $x < $o.x + $o.w and $y >= $o.y and $y < $o.y + $o.h;
       [$l | objects | to_entries[] | .key as $mon | .value | .levels? // {} | to_entries[] | (.key | tonumber) as $lv | .value | reverse[]
         | select(.w > 1 and .h > 1 and at(.))
-        | {lv: $lv, ns: (if (.namespace // "") == "" then .address else .namespace end), whole: ($lv >= 2 and whole($m; $mon))}] as $L
+        | {lv: $lv, ns: (if (.namespace // "") == "" then .address else .namespace end), span: ($lv >= 2 and spans($m; $mon))}] as $L
       | ([(WIN) | .[] | select(.onscreen and at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]})
             and all(.cover[]; at({x: .at[0], y: .at[1], w: .size[0], h: .size[1]}) | not))] | first // null) as $w
       | ([$L[] | select(.lv >= 2)] | sort_by(-.lv)) as $tops
-      | ($tops | map(select(.whole | not)) | first // null) as $top
-      | ($tops | map(select(.whole)) | first // null) as $maybe
+      | ($tops | map(select(.span | not)) | first // null) as $top
+      | ($tops | map(select(.span)) | first // null) as $maybe
       | if $top then target("layer"; null; $top.ns; null; "\($say) on layer \($top.ns)"
             + (if $w then " (over \($w | name))" else "" end))
         else
@@ -10840,7 +10856,7 @@ DESK_TARGET_JQ="$LAYER_WHOLE_JQ"'
              ($L | map(select(.lv < 2)) | sort_by(-.lv) | first) as $b | target("layer"; null; $b.ns; null; "\($say) on no window (layer \($b.ns))")
            else target("none"; null; null; null; "\($say) on no window or layer") end)
           | if $maybe then .certain = false
-              | .text += ", or possibly on layer \($maybe.ns) (full-screen: if one of its items, a toast, is there)"
+              | .text += ", or possibly on layer \($maybe.ns) (it spans the screen: if one of its items, a toast, is there)"
             else . end
         end
     end'

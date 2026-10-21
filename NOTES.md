@@ -8730,6 +8730,30 @@ from them.
     tree's. The failing keymap itself is not reproduced (this host has the files). Tests:
     t_unit_omarchy45 (`omarchy_host_gaps`), t_omarchy_tree.
 
+421. **On Omarchy 4.5 `--no-raise` was refused over the notifications and dock with nothing there**
+    (2026-10-21, #311; verified in a box on 4.5.0rc1 and on the v4.0.6 tree). Finding 398 took a
+    layer covering its whole output for one that takes input on its items only. 4.5's notifications
+    layer is a column the full height of the screen at its right (465x1080 at 1455,0; 399 px on the
+    stock bar), mapped while idle (`Service.qml`: "It stays mapped while idle", input `mask` the toast
+    deck), and its dock a strip along the bottom (1920x207, or 1878 px beside a vertical bar), mapped
+    too, input on its icons (`DockWindow.qml`'s `mask`). Neither covers the whole screen, so both were
+    certain: `windows` said each "is over" every window it overlapped, `click --window --no-raise`
+    under either was refused ("input there goes to it") with no toast up and the dock hidden, and a
+    plain click warned that it went to the layer. Checked by hand that input passes through: a
+    `--no-raise` click under the idle column on an unfocused window, and one over the hidden dock,
+    each focused that window. **Fix**: `LAYER_SPAN_JQ` (was LAYER_WHOLE_JQ): a top or overlay layer
+    also spans its output when it covers the output's whole height or width outside the edges the
+    output reserves (`monitors`' `reserved`), unless it sits on a screen edge the output reserves,
+    which is a bar's (Omarchy's bar has an exclusive zone; it takes input all over). Monitors without
+    `reserved` (unit fixtures) keep finding 398's rule. A canvas on the same edge as a bar is missed
+    (certain, as before). The wording is now "a layer spanning the screen" / "spans the screen,
+    possibly over" / "(it spans the screen: …)", and the click's hint names `omarchy-shell
+    notifications dismissAll` for the notifications (not `wait layer --gone`, which on 4.5 never
+    returns). The toast itself: a click on it still closes it on 4.5 (`card.activated()` →
+    `closeToast`; live.json empties); only the layer stays, so t_click_layer's `wait layer --gone`
+    was a 4.0 expectation, not an omabox bug. Tests: t_click_layer (both generations, OM),
+    t_unit_window_select, t_unit_wait_facts.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

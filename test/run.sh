@@ -11,9 +11,10 @@
 #   test/run.sh PATTERN...   tests whose name matches any PATTERN (e.g. isolated systemd); a PATTERN
 #                            that matches no test exits 2
 #   --strict (or OMABOX_TEST_STRICT=1): a skipped check (a tool this machine lacks) fails
-#   OMABOX_TEST_OMARCHY=DIR: the Omarchy tree t_unit_omarchy_contract reads, and t_widget_mark's box
-#                            runs on (default /usr/share/omarchy): a checkout, to see what an Omarchy
-#                            update moves before it is released
+#   OMABOX_TEST_OMARCHY=DIR: the Omarchy tree t_unit_omarchy_contract reads, and the boxes of
+#                            t_widget_mark, t_click_layer, t_tree_layer and t_cursor_hw_nvidia run on
+#                            (default /usr/share/omarchy): a checkout, to see what an Omarchy update
+#                            moves before it is released, or an older one (4.0.x) for its branch
 #   test/run.sh --installed [ARGS...]   the same against omabox installed as a package would be:
 #                            read-only at /usr/lib/omabox, /usr/bin/omabox (a throwaway namespace)
 #
@@ -140,6 +141,13 @@ ob() { "$CLI" "$@"; }
 # up_ok ARGS: `ob up ARGS`, its output kept in UP_OUT for the no() of a failed start, which prints its end
 # (#289: a bare "failed" under load named no cause).
 up_ok() { UP_OUT=$(ob up "$@" 2>&1); }
+# The Omarchy under test (#311): OMABOX_TEST_OMARCHY's tree, else the installed one. omarchy45 [DIR]:
+# whether it (or DIR) is Omarchy 4.5 or later, told by the tree as center_split tells it (Bar.qml
+# reads centerBegin), never by a version number. A test's 4.0 branch carries `omarchy<4.5` (#312).
+# OM: up's --omarchy for OMABOX_TEST_OMARCHY's tree (empty without one), for the box tests whose
+# checks differ between the two, so their 4.0 branch runs on a 4.5 host too.
+omarchy45() { grep -qs centerBegin "${1:-${OMABOX_TEST_OMARCHY:-/usr/share/omarchy}}/shell/plugins/bar/Bar.qml"; }
+OM=(); [ -z "${OMABOX_TEST_OMARCHY:-}" ] || OM=(--omarchy "$OMABOX_TEST_OMARCHY")
 # Notes from inside checks (a slow wait), whose output is captured: shown before the next result.
 # (NOTES and UNTIL are per test when tests run in parallel.)
 NOTES=$TMP/notes UNTIL=$TMP/until.last
@@ -8404,46 +8412,52 @@ QML
 }
 
 # A layer surface over the point a --window click aims at (#263): the Omarchy shell's notification
-# toast, in a full-screen overlay that takes input on the toasts only, is possibly over every point
-# (finding 398): said as a may, never refused, the click sent (on the toast it lands there, which
-# closes); `windows` and a 124 name it as possible. A smaller layer (a panel stub) is over the point
-# for certain, even under the full-screen one: refused under --no-raise. Without one, nothing is said.
+# toasts sit in a layer that spans the screen and takes input on the toasts only (findings 398, 421):
+# possibly over the points it spans, said as a may, never refused, the click sent (on the toast it
+# lands there, which closes it); `windows` and a 124 name it as possible. Omarchy 4.0's is a
+# full-screen overlay, up while a toast shows; 4.5's a 465 px column at the right, mapped while idle
+# beside a dock along the bottom (the same kind of layer). A smaller layer (a panel stub) is over the
+# point for certain, even under a spanning one: refused under --no-raise. Without one, nothing is said.
 t_click_layer() {
-  local B=$P-cl D out rc w at x y px py
-  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
+  local B=$P-cl D out rc w at x y px py fx fy live
+  up_ok "$B" --net isolated --stock-bar "${OM[@]}" || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
+  live=$D/home/.local/state/omarchy/notifications/live.json
   ob run -b "$B" -d -q -- foot -T L sh -c 'cat > /dev/null'
   ob wait -b "$B" window 'title:^L$' >/dev/null 2>&1
   out=$(ob click -b "$B" --window 'title:^L$' --no-raise 20 20 2>&1); rc=$?
   check_eq "no toast: --no-raise clicks, nothing said" "0 " "$rc $out"
   ob run -b "$B" -- notify-send -t 120000 T263 "a toast over the window"
   if ! ob wait -b "$B" layer omarchy-notifications >/dev/null 2>&1; then no "the toast shows" "no omarchy-notifications layer"; ob down "$B" >/dev/null; return; fi
-  # The toast sits at the screen's top right: window coordinates of a point in it.
+  # 4.5 keeps the layer mapped with no toast: its toasts on screen are in live.json.
+  if omarchy45; then check "the toast shows (live.json)" until_ok 5 jq -e 'length == 1' "$live"; fi
+  # The toast sits at the screen's top right: window coordinates of a point in it (x y), and of one
+  # far below it that the layer still spans (fx fy: 1700,600 on the screen).
   w=$(ob windows -b "$B" --json | jq -c '.[] | select(.title == "L")')
   at=$(jq -r '"\(.at[0]) \(.at[1])"' <<<"$w")
   x=$((1700 - ${at% *})) y=$((40 - ${at#* }))
-  # The notification layer is a full-screen overlay that takes input on its toasts only (finding 398):
-  # possibly over every point, never refused.
+  fx=$((1700 - ${at% *})) fy=$((600 - ${at#* }))
   out=$(ob windows -b "$B")
-  check_match "windows names the full-screen layer as possibly over the window" \
-    "layer \"omarchy-notifications\" \(overlay 1920x1080 at 0,0\) is full-screen, possibly over $(jq -r .address <<<"$w"): input goes to it only where one of its items \(a toast\) is" "$out"
+  check_match "windows names the spanning layer as possibly over the window" \
+    "layer \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\) spans the screen, possibly over $(jq -r .address <<<"$w"): input goes to it only where one of its items \(a toast, a dock icon\) is" "$out"
   check_eq "...--json: certain false" false \
     "$(ob windows -b "$B" --json | jq -r '.[] | select(.title == "L") | .layers[] | select(.namespace == "omarchy-notifications") | .certain')"
-  out=$(ob click -b "$B" --window 'title:^L$' --no-raise 20 20 2>&1); rc=$?
+  out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$fx" "$fy" 2>&1); rc=$?
   check_eq "--no-raise far from the toast: clicked, exit 0" 0 "$rc"
   check_match "...said: the input may go to the layer" \
-    "a full-screen layer \"omarchy-notifications\" \(overlay 1920x1080 at 0,0\) is up over window 0x[0-9a-f]+ foot \"L\": input at 20,20 may go to it if one of its items \(a toast\) is there; elsewhere it goes to the window \(omabox wait layer omarchy-notifications --gone waits it out\)" "$out"
-  check "...the toast is still up" ob wait -b "$B" --timeout 1s layer omarchy-notifications
-  px=$((20 + ${at% *})) py=$((20 + ${at#* }))
-  out=$(ob click -b "$B" --window 'title:^L$' --wait --timeout 1s 20 20 2>&1); rc=$?
+    "a layer spanning the screen, \"omarchy-notifications\" \(overlay [0-9]+x1080 at [0-9]+,0\), is up over window 0x[0-9a-f]+ foot \"L\": input at $fx,$fy may go to it if one of its items \(a toast, a dock icon\) is there; elsewhere it goes to the window \(omabox run -- omarchy-shell notifications dismissAll clears the toasts\)" "$out"
+  if omarchy45; then check "...the toast is still up" jq -e 'length == 1' "$live"
+  else check "...the toast is still up" ob wait -b "$B" --timeout 1s layer omarchy-notifications; fi   # omarchy<4.5
+  px=$((fx + ${at% *})) py=$((fy + ${at#* }))
+  out=$(ob click -b "$B" --window 'title:^L$' --wait --timeout 1s "$fx" "$fy" 2>&1); rc=$?
   check_eq "click --wait that changes nothing there: 124" 124 "$rc"
   check_match "...on the window, possibly on the layer" \
-    "the click at $px,$py was on foot \"L\" \(its 20,20\), or possibly on layer omarchy-notifications \(full-screen: if one of its items, a toast, is there\)" "$out"
-  out=$(ob pointer -b "$B" --window 'title:^L$' move 20 20 2>&1); rc=$?
+    "the click at $px,$py was on foot \"L\" \(its $fx,$fy\), or possibly on layer omarchy-notifications \(it spans the screen: if one of its items, a toast, is there\)" "$out"
+  out=$(ob pointer -b "$B" --window 'title:^L$' move "$fx" "$fy" 2>&1); rc=$?
   check_eq "pointer --window: moved (exit 0)" 0 "$rc"
-  check_match "...the layer said as a may" "a full-screen layer \"omarchy-notifications\" .* input at 20,20 may go to it" "$out"
+  check_match "...the layer said as a may" "a layer spanning the screen, \"omarchy-notifications\" .* input at $fx,$fy may go to it" "$out"
   # A layer smaller than its output (a panel) over the point: certain, refused under --no-raise, and
-  # it wins over the full-screen one above it.
+  # it wins over a spanning one above it (4.0's full-screen notifications).
   cat > "$D/home/t263.qml" <<'QML'
 import QtQuick
 import Quickshell
@@ -8472,10 +8486,24 @@ QML
   else no "the panel layer maps" "no t263-panel layer"; fi
   out=$(ob click -b "$B" --window 'title:^L$' "$x" "$y" 2>&1); rc=$?
   check_eq "click --window on the toast: clicked (exit 0)" 0 "$rc"
-  check_match "...said on stderr as a may" "a full-screen layer \"omarchy-notifications\" .* may go to it" "$out"
-  check "...the click went to the toast, which closed" ob wait -b "$B" --timeout 3s layer omarchy-notifications --gone
+  check_match "...said on stderr as a may" "a layer spanning the screen, \"omarchy-notifications\" .* may go to it" "$out"
+  if omarchy45; then
+    check "...the click went to the toast, which closed (live.json empty; the layer stays)" until_ok 3 jq -e 'length == 0' "$live"
+    # 4.5's layers stay mapped while idle (finding 421): with no toast, under the column and over
+    # the dock, --no-raise still clicks (it was refused: "input there goes to it").
+    out=$(ob click -b "$B" --window 'title:^L$' --no-raise "$fx" "$fy" 2>&1); rc=$?
+    check_eq "...then --no-raise under the idle column: clicked, exit 0" 0 "$rc"
+    check_match "...said as a may" "a layer spanning the screen, \"omarchy-notifications\" .* may go to it" "$out"
+    if ob wait -b "$B" --timeout 1s layer omarchy-dock >/dev/null 2>&1; then
+      out=$(ob click -b "$B" --window 'title:^L$' --no-raise $((400 - ${at% *})) $((1000 - ${at#* })) 2>&1); rc=$?
+      check_eq "--no-raise over the idle dock: clicked, exit 0" 0 "$rc"
+      check_match "...said as a may" "a layer spanning the screen, \"omarchy-dock\" \(top 1920x[0-9]+ at 0,[0-9]+\), is up over window .* may go to it" "$out"
+    else skip "--no-raise over the idle dock" "no omarchy-dock layer in this box"; fi
+  else   # omarchy<4.5: the layer goes with its last toast
+    check "...the click went to the toast, which closed" ob wait -b "$B" --timeout 3s layer omarchy-notifications --gone
+  fi
   out=$(ob click -b "$B" --window 'title:^L$' --no-raise 20 20 2>&1); rc=$?
-  check_eq "...then a --no-raise click goes on, nothing said" "0 " "$rc $out"
+  check_eq "...then a --no-raise click away from them goes on, nothing said" "0 " "$rc $out"
   ob down "$B" >/dev/null
 }
 
@@ -12261,12 +12289,12 @@ t_unit_window_select() {
   check_eq "win_layer: only the full-screen one there: possible" 'possible "notif" overlay 1920x1080 at 0,0' "$(lib win_layer "$A" 500 500)"
   check_eq "...a smaller one under it: that one, certain (certain wins over possible)" 'certain "osd" overlay 100x100 at 20,500' "$(lib win_layer "$A" 50 550)"
   check_eq "...a top one (the bar) under it: certain too" 'certain "bar" top 42x1080 at 0,0' "$(lib win_layer "$A" 10 10)"
-  check_eq "windows: a full-screen layer is possibly over the windows" \
-    'layer "notif" (overlay 1920x1080 at 0,0) is full-screen, possibly over 0xf, 0xa, 0xb, 0x2: input goes to it only where one of its items (a toast) is, elsewhere to the window' \
+  check_eq "windows: a full-screen layer spans the screen, possibly over the windows" \
+    'layer "notif" (overlay 1920x1080 at 0,0) spans the screen, possibly over 0xf, 0xa, 0xb, 0x2: input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window' \
     "$(lib windows_layers <<<"$Wn" | grep notif)"
   check_eq "...a smaller one still is over them" \
     'layer "toast" (overlay 400x100 at 1500,0) is over 0xb: where it takes input, input there goes to it' "$(lib windows_layers <<<"$Wn" | grep '^layer "toast"')"
-  whole() { jq -r --argjson m "$1" --arg mon "${3:-M}" "$(lib eval 'printf %s "$LAYER_WHOLE_JQ"') ($2 | whole(\$m; \$mon))" -n; }
+  whole() { jq -r --argjson m "$1" --arg mon "${3:-M}" "$(lib eval 'printf %s "$LAYER_SPAN_JQ"') ($2 | spans(\$m; \$mon))" -n; }
   check_eq "whole: the output's size at scale 2 (3840x2160 mode, 1920x1080 logical)" true \
     "$(whole "$(jq -c '.[0] += {width: 3840, height: 2160, scale: 2}' <<<"$mg")" '{x: 0, y: 0, w: 1920, h: 1080}')"
   check_eq "...turned (transform 1): 1080x1920" "true false" \
@@ -12275,6 +12303,23 @@ t_unit_window_select() {
     "$(whole "$(jq -c '.[0] += {x: 1920}' <<<"$mg")" '{x: 1920, y: 0, w: 1920, h: 1080}') $(whole "$(jq -c '.[0] += {x: 1920}' <<<"$mg")" '{x: 0, y: 0, w: 1920, h: 1080}')"
   check_eq "...a layer short of the output, or an output not found: false" "false false" \
     "$(whole "$mg" '{x: 0, y: 0, w: 1920, h: 1046}') $(whole "$mg" '{x: 0, y: 0, w: 1920, h: 1080}' N)"
+  # A strip as tall or wide as its output (#311, finding 421: Omarchy 4.5's notifications column and
+  # dock, mapped while idle, input on their items only) spans it unless it reserves the edge it sits
+  # on (a bar); with the reserved edges unknown, only a whole one.
+  local mr; mr=$(jq -c '.[0].reserved = [0, 26, 0, 0]' <<<"$mg")
+  check_eq "spans: a full-height column at the right, a full-width strip at the bottom, nothing reserved there" "true true" \
+    "$(whole "$mr" '{x: 1455, y: 0, w: 465, h: 1080}') $(whole "$mr" '{x: 0, y: 873, w: 1920, h: 207}')"
+  check_eq "...a full-width bar at the top that reserves it, and a left bar that reserves its edge: no" "false false" \
+    "$(whole "$mr" '{x: 0, y: 0, w: 1920, h: 26}') $(whole "$(jq -c '.[0].reserved = [42, 0, 0, 0]' <<<"$mg")" '{x: 0, y: 0, w: 42, h: 1080}')"
+  check_eq "...one under the bar (the height it leaves), and 4.5's dock beside a vertical bar (the width it leaves): yes" "true true" \
+    "$(whole "$mr" '{x: 1455, y: 26, w: 465, h: 1054}') $(whole "$(jq -c '.[0].reserved = [42, 0, 0, 0]' <<<"$mg")" '{x: 42, y: 835, w: 1878, h: 245}')"
+  check_eq "...a column shorter than that, or a strip narrower: no" "false false" \
+    "$(whole "$mr" '{x: 1455, y: 26, w: 465, h: 900}') $(whole "$mr" '{x: 100, y: 873, w: 1820, h: 207}')"
+  check_eq "...the reserved edges unknown: only a whole one" "false true" \
+    "$(whole "$mg" '{x: 1455, y: 0, w: 465, h: 1080}') $(whole "$mg" '{x: 0, y: 0, w: 1920, h: 1080}')"
+  local Wc; Wc=$(lib win_annotate "$c" "$mr" "$act" "$(jq -c '.M.levels["3"] += [{"namespace":"col","pid":2,"x":1455,"y":0,"w":465,"h":1080}]' <<<"$l")")
+  check_eq "win_layer: under an idle column (4.5's notifications): possible" 'possible "col" overlay 465x1080 at 1455,0' \
+    "$(lib win_layer "$(jq -c '.[] | select(.address == "0xb")' <<<"$Wc")" "$((1600 - $(jq -r '.[] | select(.address == "0xb") | .at[0]' <<<"$Wc")))" 500)"
   # --in (finding 81): image pixel -> screen pixel under its centre
   check_eq "1:1 maps to itself" "0 1919" "$(lib img_px 0 1920 1920) $(lib img_px 1919 1920 1920)"
   check_eq "x1.92: 500 of 1000 is 960" 960 "$(lib img_px 500 1000 1920)"
@@ -14038,12 +14083,12 @@ t_unit_wait_facts() {
   local sn; sn=$(jq -c '.monitors[0] += {name: "HEADLESS-2", x: 0, y: 0, width: 1920, height: 1080, scale: 1, transform: 0}
     | .layers["HEADLESS-2"].levels["3"] += [{address: "0x5", namespace: "omarchy-notifications", x: 0, y: 0, w: 1920, h: 1080}]' <<<"$s")
   check_eq "a full-screen overlay over the point: the window under it, possibly the layer" \
-    'the click at 100,450 was on foot "K" (its 100,450), or possibly on layer omarchy-notifications (full-screen: if one of its items, a toast, is there)|window|false|null' \
+    'the click at 100,450 was on foot "K" (its 100,450), or possibly on layer omarchy-notifications (it spans the screen: if one of its items, a toast, is there)|window|false|null' \
     "$(lib desk_target click "$sn" "100 450" | jq -r '"\(.text)|\(.kind)|\(.certain)|\(.namespace)"')"
   check_eq "...the bar (top, smaller) under it wins: certain" 'the click at 30,1060 was on layer omarchy-bar (over foot "K")|layer|true' \
     "$(lib desk_target click "$sn" "30 1060" | jq -r '"\(.text)|\(.kind)|\(.certain)"')"
   check_eq "...no window under it: the background, possibly the layer" \
-    'the scroll at 1500,500 was on no window (layer omarchy-background), or possibly on layer omarchy-notifications (full-screen: if one of its items, a toast, is there)|layer|omarchy-background|false' \
+    'the scroll at 1500,500 was on no window (layer omarchy-background), or possibly on layer omarchy-notifications (it spans the screen: if one of its items, a toast, is there)|layer|omarchy-background|false' \
     "$(lib desk_target scroll "$sn" "1500 500" | jq -r '"\(.text)|\(.kind)|\(.namespace)|\(.certain)"')"
   check_eq "...the same layer a toast's size: on it, certain" 'the click at 100,450 was on layer omarchy-notifications (over foot "K")|true' \
     "$(lib desk_target click "$(jq -c '.layers["HEADLESS-2"].levels["3"][-1] += {y: 400, h: 100}' <<<"$sn")" "100 450" | jq -r '"\(.text)|\(.certain)"')"

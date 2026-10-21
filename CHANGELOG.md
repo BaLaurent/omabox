@@ -26,6 +26,11 @@ Boxes on Omarchy 4.5.
 - **`up --omarchy` of a 4.5 tree on an older host**: the tree's xkb files go into the box (its keyboard
   option), and `up` says which of owe, omasnap and the titlebars plugin the host lacks
   ([#293](https://github.com/diogochaves/omabox/issues/293)).
+- **`click --window --no-raise` was refused over 4.5's notifications column and dock with nothing
+  there**: both stay mapped while idle and take input only on their items. A layer spanning the
+  screen's height or width (and not reserving its edge, as a bar does) is now said as one the input
+  may go to, like a full-screen one, and never refused; the message says "a layer spanning the screen"
+  where it said "a full-screen layer" ([#311](https://github.com/diogochaves/omabox/issues/311)).
 
 ## 1.0.0 — unreleased
 
