@@ -8633,6 +8633,23 @@ from them.
     space lost it, so the reason ran into the fields after it. **Fix**: `IFS= read` in settle_begin
     and settle_end. Tests: t_unit_settle_read (an answer and a `ready` line split at a space).
 
+415. **On Omarchy 4.5 the first shot after `up` could be a black screen** (2026-10-21, #291; verified
+    in a box on 4.5.0rc1). A shell that finds no mark of its session in
+    `~/.local/state/omarchy/background-intro.session-id` (`OMARCHY_SESSION_ID`, else
+    `HYPRLAND_INSTANCE_SIGNATURE`) takes its start for a new login and puts a black cover over every
+    screen, the bar too (`shell/services/BackgroundIntro.qml`: a layer `omarchy-background` on the
+    Overlay level), until `omarchy-theme-bg-boot-intro` returns and the wallpaper is in. A box HOME
+    never has the mark, so every `up` was a login. On a theme whose wallpaper has an intro (catppuccin)
+    the script waits 5 s for an OWE daemon a box does not run: `up --theme catppuccin` came back with
+    the cover still up (layers: overlay `omarchy-background`; the shot all black, the pointer alone),
+    and `bar_settle` had settled on the black under it. **Fix**: `share/shell.sh` writes the session's
+    id to that file before it starts the shell, as a shell restart finds it: no cover, no intro (none
+    can play in a box anyway). `wait_ready` also waits, after the bar, until no Overlay
+    `omarchy-background` layer is up (12 s at most, then says so), for an Omarchy that tells a login
+    another way. Checked: `up --theme catppuccin`, a shot right after: the wallpaper and bar, no
+    overlay cover. The contract checks the mark's file and ids and the cover's layer. Tests: t_theme,
+    t_unit_omarchy45 (`intro_cover`), t_unit_omarchy_contract.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

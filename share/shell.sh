@@ -68,6 +68,14 @@ sh -c 'echo $$' > "$XDG_RUNTIME_DIR/omabox-shell.mark"
 # `restart-shell` passes a token and waits for it here: a pid written after it is this start's, not
 # one an old launcher's relaunch wrote while the old shell was being stopped (finding 248).
 echo "${1:-}" > "$XDG_RUNTIME_DIR/omabox-shell.start"
+# Omarchy 4.5's boot intro (#291, finding 415): a shell that finds no mark of this session in
+# background-intro.session-id takes its start for a new login and covers every screen, the bar too,
+# in black on the Overlay layer until omarchy-theme-bg-boot-intro returns: up to 5 s on a theme with
+# intros (it waits for an OWE daemon no box runs), 10 s at most. The first shot after `up` was that
+# black. A box's start is no login anyone watches: marked as had, as a shell restart finds it, the
+# shell shows the desktop at once. (The same id the shell and the intro script read.)
+mkdir -p "$HOME/.local/state/omarchy" 2>/dev/null &&
+  printf '%s\n' "${OMARCHY_SESSION_ID:-$HYPRLAND_INSTANCE_SIGNATURE}" > "$HOME/.local/state/omarchy/background-intro.session-id" 2>/dev/null
 launcher=$OMARCHY_PATH/bin/omarchy-launch-shell
 [ ! -x "$launcher" ] || exec "$launcher" >> "$HOME/shell.log" 2>&1
 # An Omarchy tree without it (`up --omarchy` of an older one): the shell itself, as before.

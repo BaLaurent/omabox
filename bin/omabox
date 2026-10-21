@@ -2278,6 +2278,17 @@ wait_ready() {
     sleep 0.1
   done
   BAR_AT=$(date +%s%3N)
+  # Omarchy 4.5's boot-intro cover (#291, finding 415): black over every screen, the bar too, on the
+  # Overlay layer as `omarchy-background`, until the shell has its wallpaper (and the theme's intro has
+  # played). share/shell.sh marks the box's start so the shell never maps it; one up all the same (an
+  # Omarchy that reads another mark) is waited out, or the bar below settles on black and the first
+  # shot is a black screen. 12 s at most (the shell lifts it by 10 s), then said.
+  local cd=$((SECONDS + 12))
+  until ! on_box hyprctl -j layers 2>/dev/null | intro_cover >/dev/null; do
+    starting_ok
+    [ $SECONDS -lt $cd ] && [ $SECONDS -lt $deadline ] || { say "the shell's start-up cover (black, omarchy-background) is still up; see $D/home/shell.log"; break; }
+    sleep 0.1
+  done
   # And the notification server (the built-in one, or a mounted plugin's: every box has one, finding
   # 42), which registers up to ~3 s after the bar: a `notify-send` right after `up` failed with
   # ServiceUnknown (finding 62). A server that never comes is a warning, not a failed box.
@@ -2296,6 +2307,11 @@ wait_ready() {
   [ "$(meta mode)" = interactive ] && return 0
   local geom; geom=$(on_box hyprctl -j layers | layer_at omarchy-bar)
   bar_settle "$geom" "$deadline"
+}
+# Whether `hyprctl -j layers` (stdin) has Omarchy 4.5's start-up cover: a layer `omarchy-background`
+# on the Overlay level (3), where its wallpaper is on the Background level (#291). Prints its geometry.
+intro_cover() {
+  jq -er 'first(.[].levels["3"][]? | select(.namespace == "omarchy-background") | "\(.x),\(.y) \(.w)x\(.h)")'
 }
 # Until the bar's pixels at GEOM hold still (3 identical captures), or DEADLINE ($SECONDS). A box gone
 # meanwhile fails every capture: said now (#157, finding 216), where this retried until the deadline,
