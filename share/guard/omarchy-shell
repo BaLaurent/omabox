@@ -1,7 +1,7 @@
 #!/bin/sh
 # The agent guard's omarchy-shell (#290): first on a guarded agent's PATH, as quickshell is. Omarchy 4.5's
 # omarchy-shell takes the newest wayland-N in $XDG_RUNTIME_DIR when $WAYLAND_DISPLAY is empty or names
-# no socket (4.0.6 only when empty), which the guard's display never is, then answers over the shell's
+# no socket (4.0.6 only when empty: omarchy<4.5), which the guard's display never is, then answers over the shell's
 # own socket (omarchy-shell-<md5>.sock) with socat, never going near qs: the user's bar, menus and
 # panels. The guard's file $XDG_RUNTIME_DIR/omabox-guard keeps that from happening for any caller
 # (`omarchy shell`, which runs omarchy-shell by its path, too); this refuses with a reason for those that

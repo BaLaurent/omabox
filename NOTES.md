@@ -8754,6 +8754,21 @@ from them.
     was a 4.0 expectation, not an omabox bug. Tests: t_click_layer (both generations, OM),
     t_unit_window_select, t_unit_wait_facts.
 
+422. **The suite on Omarchy 4.0.x and 4.5** (2026-10-21, #311). The contract checked 4.5 only (12
+    items failed on a 4.0.6 tree), and three box tests 4.0's behaviour only (9 checks failed on
+    4.5.0rc1, on v1.0 too). Each now expects what the Omarchy under test has, told by its tree as
+    `center_split` tells it (Bar.qml reads `centerBegin`: `omarchy45` in test/run.sh), never by a
+    version: `omarchy_contract` runs the shared items, then `omarchy_contract_45` (the split centre,
+    the start-up cover, the intro script, per-monitor workspaces, kept notifications, the spanning
+    notifications column and dock of finding 421, Print's Omasnap) or `omarchy_contract_40`
+    (centerAnchor, the registry's `center` default, the full-screen notifications layer, Print's
+    slurp). t_click_layer (finding 421), t_tree_layer (4.5's launcher tree starts with its search
+    field, `text [focused editable]`) and t_cursor_hw_nvidia (Print's layer is `omasnap` on 4.5,
+    slurp's `selection` before) branch the same way, and run their box on `OMABOX_TEST_OMARCHY`'s tree
+    (`up --omarchy`), so their 4.0 branch runs on a 4.5 host. Every 4.0-only branch, in the code and
+    the tests, carries `omarchy<4.5` for #312. Checked: `test/run.sh unit` on the installed 4.5.0rc1,
+    the RC tree and the v4.0.6 tree; the three box tests on 4.5 and with the v4.0.6 tree.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
@@ -8780,12 +8795,8 @@ Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here
   named specials keep neither numbering nor the floating mode: whether host placement moves to one
   is a design decision, not made. Boxes run no OWE daemon: no video wallpapers or intros (an opt-in
   `up --owe` for footage would be #309).
-- Omarchy 4.5 moved what three box tests expect, with or without findings 415-420 (they fail the
-  same on v1.0, 2026-10-21): t_click_layer (the notifications layer is a 465 px column at the right,
-  no longer full-screen, so `windows` says it is over the window, certain, where it said "possibly";
-  and a click on a toast no longer closes it within 3 s), t_tree_layer (the launcher's tree starts
-  with its search field, `text [focused editable]`, before the rows) and t_cursor_hw_nvidia (Print
-  opens Omasnap, layer `omasnap`, not slurp's `selection`). Not looked into further: no issue yet.
+- 1.0.1 runs on Omarchy 4.0.x and 4.5 (finding 422); 1.1 drops 4.0 (#312): every 4.0-only spot
+  carries `omarchy<4.5` (`grep -rn 'omarchy<4.5'`).
 
 - Visual checks (findings 357-363, #252): a checkpoint's speck comes from its --approve runs (3):
   noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; only the

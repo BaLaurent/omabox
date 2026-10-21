@@ -2654,6 +2654,7 @@ shell_json_filter() {
         else . end
       | if (.bar.layout? | type) == "object" then .bar.layout |= map_values(map(select(keep))) else . end
       | if .plugins then .plugins |= map(select(keep)) else . end
+      # omarchy<4.5: a bar.centerAnchor naming a widget left out of the box (none after center_split)
       | (.bar.centerAnchor? // "") as $a
       | if $a != "" and (($a | startswith("omarchy.")) or ($keep | index($a)) | not)
         then del(.bar.centerAnchor) else . end'
@@ -2666,7 +2667,8 @@ shell_json_filter() {
 # runs on in a box: its centre came out as one group. center_split, the migration's jq: what flanked
 # the anchor moves to the sections either side. Only for Omarchy's own bar (a replacement reads the
 # layout it was written for). center_split (shell): whether the box's Omarchy (--omarchy's tree, else
-# the installed one) has the split, as true or false.
+# the installed one) has the split, as true or false. omarchy<4.5: the migration serves a desk from
+# before 4.5, and false an Omarchy before it.
 # shellcheck disable=SC2016 # jq, not shell
 CENTER_SPLIT_JQ='def center_split:
   def entry_id: if type == "object" then (.id // "" | tostring) else tostring end;
@@ -2689,7 +2691,7 @@ CENTER_SPLIT_JQ='def center_split:
 widget_section() {
   if [ "$2" = true ]; then
     case $1 in left|centerBegin|centerEnd|right|tray) echo "$1" ;; *) echo centerEnd ;; esac
-  else echo "${1:-center}"; fi
+  else echo "${1:-center}"; fi   # omarchy<4.5
 }
 center_split() {
   if grep -qs centerBegin "${omarchy:-/usr/share/omarchy}/shell/plugins/bar/Bar.qml"; then echo true; else echo false; fi
@@ -2909,6 +2911,7 @@ seed_home() {
       | if $split then center_split else . end
       | if $keep | index("chaves.omabox") then . else
           walk(if type == "array" then map(select((if type == "object" then .id else . end) != "chaves.omabox")) else . end)
+          # omarchy<4.5: an anchor (none after center_split)
           | if .bar.centerAnchor? == "chaves.omabox" then del(.bar.centerAnchor) else . end end' \
       "$DESK/shell.json" > "$h/.config/omarchy/shell.json" 2>/dev/null || {
       say "--desk-shell: no shell.json in $DESK (or not JSON): the box's shell starts from an empty one"

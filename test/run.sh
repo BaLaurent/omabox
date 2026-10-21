@@ -2454,6 +2454,7 @@ t_unit_bar_filter() {
     '{"layout":{"center":[{"id":"omarchy.clock"}],"centerEnd":[{"id":"omarchy.weather"},{"id":"omarchy.tray"}],"centerBegin":["x.a",{"id":"omarchy.indicators"}],"left":[{"id":"omarchy.workspaces"}]}}' \
     "$(bars '["x.a"]' "$anc")"
   check_eq "...a plugin left out filtered after the split" '[{"id":"omarchy.indicators"}]' "$(bars '[]' "$anc" .bar.layout.centerBegin)"
+  # omarchy<4.5: this check and "before the split" below
   check_eq "...without SPLIT (an older Omarchy) the anchor stays" '"omarchy.clock"' \
     "$(lib shell_json_filter '[]' true '[]' <<<"$anc" | jq -c .bar.centerAnchor)"
   check_eq "...a replacement bar's layout left as it was written" '"omarchy.clock"' \
@@ -2745,7 +2746,27 @@ omarchy_contract() {
   oc "barWidget.defaultSection (seed_home places a mounted widget by it)" "not read by services/PluginRegistry.qml" \
     oc_has "$s/services/PluginRegistry.qml" defaultSection
   # shell.json keys seed_home writes: read by the shell under these names.
-  for e in disabledPlugins:services/PluginRegistry.qml centerBegin:plugins/bar/Bar.qml centerEnd:plugins/bar/Bar.qml screensaver:plugins/services/idle/Service.qml; do
+  for e in disabledPlugins:services/PluginRegistry.qml screensaver:plugins/services/idle/Service.qml; do
+    oc "shell.json ${e%%:*} (shell_json_filter)" "not read in shell/${e#*:}" oc_has "$s/${e#*:}" "${e%%:*}"
+  done
+  # What differs between Omarchy 4.0.x and 4.5 (#311): one list or the other, by what the tree has
+  # (omarchy45: its bar splits the centre, as center_split tells it), never by its version.
+  if omarchy45 "$o"; then omarchy_contract_45 "$o"; else omarchy_contract_40 "$o"; fi   # omarchy<4.5: the else
+  # --omarchy's xkb (finding 420).
+  oc "Omarchy's keyboard option omarchy:shift_caps_compose is in its etc/xkb (up --omarchy lays a tree's over /etc/xkb)" \
+    "default/hypr/input.lua names it but etc/xkb/symbols/omarchy is not there" \
+    bash -c '! grep -qF "omarchy:shift_caps_compose" "$1/default/hypr/input.lua" || [ -f "$1/etc/xkb/symbols/omarchy" ] || [ -f /etc/xkb/symbols/omarchy ]' _ "$o"
+  # A shell that fits bar icons (Ui/BarIconContent.qml) says how wide it painted the widget's mark: the
+  # count goes beside it (plugin/Panel.qml, #219). Holds too in a shell without fitted icons.
+  oc "BarIconButton's componentPaintedWidth, where bar icons are fitted (the widget's count, #219)" \
+    "Ui/BarIconContent.qml there, but no componentPaintedWidth in Ui/BarIconButton.qml: the count would land on the mark" \
+    bash -c '[ ! -f "$1/BarIconContent.qml" ] || grep -qF "property real componentPaintedWidth" "$1/BarIconButton.qml"' _ "$s/Ui"
+}
+
+# Omarchy 4.5's items (#291-#293, #311): what the 4.5 fixes rely on.
+omarchy_contract_45() {
+  local o=$1 s=$1/shell e
+  for e in centerBegin:plugins/bar/Bar.qml centerEnd:plugins/bar/Bar.qml; do
     oc "shell.json ${e%%:*} (shell_json_filter, center_split)" "not read in shell/${e#*:}" oc_has "$s/${e#*:}" "${e%%:*}"
   done
   # The bar's sections since 4.5 (#293, finding 418): place_plugin places a widget in one by its
@@ -2780,21 +2801,35 @@ omarchy_contract() {
   # Notifications kept across starts (#293, finding 419): up --clean clears them.
   oc "the shell keeps notifications in ~/.local/state/omarchy/notifications (up --clean clears it)" \
     "not in plugins/notifications/Service.qml" oc_has "$s/plugins/notifications/Service.qml" '"/.local/state/omarchy/notifications"'
-  # --omarchy's xkb (finding 420).
-  oc "Omarchy's keyboard option omarchy:shift_caps_compose is in its etc/xkb (up --omarchy lays a tree's over /etc/xkb)" \
-    "default/hypr/input.lua names it but etc/xkb/symbols/omarchy is not there" \
-    bash -c '! grep -qF "omarchy:shift_caps_compose" "$1/default/hypr/input.lua" || [ -f "$1/etc/xkb/symbols/omarchy" ] || [ -f /etc/xkb/symbols/omarchy ]' _ "$o"
-  # A shell that fits bar icons (Ui/BarIconContent.qml) says how wide it painted the widget's mark: the
-  # count goes beside it (plugin/Panel.qml, #219). Holds too in a shell without fitted icons.
-  oc "BarIconButton's componentPaintedWidth, where bar icons are fitted (the widget's count, #219)" \
-    "Ui/BarIconContent.qml there, but no componentPaintedWidth in Ui/BarIconButton.qml: the count would land on the mark" \
-    bash -c '[ ! -f "$1/BarIconContent.qml" ] || grep -qF "property real componentPaintedWidth" "$1/BarIconButton.qml"' _ "$s/Ui"
+  # Layers that span the screen and take input on their items only (finding 421: LAYER_SPAN_JQ).
+  oc "the notifications layer is a full-height column at the right, mapped while idle, input on its toasts (LAYER_SPAN_JQ, t_click_layer reads live.json)" \
+    "not so in plugins/notifications/Service.qml" \
+    bash -c 'grep -qF "anchors { top: true; bottom: true; right: true }" "$1" && grep -qF "exclusionMode: ExclusionMode.Ignore" "$1" && grep -qF "mask: Region { item: surface.showingNotifications ? deck : null }" "$1" && grep -qF "/live.json" "$1"' _ "$s/plugins/notifications/Service.qml"
+  oc "the dock (layer omarchy-dock) reserves no edge and takes input on its items (LAYER_SPAN_JQ)" "not so in plugins/dock/DockWindow.qml" \
+    bash -c 'grep -qF "WlrLayershell.namespace: \"omarchy-dock\"" "$1" && grep -qF "exclusiveZone: 0" "$1" && grep -qF "mask: Region {" "$1"' _ "$s/plugins/dock/DockWindow.qml"
+  oc "Print's omarchy-capture-screenshot runs Omasnap (t_cursor_hw_nvidia waits for its layer omasnap)" "not in bin/omarchy-capture-screenshot" \
+    oc_has "$o/bin/omarchy-capture-screenshot" 'exec omasnap '
+}
+
+# Omarchy 4.0.x's items: the paths 1.1 drops (#312). omarchy<4.5
+omarchy_contract_40() {
+  local o=$1 s=$1/shell
+  oc "shell.json centerAnchor (shell_json_filter)" "not read in shell/plugins/bar/Bar.qml" oc_has "$s/plugins/bar/Bar.qml" centerAnchor
+  oc "a widget's defaultSection none or no section: center (widget_section does the same)" \
+    "PluginRegistry.qml's defaultBarWidgetSection says otherwise now" \
+    oc_has "$s/services/PluginRegistry.qml" '["left", "center", "right"].indexOf(section) !== -1 ? section : "center"'
+  oc "the notifications layer covers the screen, up while a toast shows (finding 398, t_click_layer waits it out)" \
+    "not so in plugins/notifications/Service.qml" \
+    oc_has "$s/plugins/notifications/Service.qml" "anchors { top: true; bottom: true; left: true; right: true }"
+  oc "Print's omarchy-capture-screenshot runs slurp (t_cursor_hw_nvidia waits for its layer selection)" "not in bin/omarchy-capture-screenshot" \
+    oc_has "$o/bin/omarchy-capture-screenshot" 'pkill slurp'
 }
 
 t_unit_omarchy_contract() {
   local o=${OMABOX_TEST_OMARCHY:-/usr/share/omarchy} name why
   if [ ! -f "$o/shell/shell.qml" ]; then skip "the Omarchy contract (issue #82)" "no Omarchy at $o (OMABOX_TEST_OMARCHY names a tree)"; return; fi
-  note "Omarchy at $o"
+  if omarchy45 "$o"; then note "Omarchy at $o: 4.5 or later (its bar splits the centre): the 4.5 list"
+  else note "Omarchy at $o: before 4.5 (its bar does not split the centre): the 4.0 list"; fi   # omarchy<4.5
   while IFS=$'\t' read -r name why; do
     if [ -z "$why" ]; then ok "Omarchy: $name"; else no "Omarchy: $name" "$why (in $o)"; fi
   done < <(omarchy_contract "$o")
@@ -6945,7 +6980,7 @@ t_unit_tree_layer() {
 # full-screen, one pid) by the keyboard; two layers of one size that cannot be told apart.
 t_tree_layer() {
   local B=$P-tl D out rc v x y mid
-  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
+  up_ok "$B" --net isolated "${OM[@]}" || { no "up" "$UP_OUT"; return; }
   D=$(ob path -b "$B")
   out=$(ob tree -b "$B" 2>&1); rc=$?
   check_eq "tree with no window at all: exit 2" 2 "$rc"
@@ -7038,7 +7073,13 @@ QML
   ob keys -b "$B" super+space >/dev/null
   if ob wait -b "$B" layer omarchy-menu >/dev/null 2>&1; then
     out=$(ob tree -b "$B" --layer omarchy-menu --all 2>&1); rc=$?
-    check_match "the launcher (the size of the wallpaper): its frame, the active one, and its rows" $'^frame \\[active\\] @0,0 1920x1080\n  filler @' "$out"
+    # 4.5's launcher has a search field first, focused (#311); 4.0's starts with its rows.
+    if omarchy45; then
+      check_match "the launcher (the size of the wallpaper): its frame, the active one, its search field, and its rows" \
+        $'^frame \\[active\\] @0,0 1920x1080\n  text \\[focused editable\\][^\n]*\n  filler @' "$out"
+    else   # omarchy<4.5
+      check_match "the launcher (the size of the wallpaper): its frame, the active one, and its rows" $'^frame \\[active\\] @0,0 1920x1080\n  filler @' "$out"
+    fi
     check_eq "...exit 0" 0 "$rc"
     out=$(ob tree -b "$B" --layer omarchy-background 2>&1)
     check_match "...and the wallpaper's frame, not the launcher's" "layer \"omarchy-background\".*publishes no accessible items" "$out"
@@ -11237,7 +11278,7 @@ PY
     if [ -s "$d/heard" ]; then
       check_match "control: without the guard's file, $os reaches the shell's socket" ping "$(cat "$d/heard")"
     else
-      skip "control: $os reaching the shell's socket without the guard's file" "it does not recover a display that names no socket (Omarchy before 4.5)"
+      skip "control: $os reaching the shell's socket without the guard's file" "it does not recover a display that names no socket (Omarchy before 4.5)"   # omarchy<4.5
     fi
     : > "$d/heard"
     "${gx[@]}" timeout 3 "$os" shell ping >/dev/null 2>&1 || true
@@ -11982,7 +12023,7 @@ t_theme() {
       ob events -b "$B4" --since "$P-ts" --until configreloaded --timeout 300ms
     ob down "$B4" >/dev/null 2>&1
   else
-    skip "the start-up cover and intros of Omarchy 4.5 (#291)" "this Omarchy has no intro themes, or no start-up cover"
+    skip "the start-up cover and intros of Omarchy 4.5 (#291)" "this Omarchy has no intro themes, or no start-up cover"   # omarchy<4.5
   fi
   # An omarchy-theme-set that fails in the box ends it, saying why.
   copy_omarchy "$T"
@@ -13566,8 +13607,10 @@ t_no_pointer_nvidia() {
 # update. use_cpu_buffer = 0 draws them on the GPU; the box lives through both.
 t_cursor_hw_nvidia() {
   local n; n=$(nvidia_ready) || { skip "hardware cursors on NVIDIA" "$n"; return; }
-  local B=$P-curnv out
-  out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated 2>&1) || { no "up for hardware cursors on NVIDIA" "failed: $out"; return; }
+  local B=$P-curnv out sel=selection
+  # Print's region selection: 4.5's Omasnap (#311), 4.0's slurp.
+  omarchy45 && sel=omasnap   # omarchy<4.5: slurp's layer, selection
+  out=$(env OMABOX_RENDER_NODE="$n" "$CLI" up "$B" --size 1280x720 --net isolated "${OM[@]}" 2>&1) || { no "up for hardware cursors on NVIDIA" "failed: $out"; return; }
   check_eq "cursor:use_cpu_buffer is 0" 0 "$(ob hyprctl -b "$B" -j getoption cursor:use_cpu_buffer | jq .int)"
   ob lua -b "$B" 'hl.config({cursor = {no_hardware_cursors = 0}})' >/dev/null 2>&1
   ob pointer -b "$B" move 300 200 >/dev/null 2>&1
@@ -13575,9 +13618,9 @@ t_cursor_hw_nvidia() {
   check "...hardware cursors forced on, two pointer moves: the box still answers" ob hyprctl -b "$B" monitors
   ob lua -b "$B" 'hl.config({cursor = {no_hardware_cursors = 2}})' >/dev/null 2>&1
   ob keys -b "$B" Print >/dev/null 2>&1
-  check "Print: Omarchy's region selection" ob wait -b "$B" --timeout 10s layer selection
+  check "Print: Omarchy's region selection (layer $sel)" ob wait -b "$B" --timeout 10s layer "$sel"
   ob keys -b "$B" Escape >/dev/null 2>&1
-  check "...Escape: gone" ob wait -b "$B" --timeout 10s layer selection --gone
+  check "...Escape: gone" ob wait -b "$B" --timeout 10s layer "$sel" --gone
   ob pointer -b "$B" move 320 240 >/dev/null 2>&1
   check "...and the box still answers (it died here)" ob hyprctl -b "$B" monitors
 }
