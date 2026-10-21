@@ -8717,6 +8717,19 @@ from them.
     clean box starts with none. A box `--from` a save without --clean, and `restart-shell`, keep them,
     as a desk does. Tests: t_clean.
 
+420. **`up --omarchy` of a 4.5 tree on an older host** (2026-10-21, #293; read from the RC's tree, the
+    host is on 4.5 now). 4.5's `default/hypr/input.lua` sets `kb_options = "omarchy:shift_caps_compose"`,
+    an option of the xkb files its package installs in `/etc/xkb` (the tree's `etc/xkb`); a host
+    without them has a keymap that does not compile. And 4.5 runs `owe` (video wallpapers, intros),
+    `omasnap` (screenshots) and the `omarchy-hyprland-titlebars` Hyprland plugin (floating
+    workspaces), which only its packages bring. **Fix**: with `--omarchy`, the tree's `etc/xkb` goes
+    over the host's in the box's `/etc` (copied into the box dir's etc/, links kept as links) when
+    they differ, and `up` says each of the three the tree uses and the host lacks (`up: --omarchy:
+    this host has no owe: no video wallpapers and no theme intros`). Checked on this 4.5 host with a
+    copy of the RC tree whose symbols/omarchy differs: the box's `/etc/xkb/symbols/omarchy` is the
+    tree's. The failing keymap itself is not reproduced (this host has the files). Tests:
+    t_unit_omarchy45 (`omarchy_host_gaps`), t_omarchy_tree.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

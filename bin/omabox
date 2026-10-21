@@ -4384,6 +4384,22 @@ cmd_up() {
   if [ -e /etc/omarchy.conf ] || [ -n "$omarchy" ]; then
     { printf 'export OMARCHY_PATH='; printf '%q\n' "${omarchy:-/usr/share/omarchy}"; } > "$D/etc/omarchy.conf"
   fi
+  # --omarchy's own xkb files (#293, finding 420): 4.5's input.lua sets kb_options
+  # omarchy:shift_caps_compose, an option of the files its package installs to /etc/xkb (the tree's
+  # etc/xkb). A host on an older Omarchy has none, and the keymap would not compile. The tree's over
+  # the host's (copied: links in it stay links, followed in the box), when they differ. And what the
+  # tree runs that this host lacks (its packages are the host's), said.
+  rm -rf -- "${D:?}/etc/xkb"
+  if [ -n "$omarchy" ]; then
+    if [ -d "$omarchy/etc/xkb" ] && ! diff -rq -- "$omarchy/etc/xkb" /etc/xkb >/dev/null 2>&1; then
+      if ! { { [ ! -d /etc/xkb ] || cp -a /etc/xkb "$D/etc/xkb"; } && mkdir -p "$D/etc/xkb" &&
+             cp -a -- "$omarchy/etc/xkb/." "$D/etc/xkb/"; }; then
+        die "up: --omarchy: could not lay $omarchy/etc/xkb over the box's /etc/xkb"
+      fi
+    fi
+    local gap
+    while IFS= read -r gap; do say "up: --omarchy: this host has no $gap"; done < <(omarchy_host_gaps "$omarchy")
+  fi
   # --clean's locale and timezone (finding 363): the session's LANG (launch.sh below) and, for what
   # reads the files instead (a --systemd box's user manager reads locale.conf; glibc, Qt and ICU
   # localtime), /etc/locale.conf and /etc/localtime. localtime is a link, as the host's, which Qt
@@ -5157,6 +5173,21 @@ omarchy_tree() {
     [ -n "$q" ] && [ -e "$q" ] || die "--omarchy: $p is not an Omarchy tree (no $f)"
   done
   [ "$p" = /usr/share/omarchy ] || printf '%s\n' "$p"
+}
+# omarchy_host_gaps TREE: what the Omarchy tree TREE runs that this host has not installed (#293,
+# finding 420), a line each, "PACKAGE: what goes without it": an `up --omarchy` of a newer tree on an
+# older host, where the box has the host's packages. Each only when the tree uses it.
+TITLEBARS_SO=/usr/lib/omarchy-hyprland-titlebars/titlebars.so
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+omarchy_host_gaps() {
+  local t=$1
+  if grep -qsw owe "$t/bin/omarchy-theme-bg-boot-intro" && ! have_cmd owe; then
+    echo "owe: no video wallpapers and no theme intros"
+  fi
+  if grep -rqsw omasnap "$t/bin" && ! have_cmd omasnap; then echo "omasnap: no Omasnap screenshots"; fi
+  if grep -qsF "$TITLEBARS_SO" "$t/default/hypr/workspace-modes.lua" && [ ! -e "$TITLEBARS_SO" ]; then
+    echo "omarchy-hyprland-titlebars: no titlebars on floating workspaces"
+  fi
 }
 # The installed Omarchy's version, as Omarchy's omarchy-version reads it (omarchy-dev on the edge
 # channel, else omarchy), for the box's stand-in (share/bin/omarchy-version): a box has no pacman

@@ -11951,6 +11951,11 @@ t_omarchy_tree() {
   # (The package's bin/ links to /usr/bin: a file of its own in the link's place.)
   rm -f "$T/bin/omarchy-version"; printf '#!/bin/sh\necho omabox-tree\n' > "$T/bin/omarchy-version"; chmod +x "$T/bin/omarchy-version"
   printf '\nomabox_tree_marker = "tree"\n' >> "$T/default/hypr/bootstrap.lua"
+  # Its own xkb files (#293, finding 420), as a 4.5 checkout has them in etc/xkb, unlike this host's.
+  local xk=/etc/xkb/symbols/omarchy
+  mkdir -p "$T/etc/xkb/symbols" "$T/etc/xkb/rules"
+  { cat "$xk" 2>/dev/null; printf '// omabox-tree-xkb\n'; } > "$T/etc/xkb/symbols/omarchy"
+  [ ! -f /etc/xkb/rules/evdev ] || cp /etc/xkb/rules/evdev "$T/etc/xkb/rules/evdev"
   check_match "--omarchy refuses a folder that is not an Omarchy tree" "not an Omarchy tree \(no bin\)" "$(ob up "$B" --omarchy "$TMP" 2>&1)"
   up_ok "$B" --net isolated --omarchy "$T" || { no "up --omarchy" "$UP_OUT"; return; }
   check_box_safety "$B"
@@ -11959,6 +11964,9 @@ t_omarchy_tree() {
   check_eq "...and its bin first" omabox-tree "$(ob run -b "$B" -- omarchy-version)"
   check_match "...the bar runs from it" "quickshell --log-times -n -p $T/shell" "$(ob run -b "$B" -- pgrep -a quickshell)"
   check_eq "...a terminal's bash too (the box's /etc/omarchy.conf)" "$T omabox-tree" "$(ob run -b "$B" -- bash -ic 'echo "$OMARCHY_PATH $(omarchy-version)"' 2>/dev/null)"
+  check_eq "...its etc/xkb over the host's /etc/xkb (finding 420)" "// omabox-tree-xkb" "$(ob run -b "$B" -- tail -n 1 "$xk" 2>&1)"
+  check_eq "...the keymap compiled (a keyboard with it)" true \
+    "$(ob hyprctl -b "$B" -j devices | jq '[.keyboards[]? | select(.active_keymap != "")] | length > 0')"
   check_eq "ls --json names it" "$T" "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy')"
   check_eq "...and its version as dev (no git: no commit)" dev "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .omarchy_version')"
   # Committed, then edited, after up: restart-shell records it as it is now.
