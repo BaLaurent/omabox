@@ -418,7 +418,8 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   `shot --monitor NAME` (`--fit` for a mixed-scale layout, which comes out at the highest scale),
   `drag --shot F --shot-monitor NAME`; `peek --monitor NAME` for the user, one window per monitor
   (`shot` is the whole layout). Names: HEADLESS-2 (the first), HEADLESS-3, ...; on NVIDIA WAYLAND-1,
-  WAYLAND-2, ... (`monitor list`). An app that makes its own output (`hyprctl output create
+  WAYLAND-2, ... (`monitor list`). On Omarchy 4.5 each monitor has its own ten workspaces, as on a
+  desk: the main screen 1-10, the first added 11-20, the next 21-30 (the bar labels each 1-10). An app that makes its own output (`hyprctl output create
   headless`, a streaming helper's virtual screen) gets one listed **0x0 in a box on NVIDIA**, with no
   error (`monitor list` and `shot` say so): test it in a box on the AMD/Intel GPU,
   `OMABOX_RENDER_NODE=/dev/dri/renderDN omabox up --new` (`omabox config gpu` lists them); with no
@@ -1057,7 +1058,8 @@ most people will. Then:
   name in `.local/bin` under `omabox path --home` answers it.
 - Edits to the tree: `omabox restart-shell` (the shell; `keepLoaded` plugins, such as the OSD,
   notifications, the menu and the lock, keep their old code until then) or `omabox hyprctl reload`
-  (the config).
+  (the config). Omarchy 4.5's shell keeps its toasts across a restart (and in a save; `up --clean`
+  starts without them).
 
 ## Testing the lock screen
 

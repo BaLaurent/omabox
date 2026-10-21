@@ -8658,8 +8658,8 @@ from them.
     so the box's screen got 11-20, and `hyprctl dispatch workspace 2` went to a block no screen of the
     box owned. An interactive box closed with confirm-close on and opened again (a new output,
     WAYLAND-2) got a block of its own: its workspaces 1 and 2 were renumbered 22 and 23, and the
-    reopened window showed an empty one (t_guard: `want [2] got [22]`). NVIDIA boxes (WAYLAND-1) the
-    same as headless ones. Filed as upstream#171 (FALLBACK should own no block). **Fix**:
+    reopened window showed an empty one (t_guard: `want [2] got [22]`). NVIDIA boxes were not hit
+    (their WAYLAND-1 is there before Hyprland starts: `0 WAYLAND-1 WAYLAND-1`, workspace 1). Filed as upstream#171 (FALLBACK should own no block). **Fix**:
     `share/session.sh` writes the file at every start: the main screen (HEADLESS-2, or WAYLAND-1 for an
     interactive or NVIDIA box) and FALLBACK both on block 0, so FALLBACK, which only stands in for the
     screen while it is away, holds its workspaces under their numbers (`output drop`: 1 and 2 stay 1
@@ -8747,6 +8747,21 @@ of them, nor wayvnc (finding 34). It needs labwc.
 ## Open
 
 Bugs, ideas and pending work live in the GitHub issues; the reasoning stays here. Known gaps:
+
+- Omarchy 4.5 on the host (#292, findings 415-420): interactive and peek windows still open on a bare
+  workspace number (9), which 4.5 reads as that workspace of the first monitor's block (on one
+  monitor, the same as before); on a floating workspace (SUPER+L) the box's window floats with a
+  titlebar despite `float = false`; and `special` (the scratchpad) is now the Quake console, a
+  half-height dimmed panel that starts `omarchy-agent` when it opens empty. Named workspaces and
+  named specials keep neither numbering nor the floating mode: whether host placement moves to one
+  is a design decision, not made. Boxes run no OWE daemon: no video wallpapers or intros (an opt-in
+  `up --owe` for footage would be #309).
+- Omarchy 4.5 moved what three box tests expect, with or without findings 415-420 (they fail the
+  same on v1.0, 2026-10-21): t_click_layer (the notifications layer is a 465 px column at the right,
+  no longer full-screen, so `windows` says it is over the window, certain, where it said "possibly";
+  and a click on a toast no longer closes it within 3 s), t_tree_layer (the launcher's tree starts
+  with its search field, `text [focused editable]`, before the rows) and t_cursor_hw_nvidia (Print
+  opens Omasnap, layer `omasnap`, not slurp's `selection`). Not looked into further: no issue yet.
 
 - Visual checks (findings 357-363, #252): a checkpoint's speck comes from its --approve runs (3):
   noise past twice what they saw (16 px at least; 8 where they agreed) reads as a change; only the

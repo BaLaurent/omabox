@@ -3,6 +3,30 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## 1.0.1 — unreleased
+
+Boxes on Omarchy 4.5.
+
+### Fixed
+
+- **The first shot after `up` could be a black screen**: 4.5's shell covers every screen for a new
+  login until the theme's intro has played, which in a box (no OWE daemon) took up to 5 s past `up`.
+  A box's start is now marked as had, and `up` also waits out the cover
+  ([#291](https://github.com/diogochaves/omabox/issues/291)).
+- **A box's screen came up on workspace 11**: 4.5 gives each monitor ten workspaces of its own, and
+  Hyprland's stand-in output took the first ten. The main screen is on 1-10 again, monitors added
+  after it on 11-20 and on; an interactive box closed with confirm-close and opened again keeps its
+  workspaces ([#292](https://github.com/diogochaves/omabox/issues/292)).
+- **`omarchy-theme-set` reloaded Hyprland about a second after it returned** in a box, on themes with
+  intros: now before it returns, so `wait still` and a shot see the new theme.
+- **A desk's `centerAnchor` and a plugin's `center` section** are placed as 4.5 places them
+  (`centerBegin`, `center`, `centerEnd`), also for a desk on an older Omarchy in an `--omarchy` box.
+- **`up --clean --from SAVE` showed the save's notifications**: 4.5 keeps them in the HOME; a clean box
+  starts without them.
+- **`up --omarchy` of a 4.5 tree on an older host**: the tree's xkb files go into the box (its keyboard
+  option), and `up` says which of owe, omasnap and the titlebars plugin the host lacks
+  ([#293](https://github.com/diogochaves/omabox/issues/293)).
+
 ## 1.0.0 — unreleased
 
 What scripts and agents branch on is kept from this release: exit codes and `--json` fields stay as
