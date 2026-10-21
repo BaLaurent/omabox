@@ -8767,7 +8767,10 @@ from them.
     slurp's `selection` before) branch the same way, and run their box on `OMABOX_TEST_OMARCHY`'s tree
     (`up --omarchy`), so their 4.0 branch runs on a 4.5 host. Every 4.0-only branch, in the code and
     the tests, carries `omarchy<4.5` for #312. Checked: `test/run.sh unit` on the installed 4.5.0rc1,
-    the RC tree and the v4.0.6 tree; the three box tests on 4.5 and with the v4.0.6 tree.
+    the RC tree and the v4.0.6 tree; the three box tests on 4.5 and with the v4.0.6 tree; the full
+    suite on 4.5.0rc1 (boxes on the AMD iGPU, NVIDIA tests on the RTX): 5076 passed, 0 failed, 2
+    skipped (t_main's NVIDIA screen with the render node pinned to amdgpu; t_setup_prompts' install
+    case).
 
 423. **Host placement on Omarchy 4.5: `special:omabox`** (2026-10-21, #292; *decided* by Diogo; verified
     in a 4.5 box standing in for the host, finding 26). On a 4.5 desk a number is the first monitor's
