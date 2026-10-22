@@ -1933,10 +1933,11 @@ host_session() {
   HOST_SIG=$sig HOST_WL=$XDG_RUNTIME_DIR/$wl
 }
 
-# hyprctl on the user's session (host_session), wherever this shell's display points.
+# hyprctl on the user's session (host_session), wherever this shell's display points. HOST_LIMIT=S
+# ends it after S s (exit 124).
 host_hyprctl() {
   host_session
-  HYPRLAND_INSTANCE_SIGNATURE=$HOST_SIG hyprctl "$@"
+  HYPRLAND_INSTANCE_SIGNATURE=$HOST_SIG ${HOST_LIMIT:+timeout "$HOST_LIMIT"} hyprctl "$@"
 }
 
 # A screen mode for a headless box: WxH (@60), WxH@HZ, or `host` for the user's focused monitor
@@ -12156,12 +12157,36 @@ aq_monitor_note() {
     say "monitor add: box '$NAME''s aquamarine ($1) hides your cursor when it goes from one monitor's window to another (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
   fi
 }
+# monitor_add_held SPEC: monitor_add_window for `monitor add`, its line in MON_LINE, waited for
+# whatever signal comes (finding 435). Called as `line=$(monitor_add_window ...)`, a TERM or HUP to the
+# group ended this shell at once (a Ctrl-C was waited for: bash waits on a child that handles SIGINT
+# itself) while the add's subshell drained on, up to ~20 s, detached:
+# a retry then redefined and turned off the one host rule, and the first add's late window mapped on
+# the user's workspace, focused. Here INT, TERM and HUP are only noted (the first one's status) while
+# the subshell runs, in the foreground (bash runs a trap once the child it waits for has returned), its
+# line through a file; this shell exits with that status once the subshell is done. `up` calls
+# monitor_add_window bare in its own shell, which waits for it already.
+MON_LINE="" MON_SIG=""
+monitor_add_held() {
+  local out rc
+  out=$(mktemp "$D/.monitor-add.XXXXXX") || die "monitor add: cannot write in $D"
+  MON_SIG=""
+  trap '[ -n "$MON_SIG" ] || MON_SIG=130' INT; trap '[ -n "$MON_SIG" ] || MON_SIG=143' TERM; trap '[ -n "$MON_SIG" ] || MON_SIG=129' HUP
+  monitor_add_window "$1" > "$out" && rc=0 || rc=$?
+  trap - INT TERM HUP
+  MON_LINE=$(cat "$out") || MON_LINE=""
+  rm -f "$out"
+  [ -z "$MON_SIG" ] || exit "$MON_SIG"
+  [ "$rc" = 0 ] || exit "$rc"
+}
 # An interactive box's monitor (#123): a window on the user's desktop, as its first one is. The box's
 # Hyprland makes it (`output create wayland NAME`); the host would put it on the user's active
 # workspace, focused (finding 70: an exec rule holds for the first window only, and no window rule
 # matches a pid). So a host rule for aquamarine windows (workspace, silent, no focus, drawn hidden,
-# floating at its size and place) is on from just before the window is made until it is there, at most
-# 5 s: a nested Hyprland of the user's opening a window in that second would be caught too. In the box
+# floating at its size and place) is on from just before the window is made until it is there, or the
+# output removed again: a second or so as a rule, about 35 s at worst (a create of 10 s, 5 s waiting
+# for the window, mon_cleanup's 20 s drain; finding 435). A nested Hyprland of the user's opening a
+# window in that span is caught too (its window on the box's workspace, unfocused). In the box
 # it is placed as a headless box's (right of or below the last one made, or X,Y:
 # omabox_place_monitors), kept in omabox.monitors with the mode and scale asked for.
 # On the host (#174) the box's windows are its layout scaled as a whole, a display-settings picture
@@ -12195,7 +12220,7 @@ monitor_add_window() (
   local w h x y
   read -r w h x y <<<"$rect"
   MON_RULE_ON=1 MON_MADE=""
-  trap 'mon_cleanup "${MON_RULE_ON:-}" "${MON_MADE:-}" "$name"' EXIT
+  trap 'mon_cleanup "${MON_RULE_ON:-}" "${MON_MADE:-}" "$name" "$line"' EXIT
   # Signals trapped, so that the EXIT trap runs (finding 435): with HUP left at its default, a HUP to
   # the group often killed this subshell outright, its trap never run, the rule left on. A $(...) bash
   # it waits on (the create's, the window wait's) hangs its jobs up as it dies, sending the group a
@@ -12213,12 +12238,12 @@ monitor_add_window() (
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create wayland "$name" 2>&1) && rc=0 || rc=$?
   case $(mon_answer "$rc" "$res") in
     made) ;;
-    no) MON_MADE=""; mon_unrecord "$name"; die "monitor add: the box could not make another window: $res" ;;
-    *) die "monitor add: box '$NAME' did not answer whether it made $name (${res:-no answer}): it is removed again" ;;
+    no) MON_MADE=""; mon_unrecord "$line"; die "monitor add: the box could not make another window: ${res//$'\n'/; }" ;;
+    *) res=${res:-no answer}; die "monitor add: box '$NAME' did not answer whether it made $name (${res//$'\n'/; }): it is removed again" ;;
   esac
-  end=$((SECONDS + 5))
+  end=$((SECONDS + MON_WAIT))
   until clients=$(host_hyprctl -j clients) && [ "$(jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length' <<<"$clients")" -gt "$n0" ]; do
-    [ $SECONDS -lt $end ] || die "monitor add: no new window of box '$NAME' on your desktop in 5 s"
+    [ $SECONDS -lt $end ] || die "monitor add: no new window of box '$NAME' on your desktop in $MON_WAIT s: $name is removed again"
     sleep 0.05
   done
   # Mapped under the rule (clients lists mapped windows only): on its workspace whatever comes next.
@@ -12239,8 +12264,8 @@ monitor_add_window() (
   monitors_record
   hypr_json monitors | jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"'
 )
-# mon_cleanup RULE_ON MADE NAME: monitor_add_window's EXIT trap (finding 435). While its host rule is
-# on, an output NAME the box may have made (MADE) is removed first, and its line dropped. The rule goes
+# mon_cleanup RULE_ON MADE NAME LINE: monitor_add_window's EXIT trap (finding 435). While its host rule
+# is on, an output NAME the box may have made (MADE) is removed first, and its LINE dropped. The rule goes
 # off only once the box has answered a remove, which it does after the create (it handles its requests
 # in order), and a late output is gone (mon_drain), so a late window maps under the rule, on the box's
 # workspace, and closes. MON_DRAIN s at most, the remove in flight included: a box still silent then is
@@ -12248,8 +12273,11 @@ monitor_add_window() (
 # the rule is off (finding 435): signals are held (a second Ctrl-C, or a pipe or terminal gone: a `say`
 # to a stderr whose reader has left would end it with SIGPIPE), and errexit is off (a `say` to a
 # hung-up terminal fails, EIO). That it runs at all on INT, TERM or HUP is monitor_add_window's traps'
-# doing. A host config reload during the drain drops the rule (left for the 1.1 line).
-MON_DRAIN=20
+# doing. The rule-off itself waits HYPR_LIMIT s at most (a host Hyprland not taking connections would
+# hold it, signals ignored, for good), and says so when it fails. A host config reload during the
+# drain drops the rule (left for the 1.1 line). MON_WAIT: how long the add waits for the window after
+# an `ok`.
+MON_DRAIN=20 MON_WAIT=5
 # shellcheck disable=SC2329 # called from monitor_add_window's trap
 mon_cleanup() {
   [ -n "$1" ] || return 0
@@ -12257,16 +12285,19 @@ mon_cleanup() {
   set +e
   if [ -n "$2" ]; then
     mon_drain "$3" || say "monitor add: box '$NAME' did not answer in $MON_DRAIN s: if it makes $3 later, its window may open on your workspace (close it, or: omabox monitor -b $NAME remove $3)"
-    mon_unrecord "$3"
+    mon_unrecord "$4"
   fi
-  host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1
+  local res
+  res=$(HOST_LIMIT=$HYPR_LIMIT host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" 2>&1)
+  [ "$res" = ok ] || say "monitor add: your desktop did not turn off omabox's window rule (${res:-no answer in $HYPR_LIMIT s}): until it does, aquamarine windows open on $(ws_text "$(meta workspace)"), unfocused (hyprctl eval 'omabox_monitor_rule:set_enabled(false)')"
 }
-# mon_unrecord NAME: NAME's line dropped from omabox.monitors as it is now, not as it was before the
-# add: an interactive `monitor add` or `remove` takes no lock, and one may have changed it meanwhile
-# (finding 435: the lines from before a 20 s drain, written back, brought back a monitor removed
-# meanwhile).
+# mon_unrecord LINE: the line this add wrote dropped from omabox.monitors as it is now (its first
+# match only), not the file as it was before the add: an interactive `monitor add` or `remove` takes
+# no lock, and one may have changed it meanwhile (finding 435: the lines from before a 20 s drain,
+# written back, brought back a monitor removed meanwhile; and another add's line of the same NAME,
+# both having picked it, is not this one's to drop).
 mon_unrecord() {
-  local keep; keep=$(monitors_file | grep -v "^$1 ") || keep=""
+  local keep; keep=$(monitors_file | awk -v l="$1" '!d && $0 == l { d = 1; next } { print }') || keep=""
   box_file "$D/run/omabox.monitors" "$keep" || true
 }
 # mon_drain NAME: `output remove NAME` until the box answers it (mon_answer not unclear), or is gone.
@@ -12530,7 +12561,7 @@ cmd_monitor() {
     local line
     if [ "$(meta mode)" = interactive ]; then
       [ -z "$mname" ] || die "monitor add: an interactive box's monitors are named by its windows (WAYLAND-N): no --name"
-      line=$(monitor_add_window "${args[0]}")
+      monitor_add_held "${args[0]}"; line=$MON_LINE
     else line=$(monitor_add "${args[0]}" "$mname"); fi
     say "box '$NAME' has a monitor $line"
     echo "${line%% *}"

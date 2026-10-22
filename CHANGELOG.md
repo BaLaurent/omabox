@@ -24,8 +24,10 @@ Boxes on Omarchy 4.5.
   refusal and turned off the rule that sends the window to the box's workspace. Now an answer that
   says nothing either way counts as "maybe made": the add removes the monitor again, waiting for the
   box to answer (about 20 s at most), and only then turns the rule off, also when the add is
-  interrupted or its terminal hangs up. The add still fails, saying the box did not answer
-  ([#349](https://github.com/diogochaves/omabox/issues/349)).
+  interrupted or its terminal hangs up; `monitor add` returns only once the rule is off, whatever the
+  signal. The add still fails, saying the box did not answer
+  ([#349](https://github.com/diogochaves/omabox/issues/349)). While the rule is on (about 35 s at
+  worst), a nested Hyprland of your own opening a window is caught by it too, as before.
 - **A shell a test starts itself, under `omabox run`, no longer loses plugin hot-reload.** The box's
   stand-in that keeps its own shell from reloading a mounted plugin on every save also caught other
   shells, so Omarchy's own `runtime-smoke-test.sh` failed in a box. Now it applies to the box's

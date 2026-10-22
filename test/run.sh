@@ -12678,22 +12678,27 @@ t_unit_monitors() {
   # until the box answers a remove, and only then turns the host rule off. Stand-ins for both sides:
   # the box's hyprctl answers the create as CREATE says (`read`: given up on; `gone`: the box died),
   # each remove as the next of REMOVES (`read+changed`: given up on, while another command removed
-  # WAYLAND-3 from omabox.monitors and added WAYLAND-4; `hang`: hyprctl blocked until its timeout), then
+  # WAYLAND-3 from omabox.monitors and added WAYLAND-4; `read+twin`: given up on, while another add
+  # recorded a WAYLAND-2 of its own; `hang`: hyprctl blocked until its timeout), then
   # "output not found"; the box alive while ALIVE is 1. What each was told is in $d/said, when each
   # remove was answered in $d/rtimes (us), its time limit in $d/rlims, when the rule went off in
-  # $d/offtime (us). With MC_ERR=full the add's stderr is /dev/full once the rule is on (a write fails,
-  # as on a hung-up terminal), with pipe a pipe whose reader is gone once the create is sent; with
-  # MC_WRITE=1 omabox.monitors is written too. With MC_HUP the add runs in a group of its own, called
-  # as `monitor add` calls it (sub: `line=$(monitor_add_window ...)`) or as `up` does (bare), and that
-  # group gets a HUP while the create (CREATE `hup`, 3 s) is in flight, from outside it.
+  # $d/offtime (us), when the add's caller returned in $d/endtime (us). With MC_ERR=full the add's
+  # stderr is /dev/full once the rule is on (a write fails, as on a hung-up terminal), with pipe a pipe
+  # whose reader is gone once the create is sent; with MC_WRITE=1 omabox.monitors is written too;
+  # MC_WAIT is MON_WAIT (5). With MC_GROUP the add runs in a group of its own, called as `monitor add`
+  # calls it (cmd: monitor_add_held), as `up` does (bare), or as `monitor add` did before (sub:
+  # `line=$(monitor_add_window ...)`), and that group gets MC_SIG (HUP) from outside it, while the
+  # create (CREATE `hup`, 3 s) is in flight, or with MC_AT=drain once the first remove is answered;
+  # INT, TERM and HUP at their defaults there (a test run in the background ignores INT).
   # shellcheck disable=SC2016 # the inner bash's
   mon_case() {   # ALIVE CREATE REMOVES...
     local alive=$1 create=$2; shift 2
-    printf '%s\n' "$@" > "$d/removes"; : > "$d/said"; : > "$d/rtimes"; : > "$d/rlims"; rm -f "$d/gone" "$d/offtime" "$d/creating" "$d/pgid"
+    printf '%s\n' "$@" > "$d/removes"; : > "$d/said"; : > "$d/rtimes"; : > "$d/rlims"; rm -f "$d/gone" "$d/offtime" "$d/endtime" "$d/creating" "$d/pgid"
     # shellcheck disable=SC2015 # the kill may fail: the case then fails on what was said
-    [ -z "${MC_HUP:-}" ] || ( for _ in $(seq 100); do [ -e "$d/creating" ] && [ -s "$d/pgid" ] && break; sleep 0.05; done
-      sleep 0.1; kill -HUP -- "-$(cat "$d/pgid")" ) >/dev/null 2>&1 &
-    ${MC_HUP:+setsid -w} bash -c 'source "$1"; D=$2 NAME=t MON_DRAIN=$5 MON_SETTLE=1 alive=$3 create=$4 err=$6 write=$7 hup=$8 errpid=""
+    [ -z "${MC_GROUP:-}" ] || ( for _ in $(seq 100); do
+        if [ "${MC_AT:-create}" = drain ]; then [ -s "$d/rtimes" ]; else [ -e "$d/creating" ]; fi && [ -s "$d/pgid" ] && break; sleep 0.05; done
+      sleep 0.1; kill -"${MC_SIG:-HUP}" -- "-$(cat "$d/pgid")" ) >/dev/null 2>&1 &
+    ${MC_GROUP:+env --default-signal=INT,TERM,HUP setsid -w} bash -c 'source "$1"; D=$2 NAME=t MON_DRAIN=$5 MON_SETTLE=1 MON_WAIT=$9 alive=$3 create=$4 err=$6 write=$7 hup=$8 errpid=""
       [ -z "$hup" ] || echo $$ > "$D/pgid"
       [ "$err" != pipe ] || { exec 2> >(exec cat >/dev/null); errpid=$!; }
       meta() { echo 9; }; ws_check() { echo "$1"; }; box_pid() { echo $$; }; hypr_json() { echo "[]"; }
@@ -12715,13 +12720,18 @@ t_unit_monitors() {
           echo "${EPOCHREALTIME//[!0-9]/}" >> "$D/rtimes"; echo "$2" >> "$D/rlims"
           if [ "$a" = hang ]; then timeout "$2" sleep 30; return 124; fi
           if [ "$a" = read+changed ]; then sed -i "/^WAYLAND-3 /d" "$D/run/omabox.monitors"; echo "WAYLAND-4 1024x768@60 right 1" >> "$D/run/omabox.monitors"; a=read; fi
+          if [ "$a" = read+twin ]; then echo "WAYLAND-2 1024x768@60 below 1" >> "$D/run/omabox.monitors"; a=read; fi
           if [ "$a" = read ]; then echo "Couldn'"'"'t read (6)"; return 6; fi; echo "$a" ;;
         *) echo ok ;;
       esac; }
       box_file() { [[ $1 != */omabox.monitors ]] || { echo "monitors: $(paste -sd, <<<"$2")" >> "$D/said"; [ -z "$write" ] || printf "%s\n" "$2" > "$1"; }; }
-      if [ "$hup" = sub ]; then line=$(monitor_add_window 800x600); else monitor_add_window 800x600; fi' \
-      _ "$TMP/lib/bin/omabox" "$d" "$alive" "$create" "${MON_DRAIN:-20}" "${MC_ERR:-}" "${MC_WRITE:-}" "${MC_HUP:-}" 2>&1
-    echo "rc=$?"
+      case $hup in
+        cmd) monitor_add_held 800x600; echo "line: $MON_LINE" ;;
+        sub) line=$(monitor_add_window 800x600) ;;
+        *) monitor_add_window 800x600 ;;
+      esac' \
+      _ "$TMP/lib/bin/omabox" "$d" "$alive" "$create" "${MON_DRAIN:-20}" "${MC_ERR:-}" "${MC_WRITE:-}" "${MC_GROUP:-}" "${MC_WAIT:-5}" 2>&1
+    local rc=$?; echo "${EPOCHREALTIME//[!0-9]/}" > "$d/endtime"; echo "rc=$rc"
   }
   local off="host: if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end"
   # (what the stand-ins were told, from the create on)
@@ -12758,14 +12768,38 @@ t_unit_monitors() {
     test "$(( $(cat "$d/offtime") - $(head -1 "$d/rtimes") ))" -lt 2700000 -a "$(head -1 "$d/rlims" | cut -d. -f1)" -le 2
   # (a HUP to the add's group during the create: the shell it waits on hangs its jobs up as it dies,
   # sending the group a second HUP, which killed the add outright with HUP at its default, the trap
-  # never run, the rule left on: on the code before, these two cases failed 5 times in 6)
+  # never run, the rule left on: on the code before, these cases failed 5 times in 6)
   local shape
-  for shape in sub bare; do
+  for shape in cmd bare; do
     # (its output read to the end: the add's subshell outlives the shell the HUP ended)
-    out=$(MC_HUP=$shape mon_case 1 hup ok)
+    out=$(MC_GROUP=$shape mon_case 1 hup ok)
     check_eq "...a HUP to the group during the create ($shape): removed, then the rule off" \
       "box: create|box: remove (ok)|monitors: |$off" "$(saidl)"
   done
+  # (a signal to the group during the drain: as `line=$(monitor_add_window ...)`, a TERM or HUP ended
+  # `monitor add`'s shell at once while the add drained on, detached, and a retry shared the rule and
+  # turned it off (MC_GROUP=sub: both fail; a Ctrl-C was waited for, bash waiting on a child that
+  # handles it itself). Now the command returns, with the signal's status, only once the rule is off)
+  out=$(MC_GROUP=cmd MC_SIG=INT MC_AT=drain mon_case 1 read read read read read ok)
+  check_eq "...a Ctrl-C to the group during the drain (cmd): removed until answered, then the rule off" \
+    "box: create|box: remove (read)|box: remove (read)|box: remove (read)|box: remove (read)|box: remove (ok)|monitors: |$off" "$(saidl)"
+  check_match "...the add's message said, the command ended 130" "did not answer whether it made WAYLAND-2 .*rc=130" "$(tr '\n' ' ' <<<"$out")"
+  check "...the command returned only after the rule-off ($(( ($(cat "$d/endtime") - $(cat "$d/offtime" 2>/dev/null || echo 0)) / 1000 )) ms after it)" \
+    test -s "$d/offtime" -a "$(cat "$d/endtime")" -ge "$(cat "$d/offtime" 2>/dev/null || echo 0)"
+  local sig want
+  for sig in TERM HUP; do
+    want=$([ "$sig" = TERM ] && echo 143 || echo 129)
+    MC_GROUP=cmd MC_SIG=$sig MC_AT=drain mon_case 1 read read read ok > "$d/out"
+    check "...a $sig there: the same, $want ($(tail -1 "$d/out"))" test "$(tail -1 "$d/out")" = "rc=$want" -a -s "$d/offtime" -a \
+      "$(cat "$d/endtime")" -ge "$(cat "$d/offtime" 2>/dev/null || echo 0)"
+    # (a stray drain, had there been one, done before the next case)
+    for _ in $(seq 100); do [ -s "$d/offtime" ] && break; sleep 0.05; done; sleep 0.2
+  done
+  # (an `ok` whose window never came in MON_WAIT: the output is in the box, its window free to map
+  # later with the rule off; removed before the rule goes off)
+  out=$(MC_WAIT=0 mon_case 1 ok ok)
+  check_match "a create made but no window in MON_WAIT (0 s here): said, the add failed" "no new window of box 't' on your desktop in 0 s: WAYLAND-2 is removed again.*rc=1" "$(tr '\n' ' ' <<<"$out")"
+  check_eq "...removed, its line dropped, then the rule off" "box: create|box: remove (ok)|monitors: |$off" "$(saidl)"
   # (a trap that writes to a stderr gone bad must still reach the rule off: errexit would end it at a
   # failed write, SIGPIPE kill it, the rule left on)
   MC_ERR=full MON_DRAIN=0 mon_case 1 read read read >/dev/null
@@ -12777,7 +12811,18 @@ t_unit_monitors() {
   mkdir -p "$d/run"; echo "WAYLAND-3 800x600@60 right 1" > "$d/run/omabox.monitors"
   MC_WRITE=1 mon_case 1 read read+changed ok >/dev/null
   check_eq "...a monitor removed and one added meanwhile: kept so" "WAYLAND-4 1024x768@60 right 1" "$(cat "$d/run/omabox.monitors")"
+  : > "$d/run/omabox.monitors"
+  MC_WRITE=1 mon_case 1 read read+twin ok >/dev/null
+  check_eq "...another add's WAYLAND-2, recorded meanwhile: kept, only this add's line dropped" "WAYLAND-2 1024x768@60 below 1" "$(cat "$d/run/omabox.monitors")"
   rm -rf "$d/run"
+  # (the rule-off bounded: a host Hyprland that takes no connections held the trap, signals ignored,
+  # for good)
+  mkdir -p "$d/hbin"; printf '#!/bin/sh\nexec sleep 30\n' > "$d/hbin/hyprctl"; chmod +x "$d/hbin/hyprctl"
+  out=$(PATH="$d/hbin:$PATH" bash -c 'source "$1"; D=$2 NAME=t HOST_SIG=x HYPR_LIMIT=1; meta() { echo 9; }
+    t=${EPOCHREALTIME//[!0-9]/}; mon_cleanup 1 "" WAYLAND-2 ""; echo "took $(( (${EPOCHREALTIME//[!0-9]/} - t) / 1000 )) ms"' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
+  check_match "a host Hyprland silent at the rule-off: given up on at HYPR_LIMIT (1 s here), said" \
+    "did not turn off omabox's window rule \(no answer in 1 s\): until it does, aquamarine windows open on workspace 9.*took (9[0-9][0-9]|1[0-9]{3}|2[0-4][0-9]{2}) ms" "$(tr '\n' ' ' <<<"$out")"
+  rm -rf "$d/hbin"
   out=$(mon_case 1 "Name already taken")
   check_match "a create Hyprland refused: said as before" "the box could not make another window: Name already taken" "$out"
   check_eq "...nothing removed, the rule off at once" "box: create|monitors: |$off" "$(saidl)"

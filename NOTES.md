@@ -8836,10 +8836,16 @@ from them.
     ok at 6.0 s, just after the CONT: the box handled the request whose client had gone, then the
     next, in order.) A box silent past MON_DRAIN is said ("if it makes WAYLAND-N later, its window
     may open on your workspace"), and the rule goes off all the same: a rule left on would catch
-    every aquamarine window, the user's own nested Hyprland's too. The output's line is dropped from
-    omabox.monitors as the file is then (`mon_unrecord`), not written back as it was before the add:
-    an interactive add or remove takes no lock, and the first version's write after a drain brought
-    back a monitor removed meanwhile and lost one added. Once the trap runs, only SIGKILL ends it
+    every aquamarine window, the user's own nested Hyprland's too. The trade-off taken: the rule is on
+    from just before the create until the window is seen or the output removed again, a second or so
+    as a rule but about 35 s at worst (a create of 10 s, 5 s waiting for the window, the 20 s drain),
+    and for that span it catches the user's own nested aquamarine windows as well (on the box's
+    workspace, unfocused, at the monitor's size), where 1.0.1's span was 5 s at most. The add's own
+    line is dropped from omabox.monitors as the file is then (`mon_unrecord LINE`: the first line equal
+    to the one it wrote), not written back as it was before the add: an interactive add or remove takes
+    no lock, and the first version's write after a drain brought back a monitor removed meanwhile and
+    lost one added; the second dropped every line of its NAME, so of two adds that both picked
+    WAYLAND-2 the one refused took the other's line with it. Once the trap runs, only SIGKILL ends it
     before the rule goes off: it ignores INT, TERM, HUP and PIPE and turns errexit off. A second
     Ctrl-C would cut it short, and so would a stderr gone bad: a pipe whose reader has left (`monitor
     add ... 2>&1 | head -1`, or a `tee` the same Ctrl-C ended) kills it with SIGPIPE at its first
@@ -8857,15 +8863,19 @@ from them.
     at its default, 8 in 8 with it trapped (an exec'd `$(sleep 3)` hangs nothing up: 8 in 8 either
     way). How long signals are held: MON_DRAIN, the remove in flight included (each remove's limit is
     what is left of it, HYPR_LIMIT at most, 0.2 s at least; the settle cut to it): about 20 s from
-    the start of the trap, after a create of up to 10 s. The first version let a remove sent just
+    the start of the trap, after a create of up to 10 s, then the rule-off, which waits HYPR_LIMIT
+    (10) s at most (`HOST_LIMIT` on host_hyprctl: a host Hyprland that took no connections held the
+    trap, signals ignored, for good) and says so when it fails, naming the `hyprctl eval` that turns
+    the rule off. The first version let a remove sent just
     before MON_DRAIN run 10 s more when it blocked in connect, then MON_SETTLE: about 33 s, while its
     message and the CHANGELOG said 20. After an `ok` to a remove, MON_FLUSH (0.5) s before the rule
     goes off: a late output's window and its end, sent on the box's Wayland socket before that ok,
     are read by the host before the rule-off on its IPC socket (not reproduced without it: it rests
     on the two sockets being read in that order). An add whose
-    window did not come in 5 s after an `ok` now removes the output too (it was left in the box, its
-    window free to map later with the rule off). A refusal and a dead box are said as before, at
-    once, with no remove. In the same stand-in after the fix (two runs): the add fails at about 8.4
+    window did not come in 5 s (MON_WAIT) after an `ok` now removes the output too, and says so (it was
+    left in the box, its window free to map later with the rule off). A refusal and a dead box are said
+    as before, at once, with no remove; both messages fold hyprctl's lines into one ("Hyprland IPC
+    didn't respond in time; Couldn't read (6)"). In the same stand-in after the fix (two runs): the add fails at about 8.4
     s, saying it did not answer whether it made WAYLAND-2; no window on workspace 1, focus
     unchanged, WAYLAND-2 gone from the box and its record, the rule off, and the next add makes
     WAYLAND-2 on 9. A box killed as the rule goes on: refused in about 2.5 s, no remove asked, the
@@ -8877,10 +8887,17 @@ from them.
     then maps on the user's workspace), and a SIGKILL during the drain (a harness's KILL after its
     grace period): the rule stays on, with no time limit, until the next interactive `monitor add`
     turns it off (`down` does not touch it; a reload of the host's config likely drops it, not
-    checked), where 1.0.1's window was about 5 s. A TERM to the whole group ends omabox's main shell
-    at once while the add's subshell drains (seen in bare bash of the same shape: the parent gone in
-    50 ms, the trap done after), so a caller sees the command end and may start another add,
-    sharing the rule, during the drain. Tests:
+    checked), where 1.0.1's window was about 5 s. `monitor add` waits for the add's subshell whatever
+    the signal (`monitor_add_held`): called as `line=$(monitor_add_window ...)`, a TERM or a HUP to the
+    whole group ended omabox's main shell at once while the subshell drained on, detached, so the user
+    saw the command end, retried, and the retry redefined and turned off the one shared rule, the first
+    add's late window then mapping on the user's workspace, focused. (A Ctrl-C was waited for: bash
+    waits on a child that handles SIGINT itself. In bare bash 5.3 of the same shape, the child's trap
+    taking 1.5 s, three runs each: the parent ended after 1.85 s on INT, after 0.35 s, at once, on
+    HUP and TERM.) Now the subshell runs in the foreground, its line to a file, and the main shell's
+    INT, TERM and HUP traps only note the first one's status (130, 143, 129), which bash runs once
+    the child has returned; the command exits with it after the rule-off. `up -i --monitor` calls it
+    bare in up's shell, which waits already. Tests:
     t_monitors_window_late (new: the box's Hyprland stopped for 6 s, then killed, by the stand-in's
     Lua; it fails on the code before the fix), t_unit_monitors (`mon_answer`'s cases; the order the
     stand-ins were told things: create, removes until answered and "output not found" settled for
@@ -8890,7 +8907,11 @@ from them.
     rule off MON_FLUSH after the box's ok; a remove blocked until its limit given up on at MON_DRAIN,
     2 s there, not after HYPR_LIMIT; a HUP to the add's own group from outside while the create is
     in flight, as `monitor add` calls it and as `up` does: removed, then the rule off. On the version
-    before, the HUP cases failed 5 times in 6 over three runs, the other two every run).
+    before, the HUP cases failed 5 times in 6 over three runs, the other two every run; an INT, a TERM
+    and a HUP to the group of `monitor add`'s call during the drain: the command returns, with 130,
+    143 or 129, only after the rule-off (TERM and HUP fail with the `$(...)` call; INT passes there
+    too); an `ok` with no window in MON_WAIT: removed, then the rule off; another add's line of the
+    same name kept; a rule-off to a host that never answers given up on at HYPR_LIMIT, and said).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
