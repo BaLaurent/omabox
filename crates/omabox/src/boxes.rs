@@ -537,6 +537,20 @@ fn record_agent(d: &[u8], pid: &[u8], start: &[u8]) -> bool {
     tmp.write_all(out.as_bytes()).is_ok() && ok
 }
 
+/// box_file PATH VALUE: VALUE written to a file in the box's runtime dir without opening what is
+/// there (a link, a FIFO: finding 74): a new file in the box dir, renamed over it.
+pub fn box_file(ctx: &Ctx, p: &std::path::Path, value: &[u8]) -> bool {
+    let Ok((mut f, tmp)) = shell::mktemp_in(&cat!(ctx.d, "/.write.XXXXXX")) else {
+        return false;
+    };
+    let ok = std::io::Write::write_all(&mut f, &cat!(value, "\n")).is_ok()
+        && std::fs::rename(shell::path(&tmp), p).is_ok();
+    if !ok {
+        let _ = std::fs::remove_file(shell::path(&tmp));
+    }
+    ok
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

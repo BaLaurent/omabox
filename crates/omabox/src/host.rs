@@ -18,7 +18,12 @@ const GUARD: &str = "omabox-guard";
 
 /// host_session: the user's Hyprland session (its signature): the environment's when it names a
 /// live one, else the only one in the runtime dir; several and none named are refused (finding 65).
-fn host_session(ctx: &Ctx) -> Result<Vec<u8>, Vec<u8>> {
+pub fn host_session(ctx: &Ctx) -> Result<Vec<u8>, Vec<u8>> {
+    host_session_wl(ctx).map(|(sig, _)| sig)
+}
+
+/// host_session's signature and HOST_WL, its Wayland socket's path.
+pub fn host_session_wl(ctx: &Ctx) -> Result<(Vec<u8>, Vec<u8>), Vec<u8>> {
     let rt = shell::env_or_empty("XDG_RUNTIME_DIR");
     let sig = shell::env_or_empty("HYPRLAND_INSTANCE_SIGNATURE");
     let all = crate::sig::command("hyprctl")
@@ -77,7 +82,49 @@ fn host_session(ctx: &Ctx) -> Result<Vec<u8>, Vec<u8>> {
         return Err(cat!("Hyprland session ", sig, ": no Wayland socket found"));
     }
     let _ = ctx;
-    Ok(sig)
+    Ok((sig, cat!(rt, "/", wl)))
+}
+
+/// `host_session` called by itself: its refusal ends the command (die).
+pub fn host_session_die(ctx: &Ctx) -> Res<(Vec<u8>, Vec<u8>)> {
+    host_session_wl(ctx).map_err(|m| ctx.die(m))
+}
+
+/// `$(host_hyprctl ARGS...)`: hyprctl on the user's session, its status and stdout (its stderr this
+/// process's, or none with QUIET: `2>/dev/null`). host_session's refusal is said (unless QUIET) and
+/// is the call's failure, status 1, as its die ends the `$(...)`.
+pub fn host_hyprctl(ctx: &Ctx, args: &[&[u8]], quiet: bool) -> (i32, Vec<u8>) {
+    let sig = match host_session(ctx) {
+        Ok(s) => s,
+        Err(m) => {
+            if !quiet {
+                say(m);
+            }
+            return (i32::from(ctx.die_rc.unwrap_or(1)), Vec::new());
+        }
+    };
+    let mut c = crate::sig::command("hyprctl");
+    c.args(args.iter().map(|a| OsStr::from_bytes(a)))
+        .env("HYPRLAND_INSTANCE_SIGNATURE", OsStr::from_bytes(&sig))
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
+        .stderr(if quiet {
+            Stdio::null()
+        } else {
+            Stdio::inherit()
+        });
+    match crate::sig::foreground(|| c.output()) {
+        Ok(o) => (crate::exec::status(o.status).0, o.stdout),
+        Err(_) => {
+            if !quiet {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    b"hyprctl: command not found\n",
+                );
+            }
+            (127, Vec::new())
+        }
+    }
 }
 
 /// host_eval LUA: Lua on the host Hyprland (`out=$(host_hyprctl eval "$1" 2>&1)`); its errors are

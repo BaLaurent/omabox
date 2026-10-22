@@ -3024,6 +3024,35 @@ parity() {
   fi
 }
 
+# rp_sig_write FILE (wave 3b, shared since 4a): the signal cases' wrapper, `rp-sig SIG MARK CMD...`:
+# CMD in a process group of its own, SIG (group-SIG: to the whole group) once MARK exists; CMD's status,
+# once what it left running had its moment.
+rp_sig_write() {
+  cat > "$1" <<'EOF'
+#!/bin/bash
+# (a core limit of exactly 1 byte, as bin/omabox's nocore sets it: the kernel then skips the core
+# helper for a QUIT's core, so the desktop says nothing of it (finding 67). Not `ulimit -c 1`: bash
+# counts that in 1024-byte blocks, and the helper ran, notifying the user's desktop.)
+prlimit --pid $$ --core=1: 2>/dev/null || ulimit -S -c 0
+[ "${1:-}" != --core ] || { prlimit --pid $$ --core -o SOFT --noheadings | tr -d ' '; exit 0; }
+sig=$1 mark=$2; shift 2
+# (RP_IGN: signals it comes with ignored, as from nohup or a script's `&`)
+[ -z "${RP_IGN:-}" ] || trap '' $RP_IGN
+set -m
+"$@" & p=$!
+for i in $(seq 200); do [ -e "$mark" ] && break; sleep 0.05; done
+sleep 0.2
+case $sig in group-*) kill -"${sig#group-}" -- -"$p" ;; *) kill -"$sig" "$p" ;; esac
+wait "$p"; rc=$?
+sleep 1
+# (what is left of it then goes: bash's capture subshell ignores INT, lives on and would write the
+# next case's files; listed)
+kill -KILL -- -"$p" 2>/dev/null
+exit "$rc"
+EOF
+  chmod +x "$1"
+}
+
 # The commands ported so far (path, env, which), their refusals and box selection, against boxes faked
 # in a runtime dir of the test's own: dead ones (how their Hyprland ended), one gone idle, one whose
 # state this user namespace cannot read (a non-dumpable process: its ns is unreadable), live ones (a
@@ -3357,7 +3386,7 @@ t_unit_rust_parity() {
   # live stand-ins whose box.json says a shell (its pid file, crash reports, relaunch lines); and the
   # stand-ins' Hyprland that does not answer.
   local v
-  for v in LAYER_SPAN_JQ WIN_JQ WIN_SEL_JQ WIN_DESC_JQ DESK_FACTS_JQ DESK_TARGET_JQ LAYER_LIST_JQ JQ_MON; do
+  for v in LAYER_SPAN_JQ WIN_JQ WIN_SEL_JQ WIN_DESC_JQ DESK_FACTS_JQ DESK_TARGET_JQ LAYER_LIST_JQ JQ_MON CLIP_BOX_COPY CLIP_BOX_TYPES AGENT_MARKS; do
     check_eq "the Rust half's $v is bash's" "$(lib eval "printf %s \"\$$v\"")" "$("$ROOT/build/bin/omabox" _rust-jq "$v")"
   done
   # Its programs that are inline in bash's functions: each in bin/omabox as it is (a path, .[0] and
@@ -4192,29 +4221,7 @@ while True:
   # go once omabox is gone; shot --no-pointer's traps give the pointer back on INT, TERM and HUP.
   # rp_sig SIG CMD...: CMD in a process group of its own, SIG (group-SIG: to the whole group) once a
   # stand-in says it holds (or grabs); CMD's status, once what it left running had its moment.
-  cat > "$r/rp-sig" <<'EOF'
-#!/bin/bash
-# (a core limit of exactly 1 byte, as bin/omabox's nocore sets it: the kernel then skips the core
-# helper for a QUIT's core, so the desktop says nothing of it (finding 67). Not `ulimit -c 1`: bash
-# counts that in 1024-byte blocks, and the helper ran, notifying the user's desktop.)
-prlimit --pid $$ --core=1: 2>/dev/null || ulimit -S -c 0
-[ "${1:-}" != --core ] || { prlimit --pid $$ --core -o SOFT --noheadings | tr -d ' '; exit 0; }
-sig=$1 mark=$2; shift 2
-# (RP_IGN: signals it comes with ignored, as from nohup or a script's `&`)
-[ -z "${RP_IGN:-}" ] || trap '' $RP_IGN
-set -m
-"$@" & p=$!
-for i in $(seq 200); do [ -e "$mark" ] && break; sleep 0.05; done
-sleep 0.2
-case $sig in group-*) kill -"${sig#group-}" -- -"$p" ;; *) kill -"$sig" "$p" ;; esac
-wait "$p"; rc=$?
-sleep 1
-# (what is left of it then goes: bash's capture subshell ignores INT, lives on and would write the
-# next case's files; listed)
-kill -KILL -- -"$p" 2>/dev/null
-exit "$rc"
-EOF
-  chmod +x "$r/rp-sig"
+  rp_sig_write "$r/rp-sig"
   check_eq "the signal cases' core limit is 1 byte (no core helper, no crash notification)" 1 "$("$r/rp-sig" --core)"
   rp_held() { echo 3 > "$fk/ptr.sleep"; }; rp3_pre=(rp_held)
   rp_sed0=$rp_sed; rp_sed+='; s/ line ([0-9]+): [0-9]+ Quit / line \1: PID Quit /'
@@ -4283,6 +4290,835 @@ EOF
   # The namespaces' PID 1s first: their unshares and the stand-in pasta end with them.
   kill -KILL "$l1" "$lp" "$nd" "$lfk" 2>/dev/null
   wait "$u1" "$nd" "$pst" "$ufk" 2>/dev/null
+}
+
+# Wave 4a's parity (#324): monitor, output, mode, gpu, cpu, audio, ports and clip both ways, with the
+# `parity` helper above, on stand-ins of the test's own. A box whose Hyprland is a Python stand-in
+# (bound over hyprctl in the box's mount namespace) that makes, removes, sizes and places monitors from
+# files here, as the box's config places them; an NVIDIA box's labwc and wlr-randr; an audio box's
+# ffmpeg; the box's and the host's clipboard tools; a host Hyprland in the test's own runtime dir (a
+# socket: an interactive box's windows, its layout's picture); box servers in network namespaces of
+# their own and host listeners on throwaway ports of the test's (never a service of the user's, nor
+# 8080). Its own stand-ins (not t_unit_rust_parity's): their monitors change with each case.
+t_unit_rust_parity4() {
+  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity 4a" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  local r=$TMP/rp4 st i
+  rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/bin" "$r/hostbin" "$r/st/host" "$r/tmpd" "$r/norepo"
+  st=$r/st
+  # The box's Hyprland: its monitors in $st/mons.json, each answer a knob file can change.
+  cat > "$r/bin/hyprctl" <<'PYEOF'
+#!/usr/bin/python3
+# The stand-in box Hyprland of t_unit_rust_parity4 (wave 4a): its monitors in ST/mons.json, made,
+# removed, given a mode and placed as a box's config places them (omabox.monitors of the box dir in
+# ST/boxdir: right of the one before, below it, or at X,Y), its layout as omabox_monitor_layout says
+# it. Knob files in ST change an answer. An interactive box's new output is a window on the stand-in
+# host too (ST/host/clients.json, the window's pid in ST/wpid).
+import json, os, re, sys
+
+ST = "@ST@"
+a = sys.argv[1:]
+
+
+def rd(f, d=None):
+    try:
+        with open(os.path.join(ST, f)) as h:
+            return h.read()
+    except OSError:
+        return d
+
+
+def has(f):
+    return os.path.exists(os.path.join(ST, f))
+
+
+def mons():
+    return json.loads(rd("mons.json", "[]"))
+
+
+def save(m):
+    with open(os.path.join(ST, "mons.json"), "w") as h:
+        json.dump(m, h)
+
+
+def lines(extra=None):
+    d = (rd("boxdir", "") or "").strip()
+    t = rd_abs(os.path.join(d, "run/omabox.monitors")) or ""
+    out = [l.split() for l in t.splitlines() if len(l.split()) >= 4]
+    if extra:
+        out.append(extra.split())
+    return out
+
+
+def rd_abs(p):
+    try:
+        with open(p) as h:
+            return h.read()
+    except OSError:
+        return None
+
+
+def main_of(m):
+    for x in m:
+        if not x.get("disabled") and (x["name"] in ("HEADLESS-2", "WAYLAND-1")):
+            return x
+    return None
+
+
+def layout(m, extra=None):
+    rows = []
+    mm = main_of(m)
+    if mm:
+        rows.append(["main", mm["x"], mm["y"], int(mm["width"] / mm["scale"]), int(mm["height"] / mm["scale"])])
+    for n, mode, place, scale in [l[:4] for l in lines(extra)]:
+        w, h = mode.split("@")[0].split("x")
+        live = next((x for x in m if x["name"] == n), None)
+        if live:
+            w, h, s = live["width"], live["height"], live["scale"]
+        else:
+            s = float(scale)
+        w, h = int(int(w) / float(s)), int(int(h) / float(s))
+        p = rows[-1] if rows else ["", 0, 0, 0, 0]
+        if place == "right":
+            x, y = p[1] + p[3], p[2]
+        elif place == "below":
+            x, y = p[1], p[2] + p[4]
+        else:
+            x, y = (int(v) for v in place.split("x"))
+        rows.append([n, x, y, w, h])
+    return rows
+
+
+def log(*w):
+    with open(os.path.join(ST, "hypr.log"), "a") as h:
+        h.write(" ".join(w) + "\n")
+
+
+cmd = " ".join(a[:2])
+if a[:1] == ["version"]:
+    if has("noversion"):
+        sys.exit(1)
+    print("Hyprland 0.56.2")
+elif cmd == "-j monitors":
+    if has("monfail"):
+        print("IPC didn't respond")
+        sys.exit(1)
+    print(json.dumps(mons()))
+elif cmd in ("-j clients", "-j layers", "-j activewindow"):
+    print("[]" if a[1] != "activewindow" else "{}")
+elif a[:1] == ["eval"]:
+    lua = a[1] if len(a) > 1 else ""
+    log("eval", lua)
+    if lua.startswith("hl.monitor("):
+        if has("eval.out"):
+            print(rd("eval.out").strip())
+            sys.exit(0)
+        g = dict(re.findall(r"(\w+) = '?([^',}]+)'?", lua))
+        m = mons()
+        for x in m:
+            if x["name"] == g.get("output"):
+                if not has("eval.noop"):
+                    mode = g["mode"]
+                    x["width"], x["height"] = (int(v) for v in mode.split("@")[0].split("x"))
+                    x["refreshRate"] = float(mode.split("@")[1]) if "@" in mode else 60.0
+                    s = float(g.get("scale", "1"))
+                    for pair in (rd("scale.map", "") or "").splitlines():
+                        f = pair.split()
+                        if len(f) == 2 and float(f[0]) == s:
+                            s = float(f[1])
+                    x["scale"] = s
+                    pos = g.get("position", "0x0")
+                    if pos != "0x0" and "x" in pos:
+                        x["x"], x["y"] = (int(v) for v in pos.split("x"))
+        save(m)
+        print("ok")
+    elif lua == "omabox_place_monitors()":
+        if has("place.out"):
+            print(rd("place.out").strip())
+            sys.exit(0)
+        m = mons()
+        for n, x, y, w, h in layout(m)[1:]:
+            for mo in m:
+                if mo["name"] == n:
+                    mo["x"], mo["y"] = x, y
+        save(m)
+        print("ok")
+    elif lua.startswith("omabox_monitor_layout("):
+        if has("layout.out"):
+            print(rd("layout.out").strip())
+            sys.exit(0)
+        arg = lua[len("omabox_monitor_layout("):-1].strip("'") or None
+        rows = layout(mons(), arg)
+        print("error: omabox-layout:" + ",".join(" ".join(str(v) for v in r) for r in rows))
+    else:
+        print("stand-in hyprctl: eval", file=sys.stderr)
+        sys.exit(1)
+elif cmd in ("output create",):
+    kind, n = a[2], a[3]
+    log("output create", kind, n)
+    if has("create.out"):
+        print(rd("create.out").strip())
+        sys.exit(0)
+    m = mons()
+    line = next((l for l in lines() if l[0] == n), None)
+    w, h, r, s = 960, 540, 60.0, 1.0
+    if line and not has("create.mode"):
+        mode = line[1]
+        w, h = (int(v) for v in mode.split("@")[0].split("x"))
+        r = float(mode.split("@")[1])
+        s = float(line[3])
+    d = (rd("dropped.mode", "") or "").split()
+    if d and d[0] == n:
+        w, h = (int(v) for v in d[1].split("@")[0].split("x"))
+        r = float(d[1].split("@")[1])
+    m.append({"id": len(m), "name": n, "width": w, "height": h, "refreshRate": r, "x": 0, "y": 0, "scale": s,
+              "transform": 0, "disabled": False, "reserved": [0, 0, 0, 0],
+              "activeWorkspace": {"id": 9, "name": "9"}, "specialWorkspace": {"id": 0, "name": ""}})
+    save(m)
+    if has("crash.on.create"):
+        d = (rd("boxdir", "") or "").strip()
+        c = os.path.join(d, "home/.cache/quickshell/crashes/rp-new")
+        os.makedirs(c, exist_ok=True)
+        with open(os.path.join(c, "report.txt"), "w") as h:
+            h.write("Config Path: /usr/share/omarchy/shell/shell.qml\n")
+    open(os.path.join(ST, "creating"), "w").close()
+    if has("interactive") and not has("nohostwin"):
+        hc = os.path.join(ST, "host/clients.json")
+        c = json.loads(rd_abs(hc) or "[]")
+        c.append({"address": "0xw%d" % len(c), "pid": int(rd("wpid", "0")), "workspace": {"id": 9, "name": "9"},
+                  "floating": True, "monitor": 0, "class": "aquamarine", "title": "aquamarine - " + n})
+        with open(hc, "w") as h:
+            json.dump(c, h)
+    print("ok")
+elif cmd == "output remove":
+    n = a[2]
+    log("output remove", n)
+    if has("remove.out"):
+        print(rd("remove.out").strip())
+        sys.exit(0)
+    if not has("remove.stay"):
+        save([x for x in mons() if x["name"] != n])
+    print("ok")
+else:
+    print("stand-in hyprctl: " + " ".join(a), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+  sed -i "s#@ST@#$st#" "$r/bin/hyprctl"
+  # An NVIDIA box's parent compositor tools; an audio box's ffmpeg; the box's clipboard tools.
+  cat > "$r/bin/wlr-randr" <<EOF
+#!/bin/sh
+echo "wlr-randr \$*" >> $st/wlr.log
+exit \$(cat $st/wlr.rc 2>/dev/null || echo 0)
+EOF
+  cat > "$r/bin/labwc" <<EOF
+#!/bin/sh
+echo "labwc \$*" >> $st/wlr.log
+cp "\$XDG_RUNTIME_DIR/labwc/rc.xml" $st/rc.xml.seen 2>/dev/null
+exit \$(cat $st/labwc.rc 2>/dev/null || echo 0)
+EOF
+  cat > "$r/bin/ffmpeg" <<EOF
+#!/bin/sh
+echo "ffmpeg \$*" >> $st/wlr.log
+cat $st/ffmpeg.out 2>/dev/null
+[ ! -f $st/ffmpeg.err ] || cat $st/ffmpeg.err >&2
+exit \$(cat $st/ffmpeg.rc 2>/dev/null || echo 0)
+EOF
+  # (a clipboard tool, the box's or the host's: SIDE's state in $st/SIDE.*)
+  for i in box host; do
+    cat > "$r/$( [ "$i" = box ] && echo bin || echo hostbin)/wl-paste" <<EOF
+#!/bin/sh
+echo "wl-paste \$* (\${WAYLAND_DISPLAY:-})" | sed 's#$r#R#g' >> $st/$i.log
+if [ "\$1" = --list-types ]; then
+  [ -f $st/$i.types ] || { echo "No selection" >&2; exit 1; }
+  [ -s $st/$i.types ] || { echo "Nothing is copied" >&2; exit 1; }
+  cat $st/$i.types; exit 0
+fi
+cat $st/$i.data 2>/dev/null; [ ! -f $st/$i.perr ] || cat $st/$i.perr >&2
+exit \$(cat $st/$i.prc 2>/dev/null || echo 0)
+EOF
+    cat > "$r/$( [ "$i" = box ] && echo bin || echo hostbin)/wl-copy" <<EOF
+#!/bin/sh
+echo "wl-copy \$* (\${WAYLAND_DISPLAY:-})" | sed 's#$r#R#g' >> $st/$i.log
+cat > $st/$i.got
+[ ! -f $st/$i.cerr ] || cat $st/$i.cerr >&2
+exit \$(cat $st/$i.crc 2>/dev/null || echo 0)
+EOF
+  done
+  # The host's nvidia-smi for a box on NVIDIA: pmon's lines for the stand-in box's processes.
+  cat > "$r/hostbin/nvidia-smi" <<EOF
+#!/bin/sh
+echo "nvidia-smi \$*" >> $st/wlr.log
+[ ! -f $st/nv.fail ] || { echo "NVIDIA-SMI has failed"; echo "line two"; echo "three"; echo "four"; exit 9; }
+cat $st/nv.out
+EOF
+  chmod +x "$r"/bin/* "$r"/hostbin/*
+  # The stand-in desktop: a pid namespace with its own mounts, the tools above bound over the real
+  # ones there (the host's are never run by the box's side), the box's HOME and runtime dir tmpfs.
+  unshare -Urpfui --mount-proc sh -c 'mount -t tmpfs none /home && mkdir /home/sbx && mount -t tmpfs none /run/user &&
+    mkdir -p "/run/user/$2/labwc" && for t in hyprctl wlr-randr labwc ffmpeg wl-paste wl-copy; do mount --bind "$1/$t" "/usr/bin/$t"; done &&
+    exec sleep 3600' sh "$r/bin" "$(id -u)" >/dev/null 2>&1 & local ufk=$!
+  # A plain one (no Hyprland: nothing answers), and one in a network namespace of its own serving
+  # TCP on 127.0.0.1 and ::1 (ports), and one whose render node is held open (gpu release).
+  unshare -Urpf --mount-proc sleep 3600 >/dev/null 2>&1 & local u1=$!
+  local p1=47811 p2=47812 p3=47813 p4=47814
+  unshare -Urpfn --mount-proc sh -c 'ip link set lo up; exec python3 -c "
+import socket, time
+def l(fam, addr, port):
+    s = socket.socket(fam); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind((addr, port)); s.listen(1); return s
+ks = [l(socket.AF_INET, \"127.0.0.1\", $0), l(socket.AF_INET6, \"::1\", $0), l(socket.AF_INET6, \"::1\", $1), l(socket.AF_INET, \"127.0.0.5\", $2), l(socket.AF_INET, \"0.0.0.0\", $3)]
+time.sleep(3600)"' "$p1" "$p2" "$p3" "$p4" >/dev/null 2>&1 & local un=$!
+  unshare -Urpfn --mount-proc sh -c 'ip link set lo up; exec python3 -c "
+import socket, time
+s = socket.socket(socket.AF_INET6); s.bind((\"::1\", $0)); s.listen(1); time.sleep(3600)"' "$p1" >/dev/null 2>&1 & local un2=$!
+  local lfk="" l1="" ln="" ln2="" i
+  for i in $(seq 300); do
+    lfk=$(pgrep -P "$ufk" -x sleep) l1=$(pgrep -P "$u1") ln=$(pgrep -P "$un") ln2=$(pgrep -P "$un2")
+    [ -n "$lfk" ] && [ -n "$l1" ] && [ -n "$ln" ] && [ -n "$ln2" ] && break
+    sleep 0.1
+  done
+  check "the stand-in boxes started" test -n "$lfk" -a -n "$l1" -a -n "$ln" -a -n "$ln2"
+  # (the servers listening in their namespaces before any case reads them)
+  for i in $(seq 100); do [ "$(awk 'FNR > 1 && $4 == "0A"' "/proc/$ln/net/tcp" "/proc/$ln/net/tcp6" 2>/dev/null | wc -l)" -ge 5 ] && break; sleep 0.1; done
+  local nsfk ns1 nsn nsn2; nsfk=$(readlink "/proc/$lfk/ns/pid") ns1=$(readlink "/proc/$l1/ns/pid") nsn=$(readlink "/proc/$ln/ns/pid") nsn2=$(readlink "/proc/$ln2/ns/pid")
+  echo "$ufk" > "$st/wpid"
+  # The host Hyprland of this runtime dir's own: a socket answering from $st/host (its Wayland socket
+  # beside it), for interactive boxes, `mode host` and clip; nothing of the user's desktop answers.
+  local hs=a_4_2   # (an instance signature is HASH_TIME_RANDOM: hyprctl instances lists no other)
+  mkdir -p "$r/rt/hypr/$hs"; printf '%s\nwayland-rp4\n' "$lfk" > "$r/rt/hypr/$hs/hyprland.lock"
+  cat > "$r/fakehost.py" <<'PYEOF'
+#!/usr/bin/python3
+# The stand-in host Hyprland of t_unit_rust_parity4: a socket in the test's own runtime dir that
+# answers hyprctl from ST/host/*.json, logs every request to ST/host.log, answers ok to an eval, and
+# resizes the box's main screen (ST/mons.json) when its window is resized (aquamarine takes a
+# window's size as its mode). Never the user's desktop: another runtime dir, no session named.
+import json, os, re, socket, sys
+
+sock, ST, wl = sys.argv[1:4]
+w = socket.socket(socket.AF_UNIX)
+w.bind(wl)
+s = socket.socket(socket.AF_UNIX)
+s.bind(sock)
+s.listen(16)
+
+
+def rd(f, d):
+    try:
+        with open(os.path.join(ST, f)) as h:
+            return h.read()
+    except OSError:
+        return d
+
+
+while True:
+    c, _ = s.accept()
+    d = c.recv(1 << 20).decode("utf-8", "replace")
+    with open(os.path.join(ST, "host.log"), "a") as h:
+        h.write(d + "\n")
+    if d.startswith("j/clients"):
+        out = rd("host/clients.json", "[]")
+    elif d.startswith("j/monitors"):
+        out = rd("host/monitors.json", "[]")
+    elif d.startswith("j/activewindow"):
+        out = rd("host/active.json", "{}")
+    elif d.startswith("j/getoption general:gaps_out"):
+        out = rd("host/gaps.json", '{"option":"general:gaps_out","css":"10 10 10 10","set":true}')
+    elif d.startswith("j/getoption general:border_size"):
+        out = rd("host/border.json", '{"option":"general:border_size","int":2,"set":true}')
+    elif d.startswith("/eval"):
+        out = rd("host/eval.out", "ok").strip()
+        m = re.search(r"window\.resize\(\{ window = 'address:(\w+)', x = (\d+), y = (\d+) \}\)", d)
+        if m:
+            cl = json.loads(rd("host/clients.json", "[]"))
+            main = rd("host/main", "").strip()
+            if m.group(1) == main:
+                mo = json.loads(rd("mons.json", "[]"))
+                for x in mo:
+                    if x["name"] == "WAYLAND-1":
+                        x["width"], x["height"] = int(m.group(2)), int(m.group(3))
+                with open(os.path.join(ST, "mons.json"), "w") as h:
+                    json.dump(mo, h)
+            for x in cl:
+                if x["address"] == m.group(1):
+                    x["size"] = [int(m.group(2)), int(m.group(3))]
+            with open(os.path.join(ST, "host/clients.json"), "w") as h:
+                json.dump(cl, h)
+    else:
+        out = "unknown request"
+    c.sendall(out.encode())
+    c.close()
+PYEOF
+  python3 "$r/fakehost.py" "$r/rt/hypr/$hs/.socket.sock" "$st" "$r/rt/wayland-rp4" & local hsrv=$!
+  for i in $(seq 50); do [ -S "$r/rt/hypr/$hs/.socket.sock" ] && break; sleep 0.1; done
+  check "the stand-in host Hyprland is up" test -S "$r/rt/hypr/$hs/.socket.sock"
+  # A box dir: rp4_box NAME BOX_JSON [CHILD_PID]; one on the stand-in desktop: rp4_fk NAME [JSON...]
+  rp4_box() { local d=$r/rt/omabox/$1; mkdir -p "$d/home" "$d/run"; printf '%s\n' "$2" > "$d/box.json"; [ -z "${3:-}" ] || echo "{\"child-pid\": $3}" > "$d/info.json"; }
+  rp4_fk() {
+    rp4_box "$1" "{\"mode\":\"headless\",\"pidns\":\"$nsfk\"${2:-}}" "$lfk"
+    printf 'WAYLAND_DISPLAY=wayland-1\0HYPRLAND_INSTANCE_SIGNATURE=sig1\0' > "$r/rt/omabox/$1/run/omabox.env"
+  }
+  local mon='"refreshRate":60.0,"x":0,"y":0,"scale":1.0,"transform":0,"disabled":false,"reserved":[0,0,0,0],"activeWorkspace":{"id":1,"name":"1"},"specialWorkspace":{"id":0,"name":""}'
+  # rp4_mons NAME:WxH[:X:Y:SCALE]...: the box's monitors
+  rp4_mons() {
+    local m out="" n wh x y s
+    for m; do IFS=: read -r n wh x y s <<<"$m"
+      out+="${out:+,}{\"id\":0,\"name\":\"$n\",\"width\":${wh%x*},\"height\":${wh#*x},${mon/\"x\":0,\"y\":0,\"scale\":1.0/\"x\":${x:-0},\"y\":${y:-0},\"scale\":${s:-1.0}}}"
+    done
+    echo "[$out]" > "$st/mons.json"
+  }
+  rp4_fixture() {
+    rp4_hostback
+    rm -rf "$r/rt/omabox"; mkdir -p "$r/rt/omabox"
+    find "$st" -maxdepth 1 -type f ! -name wpid -delete; rm -rf "$st/host"; mkdir -p "$st/host"
+    rm -rf "${r:?}/tmpd"; mkdir -p "$r/tmpd"
+    rp4_box dead1 '{"mode":"headless"}'
+    rp4_box plain "{\"mode\":\"headless\",\"pidns\":\"$ns1\"}" "$l1"
+    printf 'WAYLAND_DISPLAY=wayland-1\0HYPRLAND_INSTANCE_SIGNATURE=rp-none\0' > "$r/rt/omabox/plain/run/omabox.env"
+    rp4_fk fk ',"aquamarine":{"kind":"system","version":"0.15.0","fixed":false},"render":{"driver":"amdgpu","pci":"0000:7a:00.0","node":"/dev/dri/renderD128"},"client_render":{"renderer":"llvmpipe (LLVM 20, 256 bits)","software":true}'
+    rp4_fk fkn ',"wayland_screen":true,"render":{"driver":"nvidia","pci":"0000:01:00.0","node":"/dev/dri/renderD129","fallback":true,"wanted":"intel","why":"no intel GPU on this machine"},"aquamarine":{"kind":"private","version":"0.15.1+layout","fixed":true,"main_checkout":"/x/omabox"}'
+    mkdir -p "$r/rt/omabox/fkn/run/labwc"; : > "$r/rt/omabox/fkn/run/labwc/rc.xml"; echo wayland-9 > "$r/rt/omabox/fkn/run/omabox-parent-display"
+    python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$r/rt/omabox/fkn/run/wayland-9"
+    rp4_fk fki ',"workspace":"9","aquamarine":{"kind":"private","version":"0.15.1+layout+cursor","fixed":true}'
+    sed -i 's/"mode":"headless"/"mode":"interactive"/' "$r/rt/omabox/fki/box.json"
+    rp4_fk fka ',"audio":true,"shell":true'
+    echo fk > "$st/boxdir.name"; echo "$r/rt/omabox/fk" > "$st/boxdir"
+    rp4_mons HEADLESS-2:1920x1080
+    # The host: one monitor (its bar on top), the interactive box's main window on workspace 9.
+    echo '[{"id":0,"name":"DP-1","width":2560,"height":1440,"refreshRate":60.0,"x":0,"y":0,"scale":1.0,"transform":0,"focused":true,"reserved":[0,42,0,0]}]' > "$st/host/monitors.json"
+    echo "[{\"address\":\"0xm1\",\"pid\":$ufk,\"workspace\":{\"id\":9,\"name\":\"9\"},\"floating\":false,\"monitor\":0,\"class\":\"aquamarine\",\"title\":\"aquamarine - WAYLAND-1\"}]" > "$st/host/clients.json"
+    echo 0xm1 > "$st/host/main"
+    echo "{\"address\":\"0xm1\",\"pid\":$ufk}" > "$st/host/active.json"
+    rp4_pre_run
+  }
+  # (what a case sets up after the fixture)
+  rp4_pre=()
+  rp4_pre_run() { local f; for f in ${rp4_pre[@]+"${rp4_pre[@]}"}; do "$f"; done; }
+  # What the cases left beyond the runtime dir: the stand-ins' state and logs, TMPDIR.
+  rp4_also() {
+    # (host.log's polls counted once where they repeat: how many come is timing)
+    local f; for f in mons.json hypr.log wlr.log rc.xml.seen host.log host/clients.json box.log box.got host.log host.got; do
+      [ ! -f "$st/$f" ] || { echo "== $f"; sed "s#$r#R#g" "$st/$f" | uniq; }
+    done
+    echo "== tmpd"; ls -A "$r/tmpd"
+  }
+  rp_rt=$r/rt rp_dir=$r/norepo rp_prep=rp4_fixture rp_also=rp4_also rp_snap=1 rp_env=(-u HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY=rp-none TMPDIR="$r/tmpd")
+  local rp_env4=("${rp_env[@]}")
+  # (no host Hyprland in this runtime dir for a case: moved away, and back for the next)
+  rp4_hostless() { mv "$r/rt/hypr" "$r/rt.nohost"; }
+  rp4_hostback() { [ ! -d "$r/rt.nohost" ] || mv "$r/rt.nohost" "$r/rt/hypr"; }
+  rp4_fixture
+  # --- mode ---
+  parity "mode --json and a mode" mode --json 800x600
+  parity "mode: two" mode 800x600 640x480
+  parity "mode: a scale past 4" mode 800x600,scale=4.5
+  parity "mode: a part not scale=" mode 800x600,x=1
+  parity "mode: not a mode" mode 0x600
+  parity "mode: an unknown option" mode --jsn
+  parity "mode -b with no value" mode -b
+  parity "mode of no box" mode -b nobox
+  parity "mode of a dead box" mode -b dead1
+  parity "mode: a box whose Hyprland does not answer" mode -b plain
+  parity "mode: the main screen" mode -b fk
+  parity "mode --json" mode -b fk --json
+  rp4_scaled() { rp4_mons HEADLESS-2:2560x1440:0:0:1.5; }; rp4_pre=(rp4_scaled)
+  parity "mode: a scaled main screen" mode -b fk
+  parity "mode --json: its scale" mode -b fk --json
+  rp4_away() { echo "HEADLESS-2 1920x1080@60 0x0 1" > "$r/rt/omabox/fk/output.dropped"; rp4_mons HEADLESS-3:800x600; }; rp4_pre=(rp4_away)
+  parity "mode: the main screen away" mode -b fk 800x600
+  rp4_pre=()
+  parity "mode: an interactive box's" mode -b fki 800x600
+  parity "mode: set" mode -b fk 1280x720
+  parity "mode: set with a rate, as box_screen prints it" mode -b fk 1280x720@059.940
+  parity "mode: a rate of 0" mode -b fk 1280x720@0.001
+  rp4_round() { echo "1.5 1.6" > "$st/scale.map"; }; rp4_pre=(rp4_round)
+  parity "mode: a scale Hyprland rounds, said" mode -b fk 2560x1440,scale=1.5
+  rp4_refuse() { echo "error: no such output" > "$st/eval.out"; }; rp4_pre=(rp4_refuse)
+  parity "mode: Hyprland refuses it" mode -b fk 1280x720
+  rp4_refhung() { rp4_refuse; : > "$st/noversion"; }; rp4_pre=(rp4_refhung)
+  parity "mode: refused, and the box does not answer" mode -b fk 1280x720
+  rp4_noop() { : > "$st/eval.noop"; }; rp4_pre=(rp4_noop)
+  parity "mode: the box never takes it (5 s)" mode -b fk 1280x720
+  rp4_next() { rp4_mons HEADLESS-2:1920x1080 HEADLESS-3:800x600:1920:0; printf 'HEADLESS-3 800x600@60 right 1\n' > "$r/rt/omabox/fk/run/omabox.monitors"; }; rp4_pre=(rp4_next)
+  parity "mode: the monitors placed next to it moved, box.json's list" mode -b fk 1280x720
+  rp4_noplace() { rp4_next; echo "error: no" > "$st/place.out"; }; rp4_pre=(rp4_noplace)
+  parity "mode: placing them fails" mode -b fk 1280x720
+  rp4_pre=()
+  rp4_pre=(rp4_hostless)
+  parity "mode host: no host Hyprland in this runtime dir" mode -b fk host,scale=2
+  rp4_pre=()
+  parity "mode host: the host's focused monitor" mode -b fk host
+  rp4_nofocus() { echo '[{"id":0,"name":"DP-1","width":2560,"height":1440,"refreshRate":60.0,"focused":false}]' > "$st/host/monitors.json"; }; rp4_pre=(rp4_nofocus)
+  parity "mode host: none focused" mode -b fk host
+  # (an NVIDIA box's main screen is WAYLAND-1, its monitors WAYLAND-N)
+  rp4_nvbox() { rp4_mons WAYLAND-1:1920x1080; echo "$r/rt/omabox/fkn" > "$st/boxdir"; }
+  rp4_pre=(rp4_nvbox)
+  parity "mode: NVIDIA, labwc's output first" mode -b fkn 1280x720
+  rp4_wlrfail() { echo 3 > "$st/wlr.rc"; }; rp4_pre=(rp4_nvbox rp4_wlrfail)
+  parity "mode: NVIDIA, labwc's output not resized" mode -b fkn 1280x720
+  rp4_noparent() { rm -f "$r/rt/omabox/fkn/run/wayland-9"; }; rp4_pre=(rp4_nvbox rp4_noparent)
+  parity "mode: NVIDIA, no parent display" mode -b fkn 1280x720
+  rp4_pre=()
+  # --- monitor ---
+  parity "monitor: nothing" monitor
+  parity "monitor: an unknown subcommand, the nearest" monitor lst
+  parity "monitor add: no SPEC" monitor add
+  parity "monitor add: two" monitor add 800x600 640x480
+  parity "monitor add: a bad SPEC" monitor add 800x600,left
+  parity "monitor add: nothing in it" monitor add ''
+  parity "monitor add: a position alone" monitor add 800x600,10
+  parity "monitor remove: --name" monitor remove X --name y
+  parity "monitor remove: not a name" monitor remove 'a b'
+  parity "monitor list: a word" monitor list x y
+  parity "monitor --name with no value" monitor add 800x600 --name
+  parity "monitor: --help after a word" monitor add --help
+  parity "monitor list of a dead box" monitor -b dead1 list
+  parity "monitor list: a box whose Hyprland does not answer" monitor -b plain list
+  rp4_three() { rp4_mons HEADLESS-2:1920x1080 HEADLESS-3:800x600:1920:0:1.25; printf 'HEADLESS-3 800x600@60 right 1.25\n' > "$r/rt/omabox/fk/run/omabox.monitors"; printf 'HEADLESS-4 640x480@30 100x200 2\nbad line\n' > "$r/rt/omabox/fk/output.dropped"; }
+  rp4_pre=(rp4_three)
+  parity "monitor list: one made, one dropped" monitor -b fk list
+  parity "monitor list --json" monitor -b fk list --json
+  rp4_zero() { rp4_nvbox; rp4_mons WAYLAND-1:1920x1080 HEADLESS-3:0x0; }; rp4_pre=(rp4_zero)
+  parity "monitor list: a 0x0 one on NVIDIA (zero_note)" monitor -b fkn list
+  rp4_pre=()
+  parity "monitor add: made, placed, recorded" monitor -b fk add 800x600
+  parity "monitor add: scale, below, a name of its own" monitor -b fk add 800x600@30,scale=1.5,below --name side
+  rp4_pre=(rp4_three)
+  parity "monitor add: the next free name, past a dropped one's" monitor -b fk add 1024x768,10,20
+  parity "monitor add --name: one there already" monitor -b fk add 800x600 --name HEADLESS-3
+  parity "monitor add --name: a dropped one's" monitor -b fk add 800x600 --name HEADLESS-4
+  parity "monitor add --name: the main screen's" monitor -b fk add 800x600 --name HEADLESS-2
+  parity "monitor add --name: not a name" monitor -b fk add 800x600 --name 'a/b'
+  rp4_nocreate() { echo "error: nope" > "$st/create.out"; }; rp4_pre=(rp4_nocreate)
+  parity "monitor add: Hyprland does not make it, the record put back" monitor -b fk add 800x600
+  rp4_pre=(rp4_noplace)
+  parity "monitor add: placing it fails, it is removed" monitor -b fk add 800x600
+  rp4_wrongmode() { : > "$st/create.mode"; }; rp4_pre=(rp4_wrongmode)
+  parity "monitor add: it never comes up at its mode (5 s)" monitor -b fk add 800x600
+  rp4_pre=(rp4_round)
+  parity "monitor add: a rounded scale kept as made" monitor -b fk add 2560x1440,scale=1.5
+  rp4_pre=(rp4_three)
+  parity "monitor remove: the main screen" monitor -b fk remove HEADLESS-2
+  parity "monitor remove: a dropped one" monitor -b fk remove HEADLESS-4
+  parity "monitor remove: none such" monitor -b fk remove HEADLESS-9
+  parity "monitor remove: removed" monitor -b fk remove HEADLESS-3
+  rp4_two() { rp4_three; rp4_mons HEADLESS-2:1920x1080 HEADLESS-3:800x600:1920:0 HEADLESS-5:640x480:2720:0; printf 'HEADLESS-3 800x600@60 right 1\nHEADLESS-5 640x480@60 right 1\n' > "$r/rt/omabox/fk/run/omabox.monitors"; }
+  rp4_pre=(rp4_two)
+  parity "monitor remove: the one placed after it moves" monitor -b fk remove HEADLESS-3
+  rp4_noremove() { rp4_three; echo "error: busy" > "$st/remove.out"; }; rp4_pre=(rp4_noremove)
+  parity "monitor remove: Hyprland refuses" monitor -b fk remove HEADLESS-3
+  rp4_stay() { rp4_three; : > "$st/remove.stay"; }; rp4_pre=(rp4_stay)
+  parity "monitor remove: still listed (5 s)" monitor -b fk remove HEADLESS-3
+  rp4_pre=(rp4_nvbox)
+  parity "monitor add: NVIDIA, labwc's rule first" monitor -b fkn add 800x600
+  parity "monitor add: NVIDIA, no --name" monitor -b fkn add 800x600 --name x
+  rp4_norc() { rm -f "$r/rt/omabox/fkn/run/labwc/rc.xml"; }; rp4_pre=(rp4_nvbox rp4_norc)
+  parity "monitor add: NVIDIA, a box from before #165" monitor -b fkn add 800x600
+  rp4_pre=(rp4_nvbox rp4_noparent)
+  parity "monitor add: NVIDIA, labwc not reachable" monitor -b fkn add 800x600
+  rp4_labwcfail() { echo 1 > "$st/labwc.rc"; }; rp4_pre=(rp4_nvbox rp4_labwcfail)
+  parity "monitor add: NVIDIA, labwc not told" monitor -b fkn add 800x600
+  # Interactive: its windows on the stand-in host, laid out as its layout.
+  rp4_imain() { rp4_mons WAYLAND-1:1920x1080; echo fki > "$st/boxdir.name"; echo "$r/rt/omabox/fki" > "$st/boxdir"; : > "$st/interactive"; }
+  rp4_pre=(rp4_imain)
+  parity "monitor add: interactive, no --name" monitor -b fki add 800x600 --name x
+  parity "monitor add: interactive, its window on the host" monitor -b fki add 1280x720
+  parity "monitor list: interactive" monitor -b fki list
+  rp4_iold() { rp4_imain; sed -i 's/"version":"0.15.1+layout+cursor"/"version":"0.15.0"/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_iold)
+  parity "monitor add: interactive, a system aquamarine said" monitor -b fki add 800x600,below
+  rp4_inocursor() { rp4_imain; sed -i 's/+layout+cursor/+layout/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_inocursor)
+  parity "monitor add: interactive, an aquamarine without +cursor" monitor -b fki add 800x600
+  rp4_iunfixed() { rp4_imain; sed -i 's/"fixed":true/"fixed":false/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_iunfixed)
+  parity "monitor add: interactive, aquamarine without #415's fix" monitor -b fki add 800x600
+  rp4_ihave() {
+    rp4_imain; rp4_mons WAYLAND-1:1920x1080 WAYLAND-2:1280x720:1920:0
+    printf 'WAYLAND-2 1280x720@60 right 1\n' > "$r/rt/omabox/fki/run/omabox.monitors"; echo "WAYLAND-2 0xw1" > "$r/rt/omabox/fki/monitor-windows"
+    echo "0xm1 tiled" > "$r/rt/omabox/fki/main-window"
+    echo "[{\"address\":\"0xm1\",\"pid\":$ufk,\"workspace\":{\"id\":9,\"name\":\"9\"},\"floating\":true,\"monitor\":0},{\"address\":\"0xw1\",\"pid\":$ufk,\"workspace\":{\"id\":9,\"name\":\"9\"},\"floating\":true,\"monitor\":0}]" > "$st/host/clients.json"
+  }
+  rp4_pre=(rp4_ihave)
+  parity "monitor remove: interactive, the picture laid out again, the main window tiled back" monitor -b fki remove WAYLAND-2
+  parity "monitor add: interactive, with one already" monitor -b fki add 800x600,below
+  rp4_igone() { rp4_ihave; echo "[{\"address\":\"0xm1\",\"pid\":$ufk,\"workspace\":{\"id\":9,\"name\":\"9\"},\"floating\":true,\"monitor\":0}]" > "$st/host/clients.json"; rp4_mons WAYLAND-1:1920x1080; }
+  rp4_pre=(rp4_igone)
+  parity "monitor add: interactive, a window closed on the desktop pruned first" monitor -b fki add 800x600
+  rp4_ibig() { rp4_imain; echo '[{"id":0,"name":"DP-1","width":800,"height":600,"refreshRate":60.0,"x":0,"y":0,"scale":1.0,"transform":0,"focused":true}]' > "$st/host/monitors.json"; }
+  rp4_pre=(rp4_ibig)
+  parity "monitor add: interactive, a layout too big for the host's monitor" monitor -b fki add 3840x2160
+  rp4_inolayout() { rp4_imain; echo nil > "$st/layout.out"; }; rp4_pre=(rp4_inolayout)
+  parity "monitor add: interactive, a box from before #174" monitor -b fki add 800x600
+  rp4_ihostfail() { rp4_imain; echo "error: no" > "$st/host/eval.out"; }; rp4_pre=(rp4_ihostfail)
+  parity "monitor add: interactive, the host refuses its eval" monitor -b fki add 800x600
+  rp4_pre=(rp4_imain rp4_hostless)
+  parity "monitor add: interactive, no host Hyprland here" monitor -b fki add 800x600
+  # --- output ---
+  parity "output: nothing" output
+  parity "output: a word first" output HEADLESS-2
+  parity "output: drop and back" output drop back
+  parity "output --for: past 60s" output drop --for 61s
+  parity "output --for: no duration" output drop --for x
+  parity "output --cycles: 0" output drop --cycles 0
+  parity "output back --cycles" output back --cycles 2
+  parity "output: two names" output drop A B
+  parity "output: not a name" output drop 'a b'
+  parity "output: --help after a word" output drop --help
+  parity "output of an interactive box" output -b fki drop
+  rp4_pre=()
+  parity "output drop: the main screen, none left" output -b fk drop
+  rp4_pre=(rp4_three)
+  parity "output drop: the main screen, a monitor still on, one dropped before" output -b fk drop
+  parity "output drop: a monitor" output -b fk drop HEADLESS-3
+  parity "output drop: a dropped one again" output -b fk drop HEADLESS-4
+  parity "output drop: none such" output -b fk drop HEADLESS-9
+  parity "output drop: Hyprland's stand-in" output -b fk drop FALLBACK
+  rp4_pre=(rp4_away)
+  parity "output drop: the main screen twice" output -b fk drop
+  parity "output back: the main screen" output -b fk back HEADLESS-2
+  parity "output back: one not dropped" output -b fk back HEADLESS-3
+  rp4_pre=(rp4_three rp4_away)
+  parity "output back: every one, the main screen first" output -b fk back
+  rp4_badrec() { printf 'HEADLESS-6 big 0x0 1\n' >> "$r/rt/omabox/fk/output.dropped"; }; rp4_pre=(rp4_away rp4_badrec)
+  parity "output back: a line omabox did not write" output -b fk back
+  rp4_pre=(rp4_away rp4_nocreate)
+  parity "output back: Hyprland does not make it again" output -b fk back
+  rp4_pre=()
+  parity "output back: nothing dropped, the screen there" output -b fk back
+  parity "output back NAME: nothing dropped" output -b fk back HEADLESS-3
+  rp4_noscreen() { rp4_mons; }; rp4_pre=(rp4_noscreen)
+  parity "output back: nothing dropped, no screen" output -b fk back
+  rp4_pre=(rp4_three)
+  parity "output drop --cycles: gaps in turn" output -b fk drop HEADLESS-3 --cycles 2
+  parity "output drop --for --cycles: the main screen" output -b fk drop --for 50ms --cycles 1
+  rp4_crash() { rp4_three; : > "$st/crash.on.create"; echo "$r/rt/omabox/fka" > "$st/boxdir"; rp4_mons HEADLESS-2:1920x1080; }; rp4_pre=(rp4_crash)
+  parity "output drop --cycles: the shell crashes, its report named" output -b fka drop --for 50ms --cycles 3
+  rp4_shellup() { rp4_mons HEADLESS-2:1920x1080; echo "$r/rt/omabox/fka" > "$st/boxdir"; }; rp4_pre=(rp4_shellup)
+  parity "output drop --cycles: the shell's state each cycle" output -b fka drop --for 50ms --cycles 1
+  rp4_pre=(rp4_nvbox)
+  parity "output drop: NVIDIA (WAYLAND-1)" output -b fkn drop
+  rp4_nvaway() { rp4_nvbox; echo "WAYLAND-1 1920x1080@60 0x0 1" > "$r/rt/omabox/fkn/output.dropped"; rp4_mons; }; rp4_pre=(rp4_nvaway)
+  parity "output back: NVIDIA, a Wayland output again" output -b fkn back
+  rp4_pre=()
+  # --- gpu ---
+  parity "gpu: not a duration" gpu x
+  parity "gpu: an unknown option" gpu --jsn
+  parity "gpu release: no GPU" gpu release
+  parity "gpu release: two" gpu release amd intel
+  parity "gpu release: not a GPU" gpu release vfio
+  parity "gpu release: auto" gpu release auto
+  rp_env=("${rp_env4[@]}" OMABOX_JAIL='{"id":"j1"}'); parity "gpu release: in a jail" gpu release amd; rp_env=("${rp_env4[@]}")
+  parity "gpu release: none on it" gpu release intel
+  parity "gpu of a dead box" gpu -b dead1
+  parity "gpu: its figures (none: no DRM client), its context lines" gpu -b fk 200ms
+  parity "gpu --json" gpu -b fk 200ms --json
+  parity "gpu: an interactive box, no GPU of its own" gpu -b fki 100ms
+  rp4_nv() { { echo "# gpu    pid  type    sm   mem   enc   dec   jpg   ofa   command"; echo "# Idx    #     C/G     %     %     %     %     %     %   name"
+      echo "    0   $lfk     G     5     1     -     -     -     -   sleep"; echo "    0   999999999     G    90     -     -     -     -     -   other"
+      echo "    0   $lfk     G    20     2     3     -     -     -   sleep"; echo "    0   $lfk     G    40     2     -     1     -     -   sleep"; } > "$st/nv.out"; }
+  rp4_pre=(rp4_nvbox rp4_nv)
+  rp_env=("${rp_env4[@]}" PATH="$r/hostbin:$PATH")
+  parity "gpu: NVIDIA, nvidia-smi pmon's own sampling" gpu -b fkn 1500ms
+  parity "gpu --json: NVIDIA" gpu -b fkn 1s --json
+  rp4_nvfail() { : > "$st/nv.fail"; }; rp4_pre=(rp4_nvbox rp4_nvfail)
+  parity "gpu: NVIDIA, nvidia-smi fails" gpu -b fkn 1
+  rp_env=("${rp_env4[@]}")
+  rp4_pre=()
+  # gpu release takes boxes down (`down`): each side its own stand-ins, taken down by it.
+  # (names of this run's own: down removes a box's cache dir by its name; the other boxes out of the
+  # way, the stand-ins' unshares kept to end them after)
+  local n4=$P-rel rd4 sl4 dv4
+  rd4=$(readlink -f /sys/class/drm/renderD128/device/driver); dv4=${rd4##*/}; sl4=$(readlink -f /sys/class/drm/renderD128/device); sl4=${sl4##*/}
+  rp4_rel() {
+    rm -rf "$r/rt/omabox"/{fk,fkn,fki,fka,plain}
+    # (in subshells of their own: a `down` that kills them is no job of this shell's to report)
+    local a b
+    a=$(unshare -Urpf --mount-proc sleep 600 >/dev/null 2>&1 & echo $!)
+    b=$(unshare -Urpf --mount-proc sh -c 'exec 3</dev/dri/renderD128; exec sleep 600' >/dev/null 2>&1 & echo $!)
+    echo "$a $b" >> "$r/rel.pids"
+    local pa="" pb="" k; for k in $(seq 100); do pa=$(pgrep -P "$a") pb=$(pgrep -P "$b") && [ -n "$pa" ] && readlink "/proc/$pb/fd/3" >/dev/null 2>&1 && break; sleep 0.05; done
+    rp4_box "$n4"1 "{\"mode\":\"headless\",\"pidns\":\"$(readlink "/proc/$pa/ns/pid")\",\"render\":{\"driver\":\"$dv4\",\"pci\":\"$sl4\",\"node\":\"/dev/dri/renderD128\"}}" "$pa"
+    rp4_box "$n4"2 "{\"mode\":\"headless\",\"pidns\":\"$(readlink "/proc/$pb/ns/pid")\"}" "$pb"
+  }
+  rp4_pre=(rp4_rel)
+  parity "gpu release KIND: the boxes on it taken down, one by the node it holds" gpu release "$(lib gpu_kind "$dv4" | tr '[:lower:]' '[:upper:]')"
+  parity "gpu release SLOT, written short" gpu release "${sl4#0000:}"
+  # (the box whose up holds its lock dead by then: nothing of a side's own left to compare)
+  rp4_busy() { rm -rf "$r/rt/omabox"/{fk,fkn,fki,fka,plain}; rp4_box "$n4"3 "{\"mode\":\"headless\"}"
+    flock "$r/rt/omabox/.lock-${n4}3" sleep 1 & flock "$r/rt/omabox/.lock-new" sleep 1 & sleep 0.2; }; rp4_pre=(rp4_busy)
+  parity "gpu release: waits for an up in progress (its lock)" gpu release 0000:ff:00.0
+  rp4_pre=()
+  local a4; for a4 in $(tr -s ' ' '\n' < "$r/rel.pids" 2>/dev/null); do pkill -KILL -P "$a4" 2>/dev/null; done
+  true
+  # --- cpu --- (PSS out of the comparison, its value only: a process's share of the pages it maps
+  # with others changes as they come and go on the host, between one side's sample and the other's)
+  rp_sed='s/"pss_kb": [0-9]+/"pss_kb": PSS/g; s/([0-9.]+[MG]) +[0-9.]+[MG]/\1 PSS/'
+  parity "cpu: not a duration" cpu 0
+  parity "cpu --settle: not one" cpu --settle 1x
+  parity "cpu --pid: not a pid" cpu --pid 0
+  parity "cpu --pid and --app" cpu --pid 1 --app x
+  parity "cpu --threads alone" cpu --threads
+  parity "cpu: --help after a word" cpu 1 --help
+  parity "cpu of a dead box" cpu -b dead1
+  parity "cpu: its processes, its context lines" cpu -b fk 300ms
+  parity "cpu --json --settle 0" cpu -b fk 300ms --settle 0 --json
+  parity "cpu --pid in the box's numbering" cpu -b fk 200ms --pid 1
+  parity "cpu --pid as the host numbers it, --threads" cpu -b fk 200ms --pid "$lfk" --threads
+  parity "cpu --pid: none such" cpu -b fk 200ms --pid 999999
+  parity "cpu --app --threads --json" cpu -b fk 200ms --app sleep --threads --json
+  parity "cpu --app: none such in the window" cpu -b fk 200ms --app nope
+  parity "cpu --app: a name past 15 characters" cpu -b fk 200ms --app 'sleeeeeeeeeeeeeep and more'
+  parity "cpu --settle: an interactive box" cpu -b fki 100ms --settle 100ms
+  rp_sed=""
+  # A process whose name is characters past one byte: the kernel keeps 15 bytes of it, and --app's
+  # cut is that too (finding 428: it was 15 characters).
+  local ue; ue=$(printf 'é%.0s' {1..9})
+  nsenter -t "$lfk" -U -m -p --preserve-credentials python3 -c 'import ctypes, sys, time; ctypes.CDLL(None).prctl(15, sys.argv[1].encode(), 0, 0, 0); time.sleep(3600)' "$ue" >/dev/null 2>&1 & local uc=$!
+  local lc=""; for i in $(seq 100); do lc=$(pgrep -P "$uc") && [ "$(head -c 2 "/proc/$lc/comm" 2>/dev/null)" = é ] && break; sleep 0.05; done
+  rp_sed='s/"pss_kb": [0-9]+/"pss_kb": PSS/g; s/([0-9.]+[MG]) +[0-9.]+[MG]/\1 PSS/'
+  rp_check=rp4_found
+  rp4_found() { grep -q '"name": "???????????????"' "$2" || no "$1: the process found by its first 15 bytes (finding 428)" "$(head -c 300 "$2"; head -c 300 "$3")"; }
+  parity "cpu --app: a name of characters past a byte, its first 15 bytes (finding 428)" cpu -b fk 200ms --app "$ue" --json
+  rp_check="" rp_sed="" rp4_pre=()
+  kill -KILL "$lc" "$uc" 2>/dev/null
+  # --- audio ---
+  parity "audio: too short" audio 50ms
+  parity "audio: too long" audio 11m
+  parity "audio: an unknown option" audio --x
+  parity "audio: a box with none" audio -b fk
+  rp4_snd() { local k; { for k in $(seq 12); do echo "frame:$k pts:$k pts_time:0.$k"
+      if [ "$k" -ge 3 ] && [ "$k" -le 6 ]; then echo "lavfi.astats.Overall.Peak_level=-1$k.5"; echo "lavfi.astats.Overall.RMS_level=-2$k.25"
+      else echo "lavfi.astats.Overall.Peak_level=-inf"; echo "lavfi.astats.Overall.RMS_level=-inf"; fi; done; } > "$st/ffmpeg.out"; }
+  rp4_pre=(rp4_snd)
+  parity "audio: a sound, when and how loud" audio -b fka 1s
+  parity "audio --json: every window" audio -b fka 500ms --json
+  rp4_quiet() { local k; for k in $(seq 30); do echo "frame:$k"; echo "lavfi.astats.Overall.Peak_level=-inf"; done > "$st/ffmpeg.out"; }; rp4_pre=(rp4_quiet)
+  parity "audio: silence" audio -b fka
+  rp4_ffail() { echo 1 > "$st/ffmpeg.rc"; echo "pulse: no such source" > "$st/ffmpeg.err"; }; rp4_pre=(rp4_ffail)
+  parity "audio: ffmpeg fails" audio -b fka 200ms
+  rp4_none() { : > "$st/ffmpeg.out"; }; rp4_pre=(rp4_none)
+  parity "audio: no levels" audio -b fka 200ms
+  rp4_pre=()
+  # --- ports --- (the box servers in network namespaces of their own; on the host side, a server of
+  # the test's own on one of their ports, a non-dumpable one on another: pasta's place, unreadable)
+  rp4_ports() {
+    rp4_box srv "{\"mode\":\"headless\",\"pidns\":\"$nsn\",\"net\":\"connected\"}" "$ln"
+    rp4_box srv2 "{\"mode\":\"headless\",\"pidns\":\"$nsn2\",\"net\":\"connected\"}" "$ln2"
+    rp4_box iso "{\"mode\":\"headless\",\"pidns\":\"$ns1\",\"net\":\"isolated\",\"allow\":\"5432,x,6379\"}" "$l1"
+    rp4_box nonet "{\"mode\":\"headless\",\"pidns\":\"$nsn\",\"net\":\"none\"}" "$ln"
+  }
+  cp /usr/bin/python3 "$r/ndpy"; chmod 111 "$r/ndpy"
+  "$r/ndpy" -c 'import socket, time
+ks = []
+for p in ('"$p1, $p3"'):
+    s = socket.socket(); s.bind(("127.0.0.1", p)); s.listen(1); ks.append(s)
+time.sleep(3600)' >/dev/null 2>&1 & local hnd=$!
+  python3 -c 'import socket, time; s = socket.socket(); s.bind(("127.0.0.1", '"$p4"')); s.listen(1); time.sleep(3600)' >/dev/null 2>&1 & local hsv=$!
+  for i in $(seq 50); do [ "$(ss -ltnH "( sport = :$p1 or sport = :$p3 or sport = :$p4 )" | wc -l)" -ge 3 ] && break; sleep 0.1; done
+  check "the host-side servers of the test's own are up (ports $p1, $p3, $p4)" test "$(ss -ltnH "( sport = :$p1 or sport = :$p3 or sport = :$p4 )" | wc -l)" -ge 3
+  rp4_pre=(rp4_ports)
+  parity "ports: a word" ports x
+  parity "ports: one that names a box" ports fk
+  parity "ports: every box's servers and what holds each port here" ports
+  parity "ports --json" ports --json
+  parity "ports -b: one box's" ports -b srv
+  parity "ports -b --json" ports -b srv2 --json
+  parity "ports -b of a dead box" ports -b dead1
+  rp_env=("${rp_env4[@]}" OMABOX_JAIL='{"id":"j1"}')
+  rp4_jailed() { rp4_ports; sed -i 's/{"mode"/{"jail":"j1","mode"/' "$r/rt/omabox/srv2/box.json"; }; rp4_pre=(rp4_jailed)
+  parity "ports in a jail: its box's, another's port taken" ports
+  parity "ports --json in a jail" ports --json
+  rp_env=("${rp_env4[@]}")
+  rp4_pre=()
+  kill "$hnd" "$hsv" 2>/dev/null
+  # --- clip --- (with no agent above it: a process of its own under the user's service manager, a
+  # clean environment, this runtime dir's host and the stand-in clipboard tools on PATH)
+  cat > "$r/rp-orphan" <<'EOF'
+#!/bin/bash
+# rp-orphan CMD...: CMD with no agent among its ancestors (setsid -f: under the session's subreaper,
+# its environment cleared), its output, status and stdin as if run here.
+d=$(mktemp -d)
+setsid -f env -i PATH="$RP4_PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" TMPDIR="${TMPDIR:-}" \
+  OMABOX_BASH="${OMABOX_BASH:-}" ${RP4_EXTRA:-} sh -c '"$@" >"$0/out" 2>"$0/err"; echo $? > "$0/rc"' "$d" "$@" <&0
+for i in $(seq 600); do [ -s "$d/rc" ] && break; sleep 0.05; done
+cat "$d/out"; cat "$d/err" >&2; rc=$(cat "$d/rc" 2>/dev/null || echo 99); rm -rf "$d"; exit "$rc"
+EOF
+  chmod +x "$r/rp-orphan"
+  rp_wrap=(env RP4_PATH="$r/hostbin:/usr/local/bin:/usr/bin" "$r/rp-orphan")
+  rp_sed='s/pid [0-9]+/pid P/g'
+  rp4_cin() { echo 'text/plain;charset=utf-8' > "$st/host.types"; printf 'p4ss w\303\266rd\n' > "$st/host.data"; }
+  rp_env=("${rp_env4[@]}" RP4_EXTRA=CLAUDECODE=1)
+  rp4_pre=(rp4_cin)
+  parity "clip: refused to an agent, before its words" clip --bogus
+  rp_env=("${rp_env4[@]}")
+  parity "clip: an unknown option" clip --bogus
+  parity "clip: a word" clip x
+  parity "clip: one that names a box" clip fki
+  parity "clip -b with no value" clip -b
+  parity "clip: --help after a word" clip --from-box --help
+  rp4_pre=(rp4_hostless)
+  parity "clip: no host Hyprland here" clip -b fki
+  rp4_pre=(rp4_cin)
+  parity "clip: no box up" clip -b nobox
+  parity "clip: a headless box" clip -b fk
+  parity "clip: text into an interactive box" clip -b fki
+  parity "clip: the only interactive box, no -b" clip
+  rp4_csec() { printf 'text/plain;charset=utf-8\nx-kde-passwordManagerHint\n' > "$st/host.types"; printf 'pw' > "$st/host.data"; }; rp4_pre=(rp4_csec)
+  parity "clip: a secret stays marked" clip -b fki
+  rp4_cimg() { printf 'image/jpeg\nimage/png\ntext/html\n' > "$st/host.types"; head -c 3000 /dev/zero | tr '\0' 'x' > "$st/host.data"; }; rp4_pre=(rp4_cimg)
+  parity "clip: an image" clip -b fki
+  rp4_cweb() { printf 'text/html\nimage/webp\n' > "$st/host.types"; printf 'x' > "$st/host.data"; }; rp4_pre=(rp4_cweb)
+  parity "clip: an image by its own type" clip -b fki
+  rp4_cempty() { : > "$st/host.types"; }; rp4_pre=(rp4_cempty)
+  parity "clip: your clipboard empty" clip -b fki
+  rp4_cnone() { :; }; rp4_pre=(rp4_cnone)
+  parity "clip: your clipboard not readable" clip -b fki
+  rp4_cother() { printf 'application/x-omabox-test\ntext/uri-list\n\e[31mx\n' > "$st/host.types"; }; rp4_pre=(rp4_cother)
+  parity "clip: a type neither text nor an image" clip -b fki
+  rp4_cvoid() { rp4_cin; : > "$st/host.data"; }; rp4_pre=(rp4_cvoid)
+  parity "clip: an empty item" clip -b fki
+  rp4_cslow() { rp4_cin; echo 124 > "$st/host.prc"; }; rp4_pre=(rp4_cslow)
+  parity "clip: no answer for the item" clip -b fki
+  rp4_cfail() { rp4_cin; echo 3 > "$st/host.prc"; echo "wl-paste: boom" > "$st/host.perr"; }; rp4_pre=(rp4_cfail)
+  parity "clip: the item not read" clip -b fki
+  rp4_cboxfail() { rp4_cin; echo 1 > "$st/box.crc"; printf 'first\nwl-copy: \e[1mno seat\n' > "$st/box.cerr"; }; rp4_pre=(rp4_cboxfail)
+  parity "clip: the box's wl-copy fails, its words" clip -b fki
+  rp4_bout() { echo 'UTF8_STRING' > "$st/box.types"; printf 'from the box' > "$st/box.data"; }; rp4_pre=(rp4_bout)
+  parity "clip --from-box: text to your clipboard" clip -b fki --from-box
+  rp4_bsec() { printf 'text/plain\nx-kde-passwordManagerHint\n' > "$st/box.types"; printf 'box secret' > "$st/box.data"; }; rp4_pre=(rp4_bsec)
+  parity "clip --from-box: a secret" clip -b fki --from-box
+  rp4_bempty() { : > "$st/box.types"; }; rp4_pre=(rp4_bempty)
+  parity "clip --from-box: its clipboard empty (3)" clip -b fki --from-box
+  rp4_bnone() { :; }; rp4_pre=(rp4_bnone)
+  parity "clip --from-box: its clipboard not readable" clip -b fki --from-box
+  rp4_bother() { echo 'text/html' > "$st/box.types"; }; rp4_pre=(rp4_bother)
+  parity "clip --from-box: no text or image" clip -b fki --from-box
+  rp4_bvoid() { echo 'STRING' > "$st/box.types"; : > "$st/box.data"; }; rp4_pre=(rp4_bvoid)
+  parity "clip --from-box: an empty item" clip -b fki --from-box
+  rp4_bhost() { rp4_bout; echo 1 > "$st/host.crc"; echo "wl-copy: no" > "$st/host.cerr"; }; rp4_pre=(rp4_bhost)
+  parity "clip --from-box: your wl-copy fails" clip -b fki --from-box
+  rp4_two_i() { rp4_cin; cp -a "$r/rt/omabox/fki" "$r/rt/omabox/fki2"; echo '{"address":"0xzz","pid":1}' > "$st/host/active.json"; }; rp4_pre=(rp4_two_i)
+  parity "clip: two interactive boxes, none focused" clip
+  rp4_two_f() { rp4_two_i; echo "{\"address\":\"0xm1\",\"pid\":$ufk}" > "$st/host/active.json"; }; rp4_pre=(rp4_two_f)
+  parity "clip: two, the one whose window has focus" clip
+  rp4_pre=()
+  rp_wrap=() rp_sed=""
+  # Signals: what bash's EXIT traps undo (gpu's and cpu's temporary dir, monitor add's host rule) is
+  # undone; a TERM or HUP ends bash at once, its trap run, an INT once the foreground child is over
+  # (probed), and bash then dies of the signal. A `sleep` on PATH says when the window is open.
+  rp_sig_write "$r/rp-sig"
+  mkdir -p "$r/sigbin"; printf '#!/bin/sh\ntouch %s/sleeping\nexec /usr/bin/sleep "$@"\n' "$st" > "$r/sigbin/sleep"; chmod +x "$r/sigbin/sleep"
+  rp_env=("${rp_env4[@]}" PATH="$r/sigbin:$PATH")
+  rp_sed='s/ line ([0-9]+): [0-9]+ (Hangup|Terminated|Interrupt) / line \1: PID \2 /'
+  local sg; for sg in TERM HUP group-INT; do
+    rp_wrap=("$r/rp-sig" "$sg" "$st/sleeping")
+    parity "gpu and $sg in its window: its temporary dir gone" gpu -b fk 5s
+    parity "cpu and $sg in its window: the same" cpu -b fk 5s
+  done
+  rp4_nowin() { rp4_imain; : > "$st/nohostwin"; }; rp4_pre=(rp4_nowin)
+  rp_wrap=("$r/rp-sig" group-INT "$st/creating")
+  parity "monitor add, interactive, and group-INT while the host rule is on: the rule off" monitor -b fki add 800x600
+  check "...the stand-in host was told so" grep -q 'omabox_monitor_rule:set_enabled(false)' "$st/host.log"
+  rp_wrap=() rp4_pre=() rp_env=("${rp_env4[@]}") rp_sed=""
+  rp_prep="" rp_also="" rp_snap=1 rp_env=() rp_dir=/ rp_rt=""
+  check "the stand-in boxes lived through every case (a dead one fails both halves alike)" kill -0 "$lfk" "$l1" "$ln" "$ln2" "$hsrv"
+  kill -KILL "$lfk" "$l1" "$ln" "$ln2" "$hsrv" 2>/dev/null
+  wait "$ufk" "$u1" "$un" "$un2" "$hsrv" 2>/dev/null
 }
 
 # evidence() puts back a box's idle clock after its reads (#111, finding 180), but not over another
@@ -6381,7 +7217,11 @@ t_mode_lock() {
   flock "$lk" sh -c 'touch "$0"; until [ -e "$1" ] || [ ! -d "${1%/*}" ]; do sleep 0.1; done' "$TMP/ml-held" "$TMP/ml-release" & held=$!
   until_ok 5 test -e "$TMP/ml-held"
   "$CLI" mode -b "$B" 1280x720 > "$TMP/ml-out" 2>&1 & m=$!
-  check "mode waits for the box's lock to record the new size" until_ok 10 pgrep -x flock -P "$m"
+  # (by what it does, not by a flock child: the Rust half takes the lock with flock(2) itself, #324)
+  # shellcheck disable=SC2329 # called through until_ok
+  ml_set() { kill -0 "$m" 2>/dev/null && [ "$(ob hyprctl -b "$B" -j monitors | jq -r '.[0].width')" = 1280 ]; }
+  check "mode sets the new size, then waits for the box's lock to record it" until_ok 10 ml_set
+  check "...still waiting a second on" holds 1 kill -0 "$m"
   check_eq "...box.json keeps the old one meanwhile" "$before" "$(jq -r .size "$XDG_RUNTIME_DIR/omabox/$B/box.json")"
   touch "$TMP/ml-release"; wait "$held" 2>/dev/null
   wait "$m" || rc=$?
@@ -6964,6 +7804,12 @@ t_ports() {
   out=$(ob ports -b "$B")
   check_match "ports -b lists that box only" "^BOX .*"$'\n'"$B +$shared +0\.0\.0\.0 +python3? +one of $A, $B" "$out"
   check_eq "...one line" 2 "$(wc -l <<<"$out")"
+  # The Rust half's parity (#324, wave 4a): these states both ways, the box's rows only (any box up
+  # is read; another's come and go).
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_prep="" rp_also="" rp_snap=0 rp_sed="" rp_wrap=()
+  parity "ports -b (both ways): a box's own, shared and resetting servers" ports -b "$A"
+  parity "ports -b --json (both ways)" ports -b "$B" --json
+  rp_rt="" rp_snap=1
   # Both boxes serve on the shared port, so whichever lost it holds a port pasta cannot bind.
   for b in "$A" "$B"; do
     until later=$(free_port); [ "$later" -gt "$shared" ] && [ "$later" != "$own" ] && [ "$later" != "$local6" ] && [ "$later" != "$hostp" ]; do :; done
@@ -10921,7 +11767,13 @@ t_rust_parity() {
   parity "keys --window: none such" keys -b "$B" --window rp-none a
   parity "click --window" click -b "$B" --window rp-k 20 20
   parity "click --steps --mod" click -b "$B" --steps 3 --mod ctrl --window rp-k 30 30
+  # (each side's pointer from the same place: the bash side's click left it at the point, so the
+  # second side's made no move and no cursor change to ignore, a difference of the order, not of
+  # the halves; seen twice in wave 4a's runs)
+  rp_ptr_home() { rp_live3_prep; OMABOX_BASH=1 ob pointer -b "$B" -- move 5 5 >/dev/null 2>&1; OMABOX_BASH=1 ob wait -b "$B" still --quiet 300ms >/dev/null 2>&1; }
+  rp_prep=rp_ptr_home
   parity "click --wait --json --window" click -b "$B" --wait --json --window rp-k 40 40
+  rp_prep=rp_live3_prep
   parity "click off the screen" click -b "$B" 99999 1
   parity "scroll --window" scroll -b "$B" --window rp-k 20 20 15
   parity "scroll --source wheel: notches" scroll -b "$B" --window rp-k 20 20 20 -7 --source wheel
@@ -10950,6 +11802,59 @@ t_rust_parity() {
   parity "keys-to-box: a headless box" keys-to-box -b "$B" on
   rp_prep="" rp_sed="" rp_also="" rp_env=()
   ob run -b "$B" -- sh -c 'pkill -x foot; true' >/dev/null 2>&1
+  # Wave 4a: mode, monitor, output, gpu, cpu on a real box, each side from the same layout (put back
+  # by bash before it), what it left in box.json and the box's records compared after it. A box of
+  # its own with no shell, checked alive after each group (a crash would make every case after it a
+  # dead box's on both sides).
+  ob down "$B" >/dev/null 2>&1
+  B=$P-rp4
+  up_ok "$B" --no-shell --net isolated || { no "up (wave 4a)" "$UP_OUT"; return; }
+  local mon_d=$XDG_RUNTIME_DIR/omabox/$B
+  rp_lay() {
+    local n; for n in $(OMABOX_BASH=1 ob monitor -b "$B" list --json 2>/dev/null | jq -r '.[] | select(.name != "HEADLESS-2") | .name'); do
+      if [ "$(jq -r --arg n "$n" 'any(.[]; .name == $n and .dropped)' < <(OMABOX_BASH=1 ob monitor -b "$B" list --json))" = true ]; then OMABOX_BASH=1 ob output -b "$B" back "$n" >/dev/null 2>&1; fi
+      OMABOX_BASH=1 ob monitor -b "$B" remove "$n" >/dev/null 2>&1
+    done
+    [ ! -s "$mon_d/output.dropped" ] || OMABOX_BASH=1 ob output -b "$B" back >/dev/null 2>&1
+    [ "$(OMABOX_BASH=1 ob mode -b "$B" 2>/dev/null)" = "HEADLESS-2 1920x1080@60" ] || OMABOX_BASH=1 ob mode -b "$B" 1920x1080 >/dev/null 2>&1
+  }
+  rp_lay_m() { rp_lay; OMABOX_BASH=1 ob monitor -b "$B" add 800x600 >/dev/null 2>&1; }
+  rp_lay_also() {
+    jq -c '{size, scale, monitors}' "$mon_d/box.json"; cat "$mon_d/run/omabox.monitors" "$mon_d/run/omabox.mode" "$mon_d/output.dropped" 2>/dev/null
+    OMABOX_BASH=1 ob hyprctl -b "$B" -j monitors | jq -c '[.[] | {name, width, height, x, y, scale}]'
+  }
+  rp_prep=rp_lay rp_also=rp_lay_also
+  parity "mode (both ways)" mode -b "$B"
+  parity "mode --json (both ways)" mode -b "$B" --json
+  parity "mode WxH (both ways)" mode -b "$B" 1280x720
+  parity "mode WxH@HZ,scale=S (both ways)" mode -b "$B" 2560x1440@30,scale=1.5
+  parity "monitor list (both ways)" monitor -b "$B" list
+  parity "monitor add (both ways)" monitor -b "$B" add 800x600
+  parity "monitor add below, scaled, named (both ways)" monitor -b "$B" add 1024x768,scale=2,below --name rp-side
+  check "...the box lived through them" ob hyprctl -b "$B" version
+  rp_prep=rp_lay_m
+  parity "monitor list --json: one made (both ways)" monitor -b "$B" list --json
+  parity "mode: the monitor placed next to it moves (both ways)" mode -b "$B" 1280x720
+  parity "monitor remove (both ways)" monitor -b "$B" remove HEADLESS-3
+  parity "output drop: a monitor (both ways)" output -b "$B" drop HEADLESS-3
+  parity "output drop --for --cycles (both ways)" output -b "$B" drop HEADLESS-3 --for 100ms --cycles 2
+  check "...the box lived through them" ob hyprctl -b "$B" version
+  rp_prep=rp_lay
+  # (the figures are the window's: their numbers left out, the rows and what they are kept)
+  rp_sed='s/[0-9]+\.[0-9]+(%|M|G)/N\1/g; s/: [0-9]+(\.[0-9]+)?(,?)$/: N\2/'
+  parity "gpu --json (both ways)" gpu -b "$B" 500ms --json
+  parity "cpu --pid 1 (both ways)" cpu -b "$B" 300ms --pid 1
+  parity "cpu --pid 1 --threads --json (both ways)" cpu -b "$B" 300ms --pid 1 --threads --json
+  rp_sed='s/^  [^ ]+ +[0-9]+\.[0-9]%$/  ROW/'
+  parity "gpu (both ways): its rows" gpu -b "$B" 300ms
+  rp_sed=""
+  check "...the box lived through them" ob hyprctl -b "$B" version
+  # (The main screen's drop and back are on the stand-in desktop of t_unit_rust_parity4, and t_output's
+  # on a real box: here the main screen dropped once more, after it was back, crashed this Hyprland
+  # (0.56.2, SIGSEGV), with the shell up and without, the same in bash's half: every case after it
+  # would have been a dead box's on both sides.)
+  rp_prep="" rp_sed="" rp_also=""
+  rp_lay
   rp_rt="" rp_snap=1
   ob down "$B" >/dev/null 2>&1
 }
@@ -12007,6 +12912,17 @@ t_audio() {
   check "...its PipeWire socket its own (${bs:-none}; yours ${hs})" test -n "$bs" -a "$bs" != "$hs"
   check_match "audio: silence while nothing plays" "^silence for 0.5s: nothing played to the speaker of box '$B'$" "$(ob audio -b "$B" 0.5 2>&1)"
   ob run -b "$B" -- ffmpeg -v error -y -f lavfi -i "sine=f=1000:d=1:sample_rate=48000" -ac 2 /home/sbx/tone.wav
+  # The Rust half's parity (#324, wave 4a): silence, and a tone played into each side's window (its
+  # levels and when it sounded are the window's timing: their numbers left out, how many kept).
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_prep="" rp_also="" rp_snap=0 rp_sed="" rp_wrap=()
+  parity "audio (both ways): silence" audio -b "$B" 0.5
+  parity "audio --json (both ways): silence" audio -b "$B" 300ms --json
+  rp_tone() { ob run -b "$B" -d -q -- sh -c 'sleep 0.3; pw-play ~/tone.wav' >/dev/null 2>&1; }
+  rp_prep=rp_tone rp_sed='s/-?[0-9]+\.[0-9]+/N/g'
+  parity "audio (both ways): a tone" audio -b "$B" 2
+  parity "audio --json (both ways): a tone" audio -b "$B" 2 --json
+  rp_prep="" rp_sed="" rp_rt="" rp_snap=1
+  sleep 2.5
   ob run -b "$B" -d -- sh -c 'sleep 0.3; pw-play ~/tone.wav' >/dev/null 2>&1
   local aj; aj=$(ob audio -b "$B" 2 --json 2>&1)
   check "audio 2 --json: a 1 s tone, -40 to -10 dBFS, heard 0.8 to 1.3 s, 20 windows" \
@@ -12432,6 +13348,22 @@ t_monitors_window() {
   "${in[@]}" monitor -b wm remove WAYLAND-4 >/dev/null 2>&1
   check_eq "removing the last monitor: the main window tiles again, filling the workspace" '[{"ws":"9","floating":false,"at":[12,12],"size":[3416,1416]}]' "$(boxwins)"
   check "...its screen its window's size again, at scale 1" until_ok 3 mons 'map("\(.name) \(.mode) \(.scale)") | join("|")' "WAYLAND-1 3416x1416@60 1"
+  # The Rust half's parity (#324, wave 4a): an interactive box's monitor as a window on the stand-in,
+  # added and removed both ways (each side from the main window alone, or with one monitor), the
+  # stand-in's windows and the box's monitors compared after each.
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_snap=0 rp_sed="" rp_wrap=("$CLI" run -b "$S" --pass OMABOX_BASH -- "${GUARDED[@]}")
+  rp_mw_one() { local n; for n in $("${in[@]}" monitor -b wm list --json | jq -r '.[] | select(.name != "WAYLAND-1") | .name'); do
+      OMABOX_BASH=1 "${in[@]}" monitor -b wm remove "$n" >/dev/null 2>&1; done; until_ok 3 mons 'map(.name) | join(" ")' WAYLAND-1 >/dev/null; }
+  rp_mw_two() { rp_mw_one; OMABOX_BASH=1 "${in[@]}" monitor -b wm add 800x600,below >/dev/null 2>&1; }
+  rp_mw_also() { boxwins; "${in[@]}" monitor -b wm list --json; ob lua -b "$S" 'omabox_monitor_rule:is_enabled()'; }
+  rp_also=rp_mw_also rp_prep=rp_mw_one
+  parity "monitor add, interactive (both ways): a window on the stand-in, the picture laid out" monitor -b wm add 1280x720
+  rp_prep=rp_mw_two
+  parity "monitor add, interactive, with one (both ways)" monitor -b wm add 800x600
+  parity "monitor remove, interactive (both ways): the main window tiled again" monitor -b wm remove WAYLAND-2
+  parity "monitor list, interactive (both ways)" monitor -b wm list
+  rp_mw_one
+  rp_prep="" rp_also="" rp_wrap=() rp_rt="" rp_snap=1
   "${in[@]}" monitor -b wm add 800x600 >/dev/null 2>&1
   local main; main=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .floating and .size[0] > 1000) | .address')
   ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$main' })" >/dev/null
@@ -13111,6 +14043,26 @@ t_clip() {
   "${in[@]}" sh -c 'printf "second" | wl-copy'
   check_match "with no -b: the only interactive box" "to box 'ib'$" "$("${in[@]}" "$CLI" clip 2>&1)"
   check_eq "...which has it" second "$("${inb[@]}" wl-paste -n)"
+  # The Rust half's parity (#324, wave 4a): clip both ways in the stand-in (its own run of omabox,
+  # told which half by --pass), the clipboards it changed compared after each side.
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_snap=0 rp_sed="" rp_wrap=("$CLI" run -b "$B" --pass OMABOX_BASH --)
+  rp_cl_also() { "${inb[@]}" sh -c 'wl-paste --list-types | LC_ALL=C sort | xargs; wl-paste -n | md5sum' 2>&1; "${in[@]}" sh -c 'wl-paste --list-types | LC_ALL=C sort | xargs; wl-paste -n | md5sum' 2>&1; }
+  rp_cl_text() { "${in[@]}" sh -c 'printf "rp t\303\251xt\n" | wl-copy'; "${inb[@]}" wl-copy --clear; }
+  rp_cl_sec() { "${in[@]}" sh -c 'printf "rp pw" | wl-copy --sensitive'; "${inb[@]}" wl-copy --clear; }
+  rp_cl_box() { "${inb[@]}" sh -c 'printf "rp from box" | wl-copy'; "${in[@]}" wl-copy --clear; }
+  rp_cl_none() { "${in[@]}" wl-copy --clear; "${inb[@]}" wl-copy --clear; }
+  rp_cl_other() { "${in[@]}" sh -c 'printf x | wl-copy --type application/x-omabox-test'; }
+  rp_also=rp_cl_also rp_prep=rp_cl_text
+  parity "clip (both ways): text into the box" clip -b ib
+  parity "clip (both ways): no -b, the only interactive box" clip
+  rp_prep=rp_cl_sec; parity "clip (both ways): a secret" clip -b ib
+  rp_prep=rp_cl_box; parity "clip --from-box (both ways)" clip --from-box -b ib
+  rp_prep=rp_cl_none; parity "clip (both ways): your clipboard empty" clip -b ib
+  parity "clip --from-box (both ways): the box's empty" clip --from-box -b ib
+  rp_prep=rp_cl_other; parity "clip (both ways): a type it does not take" clip -b ib
+  rp_prep=rp_cl_text rp_sed='s/pid [0-9]+/pid P/g' rp_wrap=("$CLI" run -b "$B" --pass OMABOX_BASH -- env CLAUDECODE=1)
+  parity "clip (both ways): refused to an agent" clip -b ib
+  rp_prep="" rp_also="" rp_sed="" rp_wrap=() rp_rt="" rp_snap=1
   # An image, by its type; a PNG of the stand-in's screen
   "${in[@]}" sh -c 'grim /tmp/clip.png && wl-copy --type image/png < /tmp/clip.png'
   check_match "clip: an image" "handed an image \(image/png, [0-9.]+ [KM]iB\)" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
@@ -16395,7 +17347,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)

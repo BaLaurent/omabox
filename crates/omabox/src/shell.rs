@@ -76,6 +76,24 @@ fn multibyte() -> bool {
     unsafe { __ctype_get_mb_cur_max() > 1 }
 }
 
+/// A line `grep .` matches: one character at least, as the locale reads them (a line of bytes that
+/// start none matches nothing in a multibyte locale).
+pub fn grep_dot(l: &[u8]) -> bool {
+    if l.is_empty() {
+        return false;
+    }
+    if !multibyte() {
+        return true;
+    }
+    mb_chars(l).iter().any(|(c, _)| c.is_some())
+}
+
+/// `printf '%s\n' "$V" | grep .`'s lines, as `$(...)` keeps them: V's lines grep . matches, joined.
+pub fn grep_lines(v: &[u8]) -> Vec<u8> {
+    let kept: Vec<&[u8]> = v.split(|&c| c == b'\n').filter(|l| grep_dot(l)).collect();
+    kept.join(&b'\n')
+}
+
 /// `${#V}`: V's length in characters as bash counts them (a byte that starts none is one).
 pub fn char_count(v: &[u8]) -> usize {
     let (mut i, mut k) = (0, 0);

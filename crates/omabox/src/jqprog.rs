@@ -200,6 +200,9 @@ pub fn by_name(n: &str) -> Option<&'static str> {
         "DESK_TARGET_JQ" => DESK_TARGET_JQ,
         "LAYER_LIST_JQ" => LAYER_LIST_JQ,
         "JQ_MON" => JQ_MON,
+        "CLIP_BOX_COPY" => CLIP_BOX_COPY,
+        "CLIP_BOX_TYPES" => CLIP_BOX_TYPES,
+        "AGENT_MARKS" => AGENT_MARKS,
         _ => return None,
     })
 }
@@ -425,8 +428,442 @@ pub const CALIB_FIT_AWK: &str = r#"
     printf "fit %.3f %.3f %.3f %d %s %d %s\n", s, sx, sy, N, w >= h ? N "x" S : S "x" N, m + 0.5, worst
   }"#;
 
+// --- wave 4a: monitor, output, mode, gpu, cpu, audio, ports, clip (verbatim from bin/omabox) ---
+/// parse_mode host: the user's focused monitor's mode.
+pub const HOST_MODE_JQ: &str = r#"map(select(.focused)) | .[0] // empty |
+      "\(.width)x\(.height)@\(.refreshRate * 100 | round / 100)""#;
+
+/// main_scale_live (after main_screen).
+pub const MAIN_SCALE_JQ: &str = r#" // empty | .scale * 100 | round / 100"#;
+
+/// monitors_record: box.json's list of the monitors.
+pub const MONITORS_RECORD_JQ: &str = r#".monitors = ($m | map(select(.disabled | not)) | map({name, mode: "\(.width)x\(.height)@\(.refreshRate * 100 | round / 100)",
+    scale, x, y}))"#;
+
+/// placed_as: the layout's rows, the main screen by its name.
+pub const PLACED_ROWS_AWK: &str = r#"$1 == "main" { $1 = m } { print $1, $2, $3 }"#;
+
+/// placed_as: each row where Hyprland has it.
+pub const PLACED_AS_JQ: &str = r#"[.[] | "\(.name) \(.x) \(.y)"] as $live
+    | all($rows | split("\n")[] | select(. != ""); . as $r | $live | index($r) != null)"#;
+
+/// monitors_place: the ones that moved.
+pub const PLACE_MOVED_JQ: &str = r#"map(. as $n | select(any($a[]; .name == $n.name and (.x != $n.x or .y != $n.y)))
+    | "\(.name) to \(.x),\(.y)") | join(", ")"#;
+
+/// mode --json (#273, audit J6).
+pub const MODE_JSON_JQ: &str = r#"{name: $n, mode: $m, scale: ($s | tonumber? // 1)}"#;
+
+/// mode: box.json's size and scale.
+pub const MODE_RECORD_JQ: &str = r#".size = $s | .scale = $sc"#;
+
+/// output drop: the monitors still on.
+pub const OUTPUT_LEFT_JQ: &str =
+    r#"map(select((.disabled | not) and .name != "FALLBACK") | .name) | join(", ")"#;
+
+/// output_drop: its line.
+pub const DROP_REC_JQ: &str = r#"first(.[] | select(.name == $n and (.disabled | not))) |
+    "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)""#;
+
+/// output_drop: the monitors there are, Hyprland's stand-in left out.
+pub const MON_NAMES_NOFB_JQ: &str = r#"map(select(.name != "FALLBACK") | .name) | join(", ")"#;
+
+/// A monitor of that name is listed.
+pub const ANY_NAME_JQ: &str = r#"any(.[]; .name == $n)"#;
+
+/// output_back_one: its mode now.
+pub const BACK_LINE_JQ: &str = r#"first(.[] | select(.name == $n and (.disabled | not))) |
+      "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)""#;
+
+/// monitor list: the dropped ones (#163).
+pub const LIST_DROPPED_JQ: &str = r#"[inputs | split(" ") | select(length == 4) | {name: .[0], mode: .[1],
+      scale: (.[3] | tonumber? // .), x: (.[2] | split("x")[0] | tonumber? // 0), y: (.[2] | split("x")[1] | tonumber? // 0), dropped: true}]"#;
+
+/// monitor list --json.
+pub const LIST_JSON_JQ: &str = r#"map(select(.disabled | not)) | map({name, mode: "\(.width)x\(.height)@\(.refreshRate * 100 | round / 100)", scale, x, y,
+        workspace: .activeWorkspace.name}) + $dr"#;
+
+/// monitor list: a line each.
+pub const LIST_TABLE_JQ: &str = r#"(map(select(.disabled | not))[] | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.scale) \(.x),\(.y) \(.activeWorkspace.name)"),
+        ($dr[] | "\(.name) \(.mode) \(.scale) \(.x),\(.y) (dropped)")"#;
+
+/// monitor_add: its line as Hyprland made it.
+pub const ADD_LINE_JQ: &str = r#"first(.[] | select(.name == $n and
+      "\(.width)x\(.height)" == $w)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)""#;
+
+/// monitor_add_window: the box's windows on the host.
+pub const PID_COUNT_JQ: &str = r#"[.[] | select(.pid == $p)] | length"#;
+
+/// desk_windows: a window of that address is there.
+pub const ANY_ADDR_JQ: &str = r#"any(.[]; .address == $a)"#;
+
+/// desk_windows: the main window.
+pub const DESK_MAIN_JQ: &str = r#"first(.[] | select(.pid == $p and .workspace.name == $ws and (.address as $a | $k | index($a) | not))) | "main \(.address)" // empty"#;
+
+/// desk_relay: the main window's monitor.
+pub const WIN_MONITOR_JQ: &str = r#"first(.[] | select(.address == $a)) | .monitor"#;
+
+/// desk_relay: that monitor.
+pub const MON_BY_ID_JQ: &str = r#"first(.[] | select(.id == $id)) // empty"#;
+
+/// desk_relay: the focused monitor.
+pub const MON_FOCUSED_JQ: &str = r#"first(.[] | select(.focused)) // empty"#;
+
+/// desk_relay: the host's outer gap.
+pub const GAPS_JQ: &str = r#"(.css // (.int | tostring)) | split(" ")[0] | tonumber? // empty"#;
+
+/// desk_relay: the monitor's free area (after JQ_MON).
+pub const DESK_AREA_JQ: &str = r#"(.reserved // [0, 0, 0, 0]) as $r |
+    "\(.x) \(.y) \(.x + $r[0] + $g) \(.y + $r[1] + $g) \((lw | floor) - $r[0] - $r[2] - 2 * $g) \((lh | floor) - $r[1] - $r[3] - 2 * $g)""#;
+
+/// desk_relay: the picture's scale as a percentage.
+pub const DESK_PCT_AWK: &str = r#"BEGIN { printf "%d%%", k * 100 + 0.5 }"#;
+
+/// desk_relay: whether the main window floats.
+pub const WIN_FLOATING_JQ: &str = r#"first(.[] | select(.address == $a)) | .floating"#;
+
+/// desk_relay: the main screen's size (after main_screen).
+pub const WH_JQ: &str = r#" | "\(.width)x\(.height)""#;
+
+/// desk_picture: the layout as a picture on the host (#174).
+pub const DESK_PICTURE_AWK: &str = r#"NR == 1 { aw = $1; ah = $2; g = $3; next }
+    NF == 5 { n++; nm[n] = $1; x[n] = $2; y[n] = $3; w[n] = $4; h[n] = $5 }
+    END {
+      if (!n) exit 1
+      minx = x[1]; miny = y[1]; maxx = x[1] + w[1]; maxy = y[1] + h[1]
+      for (i = 1; i <= n; i++) {
+        if (x[i] < minx) minx = x[i]; if (y[i] < miny) miny = y[i]
+        if (x[i] + w[i] > maxx) maxx = x[i] + w[i]; if (y[i] + h[i] > maxy) maxy = y[i] + h[i]
+      }
+      # Each window is GAP further right per left edge left of its own, and down per top edge above.
+      for (i = 1; i <= n; i++) {
+        cx = 1; cy = 1
+        for (j = 1; j < i; j++) { if (x[j] == x[i]) cx = 0; if (y[j] == y[i]) cy = 0 }
+        if (cx) cols++
+        if (cy) rows++
+        rx[i] = 0; ry[i] = 0
+      }
+      for (i = 1; i <= n; i++) {
+        split("", sx); split("", sy)
+        for (j = 1; j <= n; j++) {
+          if (x[j] < x[i] && !(x[j] in sx)) { sx[x[j]] = 1; rx[i]++ }
+          if (y[j] < y[i] && !(y[j] in sy)) { sy[y[j]] = 1; ry[i]++ }
+        }
+      }
+      fx = (aw - g * (cols - 1)) / (maxx - minx); fy = (ah - g * (rows - 1)) / (maxy - miny)
+      f = fx < fy ? fx : fy
+      if (f > 1) f = 1
+      k = int(f * 120 + 1e-6); fitted = 1
+      if (k < 30) { k = 30; fitted = 0 }
+      for (j = k; j >= k - 6 && j >= 30; j--) {
+        ok = 1
+        for (i = 1; i <= n; i++) if ((w[i] * j) % 120 || (h[i] * j) % 120) ok = 0
+        if (ok) { k = j; break }
+      }
+      f = k / 120
+      pw = 0; ph = 0
+      for (i = 1; i <= n; i++) {
+        X[i] = int((x[i] - minx) * f) + g * rx[i]; Y[i] = int((y[i] - miny) * f) + g * ry[i]
+        W[i] = int(w[i] * f + 0.5); H[i] = int(h[i] * f + 0.5)
+        if (X[i] + W[i] > pw) pw = X[i] + W[i]
+        if (Y[i] + H[i] > ph) ph = Y[i] + H[i]
+      }
+      ox = aw > pw ? int((aw - pw) / 2) : 0; oy = ah > ph ? int((ah - ph) / 2) : 0
+      printf "%.5g %d\n", f, fitted
+      for (i = 1; i <= n; i++) print nm[i], X[i] + ox, Y[i] + oy, W[i], H[i]
+    }"#;
+
+/// monitor_add_window: the new window.
+pub const NEW_WINDOW_JQ: &str = r#"first(.[] | select(.pid == $p and (.address as $a | $k | index($a) | not))) | .address // empty"#;
+
+/// monitor_add_window: its line.
+pub const MON_LINE_JQ: &str = r#"first(.[] | select(.name == $n)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)""#;
+
+/// cost_lines: the aquamarine.
+pub const COST_AQ_JQ: &str = r#""aquamarine: " + (if .kind == "private" then "a private build, " else "the system\u0027s, " end)
+    + .version + (if .fixed == false then ", without the fix for nested Wayland outputs" else "" end)
+    + (if .main_checkout then " (" + .main_checkout + ", the main checkout\u0027s)" else "" end)"#;
+
+/// render_line: the box's GPU (finding 237).
+pub const RENDER_LINE_JQ: &str = r#""GPU: \(.driver) \(.pci) (\(.node | sub(".*/"; "")))"
+    + (if .fallback then ", a fallback: gpu \(.wanted // "(the setting)") was not usable"
+      + (if (.why // "") != "" then " (\(.why))" else "" end) else "" end)"#;
+
+/// cost_lines: apps on a software renderer (#204).
+pub const COST_APPS_JQ: &str = r#"select(.software == true) | "apps: \(.renderer | sub(" \\(.*"; "")), in software: their drawing is CPU time, not in the GPU figures""#;
+
+/// gpu's snap: a line per DRM client and engine.
+pub const GPU_SNAP_AWK: &str = r#"
+        FNR == 1 { flush() }
+        /^drm-pdev:/ { pdev = $2 } /^drm-client-id:/ { cid = $2 }
+        /^drm-engine-/ && !/^drm-engine-capacity-/ { e = $1; sub(/^drm-engine-/, "", e); sub(/:$/, "", e); eng[e] = $2 }
+        function flush(  k) { if (cid != "") for (k in eng) print pdev "/" cid, k, eng[k], pid, comm; pdev = cid = ""; delete eng }
+        END { flush() }"#;
+
+/// gpu: the window's figures from two snaps.
+pub const GPU_DIFF_AWK: &str = r#"
+      FNR == NR { a[$1 " " $2] = $3; next }
+      !(($1 " " $2) in seen) { seen[$1 " " $2]; if (!($1 in who)) who[$1] = $5
+        d = $3 - a[$1 " " $2]; if (d < 0) d = 0; t[who[$1]] += d; te[who[$1] " " $2] += d }
+      END { for (n in t) printf "proc %s %.1f\n", n, t[n] / wall * 100
+            for (k in te) printf "engine %s %.1f\n", k, te[k] / wall * 100 }"#;
+
+/// gpu on NVIDIA: whole seconds.
+pub const NV_SECS_AWK: &str = r#"BEGIN { n = int(s); if (n < s) n++; print n }"#;
+
+/// gpu --json.
+pub const GPU_JSON_JQ: &str = r#"
+      [inputs | split(" ")] as $r |
+      { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, aquamarine: $aq, render: $render,
+        source: (if $via == "nvidia" then "nvidia-smi pmon" else "drm fdinfo" end),
+        client_render: $cr,
+        percent: ([$r[] | select(.[0] == "proc") | {(.[1]): (.[2] | tonumber)}] | add // {}),
+        engines: (reduce ($r[] | select(.[0] == "engine")) as $e ({}; .[$e[1]][$e[2]] = ($e[3] | tonumber))) }"#;
+
+/// pmon_figures: NVIDIA's own sampling (finding 295).
+pub const PMON_AWK: &str = r#"
+    BEGIN { while ((getline l < pidcomm) > 0) { split(l, f, " "); comm[f[1]] = f[2] } }
+    /^#/ { if (!ncol) for (i = 2; i <= NF; i++) if ($i != "command") col[++ncol] = $i; next }
+    NF >= 3 && ncol {
+      key = sprintf("%08d %012d", $1, $2)
+      if (prev != "" && key <= prev) sample++
+      prev = key
+      if (sample == 0 || !($2 in comm)) next
+      if (sample > n) n = sample
+      seen[comm[$2]]
+      for (i = 4; i <= ncol && i <= NF; i++) {
+        e = col[i]; if (e == "mem" || $i == "-") continue
+        t[comm[$2]] += $i; te[comm[$2] " " e] += $i
+      }
+    }
+    END { for (c in seen) printf "proc %s %.1f\n", c, (n ? t[c] / n : 0)
+          for (k in te) printf "engine %s %.1f\n", k, te[k] / n }"#;
+
+/// gpu_rows: a row each.
+pub const GPU_ROWS_AWK: &str = r#"{ printf "  %-20s %5.1f%%\n", $2, $3 }"#;
+
+/// cpu --pid: there in the first sample.
+pub const CPU_PID_AWK: &str = r#"!/^[St] / && ($6 == p || $1 == p) { f = 1 } END { exit !f }"#;
+
+/// cpu_report: the samples as cpu's figures.
+pub const CPU_REPORT_AWK: &str = r#"
+    /^S / { t[++k] = $2; next }
+    /^t / { key = $2 " " $3 " " $4 " " $5
+      if (!(key in tfirst)) { tfirst[key] = k; tbase[key] = k == 1 ? $6 : 0; tkeys[++tn] = key; tpar[key] = $2 " " $3 }
+      tlast[key] = k; ttk[key] = $6; tbt[key] = $7; tnm[key] = $8; next }
+    { key = $1 " " $2
+      if (!(key in first)) { first[key] = k; base[key] = k == 1 ? $3 : 0; keys[++n] = key }
+      last[key] = k; tk[key] = $3; rss[key] = $4; pss[key] = $5; bp[key] = $6; nm[key] = $7 }
+    END {
+      wall = k > 1 ? (t[k] - t[1]) / 1e9 : 0
+      sorted = "sort -k1,1rn -k2,2n -k3,3n -k4,4rn -k5,5n | cut -d\" \" -f6-"
+      if (want != "") {   # the box numbering first, as gdb --pid
+        for (i = 1; i <= n; i++) if (first[keys[i]] == 1 && bp[keys[i]] == want) only = keys[i]
+        if (only == "") for (i = 1; i <= n; i++) if (first[keys[i]] == 1 && keys[i] ~ ("^" want " ")) only = keys[i]
+      }
+      for (i = 1; i <= n; i++) {
+        key = keys[i]
+        if (want != "" && key != only) continue
+        if (app != "" && nm[key] != app) continue
+        c = wall > 0 ? (tk[key] - base[key]) / clk / wall * 100 : 0
+        if (c < 0) c = 0
+        started = first[key] > 1; exited = last[key] < k
+        # Sorted on a prefix (cut off): the CPU and order of the process, then its threads by CPU.
+        printf "%.1f %d 0 0 0 p %s %s %s %.1f %d %s %d %d\n", c, i, substr(key, 1, index(key, " ") - 1), bp[key], nm[key], c,
+          rss[key], pss[key], started, exited | sorted
+        for (j = 1; j <= tn; j++) {
+          tq = tkeys[j]; if (tpar[tq] != key) continue
+          d = wall > 0 ? (ttk[tq] - tbase[tq]) / clk / wall * 100 : 0
+          if (d < 0) d = 0
+          split(tq, f, " ")
+          printf "%.1f %d 1 %.1f %d t %s %s %s %.1f %d %d\n", c, i, d, j, f[3], tbt[tq], tnm[tq], d, (tfirst[tq] > 1), (tlast[tq] < k) | sorted
+        }
+        tc += c; tr += rss[key]; if (pss[key] != "-") { tp += pss[key]; np++ }
+      }
+      close(sorted)
+      printf "total %.1f %d %s\n", tc, tr, np ? tp : "-"
+    }"#;
+
+/// cpu --json.
+pub const CPU_JSON_JQ: &str = r#"
+      def n: if . == "-" then null else tonumber end;
+      [inputs | split(" ")] as $r |
+      reduce ($r[] | select(.[0] == "p" or .[0] == "t")) as $x ([];
+        if $x[0] == "p" then
+          . + [{pid: ($x[2] | tonumber), host_pid: ($x[1] | tonumber), name: $x[3], cpu: ($x[4] | tonumber),
+            rss_kb: ($x[5] | tonumber), pss_kb: ($x[6] | n), started: ($x[7] == "1"), exited: ($x[8] == "1")}
+            + (if $threads == 1 then {threads: []} else {} end)]
+        else .[length - 1].threads += [{tid: ($x[2] | tonumber), host_tid: ($x[1] | tonumber), name: $x[3], cpu: ($x[4] | tonumber),
+          started: ($x[5] == "1"), exited: ($x[6] == "1")}] end) as $p |
+      first($r[] | select(.[0] == "total")) as $t |
+      { box: $box, output: ($screen | split(" ")[0]), mode: ($screen | split(" ")[1]), seconds: $secs, settle: $settle,
+        cores: $cores, aquamarine: $aq, render: $render, client_render: $cr,
+        percent: (reduce $p[] as $x ({}; .[$x.name] += $x.cpu) | map_values(. * 10 | round / 10)),
+        processes: $p, total: {cpu: ($t[1] | tonumber), rss_kb: ($t[2] | tonumber), pss_kb: ($t[3] | n)} }"#;
+
+/// cpu_table: cpu's table.
+pub const CPU_TABLE_AWK: &str = r#"function mem(k) { if (k == "-") return "-"; return k >= 1048576 ? sprintf("%.2fG", k / 1048576) : sprintf("%.1fM", k / 1024) }
+    BEGIN { printf "  %-20s %8s %7s %9s %9s\n", "PROCESS", "PID", "CPU", "RSS", "PSS" }
+    $1 == "p" { note = $8 && $9 ? "  (started and exited in the window)" : $8 ? "  (started in the window)" : $9 ? "  (exited in the window)" : ""
+      printf "  %-20s %8s %6.1f%% %9s %9s%s\n", $4, $3, $5, mem($6), mem($7), note; rows++ }
+    $1 == "t" { note = $6 && $7 ? "  (started and exited in the window)" : $6 ? "  (started in the window)" : $7 ? "  (exited in the window)" : ""
+      printf "    %-18s %8s %6.1f%%%s\n", $4, $3, $5, note }
+    $1 == "total" { if (!rows) print "  (no processes)"
+      printf "  %-20s %8s %6.1f%% %9s %9s\n", "total", "", $2, mem($3), mem($4) }"#;
+
+/// audio: ffmpeg's levels as a summary and every window's.
+pub const AUDIO_AWK: &str = r#"
+    function db(v) { return (v ~ /^-?[0-9.]+$/) ? v + 0 : "x" }
+    function js(v) { return v == "x" ? "null" : sprintf("%.1f", v) }
+    /^frame:/ { n++; pk[n] = "x"; rm[n] = "x"; next }
+    /Overall\.Peak_level=/ { sub(/.*=/, ""); pk[n] = db($0); next }
+    /Overall\.RMS_level=/ { sub(/.*=/, ""); rm[n] = db($0); next }
+    END {
+      # -t goes by the pulse input stamps, which let a window or two more through: SECONDS worth.
+      m = int(secs * 10 + 0.999); if (n > m) n = m
+      lv = ""; sp = ""; on = 0; heard = 0; peak = "x"; pw = 0
+      for (i = 1; i <= n; i++) {
+        t = (i - 1) / 10
+        lv = lv (i > 1 ? "," : "") sprintf("{\"t\":%.1f,\"peak_db\":%s,\"rms_db\":%s}", t, js(pk[i]), js(rm[i]))
+        loud = pk[i] != "x" && pk[i] > floor
+        if (loud) { heard++; if (peak == "x" || pk[i] > peak) peak = pk[i]; if (rm[i] != "x") pw += 10 ^ (rm[i] / 10) }
+        if (loud && !on) { from = t; on = 1 }
+        if (!loud && on) { sp = sp (sp == "" ? "" : ",") sprintf("[%.1f,%.1f]", from, t); on = 0 }
+      }
+      if (on) sp = sp (sp == "" ? "" : ",") sprintf("[%.1f,%.1f]", from, n / 10)
+      rms = heard && pw > 0 ? 10 * log(pw / heard) / log(10) : "x"
+      printf "{\"box\":\"%s\",\"seconds\":%s,\"sound\":%s,\"floor_db\":%d,\"sound_s\":%.1f,\"peak_db\":%s,\"rms_db\":%s,\"spans\":[%s],\"levels\":[%s]}\n",
+        box, secs + 0, heard ? "true" : "false", floor, heard / 10, js(peak), js(rms), sp, lv
+    }"#;
+
+/// tcp_listeners: the listening TCP sockets of a /proc net dir.
+pub const TCP_LISTENERS_AWK: &str = r#"function hex(s,  i, n) { n = 0; s = toupper(s)
+         for (i = 1; i <= length(s); i++) n = n * 16 + index("0123456789ABCDEF", substr(s, i, 1)) - 1; return n }
+       function v4(h) { return hex(substr(h, 7, 2)) "." hex(substr(h, 5, 2)) "." hex(substr(h, 3, 2)) "." hex(substr(h, 1, 2)) }
+       FNR > 1 && $4 == "0A" { split($2, a, ":"); h = toupper(a[1])
+         if (length(h) == 8) addr = v4(h)
+         else if (h == "00000000000000000000000000000000") addr = "::"
+         else if (h == "00000000000000000000000001000000") addr = "::1"
+         else if (substr(h, 1, 24) == "0000000000000000FFFF0000") addr = "::ffff:" v4(substr(h, 25, 8))
+         else addr = h
+         print hex(a[2]), addr, $8, $10 }"#;
+
+/// ports --json: a port each.
+pub const PORTS_JSON_JQ: &str = r#"
+        { box: $box, port: $port, addresses: ($addr | split(",")), process: $proc,
+          host: ({ state: $state }
+            + (if $state == "this" or $state == "this-resets" or $state == "shared" then { boxes: ($boxes | split(" ")) } else {} end)
+            + (if $state == "shared" then { resets: ($resets | split(" ")) } else {} end)
+            + (if $state == "host" and $who != "" then { pid: ($who | tonumber), process: $hcomm } else {} end)
+            + (if $state == "other-user" and $who != "" then { uid: ($who | tonumber) } else {} end)) }"#;
+
+/// clip: the item onto the box's clipboard (wl-copy forks to serve it, in a session of its own).
+pub const CLIP_BOX_COPY: &str = r#"e=$(/usr/bin/mktemp) || exit 1
+/usr/bin/timeout 10 /usr/bin/setsid -w /usr/bin/wl-copy --type "$1" ${2:+"$2"} >/dev/null 2>"$e"; rc=$?
+/usr/bin/tail -n 1 "$e" >&2; /usr/bin/rm -f "$e"; exit $rc"#;
+
+/// clip --from-box: the box's clipboard's types (3: nothing copied).
+pub const CLIP_BOX_TYPES: &str = r#"o=$(/usr/bin/timeout 10 /usr/bin/wl-paste --list-types 2>&1) && { printf "%s\n" "$o"; exit 0; }
+case $o in *"Nothing is copied"*) exit 3 ;; esac; exit 1"#;
+
+/// placed_as: the main screen's name (after main_screen).
+pub const PLACED_MAIN_JQ: &str = r#" | .name // empty"#;
+/// output_drop: the main screen's name (after main_screen).
+pub const DROP_MAIN_JQ: &str = r#".name // empty"#;
+/// desk_windows: the known monitors' addresses.
+pub const DESK_KNOWN_JQ: &str = r#"select(. != "") | split(" ")[1]"#;
+/// desk_prune: the monitors' names as an ERE's alternatives.
+pub const NAMES_RE_JQ: &str = r#"map(.name) | join("|")"#;
+/// desk_relay: the host's border size.
+pub const BW_JQ: &str = r#".int // empty"#;
+/// desk_relay: the host monitor's sides (after JQ_MON).
+pub const LW_FLOOR_JQ: &str = r#"lw | floor"#;
+pub const LH_FLOOR_JQ: &str = r#"lh | floor"#;
+/// monitor_add_window: the box's aquamarine (findings 238, 239).
+pub const AQ_VERSION_JQ: &str = r#".aquamarine.version // "?""#;
+/// gpu release: a box's GPU, "DRIVER SLOT".
+pub const RENDER_PAIR_JQ: &str = r#".render | "\(.driver) \(.pci)""#;
+/// audio's words (bash's program has the quotes around the box's name as '"'"'): its parts.
+pub const AUDIO_SAY_A: &str = r#"if .sound then
+      "sound for \(.sound_s)s of \(.seconds)s: peak \(.peak_db) dBFS, RMS \(.rms_db) dBFS while it sounded; at "
+      + ([.spans[:10][] | "\(.[0])-\(.[1])s"] | join(", ")) + (if (.spans | length) > 10 then ", ..." else "" end)
+    else "silence for \(.seconds)s: nothing played to the speaker of box "#;
+pub const AUDIO_SAY_B: &str = r#"\(.box)"#;
+pub const AUDIO_SAY_C: &str = r#"" end"#;
+pub const AUDIO_SAY_JQ: &str = concat!(
+    r#"if .sound then
+      "sound for \(.sound_s)s of \(.seconds)s: peak \(.peak_db) dBFS, RMS \(.rms_db) dBFS while it sounded; at "
+      + ([.spans[:10][] | "\(.[0])-\(.[1])s"] | join(", ")) + (if (.spans | length) > 10 then ", ..." else "" end)
+    else "silence for \(.seconds)s: nothing played to the speaker of box "#,
+    "'",
+    r#"\(.box)"#,
+    "'",
+    r#"" end"#
+);
+/// agent_caller (AGENT_MARKS): what gives an agent's process away, in its environment.
+pub const AGENT_MARKS: &str = r#"^(CLAUDECODE|CLAUDE_CODE_SESSION_ID|CLAUDE_PID|CODEX_THREAD_ID|CODEX_SANDBOX|OPENCODE|AI_AGENT|OMABOX_AGENT_PID)=|^OMABOX_SESSION=.|^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE)=omabox-guard$|^PATH=([^:]*:)*[^:]*/share/guard/?(:|$)"#;
+
 /// Every inline program (and the awk ones), for `_rust-jq --inline` (the rest are a path, .kind, .[0], length).
-pub const INLINE: [&str; 47] = [
+pub const INLINE: [&str; 106] = [
+    HOST_MODE_JQ,
+    MAIN_SCALE_JQ,
+    MONITORS_RECORD_JQ,
+    PLACED_ROWS_AWK,
+    PLACED_AS_JQ,
+    PLACE_MOVED_JQ,
+    MODE_JSON_JQ,
+    MODE_RECORD_JQ,
+    OUTPUT_LEFT_JQ,
+    DROP_REC_JQ,
+    MON_NAMES_NOFB_JQ,
+    ANY_NAME_JQ,
+    BACK_LINE_JQ,
+    LIST_DROPPED_JQ,
+    LIST_JSON_JQ,
+    LIST_TABLE_JQ,
+    ADD_LINE_JQ,
+    PID_COUNT_JQ,
+    ANY_ADDR_JQ,
+    DESK_MAIN_JQ,
+    WIN_MONITOR_JQ,
+    MON_BY_ID_JQ,
+    MON_FOCUSED_JQ,
+    GAPS_JQ,
+    DESK_AREA_JQ,
+    DESK_PCT_AWK,
+    WIN_FLOATING_JQ,
+    WH_JQ,
+    DESK_PICTURE_AWK,
+    NEW_WINDOW_JQ,
+    MON_LINE_JQ,
+    COST_AQ_JQ,
+    RENDER_LINE_JQ,
+    COST_APPS_JQ,
+    GPU_SNAP_AWK,
+    GPU_DIFF_AWK,
+    NV_SECS_AWK,
+    GPU_JSON_JQ,
+    PMON_AWK,
+    GPU_ROWS_AWK,
+    CPU_PID_AWK,
+    CPU_REPORT_AWK,
+    CPU_JSON_JQ,
+    CPU_TABLE_AWK,
+    AUDIO_AWK,
+    TCP_LISTENERS_AWK,
+    PORTS_JSON_JQ,
+    PLACED_MAIN_JQ,
+    DROP_MAIN_JQ,
+    DESK_KNOWN_JQ,
+    NAMES_RE_JQ,
+    BW_JQ,
+    LW_FLOOR_JQ,
+    LH_FLOOR_JQ,
+    AQ_VERSION_JQ,
+    RENDER_PAIR_JQ,
+    AUDIO_SAY_A,
+    AUDIO_SAY_B,
+    AUDIO_SAY_C,
     CALIB_MARKS_AWK,
     CALIB_FIT_AWK,
     ZERO_NOTE_JQ,

@@ -1,18 +1,26 @@
 //! The commands ported from bin/omabox, one module each.
 
+pub mod audio;
 pub mod calibrate;
 pub mod click;
+pub mod clip;
+pub mod cpu;
 pub mod drag;
 pub mod env;
 pub mod events;
+pub mod gpu;
 pub mod hyprctl;
 pub mod keys;
 pub mod keys_to_box;
 pub mod log;
 pub mod lua;
+pub mod mode;
+pub mod monitor;
+pub mod output;
 pub mod path;
 pub mod pixel;
 pub mod pointer;
+pub mod ports;
 pub mod run;
 pub mod shot;
 pub mod tree;
