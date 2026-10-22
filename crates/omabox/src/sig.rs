@@ -76,7 +76,8 @@ pub fn foreground<T>(f: impl FnOnce() -> T) -> T {
         return f();
     }
     // Nothing new starts once a trap is on its way, as bash starts nothing after its trap: a TERM
-    // between two steps of monitor add must not see the host rule turned off and the window made.
+    // between two steps of monitor add must not see the box's output made after the trap's remove
+    // (a monitor no one listed).
     park_while_stopping();
     let r = {
         let _g = FOREGROUND

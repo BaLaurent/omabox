@@ -6992,27 +6992,33 @@ t_unit_cli() {
   check "confirm-close calls the box's own hyprctl and jq (#113: a stub must not end the box)" \
     grep -qE '^hyprctl\(\) \{ /usr/bin/hyprctl .*$' "$ROOT/share/confirm-close.sh"
   check "...and jq" grep -qE '^jq\(\) \{ /usr/bin/jq ' "$ROOT/share/confirm-close.sh"
-  # (finding 429) Its new window never unnamed, which the box could name after a class token another
-  # `monitor add` left: the closed window's name, else the first WAYLAND-N with no token that the box
-  # takes. Run with a stub of the box's hyprctl (by path, as the script calls it).
+  # (finding 429) Its new window never under a name with a class token `monitor add` left (one an add
+  # still in flight may need: kept), nor unnamed, which the box could name after one: the closed
+  # window's name when it has none, else the first WAYLAND-N with none that the box takes. Run with a
+  # stub of the box's hyprctl (by path, as the script calls it); $CCX/ok names the output it makes.
   local ccx=$TMP/$P-ccx; mkdir -p "$ccx/rt"
   cat > "$ccx/hyprctl" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$CCX/log"
 [ ! -e "$CCX/down" ] || exit 1
 case "$*" in
-  "output create wayland WAYLAND-4") echo ok ;;
+  "output create wayland $(cat "$CCX/ok")") echo ok ;;
   "output create wayland"*) echo "Name already taken" ;;
   "-j monitors") echo '[{"name":"WAYLAND-4"}]' ;;
 esac
 EOF
   chmod +x "$ccx/hyprctl"
   sed "s|/usr/bin/hyprctl|$ccx/hyprctl|" "$ROOT/share/confirm-close.sh" > "$ccx/cc.sh"
-  echo omabox-0123456789abcdef > "$ccx/rt/omabox.appid.WAYLAND-1"; echo omabox-fedcba9876543210 > "$ccx/rt/omabox.appid.WAYLAND-3"
+  echo WAYLAND-1 > "$ccx/ok"; echo omabox-fedcba9876543210 > "$ccx/rt/omabox.appid.WAYLAND-3"
   CCX=$ccx XDG_RUNTIME_DIR=$ccx/rt OMABOX_SHELL=0 bash "$ccx/cc.sh" WAYLAND-1 >/dev/null 2>&1
-  check_eq "confirm-close: its window under the closed one's name, else the first WAYLAND-N with no class token (finding 429)" \
-    "WAYLAND-1 WAYLAND-2 WAYLAND-4" "$(grep '^output create wayland' "$ccx/log" | awk '{print $4 "" ($4 == "" ? "(unnamed)" : "")}' | paste -sd ' ')"
-  check "...the closed one's token gone" test ! -e "$ccx/rt/omabox.appid.WAYLAND-1"
+  check_eq "confirm-close: its window under the closed one's name (#292)" \
+    "WAYLAND-1" "$(grep '^output create wayland' "$ccx/log" | awk '{print $4 "" ($4 == "" ? "(unnamed)" : "")}' | paste -sd ' ')"
+  rm -f "$ccx/log"; echo WAYLAND-4 > "$ccx/ok"
+  echo omabox-0123456789abcdef > "$ccx/rt/omabox.appid.WAYLAND-1"
+  CCX=$ccx XDG_RUNTIME_DIR=$ccx/rt OMABOX_SHELL=0 bash "$ccx/cc.sh" WAYLAND-1 >/dev/null 2>&1
+  check_eq "...a class token left for that name: the first WAYLAND-N with none that the box takes instead, never unnamed (finding 429)" \
+    "WAYLAND-2 WAYLAND-4" "$(grep '^output create wayland' "$ccx/log" | awk '{print $4 "" ($4 == "" ? "(unnamed)" : "")}' | paste -sd ' ')"
+  check "...the closed one's token kept (an add in flight may need it)" test -e "$ccx/rt/omabox.appid.WAYLAND-1"
   check "...another add's kept" test -e "$ccx/rt/omabox.appid.WAYLAND-3"
   check "...and the box kept" test ! -e "$ccx/rt/omabox.closed"
   rm -f "$ccx/log"; : > "$ccx/down"
@@ -14343,14 +14349,8 @@ t_guard() {
     "${cch[@]}" dispatch 'hl.dsp.focus({ workspace = "2" })' >/dev/null
     "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
     until_ok 10 ccwins 2
-    # (a class token `monitor add` left for that window's name, an add cut short: finding 429)
-    local ccd; ccd=$("${in[@]}" "$CLI" path cc)
-    "${in[@]}" sh -c "echo omabox-0123456789abcdef > '$ccd/run/omabox.appid.WAYLAND-1'"
     "${cl[@]}" >/dev/null
     check "confirm-close: the box stays after a close" holds 2 is cc up
-    check_eq "...with a new window, of class aquamarine even with a class token left for its name (finding 429)" 1 \
-      "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
-    check_fails "...the token gone" "${in[@]}" test -e "$ccd/run/omabox.appid.WAYLAND-1"
     check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
     check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
     check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
@@ -14361,8 +14361,17 @@ t_guard() {
     check "...and a second close ends it, cleared: no dead box left (finding 71)" until_ok 8 gone cc
     "${in[@]}" "$CLI" up lv --interactive --no-shell >/dev/null 2>&1
     "${in[@]}" "$CLI" config confirm-close on >/dev/null
+    # (a class token `monitor add` left for that window's name: an add still in flight, or one cut
+    # short; finding 429)
+    local lvd; lvd=$("${in[@]}" "$CLI" path lv)
+    "${in[@]}" sh -c "echo omabox-0123456789abcdef > '$lvd/run/omabox.appid.WAYLAND-1'"
     "${cl[@]}" >/dev/null
     check "config confirm-close on reaches a running box" holds 2 is lv up
+    check_eq "...its new window of class aquamarine with a class token left for the closed one's name (finding 429)" 1 \
+      "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+    check_eq "...under another name, one with no token" WAYLAND-2 \
+      "$("${in[@]}" "$CLI" hyprctl -b lv -j monitors | jq -r '[.[] | select(.name != "FALLBACK") | .name] | join(" ")')"
+    check "...the token kept (an add in flight may need it)" "${in[@]}" test -e "$lvd/run/omabox.appid.WAYLAND-1"
     "${in[@]}" "$CLI" config confirm-close off >/dev/null
     "${cl[@]}" >/dev/null
     check "...and off again: one close ends it, cleared" until_ok 8 gone lv

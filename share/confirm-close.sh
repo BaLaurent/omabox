@@ -17,19 +17,20 @@ keep() { rm -f "$XDG_RUNTIME_DIR/omabox.close-asking"; exit 0; }
 
 # A host that cannot give a new window (the session is ending): nothing to ask on, so end. The new
 # window under the closed one's name ($1, from hyprland.lua), so it keeps that window's workspaces
-# (#292: Omarchy 4.5 numbers them by the output's name). A class token `monitor add` left for that
-# name (an add cut short) goes first: this window is a plain aquamarine one, for the user's workspace
-# (finding 429). If that name is refused (hyprctl exits 0 either way: "Name already taken" instead of
-# "ok"), the first WAYLAND-N the box takes that has no token: never unnamed, which the box could
-# give a name with another add's token left, its rule sending this window to the box's workspace.
-# Other names' tokens stay (an add in flight may need its own).
-case ${1:-} in ""|*/*) ;; *) rm -f "$XDG_RUNTIME_DIR/omabox.appid.$1" ;; esac
-names=(); [ -z "${1:-}" ] || names=("$1")
+# (#292: Omarchy 4.5 numbers them by the output's name), unless that name has a class token
+# `monitor add` left (finding 429): never deleted here, as it may be an add's still in flight (one
+# that picked this name after the window closed, its token written, its create not yet sent), whose
+# window would then be a plain aquamarine one, on the user's workspace with focus. This window is
+# meant for the user's workspace, so it takes a name with no token: $1, else the first WAYLAND-N the
+# box takes that has none, each looked for right before its create. Never unnamed, which the box could
+# give a name with a token left, its rule sending this window to the box's workspace. A refused name
+# (hyprctl exits 0 either way: "Name already taken" instead of "ok") goes to the next.
+names=(); [ -z "${1:-}" ] || [[ $1 == */* ]] || names=("$1")
 for i in $(seq 1 32); do [ "WAYLAND-$i" = "${1:-}" ] || names+=("WAYLAND-$i"); done
 made=0
 for n in "${names[@]}"; do
-  # (a token looked for right before its create, as late as can be: an add may have just written it)
-  [ "$n" = "${1:-}" ] || [ ! -e "$XDG_RUNTIME_DIR/omabox.appid.$n" ] || continue
+  # (as late as can be: an add may have just written it)
+  [ ! -e "$XDG_RUNTIME_DIR/omabox.appid.$n" ] || continue
   # (hyprctl failing: the box's Hyprland is not answering)
   res=$(hyprctl output create wayland "$n" 2>/dev/null) || break
   [ "$res" != ok ] || { made=1; break; }

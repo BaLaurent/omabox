@@ -953,8 +953,11 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
       and the resize watch follows whichever exists.
     - Since finding 429, a window `monitor add` makes is no longer a plain `aquamarine` one: it has
       a class of its own (`aquamarine-omabox-TOKEN`), whose host rule keeps it silent on this
-      workspace and is never turned off. confirm-close's window stays plain `aquamarine` (it removes
-      a token left for its name first), so it still lands on the active workspace with focus.
+      workspace and is never turned off. confirm-close's window stays plain `aquamarine` (it takes a
+      name with no token left: the closed window's, else the first free WAYLAND-N; a token is never
+      deleted there, as an add in flight may need it), so it still lands on the active workspace with
+      focus. Under another name than the closed window's it keeps none of that window's workspaces
+      (finding 416: a new block of ten).
     Checked in a stand-in host (a box, finding 26): windows on 3 and on the scratchpad, no focus;
     keep, a second close, the menu's "Shut down", `--no-shell`, confirm off, the live change,
     resize after the new window; the widget's section in a box (toggle and dropdown write the
@@ -8932,14 +8935,27 @@ from them.
       ... start a new box with this omabox"). An add that sees no window in 5 s now also takes its
       line out of `omabox.monitors` (it was left there; the trap removes the output).
     - share/passthrough.lua v5 takes `aquamarine-omabox-*` windows for box windows (toggle,
-      keys-to-box, border); confirm-close removes `omabox.appid.NAME` before it opens its window again
-      under NAME (finding 70: that one is meant for the user's workspace, focused). When that name is
-      refused it no longer asks for an unnamed output, which the box could name after a token another
-      add left (one whose create got no clear answer and whose removes failed), its rule then sending
-      the window meant for the user to the box's workspace: it tries WAYLAND-1 to 32 in turn, skipping
-      each that has a token (looked for right before its create), and leaves other names' tokens (an
-      add in flight may need its own). An output an agent makes in the box under such a name can
-      still take a stale token: left as is (both removes must have failed first).
+      keys-to-box, border). confirm-close (finding 70) opens its window again under a name with no
+      token, as that window is meant for the user's workspace, focused: the closed window's name when
+      it has none, else WAYLAND-1 to 32 in turn, skipping each that has one (looked for right before
+      its create); never an unnamed output, which the box could name after a token another add left
+      (one whose create got no clear answer and whose removes failed), its rule then sending the
+      window to the box's workspace. It deletes no token. It first removed the one left for the
+      closed window's name (third review of this fix): that token can be an add's still in flight (the
+      user closes the box's last monitor WAYLAND-k while an add, after desk_prune dropped WAYLAND-k,
+      picked that name and wrote its token), and a removal landing between the add's token and its
+      create made the add's window plain `aquamarine`, on the user's workspace with focus. Left: the
+      check and the create are two steps, so an add can write its token for that name between them;
+      the box then gives confirm-close's window the add's class and rule (the box's workspace, no
+      focus: the box keeps a window, out of the user's sight) and refuses the add's create ("Name
+      already taken"). A stale token (an add SIGKILLed after writing it, or one whose removes all
+      failed) needs no other cleanup: a name's token is read only by a create of that name, the next
+      add of that name writes its own over it, `monitor remove`, an add's success and its trap's
+      answered remove delete it, and it goes with the box's runtime dir. Until then confirm-close
+      passes that name over: its window then keeps none of the closed one's workspaces (finding 416:
+      a new block of ten). Adds name WAYLAND-2 and up, so the main window's WAYLAND-1 has a token only
+      if an agent wrote one. An output an agent makes in the box under a name with a stale token
+      still takes it: left as is (both removes must have failed first).
     - Contract changes: monitor windows' class is no longer exactly `aquamarine` (a user's rule on
       `^aquamarine$` no longer touches them; `^aquamarine` matches both), they keep `render_unfocused`
       (drawn while hidden) while their rule lasts, adds on one box take turns, and an aquamarine
@@ -8957,7 +8973,8 @@ from them.
     monitor's window has its own `aquamarine-omabox-*` class and lands on 9, floating, the stand-in's
     focus and workspace unchanged (so the rule applies by `initial_class` at the first map), for `up
     --interactive --monitor`, `monitor add`, and two adds on one box with one on another at once;
-    confirm-close with a token left for its name reopens a plain `aquamarine` window. Read in source,
+    confirm-close with a token left for its name reopens a plain `aquamarine` window under another
+    name, the token kept. Read in source,
     not seen: hyprctl's 5 s give-up (the stand-in models it), keys-to-box inside a monitor's window
     (passthrough v5; the suite's keys-to-box checks use the main window). `up --interactive
     --monitor`'s refusal without +appid is checked from `main` with aq_resolve answering for a private
@@ -8978,9 +8995,10 @@ from them.
     words), t_monitors_window (each monitor's window its own class on a
     stand-in host; two adds on one box and one on another at once: on 9, floating, focus unchanged; a real `up`
     leaves `omabox.appid-files`),
-    t_guard (confirm-close with a token left for the window's name: plain aquamarine), t_unit_cli
-    (confirm-close against a stub hyprctl: the closed window's name, then the first WAYLAND-N with no
-    token, never unnamed; one try and the box ended when Hyprland does not answer), t_unit_refusals
+    t_guard (confirm-close with a token left for the window's name: plain aquamarine, WAYLAND-2, the
+    token kept), t_unit_cli (confirm-close against a stub hyprctl: the closed window's name when it has
+    no token, else the first WAYLAND-N with none, never unnamed, every token kept; one try and the box
+    ended when Hyprland does not answer), t_unit_refusals
     (`up -i --monitor` on a private build without +appid).
 
 430. **`cpu --app -n` listed every process** (2026-10-22, #324 wave 4a's review). cpu_tame wrote the

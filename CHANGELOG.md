@@ -24,9 +24,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   box's Hyprland took more than 5 s to make it, when `monitor add` was interrupted (Ctrl-C, TERM,
   HUP) while the box made it, or when two adds ran at once; and an add cut short could leave its host
   rule on, sending every later aquamarine window (a nested Hyprland's too) to the box's workspace.
-  The window now has its own class and rule from the start, so it always opens on the box's
-  workspace without focus, whatever happens to the add. An add cut short removes its half-made
-  monitor, and a second Ctrl-C ends that at once
+  The window now has its own class and rule from the start, so it opens on the box's workspace
+  without focus whatever happens to the add, unless your Hyprland reloads its config between the
+  rule and the window's first map (a theme change, a saved config: the reload drops the rule). An
+  add cut short removes its half-made monitor, and a second Ctrl-C ends that at once
   ([#349](https://github.com/diogochaves/omabox/issues/349)).
 
 ## 1.0.1 — unreleased

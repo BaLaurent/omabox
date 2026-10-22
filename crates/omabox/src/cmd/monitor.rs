@@ -127,7 +127,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // Each monitor's window a class of its own, its rule's alone (finding 429): omabox's build
         // only.
         if act == b"add" {
-            let aq = Args::new(&["-r", r#".aquamarine.version // "?""#])
+            let aq = Args::new(&["-r", crate::jqprog::AQ_VERSION_JQ])
                 .arg(cat!(ctx.d, "/box.json"))
                 .run_file(jq::Err::Inherit)
                 .text();
