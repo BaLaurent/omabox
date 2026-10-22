@@ -8861,16 +8861,23 @@ from them.
     Tests: t_unit_rust_parity4 (a stand-in process named so, found by `--app` both ways).
 
 429. **A signal during `monitor add` on an interactive box could open its window on the user's
-    workspace, focused** (2026-10-22, #324 wave 4a's review). monitor_add_window turns a host rule on
-    (the box's new window: workspace, silent, no focus) and its EXIT trap turns it off however it
-    ends. A Ctrl-C or TERM to it once the box had been told to make the output (`output create
-    wayland`) ran the trap at once: the rule went off, and the window the box made anyway a moment
-    later opened on the user's active workspace and took focus (finding 70). **Fix**: from the create
-    on (MON_CREATING) the trap first waits for that window, 5 s at most, then turns the rule off; in
-    the Rust half too, which also starts no foreground step once a trap is on its way (bash starts
-    nothing after its trap). Tests: t_unit_rust_parity4 (a TERM to the group while the stand-in box
-    makes its window late: the stand-in host has the window before the rule goes off, both ways; a
-    TERM while the rule is being turned on: no create follows).
+    workspace, focused, or leave the host rule on** (2026-10-22, #324 wave 4a's reviews).
+    monitor_add_window turns a host rule on (the box's new window: workspace, silent, no focus) and
+    its EXIT trap turns it off however it ends. A Ctrl-C or TERM once the box had been told to make the
+    output (`output create wayland`) ran the trap at once: the rule went off, and the window the box
+    made anyway opened on the user's active workspace and took focus (finding 70). **Fix**: from the
+    create on (MON_CREATING) the trap first removes that output (`output remove NAME`, HYPR_LIMIT at
+    most): the box handles its IPC in order, so its answer means the create was handled and its window
+    is gone; a box that cannot answer makes none; then the rule goes off. A first fix waited 5 s for
+    the window instead, less than the create's own 10 s, and a second signal during that wait ended the
+    trap with the rule left on (every later aquamarine window, a nested Hyprland's too, silent on the
+    box's workspace): the trap now ignores INT, TERM and HUP (bash still dies of the first one after
+    it). A rule-on call cut short may land after the rule-off: sent again half a second on. An add
+    that saw no window in 5 s now removes its output too. The Rust half alike, and it starts nothing
+    once a trap is on its way (bash starts nothing after its trap). Tests: t_unit_rust_parity4 (TERM
+    and HUP to the group while the stand-in box makes its window late, half a second and six; two
+    signals during the trap; a TERM while the rule goes on: the stand-in host ends with the rule off,
+    the window closed before it, no create after it, both ways).
 
 430. **`cpu --app -n` listed every process** (2026-10-22, #324 wave 4a's review). cpu_tame wrote the
     tamed name with `echo`, which takes a name of `-n`, `-e`, `-E` or their mixes for its options and

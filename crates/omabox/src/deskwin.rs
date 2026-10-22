@@ -505,39 +505,68 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8], errexit: bool) -> Res<Vec<u8>> {
 
 const RULE_OFF: &[u8] = b"if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end";
 
-/// monitor_add_window's EXIT trap (MON_RULE_ON): the host rule off however the subshell ends (a
-/// refusal; INT, TERM or HUP), quietly; once its window is there when the box was told to make it
-/// (MON_CREATING: finding 429), at most 5 s: turned off first, the window the box makes anyway
-/// would open on the user's active workspace, focused (finding 70).
+/// monitor_add_window's EXIT trap (MON_RULE_ON, mon_rule_off): the host rule off however the
+/// subshell ends (a refusal; INT, TERM or HUP, a second one meanwhile held: finding 429), quietly.
+/// Once the box was told to make the output (MON_CREATING), it is removed first: the box handles its
+/// IPC in order, so its answer means the create was handled and its window is gone (turned off before
+/// that, the window the box makes anyway opens on the user's workspace, focused: finding 70); a box
+/// that cannot answer makes none. A rule-on call cut short (MON_ASKING) may land after the rule-off:
+/// sent again half a second on. The trap waits for main's foreground child (the rule-on call) too.
 struct RuleGuard {
     ctx: Ctx,
     trap: Option<crate::trap::Trap>,
     creating: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    asking: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl RuleGuard {
-    fn arm(ctx: &Ctx, pid: &[u8], n0: &[u8]) -> RuleGuard {
+    fn arm(ctx: &Ctx, name: &[u8]) -> RuleGuard {
         let c = ctx.clone();
         let creating = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (cr, pid, n0) = (creating.clone(), pid.to_vec(), n0.to_vec());
-        let trap = crate::trap::on_exit(move || {
+        let asking = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (cr, ask, name) = (creating.clone(), asking.clone(), name.to_vec());
+        let trap = crate::trap::on_exit_fg(move || {
             crate::exit::muted(|| {
                 if cr.load(std::sync::atomic::Ordering::SeqCst) {
-                    window_wait(&c, &pid, &n0);
+                    let _ = on_box(
+                        &c,
+                        &w(&[
+                            b"timeout",
+                            HYPR_LIMIT.as_bytes(),
+                            b"hyprctl",
+                            b"output",
+                            b"remove",
+                            &name,
+                        ]),
+                        false,
+                        Out::Null,
+                        ErrTo::Null,
+                        false,
+                    );
                 }
                 host_hyprctl(&c, &[b"eval", RULE_OFF], true);
+                if ask.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(500));
+                    host_hyprctl(&c, &[b"eval", RULE_OFF], true);
+                }
             });
         });
         RuleGuard {
             ctx: ctx.clone(),
             trap: Some(trap),
             creating,
+            asking,
         }
     }
 
     /// `MON_CREATING=1` / `MON_CREATING=""`.
     fn creating(&self, on: bool) {
         self.creating.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// `MON_ASKING=1` / `MON_ASKING=""`.
+    fn asking(&self, on: bool) {
+        self.asking.store(on, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// `host_eval "omabox_monitor_rule:set_enabled(false)"; MON_RULE_ON=""`.
@@ -547,32 +576,6 @@ impl RuleGuard {
             t.forget();
         }
         Ok(())
-    }
-}
-
-/// mon_window_wait PID N0: until the host has more than N0 windows of PID, 5 s at most (the trap's).
-fn window_wait(ctx: &Ctx, pid: &[u8], n0: &[u8]) {
-    for _ in 0..50 {
-        let (rc, c) = host_hyprctl(ctx, &[b"-j", b"clients"], true);
-        let n = jq::tool(
-            "jq",
-            &[
-                b"--argjson".to_vec(),
-                b"p".to_vec(),
-                pid.to_vec(),
-                crate::jqprog::PID_COUNT_JQ.as_bytes().to_vec(),
-            ],
-            Some(&c),
-            jq::Err::Null,
-        )
-        .text();
-        let more = shell::test_int(&n)
-            .zip(shell::test_int(n0))
-            .is_some_and(|(a, b)| a > b);
-        if rc == 0 && more {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -647,7 +650,8 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     }
     let n0 = n_of(&pid, &strip_nl(&clients));
     let r4 = shell::read_fields(&rect, 4);
-    let mut guard = RuleGuard::arm(ctx, &pid, &n0);
+    let mut guard = RuleGuard::arm(ctx, &name);
+    guard.asking(true);
     // The rule's `move` is relative to its monitor; always given: a rule of the same name keeps an
     // earlier one's.
     host_eval(
@@ -666,6 +670,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
             "' })"
         ),
     )?;
+    guard.asking(false);
     guard.creating(true);
     let r = on_box(
         ctx,
@@ -707,7 +712,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
             }
         }
         if secs() >= end {
-            guard.creating(false);
+            // (MON_CREATING kept: the trap removes the output, whose window may still come)
             return Err(ctx.die(cat!(
                 "monitor add: no new window of box '",
                 ctx.name,

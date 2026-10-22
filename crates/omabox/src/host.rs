@@ -113,8 +113,12 @@ pub fn host_hyprctl(ctx: &Ctx, args: &[&[u8]], quiet: bool) -> (i32, Vec<u8>) {
         } else {
             Stdio::inherit()
         });
-    match crate::sig::foreground(|| c.output()) {
-        Ok(o) => (crate::exec::status(o.status).0, o.stdout),
+    // (the status read inside: a child's death by SIGINT is the foreground's, sig::FG_INT)
+    match crate::sig::foreground(|| {
+        c.output()
+            .map(|o| (crate::exec::status(o.status).0, o.stdout))
+    }) {
+        Ok(o) => o,
         Err(_) => {
             if !quiet {
                 let _ = std::io::Write::write_all(

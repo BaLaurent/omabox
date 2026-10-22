@@ -11,6 +11,8 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 type Undo = Box<dyn FnOnce() + Send>;
 
 static TRAPS: Mutex<Vec<(u64, Undo)>> = Mutex::new(Vec::new());
+/// Traps that wait for main's foreground child whatever the signal (on_exit_fg).
+static FG_TRAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static NEXT: AtomicU64 = AtomicU64::new(1);
 static SIG_W: AtomicI32 = AtomicI32::new(-1);
 
@@ -25,6 +27,26 @@ pub fn on_exit(f: impl FnOnce() + Send + 'static) -> Trap {
         t.push((id, Box::new(f)));
     }
     Trap(id)
+}
+
+/// on_exit, the undo once main's foreground child is over on TERM and HUP too: one whose step in
+/// flight must land first (monitor add's rule-on call, finding 429).
+pub fn on_exit_fg(f: impl FnOnce() + Send + 'static) -> Trap {
+    FG_TRAPS.fetch_add(1, Ordering::SeqCst);
+    let fg = FgCount;
+    on_exit(move || {
+        drop(fg);
+        f();
+    })
+}
+
+/// FG_TRAPS' share of one on_exit_fg trap, given back when it is done with or dropped.
+struct FgCount;
+
+impl Drop for FgCount {
+    fn drop(&mut self) {
+        FG_TRAPS.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl Trap {
@@ -84,7 +106,8 @@ fn arm() {
             let sig = libc::c_int::from(b[0]);
             let busy = crate::sig::FG_ACTIVE.load(Ordering::SeqCst);
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
-            let fg = (sig == libc::SIGINT).then(|| {
+            let wait_fg = sig == libc::SIGINT || FG_TRAPS.load(Ordering::SeqCst) > 0;
+            let fg = wait_fg.then(|| {
                 crate::sig::FOREGROUND
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
