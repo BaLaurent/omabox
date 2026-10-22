@@ -439,7 +439,7 @@ fn agent_alive(d: &[u8]) -> bool {
 /// FILE opened for writing and flocked, waiting up to WAIT. A `down` removes a name's lock file once
 /// the box is gone (#158), so a file opened before that may be the removed one, which nobody else
 /// sees: then the path is opened again.
-fn lock_file(p: &Path, wait: Duration) -> Option<File> {
+pub fn lock_file(p: &Path, wait: Duration) -> Option<File> {
     let end = Instant::now() + wait;
     loop {
         let f = File::create(p).ok()?;
