@@ -3043,6 +3043,8 @@ set -m
 for i in $(seq 200); do [ -e "$mark" ] && break; sleep 0.05; done
 sleep 0.2
 case $sig in group-*) kill -"${sig#group-}" -- -"$p" ;; *) kill -"$sig" "$p" ;; esac
+# (RP_TWICE: the same signal again so many seconds on)
+[ -z "${RP_TWICE:-}" ] || { sleep "$RP_TWICE"; case $sig in group-*) kill -"${sig#group-}" -- -"$p" ;; *) kill -"$sig" "$p" ;; esac; } 2>/dev/null
 wait "$p"; rc=$?
 # (RP_LINGER: how long what it left running gets, 1 s by default)
 sleep "${RP_LINGER:-1}"
@@ -4485,6 +4487,11 @@ elif cmd in ("output create",):
     if has("interactive") and not has("nohostwin"):
         # (create.later: the window half a second on, as the box's Hyprland makes it, whatever happens to
         # this hyprctl meanwhile)
+        # (a remove waits for it: the box's IPC in order, create.lock held until the window is made)
+        if has("create.later"):
+            import fcntl
+            lk = os.open(os.path.join(ST, "create.lock"), os.O_RDWR | os.O_CREAT)
+            fcntl.flock(lk, fcntl.LOCK_EX)
         if has("create.later") and os.fork() > 0:
             print("ok")
             sys.exit(0)
@@ -4493,7 +4500,7 @@ elif cmd in ("output create",):
             for fd in (0, 1, 2):
                 os.dup2(os.open(os.devnull, os.O_RDWR), fd)
             import time
-            time.sleep(0.5)
+            time.sleep(float(rd("create.later", "") or "0.5"))
         hc = os.path.join(ST, "host/clients.json")
         c = json.loads(rd_abs(hc) or "[]")
         c.append({"address": "0xw%d" % len(c), "pid": int(rd("wpid", "0")), "workspace": {"id": 9, "name": "9"},
@@ -4508,6 +4515,18 @@ elif cmd in ("output create",):
 elif cmd == "output remove":
     n = a[2]
     log("output remove", n)
+    import fcntl
+    lk = os.open(os.path.join(ST, "create.lock"), os.O_RDWR | os.O_CREAT)
+    fcntl.flock(lk, fcntl.LOCK_EX)
+    # (its window closed on the host, an interactive box's)
+    hc = os.path.join(ST, "host/clients.json")
+    c = json.loads(rd_abs(hc) or "[]")
+    k = [x for x in c if x.get("title") != "aquamarine - " + n]
+    if len(k) != len(c):
+        with open(hc, "w") as h:
+            json.dump(k, h)
+        with open(os.path.join(ST, "host.log"), "a") as h:
+            h.write("== window closed " + n + "\n")
     if has("remove.out"):
         print(rd("remove.out").strip())
         sys.exit(0)
@@ -5128,7 +5147,7 @@ EOF
   rp_sig_write "$r/rp-sig"
   mkdir -p "$r/sigbin"; printf '#!/bin/sh\ntouch %s/sleeping\nexec /usr/bin/sleep "$@"\n' "$st" > "$r/sigbin/sleep"; chmod +x "$r/sigbin/sleep"
   rp_env=("${rp_env4[@]}" PATH="$r/sigbin:$PATH")
-  rp_sed='s/ line ([0-9]+): [0-9]+ (Hangup|Terminated|Interrupt) / line \1: PID \2 /'
+  rp_sed='s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line \1: PID \2 /'
   local sg; for sg in TERM HUP group-INT; do
     rp_wrap=("$r/rp-sig" "$sg" "$st/sleeping")
     parity "gpu and $sg in its window: its temporary dir gone" gpu -b fk 5s
@@ -5142,14 +5161,31 @@ EOF
   # is there (the stand-in box makes it half a second late, whatever happens to its hyprctl).
   rp4_late() { rp4_imain; : > "$st/create.later"; }; rp4_pre=(rp4_late)
   # (where the stand-in host had it: the window first)
-  rp4_order() { [ "$(grep -n -m1 '^== window mapped' "$st/host.log" | cut -d: -f1)" -lt "$(grep -n 'set_enabled(false)' "$st/host.log" | tail -1 | cut -d: -f1)" ] 2>/dev/null; }
+  # (where the stand-in host had them: the window made, then closed by the trap's remove, then the
+  # rule off, last of the rule's)
+  rp4_order() { local m c o; m=$(grep -n -m1 '^== window mapped' "$st/host.log" | cut -d: -f1); c=$(grep -n -m1 '^== window closed' "$st/host.log" | cut -d: -f1)
+    o=$(grep -n 'omabox_monitor_rule' "$st/host.log" | tail -1); [ "${m:-0}" -gt 0 ] && [ "$m" -lt "${c:-0}" ] && [ "$c" -lt "${o%%:*}" ] && [[ $o == *'set_enabled(false)'* ]]; }
   # (bash's own line for the child of its subshell the signal ended, `Terminated  sleep 0.05` and
   # the like, out: which child it was is timing, and the Rust half has no such line)
   rp_sed+='; /^(Terminated|Hangup) +[^ ]/d; /bin\/omabox: line [0-9]+: PID (Hangup|Terminated) /d'
+  # (and rp-sig's own line for its child, whose line number is where it noticed: its wait, or RP_TWICE's)
+  rp_sed+='; s/rp-sig: line [0-9]+: PID /rp-sig: line N: PID /'
   for sg in group-TERM group-HUP; do
     rp_wrap=("$r/rp-sig" "$sg" "$st/creating")
     parity "monitor add, interactive, and $sg once the box makes its window: the rule off after it (finding 429)" monitor -b fki add 800x600
-    check "...the window mapped before the rule went off" rp4_order
+    check "...the window made, closed, then the rule off" rp4_order
+  done
+  # A box that handles the create six seconds late (past the trap's first fix, a 5 s wait), and two
+  # signals during the trap: the rule off all the same, last.
+  rp4_later() { rp4_imain; echo 6 > "$st/create.later"; }; rp4_pre=(rp4_later)
+  rp_wrap=(env RP_LINGER=10 "$r/rp-sig" group-TERM "$st/creating")
+  parity "monitor add, interactive, and group-TERM, the box's create handled 6 s late (finding 429)" monitor -b fki add 800x600
+  check "...the window made, closed, then the rule off" rp4_order
+  rp4_twice() { rp4_imain; echo 1.5 > "$st/create.later"; }; rp4_pre=(rp4_twice)
+  for sg in group-TERM group-INT group-HUP; do
+    rp_wrap=(env RP_LINGER=4 RP_TWICE=0.4 "$r/rp-sig" "$sg" "$st/creating")
+    parity "monitor add, interactive, and $sg twice, the second during the trap: the rule off (finding 429)" monitor -b fki add 800x600
+    check "...the window made, closed, then the rule off" rp4_order
   done
   # A TERM while the rule is being turned on (the stand-in host slow to answer it): no create follows.
   rp4_rslow() { rp4_imain; echo 0.4 > "$st/host/rule.sleep"; }; rp4_pre=(rp4_rslow)
@@ -5162,7 +5198,7 @@ EOF
   rp_sed='s/"pss_kb": [0-9]+/"pss_kb": PSS/g; s/([0-9.]+[MG]) +[0-9.]+[MG]/\1 PSS/'
   parity "cpu and INT to omabox alone in its window: it goes on" cpu -b fk 2s
   parity "gpu and INT to omabox alone: the same" gpu -b fk 2s
-  rp_sed='s/ line ([0-9]+): [0-9]+ (Hangup|Terminated|Interrupt) / line \1: PID \2 /'
+  rp_sed='s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line \1: PID \2 /'
   # (bash's main ends at once, 130, its subshell finishing the monitor: given the time to)
   rp4_pre=(rp4_late); rp_wrap=(env RP_LINGER=4 "$r/rp-sig" INT "$st/creating")
   parity "monitor add, interactive, and INT to omabox alone: 130, the monitor made all the same" monitor -b fki add 800x600
@@ -13010,7 +13046,8 @@ t_audio() {
   parity "audio (both ways): silence" audio -b "$B" 0.5
   parity "audio --json (both ways): silence" audio -b "$B" 300ms --json
   rp_tone() { ob run -b "$B" -d -q -- sh -c 'sleep 0.3; pw-play ~/tone.wav' >/dev/null 2>&1; }
-  rp_prep=rp_tone rp_sed='s/-?[0-9]+\.[0-9]+/N/g'
+  # (a window's level is null where the tone had not started or had ended: when, the timing's too)
+  rp_prep=rp_tone rp_sed='s/-?[0-9]+\.[0-9]+|null/N/g'
   parity "audio (both ways): a tone" audio -b "$B" 2
   parity "audio --json (both ways): a tone" audio -b "$B" 2 --json
   rp_prep="" rp_sed="" rp_rt="" rp_snap=1

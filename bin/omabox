@@ -12238,21 +12238,21 @@ monitor_add_window() (
   n0=$(jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length' <<<"$clients")
   local w h x y
   read -r w h x y <<<"$rect"
-  # The rule off however this ends; once the window is there when the box was told to make it
-  # (MON_CREATING, finding 429): turned off first, the window the box makes anyway opens on the user's
-  # active workspace, focused (finding 70).
-  MON_RULE_ON=1 MON_CREATING=""
-  trap '[ -z "${MON_RULE_ON:-}" ] || { [ -z "${MON_CREATING:-}" ] || mon_window_wait "$pid" "$n0"
-    host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1 || true; }' EXIT
+  # The rule off however this ends (mon_rule_off, finding 429).
+  # shellcheck disable=SC2030 # this subshell's, for its trap
+  MON_RULE_ON=1 MON_CREATING="" MON_ASKING=""
+  trap '[ -z "${MON_RULE_ON:-}" ] || mon_rule_off "$name"' EXIT
   # The rule's `move` is relative to its monitor (the dispatcher's is global: both seen in a stand-in
   # with a second monitor at 1920,0); always given: a rule of the same name keeps an earlier one's.
+  MON_ASKING=1
   host_eval "omabox_monitor_rule = hl.window_rule({ name = 'omabox-monitor', match = { class = '^aquamarine\$' }, workspace = '$ws silent', no_initial_focus = true, render_unfocused = true, float = true, size = '$w $h', move = '$x $y' })"
-  MON_CREATING=1
+  MON_ASKING="" MON_CREATING=1
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create wayland "$name" 2>&1) || true
   [ "$res" = ok ] || { MON_CREATING=""; box_file "$D/run/omabox.monitors" "$rest" || true; die "monitor add: the box could not make another window: $res"; }
   end=$((SECONDS + 5))
   until clients=$(host_hyprctl -j clients) && [ "$(jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length' <<<"$clients")" -gt "$n0" ]; do
-    [ $SECONDS -lt $end ] || { MON_CREATING=""; die "monitor add: no new window of box '$NAME' on your desktop in 5 s"; }
+    # (MON_CREATING kept: the trap removes the output, whose window may still come)
+    [ $SECONDS -lt $end ] || die "monitor add: no new window of box '$NAME' on your desktop in 5 s"
     sleep 0.05
   done
   # Mapped under the rule (clients lists mapped windows only): on its workspace whatever comes next.
@@ -12273,16 +12273,19 @@ monitor_add_window() (
   monitors_record
   hypr_json monitors | jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"'
 )
-# mon_window_wait PID N0: monitor_add_window's trap, until the host has more than N0 windows of PID
-# (the box's new one), 5 s at most.
-# shellcheck disable=SC2329 # called from monitor_add_window's EXIT trap
-mon_window_wait() {
-  local i
-  for ((i = 0; i < 50; i++)); do
-    [ "$(host_hyprctl -j clients 2>/dev/null | jq --argjson p "$1" '[.[] | select(.pid == $p)] | length' 2>/dev/null)" -gt "$2" ] 2>/dev/null && return 0
-    sleep 0.1
-  done
-  return 0
+# mon_rule_off NAME: monitor_add_window's EXIT trap (finding 429): the host rule off, a second INT,
+# TERM or HUP meanwhile ignored (it ended the trap before the rule went off; its children ignore them
+# too). Once the box was told to make NAME (MON_CREATING), NAME is removed first: the box handles its
+# IPC in order, so its answer means the create was handled and its window is gone (turned off before
+# that, the window the box makes anyway opens on the user's workspace, focused: finding 70); a box
+# that cannot answer makes none (on_box's refusal kept in its subshell). A rule-on call cut short
+# (MON_ASKING) may land after the rule-off: sent again half a second on.
+# shellcheck disable=SC2329,SC2031 # called from monitor_add_window's EXIT trap, in its subshell
+mon_rule_off() {
+  trap '' INT TERM HUP
+  [ -z "${MON_CREATING:-}" ] || (on_box timeout "$HYPR_LIMIT" hyprctl output remove "$1") >/dev/null 2>&1 || true
+  host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1 || true
+  [ -z "${MON_ASKING:-}" ] || { sleep 0.5; host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1 || true; }
 }
 # The box's windows on the host: "NAME ADDRESS" a line, the main one as `main` first (none when it is
 # closed), then its monitors' ($D/monitor-windows, in the order made) that are still open. From

@@ -38,6 +38,8 @@ pub fn pipe_ignored() -> bool {
 /// `Command::new` for every child of this half: std's spawn sets SIGPIPE back to the default in it,
 /// where bash's children keep an ignored one (a write to a closed pipe is EPIPE there, not death).
 pub fn command(prog: impl AsRef<OsStr>) -> Command {
+    // (every child of main's is made here, just before it starts: none once a trap is on its way)
+    park_while_stopping();
     let mut c = Command::new(prog);
     if pipe_ignored() {
         // SAFETY: signal is async-signal-safe; run between fork and exec, after std's own reset.
@@ -90,8 +92,12 @@ pub fn foreground<T>(f: impl FnOnce() -> T) -> T {
     r
 }
 
-/// Main waits here while a trap is on its way (it ends this process, or lets main go on).
+/// Main waits here while a trap is on its way (it ends this process, or lets main go on); another
+/// thread (a trap's undo) never does.
 fn park_while_stopping() {
+    if MAIN.get() != Some(&std::thread::current().id()) {
+        return;
+    }
     while STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }

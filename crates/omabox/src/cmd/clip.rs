@@ -183,9 +183,7 @@ fn host_wl(wl: &[u8], args: &[&[u8]]) -> std::process::Command {
 
 /// A command's status as bash's `$?` (127 for one that could not start).
 fn status(c: &mut std::process::Command) -> i32 {
-    crate::sig::foreground(|| c.status())
-        .map(|s| crate::exec::status(s).0)
-        .unwrap_or(127)
+    crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0)).unwrap_or(127)
 }
 
 /// `>"/dev/fd/N"`: the file open again for writing, emptied, from its start (a description of its
@@ -221,9 +219,9 @@ fn into_file(mut c: std::process::Command, f: &File, e: &File, n: usize) -> i32 
         }
     });
     let rc = match child {
-        Ok(mut ch) => crate::sig::foreground(|| ch.wait())
-            .map(|s| crate::exec::status(s).0)
-            .unwrap_or(1),
+        Ok(mut ch) => {
+            crate::sig::foreground(|| ch.wait().map(|s| crate::exec::status(s).0)).unwrap_or(1)
+        }
         Err(_) => 127,
     };
     let _ = reader.join();
@@ -375,11 +373,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let mut c = host_wl(&wl, &[b"timeout", b"10", b"wl-paste", b"--list-types"]);
         c.stdin(Stdio::inherit())
             .stderr(reopen_w(&e).map_or(Stdio::null(), Stdio::from));
-        let o = crate::sig::foreground(|| c.output());
-        let (r, out) = match o {
-            Ok(o) => (crate::exec::status(o.status).0, o.stdout),
-            Err(_) => (127, Vec::new()),
-        };
+        let o = crate::sig::foreground(|| {
+            c.output()
+                .map(|o| (crate::exec::status(o.status).0, o.stdout))
+        });
+        let (r, out) = o.unwrap_or((127, Vec::new()));
         types = shell::subst(&out);
         if r != 0 {
             if crate::exit::contains(&err_all(&e), b"Nothing is copied") {
