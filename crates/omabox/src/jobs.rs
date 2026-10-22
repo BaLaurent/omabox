@@ -837,7 +837,7 @@ pub fn job_ended(
     if !r.out.is_empty() {
         let body = r.out.strip_suffix(b"\n").unwrap_or(&r.out);
         for l in body.split(|&c| c == b'\n') {
-            tail.extend_from_slice(&cat!("  ", shell::head_chars(l, 300), "\n"));
+            tail.extend_from_slice(&cat!("  ", shell::cut_line(l, 300), "\n"));
         }
     }
     let tail = shell::subst(&tail);
