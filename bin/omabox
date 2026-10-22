@@ -15843,13 +15843,13 @@ global_box() {
   ARGS=("$1" "$flag" "$name" "${@:2}")
 }
 # A command the Rust half has taken over (#324) runs there, with the words as main has them now: -b
-# after the command, --opt=value split, --help and the relay done. Not for a broker's caller: its
-# policy (broker_check) is bash's until the broker is ported. A missing binary (a checkout not built
-# yet) runs it here.
+# after the command, --opt=value split, --help and the relay done. A broker's caller too: by then
+# broker_check (bash's until the broker is ported) has passed it, and the Rust half reads the jail from
+# OMABOX_JAIL as bash does (t_jail). A missing binary (a checkout not built yet) runs it here.
 # The caller's environment as it came (run --pass, finding 74) on OMABOX_ENVIRON_FD: this script's
 # own globals (ROOT, BOXES, ...) overwrite what the caller exported under those names.
 rust_handoff() {
-  [[ $RUST_CMDS == *" $1 "* ]] && [ -z "$NO_RUST" ] && [ -z "${OMABOX_BROKER_PEER:-}" ] &&
+  [[ $RUST_CMDS == *" $1 "* ]] && [ -z "$NO_RUST" ] &&
     [ -x "$RUST" ] || return 0
   # (Read here, before the exec: that file then shows the binary's own environment.)
   local efd="" env=()

@@ -8812,8 +8812,10 @@ from them.
     repo, ai-jail's maps all name it): its `main` hands a command in `RUST_CMDS` to
     `build/bin/omabox` (crates/omabox, built by install.sh and the suite with cargo) right before its
     own dispatch, so `global_box`, `eq_split`, `CMD --help` and the relay have run and the words come
-    as they would to `cmd_*`. Not under the broker (its policy is bash's until the broker is ported),
-    not with `OMABOX_BASH=1` (to compare the two; this call's only, not what it starts), not when the
+    as they would to `cmd_*`. Under the broker too: `broker_check` (bash's until the broker is ported)
+    has passed the call by then (`broker_init` has also unset `OMABOX_BROKER_PEER`, so a check of it
+    there never held), and the Rust half reads the jail from `OMABOX_JAIL` as bash does. Not with
+    `OMABOX_BASH=1` (to compare the two; this call's only, not what it starts), not when the
     binary is missing. A command the binary lacks (one built before a pull) goes back to bash with
     `OMABOX_BASH=1`. The hand-off costs bash's parse of the script (~50 ms, as every call does today)
     until the end, when `bin/omabox` becomes the binary. The caller's environment goes along as it
