@@ -12196,6 +12196,14 @@ monitor_add_window() (
   read -r w h x y <<<"$rect"
   MON_RULE_ON=1 MON_MADE=""
   trap 'mon_cleanup "${MON_RULE_ON:-}" "${MON_MADE:-}" "$name"' EXIT
+  # Signals trapped, so that the EXIT trap runs (finding 435): with HUP left at its default, a HUP to
+  # the group often killed this subshell outright, its trap never run, the rule left on. A $(...) bash
+  # it waits on (the create's, the window wait's) hangs its jobs up as it dies, sending the group a
+  # second HUP while this shell is still in its own handler. A trapped signal is handled once that
+  # child returns; each ignores the others first, so a second one cannot cut the EXIT trap short.
+  trap 'trap "" INT TERM HUP PIPE; exit 130' INT
+  trap 'trap "" INT TERM HUP PIPE; exit 143' TERM
+  trap 'trap "" INT TERM HUP PIPE; exit 129' HUP
   # The rule's `move` is relative to its monitor (the dispatcher's is global: both seen in a stand-in
   # with a second monitor at 1920,0); always given: a rule of the same name keeps an earlier one's.
   host_eval "omabox_monitor_rule = hl.window_rule({ name = 'omabox-monitor', match = { class = '^aquamarine\$' }, workspace = '$ws silent', no_initial_focus = true, render_unfocused = true, float = true, size = '$w $h', move = '$x $y' })"
@@ -12235,10 +12243,12 @@ monitor_add_window() (
 # on, an output NAME the box may have made (MADE) is removed first, and its line dropped. The rule goes
 # off only once the box has answered a remove, which it does after the create (it handles its requests
 # in order), and a late output is gone (mon_drain), so a late window maps under the rule, on the box's
-# workspace, and closes. MON_DRAIN s at most: a box still silent then is said, and the rule goes off
-# all the same. Nothing but SIGKILL may end the trap before the rule is off (finding 435): signals are
-# held (a second Ctrl-C, or a pipe or terminal gone: a `say` to a stderr whose reader has left would
-# end it with SIGPIPE), and errexit is off (a `say` to a hung-up terminal fails, EIO).
+# workspace, and closes. MON_DRAIN s at most, the remove in flight included: a box still silent then is
+# said, and the rule goes off all the same. Once it runs, nothing but SIGKILL may end the trap before
+# the rule is off (finding 435): signals are held (a second Ctrl-C, or a pipe or terminal gone: a `say`
+# to a stderr whose reader has left would end it with SIGPIPE), and errexit is off (a `say` to a
+# hung-up terminal fails, EIO). That it runs at all on INT, TERM or HUP is monitor_add_window's traps'
+# doing. A host config reload during the drain drops the rule (left for the 1.1 line).
 MON_DRAIN=20
 # shellcheck disable=SC2329 # called from monitor_add_window's trap
 mon_cleanup() {
@@ -12262,23 +12272,32 @@ mon_unrecord() {
 # mon_drain NAME: `output remove NAME` until the box answers it (mon_answer not unclear), or is gone.
 # An answer means the box has handled the create, but a window it made becomes its monitor only once
 # the host has configured it: until then the box says "output not found", so that is asked again for
-# MON_SETTLE s (seen in a stand-in: the late output came right after such an answer). Both timed in
-# microseconds: with $SECONDS, whole seconds, MON_SETTLE 3 was 2 to 3 s (finding 435).
-MON_SETTLE=3
+# MON_SETTLE s (seen in a stand-in: the late output came right after such an answer). All within
+# MON_DRAIN: each remove's limit is what is left of it (HYPR_LIMIT at most, 0.2 s at least), the settle
+# cut to it, so the trap holds signals for MON_DRAIN s and a little more, not the ~33 s a remove
+# blocked in connect and a settle after it took on top (finding 435). Timed in microseconds: with
+# $SECONDS, whole seconds, MON_SETTLE 3 was 2 to 3 s. After an `ok`, MON_FLUSH s before the rule goes
+# off: the late output's window and its end, sent by the box on its Wayland socket before that answer,
+# are read by the host before the rule-off on its IPC socket.
+MON_SETTLE=3 MON_FLUSH=0.5
 # shellcheck disable=SC2329 # called through mon_cleanup
 mon_drain() {
-  local end=$((${EPOCHREALTIME//[!0-9]/} + MON_DRAIN * 1000000)) settle="" res rc said=""
+  local end=$((${EPOCHREALTIME//[!0-9]/} + MON_DRAIN * 1000000)) settle="" res rc said="" lim
   while :; do
-    res=$(on_box timeout "$HYPR_LIMIT" hyprctl output remove "$1" 2>&1) && rc=0 || rc=$?
+    lim=$((end - ${EPOCHREALTIME//[!0-9]/}))
+    [ "$lim" -le $((HYPR_LIMIT * 1000000)) ] || lim=$((HYPR_LIMIT * 1000000))
+    [ "$lim" -ge 200000 ] || lim=200000
+    res=$(on_box timeout "$((lim / 1000000)).$(printf %06d $((lim % 1000000)))" hyprctl output remove "$1" 2>&1) && rc=0 || rc=$?
     case $(mon_answer "$rc" "$res") in
+      made) sleep "$MON_FLUSH"; return 0 ;;
       unclear)
         [ "${EPOCHREALTIME//[!0-9]/}" -lt "$end" ] || return 1
         [ -n "$said" ] || { say "monitor add: waiting for box '$NAME' to answer ($MON_DRAIN s at most)" || true; said=1; } ;;
-      no)
+      *)
         [ "$res" = "output not found" ] && (box_alive) 2>/dev/null || return 0
         [ -n "$settle" ] || settle=$((${EPOCHREALTIME//[!0-9]/} + MON_SETTLE * 1000000))
+        [ "$settle" -le "$end" ] || settle=$end
         [ "${EPOCHREALTIME//[!0-9]/}" -lt "$settle" ] || return 0 ;;
-      *) return 0 ;;
     esac
     sleep 0.2
   done

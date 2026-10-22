@@ -12678,21 +12678,28 @@ t_unit_monitors() {
   # until the box answers a remove, and only then turns the host rule off. Stand-ins for both sides:
   # the box's hyprctl answers the create as CREATE says (`read`: given up on; `gone`: the box died),
   # each remove as the next of REMOVES (`read+changed`: given up on, while another command removed
-  # WAYLAND-3 from omabox.monitors and added WAYLAND-4), then "output not found"; the box alive while
-  # ALIVE is 1. What each was told is in $d/said, when each remove was answered in $d/rtimes (us). With
-  # MC_ERR=full the add's stderr is /dev/full once the rule is on (a write fails, as on a hung-up
-  # terminal), with pipe a pipe whose reader is gone once the create is sent; with MC_WRITE=1
-  # omabox.monitors is written too.
+  # WAYLAND-3 from omabox.monitors and added WAYLAND-4; `hang`: hyprctl blocked until its timeout), then
+  # "output not found"; the box alive while ALIVE is 1. What each was told is in $d/said, when each
+  # remove was answered in $d/rtimes (us), its time limit in $d/rlims, when the rule went off in
+  # $d/offtime (us). With MC_ERR=full the add's stderr is /dev/full once the rule is on (a write fails,
+  # as on a hung-up terminal), with pipe a pipe whose reader is gone once the create is sent; with
+  # MC_WRITE=1 omabox.monitors is written too. With MC_HUP the add runs in a group of its own, called
+  # as `monitor add` calls it (sub: `line=$(monitor_add_window ...)`) or as `up` does (bare), and that
+  # group gets a HUP while the create (CREATE `hup`, 3 s) is in flight, from outside it.
   # shellcheck disable=SC2016 # the inner bash's
   mon_case() {   # ALIVE CREATE REMOVES...
     local alive=$1 create=$2; shift 2
-    printf '%s\n' "$@" > "$d/removes"; : > "$d/said"; : > "$d/rtimes"; rm -f "$d/gone"
-    bash -c 'source "$1"; D=$2 NAME=t MON_DRAIN=$5 MON_SETTLE=1 alive=$3 create=$4 err=$6 write=$7 errpid=""
+    printf '%s\n' "$@" > "$d/removes"; : > "$d/said"; : > "$d/rtimes"; : > "$d/rlims"; rm -f "$d/gone" "$d/offtime" "$d/creating" "$d/pgid"
+    # shellcheck disable=SC2015 # the kill may fail: the case then fails on what was said
+    [ -z "${MC_HUP:-}" ] || ( for _ in $(seq 100); do [ -e "$d/creating" ] && [ -s "$d/pgid" ] && break; sleep 0.05; done
+      sleep 0.1; kill -HUP -- "-$(cat "$d/pgid")" ) >/dev/null 2>&1 &
+    ${MC_HUP:+setsid -w} bash -c 'source "$1"; D=$2 NAME=t MON_DRAIN=$5 MON_SETTLE=1 alive=$3 create=$4 err=$6 write=$7 hup=$8 errpid=""
+      [ -z "$hup" ] || echo $$ > "$D/pgid"
       [ "$err" != pipe ] || { exec 2> >(exec cat >/dev/null); errpid=$!; }
       meta() { echo 9; }; ws_check() { echo "$1"; }; box_pid() { echo $$; }; hypr_json() { echo "[]"; }
       box_alive() { [ "$alive" = 1 ] && [ ! -e "$D/gone" ]; }
       host_hyprctl() { case $* in "-j monitors") echo "[{\"id\": 0, \"focused\": true, \"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]" ;;
-        -j\ *) echo "[]" ;; eval*) echo "host: ${*:2}" >> "$D/said"; echo ok ;; *) echo ok ;; esac; }
+        -j\ *) echo "[]" ;; eval*) echo "host: ${*:2}" >> "$D/said"; echo "${EPOCHREALTIME//[!0-9]/}" > "$D/offtime"; echo ok ;; *) echo ok ;; esac; }
       host_eval() { echo "host: $1" >> "$D/said"; [ "$err" != full ] || exec 2>/dev/full; }
       on_box() { case $* in
         *omabox_monitor_layout*) echo "error: omabox-layout:main 0 0 1920 1080,WAYLAND-2 1920 0 800 600" ;;
@@ -12701,16 +12708,19 @@ t_unit_monitors() {
           case $create in
             read) printf "%s\n" "Hyprland IPC didn'"'"'t respond in time" "Couldn'"'"'t read (6)"; return 6 ;;
             gone) touch "$D/gone"; echo "omabox: box '"'"'t'"'"' is not up"; return 1 ;;
+            hup) touch "$D/creating"; sleep 3; echo "Couldn'"'"'t read (6)"; return 6 ;;
             *) echo "$create" ;;
           esac ;;
         *"output remove"*) local a; a=$(head -1 "$D/removes"); sed -i 1d "$D/removes"; a=${a:-output not found}; echo "box: remove ($a)" >> "$D/said"
-          echo "${EPOCHREALTIME//[!0-9]/}" >> "$D/rtimes"
+          echo "${EPOCHREALTIME//[!0-9]/}" >> "$D/rtimes"; echo "$2" >> "$D/rlims"
+          if [ "$a" = hang ]; then timeout "$2" sleep 30; return 124; fi
           if [ "$a" = read+changed ]; then sed -i "/^WAYLAND-3 /d" "$D/run/omabox.monitors"; echo "WAYLAND-4 1024x768@60 right 1" >> "$D/run/omabox.monitors"; a=read; fi
           if [ "$a" = read ]; then echo "Couldn'"'"'t read (6)"; return 6; fi; echo "$a" ;;
         *) echo ok ;;
       esac; }
       box_file() { [[ $1 != */omabox.monitors ]] || { echo "monitors: $(paste -sd, <<<"$2")" >> "$D/said"; [ -z "$write" ] || printf "%s\n" "$2" > "$1"; }; }
-      monitor_add_window 800x600' _ "$TMP/lib/bin/omabox" "$d" "$alive" "$create" "${MON_DRAIN:-20}" "${MC_ERR:-}" "${MC_WRITE:-}" 2>&1
+      if [ "$hup" = sub ]; then line=$(monitor_add_window 800x600); else monitor_add_window 800x600; fi' \
+      _ "$TMP/lib/bin/omabox" "$d" "$alive" "$create" "${MON_DRAIN:-20}" "${MC_ERR:-}" "${MC_WRITE:-}" "${MC_HUP:-}" 2>&1
     echo "rc=$?"
   }
   local off="host: if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end"
@@ -12722,6 +12732,10 @@ t_unit_monitors() {
   check_eq "...removed until the box answered, its line dropped, and only then the rule off" \
     "box: create|box: remove (read)|box: remove (ok)|monitors: |$off" "$(saidl)"
   check_match "...the rule was on before the create" "^host: omabox_monitor_rule = hl.window_rule" "$(grep -B1 -x 'box: create' "$d/said" | head -1)"
+  # (the late output's window and its end, sent on the box's Wayland socket before its ok, read by the
+  # host before the rule-off on its IPC socket: MON_FLUSH, 0.5 s, between them)
+  check "...the rule off 0.45 s at least after the box's ok ($(( ($(cat "$d/offtime") - $(tail -1 "$d/rtimes")) / 1000 )) ms)" \
+    test "$(( $(cat "$d/offtime") - $(tail -1 "$d/rtimes") ))" -ge 450000
   # (an answered remove: the create handled, its output still to come, as the host has yet to configure
   # its window: asked again until it is removed, MON_SETTLE s at most)
   mon_case 1 read "output not found" "output not found" ok >/dev/null
@@ -12736,6 +12750,22 @@ t_unit_monitors() {
   out=$(MON_DRAIN=0 mon_case 1 read read read)
   check_match "...a box silent past MON_DRAIN: said, the rule off all the same" "did not answer in 0 s: if it makes WAYLAND-2 later" "$out"
   check_eq "...one remove asked, then the rule off" "box: create|box: remove (read)|monitors: |$off" "$(saidl)"
+  # (a remove blocked until its limit counts within MON_DRAIN, its limit what is left of it: the add's
+  # trap holds signals for MON_DRAIN s, not MON_DRAIN plus a 10 s remove)
+  MON_DRAIN=2 mon_case 1 read hang >/dev/null
+  check_eq "...a remove that blocks: given up on at MON_DRAIN (2 s here), then the rule off" "box: create|box: remove (hang)|monitors: |$off" "$(saidl)"
+  check "...its limit what was left of MON_DRAIN ($(head -1 "$d/rlims") s), the rule off within 2.7 s of it ($(( ($(cat "$d/offtime") - $(head -1 "$d/rtimes")) / 1000 )) ms)" \
+    test "$(( $(cat "$d/offtime") - $(head -1 "$d/rtimes") ))" -lt 2700000 -a "$(head -1 "$d/rlims" | cut -d. -f1)" -le 2
+  # (a HUP to the add's group during the create: the shell it waits on hangs its jobs up as it dies,
+  # sending the group a second HUP, which killed the add outright with HUP at its default, the trap
+  # never run, the rule left on: on the code before, these two cases failed 5 times in 6)
+  local shape
+  for shape in sub bare; do
+    # (its output read to the end: the add's subshell outlives the shell the HUP ended)
+    out=$(MC_HUP=$shape mon_case 1 hup ok)
+    check_eq "...a HUP to the group during the create ($shape): removed, then the rule off" \
+      "box: create|box: remove (ok)|monitors: |$off" "$(saidl)"
+  done
   # (a trap that writes to a stderr gone bad must still reach the rule off: errexit would end it at a
   # failed write, SIGPIPE kill it, the rule left on)
   MC_ERR=full MON_DRAIN=0 mon_case 1 read read read >/dev/null
