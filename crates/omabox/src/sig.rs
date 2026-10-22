@@ -34,6 +34,27 @@ extern "C" fn to_pipe(sig: libc::c_int) {
 
 const TERMINATING: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
 
+/// Whether SIG is ignored now (as it came: this process ignores none itself).
+pub fn ignored(sig: libc::c_int) -> bool {
+    // SAFETY: a query of the disposition into a zeroed sigaction of ours.
+    unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        libc::sigaction(sig, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == libc::SIG_IGN
+    }
+}
+
+/// `trap ... SIG` as a non-interactive bash sets it: HANDLER, unless SIG was ignored when this
+/// omabox started (nohup, a `&` of a script's), which bash cannot trap: then it stays ignored.
+pub fn catch(sig: libc::c_int, handler: extern "C" fn(libc::c_int)) {
+    if ignored(sig) {
+        return;
+    }
+    // SAFETY: the handlers given here only make async-signal-safe calls.
+    unsafe {
+        libc::signal(sig, handler as *const () as libc::sighandler_t);
+    }
+}
+
 /// The box `run` started for its command, taken down once (`out=$(cmd_down NAME 2>&1) || say "$out"`).
 pub struct Teardown {
     name: Vec<u8>,
@@ -49,10 +70,7 @@ impl Teardown {
             SIG_PIPE.store(w.as_raw_fd(), Ordering::Relaxed);
             std::mem::forget(w);
             for s in TERMINATING {
-                // SAFETY: to_pipe only makes async-signal-safe calls.
-                unsafe {
-                    libc::signal(s, to_pipe as *const () as libc::sighandler_t);
-                }
+                catch(s, to_pipe);
             }
             let (n, d) = (name.clone(), done.clone());
             std::thread::spawn(move || {
@@ -132,10 +150,7 @@ extern "C" fn end_followers(sig: libc::c_int) {
 pub fn follow_on() {
     if !FOLLOWING.swap(true, Ordering::Relaxed) {
         for s in TERMINATING {
-            // SAFETY: end_followers only makes async-signal-safe calls.
-            unsafe {
-                libc::signal(s, end_followers as *const () as libc::sighandler_t);
-            }
+            catch(s, end_followers);
         }
     }
 }

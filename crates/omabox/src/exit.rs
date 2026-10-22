@@ -22,8 +22,25 @@ macro_rules! cat {
     }};
 }
 
+thread_local! {
+    /// This thread's words held back (muted): `( ... ) 2>/dev/null` for one helper's refusals,
+    /// without moving fd 2, which other threads and an exec would see.
+    static MUTE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// F with what it says held back (say's lines, its refusals' words), on this thread only.
+pub fn muted<T>(f: impl FnOnce() -> T) -> T {
+    let was = MUTE.with(|m| m.replace(true));
+    let r = f();
+    MUTE.with(|m| m.set(was));
+    r
+}
+
 /// `say`: one line on stderr.
 pub fn say(m: impl AsRef<[u8]>) {
+    if MUTE.with(std::cell::Cell::get) {
+        return;
+    }
     let mut line = b"omabox: ".to_vec();
     line.extend_from_slice(m.as_ref());
     line.push(b'\n');

@@ -7,7 +7,7 @@
 
 use crate::boxes::{box_alive, lock_file, meta, run_read};
 use crate::cat;
-use crate::exec::{ErrTo, Out, Redir, on_box};
+use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, say};
 use crate::hypr::{HYPR_LIMIT, hung_text, hypr_answers, hypr_down_text};
 use crate::input::{wh, xy};
@@ -76,17 +76,11 @@ const SEEN_SH: &str = "b=$(grim -g \"$1\" -t ppm - 2>/dev/null | cksum)\n    r=$
 /// ptr_seen true|false: set, and waited for in the frame (Hyprland draws it 50-400 ms later, finding
 /// 305): the 64x64 around the pointer changing from what it was just before.
 fn ptr_seen(ctx: &Ctx, v: &[u8]) -> Result<(), Vec<u8>> {
-    let p = {
-        let _q = Redir::null(2);
-        cursor_now(ctx).ok().filter(|p| !p.is_empty())
-    };
+    let p = crate::exit::muted(|| cursor_now(ctx).ok().filter(|p| !p.is_empty()));
     let Some(p) = p else {
         return ptr_live_set(ctx, v);
     };
-    let ext = {
-        let _q = Redir::null(2);
-        extent(ctx).ok()
-    };
+    let ext = crate::exit::muted(|| extent(ctx).ok());
     let Some(ext) = ext else {
         return ptr_live_set(ctx, v);
     };
@@ -335,6 +329,14 @@ pub fn pointer_shown(ctx: &Ctx, hide: bool) -> Res<()> {
     Ok(())
 }
 
+/// Held while this process changes the pointer's record (the hold, its release at the end): a
+/// signal's release waits for it, as bash runs a trap only once the command in the foreground (the
+/// box-side watch that hides the pointer) is over: never a release that reads the pointer shown
+/// while that watch is still about to hide it.
+static GATE: Mutex<()> = Mutex::new(());
+/// A terminating signal came: the release is on its way.
+static SIGNALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The one-off hold of this process (shot --no-pointer), given back when it ends however it ends.
 static HOLD: Mutex<Option<(Ctx, Vec<u8>)>> = Mutex::new(None);
 
@@ -343,18 +345,14 @@ fn release_quiet(ctx: &Ctx, tag: &[u8]) {
     if !ctx.at("pointer").is_file() {
         return;
     }
-    let done = {
-        let _q = Redir::null(2);
+    let done = crate::exit::muted(|| {
         let mut p = Ptr::default();
         matches!(ptr_change(ctx, &mut p, Op::Release, tag, true), Ok(Ok(())))
-    };
+    });
     if done {
         return;
     }
-    let alive = {
-        let _q = Redir::null(2);
-        box_alive(ctx).unwrap_or(false)
-    };
+    let alive = crate::exit::muted(|| box_alive(ctx).unwrap_or(false));
     if alive {
         say(cat!(
             "could not show box '",
@@ -368,6 +366,9 @@ fn release_quiet(ctx: &Ctx, tag: &[u8]) {
 
 /// At this process's end (main's, after the command): the hold given back, once (bash's EXIT trap).
 pub fn release_at_exit() {
+    let _g = GATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let h = HOLD.lock().ok().and_then(|mut g| g.take());
     if let Some((ctx, tag)) = h {
         release_quiet(&ctx, &tag);
@@ -421,6 +422,8 @@ pub fn hold_until_exit(ctx: &Ctx, tag: &[u8]) -> Res<()> {
     if let Ok(mut g) = HOLD.lock() {
         *g = Some((ctx.clone(), tag.to_vec()));
     }
+    // (argv[0] its path for ps; the exec by /proc/self/exe, which is this binary even once a
+    // rebuild has replaced or removed the file)
     let exe = std::fs::read_link("/proc/self/exe")
         .map(|p| shell::bytes(&p).to_vec())
         .unwrap_or_default();
@@ -451,13 +454,14 @@ pub fn hold_until_exit(ctx: &Ctx, tag: &[u8]) -> Res<()> {
     if let Ok((r, w)) = crate::exec::pipe() {
         use std::os::fd::IntoRawFd;
         SIG_W.store(w.into_raw_fd(), std::sync::atomic::Ordering::Relaxed);
+        // (a signal ignored when this omabox started stays ignored: bash cannot trap it, `nohup`)
         for s in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-            // SAFETY: on_signal only makes async-signal-safe calls.
-            unsafe {
-                libc::signal(s, on_signal as *const () as libc::sighandler_t);
-            }
+            crate::sig::catch(s, on_signal);
         }
         std::thread::spawn(move || {
+            // (the whole of it into the thread: a closure that named only .ptrs would take only
+            // them, and the strings they point into would be gone)
+            let argvs = argvs;
             let mut f = std::fs::File::from(r);
             let mut b = [0u8; 1];
             if std::io::Read::read_exact(&mut f, &mut b).is_ok() {
@@ -466,22 +470,42 @@ pub fn hold_until_exit(ctx: &Ctx, tag: &[u8]) -> Res<()> {
                     libc::SIGTERM => 1,
                     _ => 2,
                 };
+                // Not while the hold is being set (or released): once that is over.
+                SIGNALLED.store(true, std::sync::atomic::Ordering::SeqCst);
+                let _g = GATE
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let a = &argvs.ptrs[k];
                 if a.len() == 8 {
                     // SAFETY: a is a NUL-ended array of pointers to the NUL-ended strings argvs
                     // owns, alive for the call; execv only returns on failure.
                     unsafe {
-                        libc::execv(a[0] as *const libc::c_char, a.as_ptr().cast());
+                        libc::execv(c"/proc/self/exe".as_ptr(), a.as_ptr().cast());
                     }
                 }
-                // (no way to replace it: the release from here, then the exit)
-                release_at_exit();
+                // (no way to replace it: the release from here, its words muted on this thread
+                // alone, then the exit)
+                let h = HOLD.lock().ok().and_then(|mut g| g.take());
+                if let Some((ctx, tag)) = h {
+                    release_quiet(&ctx, &tag);
+                }
                 std::process::exit([130, 143, 129][k]);
             }
         });
     }
     let mut p = Ptr::default();
-    if ptr_change(ctx, &mut p, Op::Hold, tag, true)?.is_err() {
+    let held = {
+        let _g = GATE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        ptr_change(ctx, &mut p, Op::Hold, tag, true)?
+    };
+    // A signal that came meanwhile: bash's trap runs now, before anything more of the command; here
+    // the release replaces this process as soon as the gate is free, and nothing more is done.
+    while SIGNALLED.load(std::sync::atomic::Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    if held.is_err() {
         return Err(ptr_fail(ctx, &p, b"--no-pointer"));
     }
     Ok(())

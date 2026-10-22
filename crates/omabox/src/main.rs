@@ -45,21 +45,27 @@ static HANDOFF: std::sync::OnceLock<(Option<OsString>, Option<OsString>)> =
 type Run = fn(&mut exit::Ctx, &[Vec<u8>]) -> exit::Res<()>;
 
 fn main() -> ExitCode {
-    // As bash: a write to a closed pipe ends the command (Rust ignores SIGPIPE); glob order and
-    // `=~` follow the locale.
-    // SAFETY: at the start, before any other thread; SIG_DFL is a valid disposition.
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    // As bash: a write to a closed pipe ends the command (Rust ignores SIGPIPE), unless SIGPIPE came
+    // ignored (bash keeps an ignored signal so, and so do its children); glob order and `=~` follow
+    // the locale.
+    if !PIPE_IGNORED.load(std::sync::atomic::Ordering::Relaxed) {
+        // SAFETY: at the start, before any other thread; SIG_DFL is a valid disposition.
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
     }
     // Bash ignores SIGQUIT for itself (a Ctrl-\ does not end the script), and what it runs in the
-    // foreground gets the default back: a handler that does nothing is that (reset at exec).
-    // SAFETY: a zeroed sigaction with a handler of no work and SA_RESTART, set before any thread.
-    unsafe {
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = quit_ignored as *const () as libc::sighandler_t;
-        sa.sa_flags = libc::SA_RESTART;
-        libc::sigemptyset(&mut sa.sa_mask);
-        libc::sigaction(libc::SIGQUIT, &sa, std::ptr::null_mut());
+    // foreground gets the default back: a handler that does nothing is that (reset at exec). One
+    // that came ignored stays ignored, for it and its children, as bash leaves it.
+    if !sig::ignored(libc::SIGQUIT) {
+        // SAFETY: a zeroed sigaction with a handler of no work and SA_RESTART, before any thread.
+        unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = quit_ignored as *const () as libc::sighandler_t;
+            sa.sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&mut sa.sa_mask);
+            libc::sigaction(libc::SIGQUIT, &sa, std::ptr::null_mut());
+        }
     }
     shell::init_locale();
     // What bash's hand-off adds to the environment is this call's, not its children's (bin/omabox up
@@ -153,6 +159,21 @@ fn main() -> ExitCode {
 }
 
 extern "C" fn quit_ignored(_: libc::c_int) {}
+
+/// SIGPIPE as this process came (before Rust's runtime sets it ignored, in main's preamble): read by
+/// a constructor, which runs before it.
+static PIPE_IGNORED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn pipe_as_it_came() {
+    PIPE_IGNORED.store(
+        sig::ignored(libc::SIGPIPE),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+#[used]
+#[unsafe(link_section = ".init_array")]
+static PIPE_AS_IT_CAME: extern "C" fn() = pipe_as_it_came;
 
 /// The checkout this binary belongs to: OMABOX_ROOT from bash, else two levels up from build/bin.
 pub fn root() -> PathBuf {
