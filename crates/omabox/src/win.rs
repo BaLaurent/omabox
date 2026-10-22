@@ -126,10 +126,7 @@ pub fn win_select(ctx: &Ctx, wins: &[u8], sels: &[Vec<u8>]) -> Res<Vec<u8>> {
 /// win_lines LIST >&2: a window a line, for a refusal.
 pub fn win_lines(list: &[u8]) {
     let r = jq::jq(
-        &[
-            "-r",
-            r#"if length == 0 then "  (none)" else .[] | "  \(.address)  \(.class)  \(.title | tojson)  workspace \(.workspace)" end"#,
-        ],
+        &["-r", crate::jqprog::WIN_LINES_JQ],
         Some(list),
         jq::Err::Inherit,
     );
@@ -139,7 +136,7 @@ pub fn win_lines(list: &[u8]) {
 /// win_desc WINDOW: `0x... class "title"`, for messages.
 pub fn win_desc(w: &[u8]) -> Vec<u8> {
     jq::jq(
-        &["-r", r#""\(.address) \(.class) \(.title | tojson)""#],
+        &["-r", crate::jqprog::WIN_DESC_ONE_JQ],
         Some(w),
         jq::Err::Inherit,
     )

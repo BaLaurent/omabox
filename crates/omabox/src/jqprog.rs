@@ -203,3 +203,141 @@ pub fn by_name(n: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
+
+/// Inline programs of bin/omabox's functions, byte for byte (the suite checks each is in the
+/// script as it is).
+/// win_lines: a window a line.
+pub const WIN_LINES_JQ: &str = r#"if length == 0 then "  (none)" else .[] | "  \(.address)  \(.class)  \(.title | tojson)  workspace \(.workspace)" end"#;
+/// win_desc: `0x... class "title"`.
+pub const WIN_DESC_ONE_JQ: &str = r#""\(.address) \(.class) \(.title | tojson)""#;
+/// layer_at: where a layer is drawn, a 1x1 one not (finding 146).
+pub const LAYER_AT_JQ: &str = r#"first(.. | objects | select(.namespace? == $n and .w > 1 and .h > 1)
+    | "\(.x),\(.y) \(.w)x\(.h)") // empty"#;
+/// win_answer focused (after WIN_DESC_JQ).
+pub const WIN_FOCUSED_JQ: &str = r#"
+        (first(.[] | select(.active)) // null) as $f
+        | if length == 0 then "no"
+          elif $f == null then if length == 1 then "no \(.[0] | n) is there" else "no \(length) matching, none focused" end
+          else "yes \($f | d)" + (if length > 1 then " (1 of \(length) matching)" else "" end) end"#;
+/// win_answer present (after WIN_DESC_JQ).
+pub const WIN_PRESENT_JQ: &str = r#"
+        if length == 0 then "no" elif length == 1 then "yes \(.[0] | d)"
+        else "yes \(length) windows: \(map(d) | join("; "))" end"#;
+/// poll_until --json.
+pub const POLL_JSON_JQ: &str = r#"{result: $res, condition: ($cond | sub("_probe$"; "") | sub("^win$"; "window")), message: $msg, elapsed: ($t | tonumber / 1000),
+        detail: (if $d == "" then null else $d end)}"#;
+/// cursor_now: "X Y".
+pub const CURSOR_JQ: &str = r#"select((.x | type) == "number" and (.y | type) == "number") | "\(.x | floor) \(.y | floor)""#;
+/// settle_end --json.
+pub const SETTLE_JSON_JQ: &str = r#"
+      def secs: if . == "" or . == "-" then null else tonumber / 1000 end;
+      def box: if . == "-" then null else split(",") | map(tonumber) | {x: .[0], y: .[1], w: .[2], h: .[3]} end;
+      {result: $res, condition: $cond, message: $msg, elapsed: ($t | secs), first_change: ($first | secs),
+       last_change: ($last | secs), change: ($ch | box), late_changes: ($late | box),
+       ignored: (($ig | box) as $b | if $b then $b + {why: $why} else null end),
+       frames: (if $frames == "" then null else $frames | tonumber end)}
+      + if $facts == "" then {} else {changes: $changes, target: $target, events_since: $evs} end"#;
+/// desk_snap: the five answers as one object.
+pub const SNAP_JQ: &str = r#"select(length == 5 and (.[0] | type) == "array" and (.[1] | type) == "object"
+    and (.[2] | type) == "object" and (.[4] | type) == "array")
+    | {events: ($s | tonumber? // null), clients: .[0], layers: .[1], active: .[2], workspace: .[3], monitors: .[4]}"#;
+/// windows --json.
+pub const WINDOWS_JSON_JQ: &str = r#"def r: . + {x: .at[0], y: .at[1], w: .size[0], h: .size[1]};
+      map(r | .cover |= map(r) | if .layers then .layers |= map(r) else . end)"#;
+/// windows_table.
+pub const WINDOWS_TABLE_JQ: &str = r#"def pad($n): tostring | . + (" " * ($n - length) // "");
+    .[] | [(.address | pad(16)), (.pid | pad(8)), (.workspace | pad(10)),
+      ((if .onscreen | not then "off-screen" elif .cover != [] then "covered" else "on-screen" end)
+        + (if .active then ",active" else "" end) | pad(20)),
+      ("\(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])" | pad(22)), (.class | pad(16)), (.title | tojson)] | join(" ")"#;
+/// windows_layers.
+pub const WINDOWS_LAYERS_JQ: &str = r#"[.[] | .address as $a | .layers[]? | {k: [.namespace, .layer, .at, .size, (.certain != false)], a: $a}]
+    | group_by(.k)[] | .[0].k as [$n, $l, $at, $sz, $c]
+    | "layer \($n | tojson) (\($l) \($sz[0])x\($sz[1]) at \($at[0]),\($at[1])) "
+      + if $c then "is over \(map(.a) | join(", ")): where it takes input, input there goes to it"
+        else "spans the screen, possibly over \(map(.a) | join(", ")): input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window" end"#;
+/// layer_select: the layers SEL names.
+pub const LAYER_HITS_JQ: &str = r#"[.[] | select(
+      if ($s | startswith("address:")) then .address == ($s | ltrimstr("address:"))
+      elif ($s | startswith("pid:")) then (.pid | tostring) == ($s | ltrimstr("pid:"))
+      else .namespace == $s end)]"#;
+/// layer_lines.
+pub const LAYER_LINES_JQ: &str = r#"if length == 0 then "  (none)" else .[] | "  \(.address)  \(.namespace | tojson)  pid \(.pid)  \(.level) \(.w)x\(.h) at \(.x),\(.y) on \(.monitor)" end"#;
+/// layer_desc.
+pub const LAYER_DESC_JQ: &str =
+    r#""\(.namespace | tojson) (pid \(.pid), \(.w)x\(.h) at \(.x),\(.y))""#;
+/// layer_read: its pid and place.
+pub const LAYER_FIELDS_JQ: &str = r#""\(.pid) \(.w) \(.h) \(.x) \(.y)""#;
+/// layer_read: its pid and size (after LAYER_LIST_JQ).
+pub const LAYER_TIED_JQ: &str = r#" | map(select(.pid == $l.pid and .w == $l.w and .h == $l.h))"#;
+/// layer_read: the one of them holding the keyboard.
+pub const LAYER_KB_JQ: &str = r#"($kb | split(", ")) as $k | [.[] | select(.namespace as $n | .address as $a
+      | any($k[]; . == $n or . == $a))] | if length == 1 then .[0].address else "" end"#;
+/// tree: its app's other windows of its size (#302).
+pub const TREE_TWINS_JQ: &str =
+    r#"[.[] | select(.pid == $w.pid and .address != $w.address and .size == $w.size)] | length"#;
+/// extent (after JQ_MON).
+pub const EXTENT_JQ: &str = r#"[.[] | select(.disabled | not)] |
+    "\(map(.x + lw) | max | floor)x\(map(.y + lh) | max | floor)""#;
+/// main_screen, interactive.
+pub const MAIN_SCREEN_I_JQ: &str =
+    r#"map(select((.disabled | not) and (.name | startswith("WAYLAND-")))) | .[0]"#;
+/// main_screen, headless.
+pub const MAIN_SCREEN_H_JQ: &str =
+    r#"map(select((.disabled | not) and (.name == "HEADLESS-2" or .name == "WAYLAND-1"))) | .[0]"#;
+/// box_screen (after main_screen).
+pub const BOX_SCREEN_JQ: &str =
+    r#" // empty | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)""#;
+/// win_scale.
+pub const WIN_SCALE_JQ: &str = r#"first(.[] | select(.address == $a) | .monitor) as $id | first($m[] | select(.id == $id) | .scale) // 1"#;
+/// A window by its address.
+pub const BY_ADDRESS_JQ: &str = r#"first(.[] | select(.address == $a)) // empty"#;
+/// pixel: a point on no monitor (#161; after JQ_MON).
+pub const PIXEL_OFF_JQ: &str = r#"[.[] | select(.disabled | not)] as $m |
+      [range(0; $p | length; 2) | [$p[.], $p[. + 1]] | select(. as [$x, $y] | $x < $lw and $y < $lh and ($m | all(.[];
+        $x < .x or $y < .y or $x >= .x + (lw | floor) or $y >= .y + (lh | floor))))] |
+      if length == 0 or ($m | length) == 0 then empty
+      else "\(.[0][0]),\(.[0][1]) is not on any monitor (\($m | map("\(.name) \(.x),\(.y) \(lw | floor)x\(lh | floor)") | join(", ")))" end"#;
+/// wait --window: its place as X,Y,W,H.
+pub const WIN_REGION_JQ: &str = r#""\(.at[0]),\(.at[1]),\(.size[0]),\(.size[1])""#;
+/// A window's size, WxH.
+pub const WIN_SIZE_JQ: &str = r#""\(.size[0])x\(.size[1])""#;
+/// pixel: a window's size, W H.
+pub const WIN_SIZE2_JQ: &str = r#""\(.size[0]) \(.size[1])""#;
+
+/// layer_select: the ones drawn (over 1x1, finding 146).
+pub const LAYER_BIG_JQ: &str = r#"map(select(.w > 1 and .h > 1))"#;
+
+/// Every inline program, for `_rust-jq --inline` (the rest are a path, .kind, .[0], length).
+pub const INLINE: [&str; 30] = [
+    LAYER_BIG_JQ,
+    WIN_LINES_JQ,
+    WIN_DESC_ONE_JQ,
+    LAYER_AT_JQ,
+    WIN_FOCUSED_JQ,
+    WIN_PRESENT_JQ,
+    POLL_JSON_JQ,
+    CURSOR_JQ,
+    SETTLE_JSON_JQ,
+    SNAP_JQ,
+    WINDOWS_JSON_JQ,
+    WINDOWS_TABLE_JQ,
+    WINDOWS_LAYERS_JQ,
+    LAYER_HITS_JQ,
+    LAYER_LINES_JQ,
+    LAYER_DESC_JQ,
+    LAYER_FIELDS_JQ,
+    LAYER_TIED_JQ,
+    LAYER_KB_JQ,
+    TREE_TWINS_JQ,
+    EXTENT_JQ,
+    MAIN_SCREEN_I_JQ,
+    MAIN_SCREEN_H_JQ,
+    BOX_SCREEN_JQ,
+    WIN_SCALE_JQ,
+    BY_ADDRESS_JQ,
+    PIXEL_OFF_JQ,
+    WIN_REGION_JQ,
+    WIN_SIZE_JQ,
+    WIN_SIZE2_JQ,
+];

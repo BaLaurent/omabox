@@ -250,13 +250,13 @@ pub fn unknown_word(
 
 /// A word with no place in LABEL's command line: a usage error. One that names a box says the box
 /// goes with -b (audit E4).
-pub fn unexpected(ctx: &Ctx, label: &str, w: &[u8], hint: &str) -> Exit {
+pub fn unexpected(ctx: &Ctx, label: impl AsRef<[u8]>, w: &[u8], hint: &str) -> Exit {
     let mut why = hint.as_bytes().to_vec();
     if crate::shell::re_match("^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$", w) && ctx.in_boxes(w).is_dir() {
         why = cat!("(box '", w, "'? a box goes with -b: -b ", w, ")");
     }
     let sep: &[u8] = if why.is_empty() { b"" } else { b" " };
-    ctx.usage_die(cat!(label, ": unexpected ", w, sep, why))
+    ctx.usage_die(cat!(label.as_ref(), ": unexpected ", w, sep, why))
 }
 
 /// `optarg "$@"`: an option with no value is a usage error naming the form help gives it.

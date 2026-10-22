@@ -61,12 +61,25 @@ pub fn jq<A: AsRef<[u8]>>(args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
     };
     let child = c.spawn();
     drop(c);
-    let Ok(mut child) = child else {
-        let _ = read_all(r, None);
-        return Ran {
-            rc: 127,
-            out: Vec::new(),
-        };
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = read_all(r, None);
+            // bash's own line for a command it could not run (in the child, after its
+            // redirections: where jq's stderr goes), less its "SCRIPT: line N: ".
+            let (rc, m) = not_run(&e);
+            match err {
+                Err::Inherit => {
+                    let _ = std::io::Write::write_all(&mut std::io::stderr(), &m);
+                }
+                Err::Out => return Ran { rc, out: m },
+                Err::Null => {}
+            }
+            return Ran {
+                rc,
+                out: Vec::new(),
+            };
+        }
     };
     // A here-string's newline after the input.
     let feeder = match (input, child.stdin.take()) {
@@ -79,6 +92,27 @@ pub fn jq<A: AsRef<[u8]>>(args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
     }
     let rc = child.wait().map(|s| crate::exec::status(s).0).unwrap_or(1);
     Ran { rc, out }
+}
+
+/// Bash's status and words for jq not run: 127 "jq: command not found" when no jq is on PATH, else
+/// 126 "PATH_OF_JQ: REASON" (an argument past 128 KiB: "Argument list too long").
+fn not_run(e: &std::io::Error) -> (i32, Vec<u8>) {
+    let found = crate::shell::env_or_empty("PATH")
+        .split(|&c| c == b':')
+        .map(|d| crate::cat!(if d.is_empty() { b".".as_slice() } else { d }, "/jq"))
+        .find(|p| crate::exec::executable(p) && crate::shell::path(p).is_file());
+    match (found, e.raw_os_error()) {
+        (None, _) | (_, Some(libc::ENOENT)) => (127, b"jq: command not found\n".to_vec()),
+        (Some(p), code) => {
+            // SAFETY: strerror's string for a valid errno, read at once.
+            let why = unsafe {
+                std::ffi::CStr::from_ptr(libc::strerror(code.unwrap_or(libc::EIO)))
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            (126, crate::cat!(p, ": ", why, "\n"))
+        }
+    }
 }
 
 /// `jq -c -n --argjson K V ... PROGRAM` and the like: the words of a call, built in order.
@@ -101,5 +135,25 @@ impl Args {
 
     pub fn run(&self, input: Option<&[u8]>, err: Err) -> Ran {
         jq(&self.0, input, err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // What bash said for each: `jq -n --argjson c "$BIG"` (one argument past 128 KiB), a jq not on
+    // PATH (both less "SCRIPT: line N: ").
+    #[test]
+    fn not_run_as_bash_says() {
+        let big = vec![b'1'; 200_000];
+        let r = Args::new(&["-n"])
+            .kv("--argjson", "c", &big)
+            .arg("1")
+            .run(None, Err::Out);
+        assert_eq!(r.rc, 126);
+        assert!(r.out.ends_with(b"/jq: Argument list too long\n"));
+        let e = std::io::Error::from_raw_os_error(libc::ENOENT);
+        assert_eq!(not_run(&e), (127, b"jq: command not found\n".to_vec()));
     }
 }

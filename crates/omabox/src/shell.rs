@@ -70,8 +70,10 @@ unsafe extern "C" {
 /// The length of the character V starts with, in the locale init_locale set: 1 in a single-byte
 /// locale, for a NUL, and for a byte that starts no character there.
 fn mb_len(v: &[u8], cut: bool) -> usize {
+    // (cut's own setlocale(LC_ALL, "") failing leaves it in C: bytes, whatever bash set)
+    let c_locale = cut && !LOCALE_WHOLE.load(std::sync::atomic::Ordering::Relaxed);
     // SAFETY: reads the current locale's constant.
-    if v.is_empty() || unsafe { __ctype_get_mb_cur_max() } <= 1 {
+    if v.is_empty() || c_locale || unsafe { __ctype_get_mb_cur_max() } <= 1 {
         return 1;
     }
     // SAFETY: an mbstate_t of zeroes is the initial state; v is valid for v.len() bytes; wc is ours.
@@ -286,12 +288,59 @@ pub fn read_ifs(v: &[u8], n: usize, ifs: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-/// Sets the locale from the environment, as bash does at its start: glob order and `=~` follow it.
-pub fn init_locale() {
-    // SAFETY: called once at the start, before any other thread; the argument is a valid C string.
-    unsafe {
-        libc::setlocale(libc::LC_ALL, c"".as_ptr());
+/// Whether the whole of setlocale(LC_ALL, "") took (coreutils' own start: cut counts bytes where it
+/// did not).
+static LOCALE_WHOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// The categories bash sets one by one (locale.c's reset_locale_vars).
+const CATEGORIES: [(libc::c_int, &str); 5] = [
+    (libc::LC_CTYPE, "LC_CTYPE"),
+    (libc::LC_COLLATE, "LC_COLLATE"),
+    (libc::LC_MESSAGES, "LC_MESSAGES"),
+    (libc::LC_NUMERIC, "LC_NUMERIC"),
+    (libc::LC_TIME, "LC_TIME"),
+];
+
+/// The locale as bash sets it at its start (glob order, `=~`, `${V:0:N}` follow it): setlocale(LC_ALL,
+/// "") first; where that fails as a whole (one category's name no locale), LC_ALL's value for every
+/// category when it is set; else LANG's for every one, then each category's own LC_* over it, one
+/// by one (one that fails keeps LANG's). LANG no locale either: C. GET reads the environment, SET is
+/// setlocale's; true when the first call took.
+pub fn bash_locale(
+    get: &dyn Fn(&str) -> Option<Vec<u8>>,
+    set: &mut dyn FnMut(libc::c_int, &[u8]) -> bool,
+) -> bool {
+    if set(libc::LC_ALL, b"") {
+        return true;
     }
+    let val = |k: &str| get(k).filter(|v| !v.is_empty());
+    if let Some(all) = val("LC_ALL") {
+        set(libc::LC_ALL, &all);
+        return false;
+    }
+    let lang = val("LANG").unwrap_or_default();
+    if !set(libc::LC_ALL, &lang) {
+        return false;
+    }
+    for (c, name) in CATEGORIES {
+        let v = val(name).unwrap_or_else(|| lang.clone());
+        set(c, &v);
+    }
+    false
+}
+
+/// Sets the locale from the environment, as bash does at its start (bash_locale).
+pub fn init_locale() {
+    let get = |k: &str| env(k);
+    let mut set = |c: libc::c_int, v: &[u8]| -> bool {
+        let Ok(v) = CString::new(v.to_vec()) else {
+            return false;
+        };
+        // SAFETY: called at the start, before any other thread; v is a valid C string.
+        unsafe { !libc::setlocale(c, v.as_ptr()).is_null() }
+    };
+    let whole = bash_locale(&get, &mut set);
+    LOCALE_WHOLE.store(whole, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Bytes compared as the locale collates them (strcoll), as bash sorts a glob's matches.
@@ -449,11 +498,15 @@ pub fn arith(v: &[u8]) -> Option<i64> {
 
 /// Bash arithmetic's reading of a number word (`$((X + 1))` where X holds it): blanks around, a sign,
 /// then decimal, octal after a 0, hex after 0x, wrapping at 64 bits. None where bash refuses it ("08:
-/// value too great for base"), which bash says in its own words and ends the command list with.
+/// value too great for base"), which bash says in its own words and ends the command list with; an
+/// empty one (or blanks) is 0.
 pub fn bash_int(v: &[u8]) -> Option<i64> {
     let s = std::str::from_utf8(v)
         .ok()?
         .trim_matches(|c: char| c == ' ' || c == '\t' || c == '\n');
+    if s.is_empty() {
+        return Some(0);
+    }
     let (neg, s) = match s.as_bytes().first() {
         Some(b'-') => (true, &s[1..]),
         Some(b'+') => (false, &s[1..]),
@@ -628,6 +681,64 @@ mod tests {
         assert_eq!(subst(b"a\0b\n\n"), b"ab");
     }
 
+    // What bash 5.3 counted (`x=é; ${#x}`) with each environment: setlocale(LC_ALL, "") failing makes
+    // it set LC_ALL's, or LANG's then each LC_*, one by one.
+    #[test]
+    fn locale_as_bash_sets_it() {
+        let valid = |v: &[u8]| matches!(v, b"" | b"C" | b"C.UTF-8" | b"en_US.UTF-8");
+        let run = |env: &[(&str, &str)]| -> (bool, Vec<(libc::c_int, Vec<u8>)>) {
+            let get = |k: &str| {
+                env.iter()
+                    .find(|(n, _)| *n == k)
+                    .map(|(_, v)| v.as_bytes().to_vec())
+            };
+            let mut calls = Vec::new();
+            let mut set = |c: libc::c_int, v: &[u8]| {
+                // ("": every category's own, all of them valid or the call fails)
+                let ok = if v.is_empty() {
+                    env.iter().all(|(_, v)| valid(v.as_bytes()))
+                } else {
+                    valid(v)
+                };
+                if ok {
+                    calls.push((c, v.to_vec()));
+                }
+                ok
+            };
+            let whole = bash_locale(&get, &mut set);
+            (whole, calls)
+        };
+        let ctype = |calls: &[(libc::c_int, Vec<u8>)]| {
+            calls
+                .iter()
+                .rev()
+                .find(|(c, _)| *c == libc::LC_CTYPE || *c == libc::LC_ALL)
+                .map(|(_, v)| v.clone())
+        };
+        let (w, c) = run(&[("LANG", "en_US.UTF-8")]);
+        assert!(w);
+        assert_eq!(ctype(&c), Some(b"".to_vec()));
+        let (w, c) = run(&[("LANG", "en_US.UTF-8"), ("LC_TIME", "xx_XX.UTF-8")]);
+        assert!(!w);
+        assert_eq!(ctype(&c), Some(b"en_US.UTF-8".to_vec()));
+        let (_, c) = run(&[("LANG", "en_US.UTF-8"), ("LC_CTYPE", "xx")]);
+        assert_eq!(ctype(&c), Some(b"en_US.UTF-8".to_vec()));
+        let (_, c) = run(&[("LANG", "xx"), ("LC_CTYPE", "en_US.UTF-8")]);
+        assert_eq!(ctype(&c), None);
+        let (_, c) = run(&[("LC_ALL", "xx"), ("LANG", "en_US.UTF-8")]);
+        assert_eq!(ctype(&c), None);
+        let (_, c) = run(&[
+            ("LANG", "C"),
+            ("LC_CTYPE", "en_US.UTF-8"),
+            ("LC_TIME", "xx"),
+        ]);
+        assert_eq!(ctype(&c), Some(b"en_US.UTF-8".to_vec()));
+        let (_, c) = run(&[("LC_ALL", "C.UTF-8"), ("LANG", "xx")]);
+        assert_eq!(ctype(&c), Some(b"C.UTF-8".to_vec()));
+        let (_, c) = run(&[("LC_CTYPE", "en_US.UTF-8"), ("LC_TIME", "xx")]);
+        assert_eq!(ctype(&c), None);
+    }
+
     #[test]
     fn read_splits_as_bash() {
         let f = |v: &[u8], n| read_fields(v, n);
@@ -657,6 +768,9 @@ mod tests {
         assert_eq!(bash_int(b"0"), Some(0));
         assert_eq!(bash_int(b" 3 "), Some(3));
         assert_eq!(bash_int(b"x"), None);
+        assert_eq!(bash_int(b""), Some(0));
+        assert_eq!(bash_int(b" "), Some(0));
+        assert_eq!(bash_int(b"-"), None);
     }
 
     #[test]

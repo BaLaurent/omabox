@@ -71,7 +71,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
-    shell_note(ctx);
+    shell_note(ctx)?;
     let t = on_box(
         ctx,
         &[
@@ -129,7 +129,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let w = win_select(ctx, &wins, &sels)?;
         let pid = jq_r(".pid", &w);
         let title = jq_r(".title", &w);
-        let size = jq_r(r#""\(.size[0])x\(.size[1])""#, &w);
+        let size = jq_r(crate::jqprog::WIN_SIZE_JQ, &w);
         what = win_desc(&w);
         if !shell::re_match("^[1-9][0-9]*$", &pid) {
             return Err(ctx.die(cat!(
@@ -144,7 +144,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // none (#302).
         let twins = Args::new(&[])
             .kv("--argjson", "w", &w)
-            .arg("[.[] | select(.pid == $w.pid and .address != $w.address and .size == $w.size)] | length")
+            .arg(crate::jqprog::TREE_TWINS_JQ)
             .run(Some(&wins), jq::Err::Inherit)
             .text();
         let (f, p) = shell::mktemp()?;
