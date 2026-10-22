@@ -1,0 +1,14 @@
+# omabox's Rust half (#324): the commands it has taken over from bin/omabox. Built into build/bin by
+# install.sh and the suite; bin/omabox hands those commands to it.
+[workspace]
+members = ["crates/omabox"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+
+[profile.release]
+lto = "thin"
+strip = true

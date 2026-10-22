@@ -19,3 +19,6 @@ tools/tree/omabox-tree
 
 # release.sh output
 dist/
+
+# The Rust half (#324)
+target/

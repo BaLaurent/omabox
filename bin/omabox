@@ -5,6 +5,9 @@ set -euo pipefail
 # When this omabox was called, in µs of the wall clock: `record mark`'s time (#176), taken before the
 # rest of this script is read.
 CALL_US=${EPOCHREALTIME//[!0-9]/}
+# A command the Rust half handed back (a binary older than this script) keeps its caller's time.
+[[ ${OMABOX_CALL_US:-} != *[!0-9]* && -n ${OMABOX_CALL_US:-} ]] && CALL_US=$OMABOX_CALL_US
+unset OMABOX_CALL_US
 
 ROOT=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)
 BOXES=${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}/omabox
@@ -24,6 +27,11 @@ TREE=$ROOT/tools/tree/omabox-tree
 EVENTS=$ROOT/tools/events/omabox-events
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
 RELAY=$ROOT/tools/relay/omabox-relay
+# The Rust half (#324, crates/omabox, built into build/bin): the commands it has taken over run there
+# (rust_handoff). OMABOX_BASH=1 keeps every command here, to compare the two.
+RUST=$ROOT/build/bin/omabox
+RUST_CMDS=" _rust "
+NO_RUST=${OMABOX_BASH:-}; unset OMABOX_BASH   # for this call only, not what it starts
 # aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
 # the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
 # and where: a checkout's build/prefix, else the user's data dir (aq_resolve). With omabox's own patches
@@ -15834,6 +15842,15 @@ global_box() {
   fi
   ARGS=("$1" "$flag" "$name" "${@:2}")
 }
+# A command the Rust half has taken over (#324) runs there, with the words as main has them now: -b
+# after the command, --opt=value split, --help and the relay done. Not for a broker's caller: its
+# policy (broker_check) is bash's until the broker is ported. A missing binary (a checkout not built
+# yet) runs it here.
+rust_handoff() {
+  [[ $RUST_CMDS == *" $1 "* ]] && [ -z "$NO_RUST" ] && [ -z "${OMABOX_BROKER_PEER:-}" ] &&
+    [ -x "$RUST" ] || return 0
+  OMABOX_ROOT=$ROOT OMABOX_CALL_US=$CALL_US exec "$RUST" "$@"
+}
 # A command that is not about one box, given -b before it or (ls, #236) after it: one line, exit 2.
 not_one_box() { say "$1 takes no -b: it is not about one box"; exit 2; }
 # A command omabox does not have: exit 2, with the nearest one it has.
@@ -15894,6 +15911,7 @@ main() {
   # (A caller the broker cannot place, or one it turns away, is a refusal, not a usage error.)
   if [ -n "${OMABOX_BROKER_PEER:-}" ]; then PARSING=0; broker_init; broker_check "$cmd" "$@"; PARSING=1
   elif [ "$cmd" != calibrate ] && relay_wanted; then relay_call "$cmd" "$@"; fi
+  rust_handoff "$cmd" "$@"
   case $cmd in
     up) cmd_up "$@" ;;
     run) cmd_run "$@" ;;
