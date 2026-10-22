@@ -3023,6 +3023,9 @@ t_unit_rust_parity() {
   rm -rf "$r"; mkdir -p "$r/rt" "$r/norepo" "$r/bin"
   local repo; repo=$r/rp-repo; mkdir -p "$repo" && git -C "$repo" init -q
   local long; long=$r/$(printf 'l%.0s' {1..45}); mkdir -p "$long" && git -C "$long" init -q
+  # (31 characters cut where the bytes differ: é is 2 bytes; \xe2\x82 is € cut short, \xf4\x90... past U+10FFFF)
+  local mb bad; mb=$r/ab$(printf 'é%.0s' {1..10})$(printf 'x%.0s' {1..25}); mkdir -p "$mb" && git -C "$mb" init -q
+  bad=$r/a$'\xff\xe2\x82\xf4\x90\x80\x80'$(printf 'é%.0s' {1..8})$(printf 'y%.0s' {1..25}); mkdir -p "$bad" && git -C "$bad" init -q
   rp_rt=$r/rt rp_dir=$r/norepo rp_env=() rp_snap=1
   # Live stand-ins: a process in a pid namespace of its own; one behind a script named pasta (its
   # child, bwrap's place, has the box's PID 1 as its pid 1); one no ns of which can be read.
@@ -3174,6 +3177,13 @@ t_unit_rust_parity() {
   rp_env=(CLAUDE_CODE_SESSION_ID="$sid"); parity "...with the session's suffix" env
   rp_dir=$long; parity "a long repo name cut to fit the suffix" path
   rp_env=(); parity "...and to 40 without one" env
+  # coreutils 9.12's cut -c counts characters in a multibyte locale, bytes in C; a byte that starts
+  # none (invalid UTF-8) is one, as is each byte of a sequence cut short.
+  rp_dir=$mb rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=C.UTF-8); parity "a repo name not ASCII: cut by characters (UTF-8)" path
+  rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=C); parity "...by bytes in C" path
+  rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=); parity "...in the caller's own locale" path
+  rp_dir=$bad rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=C.UTF-8); parity "...invalid UTF-8: a byte each" path
+  rp_env=()
   rp_dir=$r/norepo
   # This session's boxes from another directory (#136): one is used, said once; two are named.
   rp_session1() { rp_fixture; rp_live "rp-repo-$s8"; }

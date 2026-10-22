@@ -23,13 +23,73 @@ pub fn echo_sub(v: &[u8]) -> Vec<u8> {
     strip_nl(v)
 }
 
-/// `$(printf '%s' "$V" | cut -c1-N)`: each line's first N bytes (GNU cut counts bytes).
+/// `$(printf '%s' "$V" | cut -c1-N)`: each line's first N characters. coreutils 9.12's cut counts
+/// characters in a multibyte locale (#324: 9.x stopped counting bytes there), as mbrtowc reads them
+/// in the caller's locale, a byte that starts none (invalid, cut short) counted as one; in a
+/// single-byte one (C, POSIX) bytes.
 pub fn cut_c(v: &[u8], n: usize) -> Vec<u8> {
     let out: Vec<&[u8]> = v
         .split(|&c| c == b'\n')
-        .map(|l| &l[..l.len().min(n)])
+        .map(|l| chars(l, n, true))
         .collect();
     strip_nl(&out.join(&b'\n'))
+}
+
+/// `${V:0:N}`: the first N characters, as bash reads them (glibc's mbrtowc in the locale), a byte
+/// that starts none counted as one.
+pub fn head_chars(v: &[u8], n: usize) -> &[u8] {
+    chars(v, n, false)
+}
+
+/// `cut -c1-N` of one line (no newline in it).
+pub fn cut_line(l: &[u8], n: usize) -> &[u8] {
+    chars(l, n, true)
+}
+
+/// The first N characters of V. CUT: as coreutils' mcel reads one, which takes none past U+10FFFF
+/// (glibc's mbrtowc takes up to 0x7FFFFFFF: bash's substring counts those as one).
+fn chars(v: &[u8], n: usize, cut: bool) -> &[u8] {
+    let (mut i, mut k) = (0, 0);
+    while i < v.len() && k < n {
+        i += mb_len(&v[i..], cut);
+        k += 1;
+    }
+    &v[..i]
+}
+
+unsafe extern "C" {
+    fn mbrtowc(
+        pwc: *mut libc::wchar_t,
+        s: *const libc::c_char,
+        n: libc::size_t,
+        ps: *mut libc::mbstate_t,
+    ) -> libc::size_t;
+    fn __ctype_get_mb_cur_max() -> libc::size_t;
+}
+
+/// The length of the character V starts with, in the locale init_locale set: 1 in a single-byte
+/// locale, for a NUL, and for a byte that starts no character there.
+fn mb_len(v: &[u8], cut: bool) -> usize {
+    // SAFETY: reads the current locale's constant.
+    if v.is_empty() || unsafe { __ctype_get_mb_cur_max() } <= 1 {
+        return 1;
+    }
+    // SAFETY: an mbstate_t of zeroes is the initial state; v is valid for v.len() bytes; wc is ours.
+    let r = unsafe {
+        let mut st: libc::mbstate_t = std::mem::zeroed();
+        let mut wc: libc::wchar_t = 0;
+        let r = mbrtowc(&mut wc, v.as_ptr().cast(), v.len(), &mut st);
+        if cut && wc as u32 > 0x10ffff {
+            usize::MAX
+        } else {
+            r
+        }
+    };
+    match r {
+        0 => 1,
+        r if r > v.len() => 1, // (size_t)-1, -2, or past U+10FFFF for cut: no character there
+        r => r,
+    }
 }
 
 /// `$(basename "$V")`.
@@ -142,21 +202,6 @@ pub fn quote_at(v: &[u8]) -> Vec<u8> {
     }
     out.push(b'\'');
     out
-}
-
-/// `${V:0:N}` in a UTF-8 locale: the first N characters, a byte that starts none counted as one.
-pub fn head_chars(v: &[u8], n: usize) -> &[u8] {
-    let (mut i, mut k) = (0, 0);
-    while i < v.len() && k < n {
-        let l = if v[i] < 0x80 {
-            1
-        } else {
-            utf8_len(&v[i..]).max(1)
-        };
-        i += l;
-        k += 1;
-    }
-    &v[..i]
 }
 
 /// `$(...)` of output that may hold NUL bytes: bash drops them (warning about it; that line is not
@@ -368,11 +413,60 @@ mod tests {
         assert_eq!(echo_sub(b"a\n\n"), b"a");
     }
 
+    // What coreutils 9.12's `cut -c` gave for each, in en_US.UTF-8 and in C.
     #[test]
-    fn cut_counts_bytes_per_line() {
+    fn cut_counts_characters_in_utf8() {
+        let _l = ThreadLocale::new(c"C.UTF-8");
         assert_eq!(cut_c(b"abcdef", 3), b"abc");
         assert_eq!(cut_c(b"abcdef\nxyzw", 2), b"ab\nxy");
+        assert_eq!(cut_c("é".as_bytes(), 1), "é".as_bytes());
+        assert_eq!(cut_c("aéb\nbéc".as_bytes(), 2), "aé\nbé".as_bytes());
+        // A byte that starts no character is one; a sequence cut short, a byte each.
+        assert_eq!(cut_c(b"a\xffb", 2), b"a\xff");
+        assert_eq!(cut_c(b"x\xe2\x82y", 2), b"x\xe2");
+        assert_eq!(cut_c(b"x\xe2\x82y", 3), b"x\xe2\x82");
+        // Overlong, a surrogate, past U+10FFFF: no character; a 4-byte one is one.
+        assert_eq!(cut_c(b"\xc0\x80z", 1), b"\xc0");
+        assert_eq!(cut_c(b"\xed\xa0\x80z", 1), b"\xed");
+        assert_eq!(cut_c(b"\xf4\x90\x80\x80z", 1), b"\xf4");
+        assert_eq!(cut_c(b"\xf8\x88\x80\x80\x80z", 1), b"\xf8");
+        // (bash's substring takes glibc's word for it)
+        assert_eq!(head_chars(b"\xf4\x90\x80\x80z", 1), b"\xf4\x90\x80\x80");
+        assert_eq!(head_chars(b"x\xe2\x82y", 2), b"x\xe2");
+        assert_eq!(cut_c("\u{1f600}z".as_bytes(), 1), "\u{1f600}".as_bytes());
+        // A combining mark is a character of its own; a NUL is one.
+        assert_eq!(cut_c("e\u{301}z".as_bytes(), 2), "e\u{301}".as_bytes());
+        assert_eq!(cut_c(b"ab\0cd", 3), b"ab\0");
+        drop(_l);
+        let _c = ThreadLocale::new(c"C");
         assert_eq!(cut_c("é".as_bytes(), 1), b"\xc3");
+        assert_eq!(cut_c("aéb".as_bytes(), 2), b"a\xc3");
+        assert_eq!(head_chars("é".as_bytes(), 1), b"\xc3");
+    }
+
+    /// A locale for this test's thread alone (uselocale), the thread's own given back on drop: the
+    /// tests run in threads of one process, whose setlocale they share.
+    struct ThreadLocale(libc::locale_t, libc::locale_t);
+
+    impl ThreadLocale {
+        fn new(name: &std::ffi::CStr) -> ThreadLocale {
+            // SAFETY: a valid C string; the new locale is this thread's until drop frees it.
+            unsafe {
+                let l = libc::newlocale(libc::LC_ALL_MASK, name.as_ptr(), std::ptr::null_mut());
+                assert!(!l.is_null(), "no locale {name:?}");
+                ThreadLocale(l, libc::uselocale(l))
+            }
+        }
+    }
+
+    impl Drop for ThreadLocale {
+        fn drop(&mut self) {
+            // SAFETY: the thread's own locale back, then the one made in new freed once.
+            unsafe {
+                libc::uselocale(self.1);
+                libc::freelocale(self.0);
+            }
+        }
     }
 
     #[test]
@@ -438,8 +532,10 @@ mod tests {
 
     #[test]
     fn characters_and_spaces() {
+        let _l = ThreadLocale::new(c"C.UTF-8");
         assert_eq!(head_chars("ééé".as_bytes(), 2), "éé".as_bytes());
         assert_eq!(head_chars(b"\xff\xfeab", 3), b"\xff\xfea");
+        drop(_l);
         assert!(all_space(b" \t\n\x0b"));
         assert!(!all_space(b" x"));
         assert!(!all_space(b"\xff"));
