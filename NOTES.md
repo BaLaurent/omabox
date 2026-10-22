@@ -8807,6 +8807,49 @@ from them.
     (without it, the real inotifywait runs), t_plugin_link and t_plugin_check (the box shell's watch
     is still the stand-in). Omarchy's runtime-smoke-test.sh: 22 of 22, three runs.
 
+435. **An interactive `monitor add` whose box answered late opened its window on the user's
+    workspace, focused** (2026-10-22, #349; the 1.0.x stopgap). `hyprctl` stops reading after 5 s of
+    its own (`SO_RCVTIMEO`, Hyprland 0.56.2's `hyprctl/src/main.cpp`): it prints "Hyprland IPC
+    didn't respond in time" and "Couldn't read (6)" and exits 6, so the create's `timeout 10`
+    (HYPR_LIMIT) never fires against a box that took the connection. `monitor_add_window` took any
+    answer but `ok` for a refusal and turned the host rule off, while the box still had the create
+    in its socket: its Hyprland handles requests in order, also those whose client has gone, and
+    made the output later, with the rule off. Seen in a stand-in host (finding 26) whose Lua stopped
+    the box's Hyprland for 6 s as the rule went on: the add failed at about 9 s, and the window
+    opened on the stand-in's workspace 1, focused, with WAYLAND-2 left in the box. **Fix** (bash
+    only, small; the 1.1 line replaces the host rule altogether): `mon_answer RC OUT` reads the
+    create's answer as `made` (ok), `no` (the box gone, "Couldn't connect" or "Couldn't open a
+    socket": the request never left, or any other words: Hyprland's own refusal) or `unclear`
+    ("Couldn't read", "Couldn't write", no words, status 124 or 128 and up). On `made` and `unclear`
+    the output counts as possibly made, from just before the create until its window is seen mapped
+    under the rule. The add's EXIT trap (`mon_cleanup`) then removes it before the rule goes off:
+    `output remove NAME` until the box answers one (any answer but an unclear one: it comes after
+    the create), 20 s at most (MON_DRAIN), and its line in omabox.monitors dropped. An answer is not
+    yet the end: a wayland output becomes the box's monitor only once the host has configured its
+    window (aquamarine announces it from that configure), so a remove handled right after the late
+    create says "output not found" and the output comes a moment later. The first version stopped
+    there, and the stand-in kept WAYLAND-2 (its window on 9, the rule off). On "output not found"
+    `mon_drain` asks again every 0.2 s for MON_SETTLE (3) s, until one says ok. (Probed in a
+    headless box: its Hyprland stopped, a create given up on at 5.2 s, a remove sent then answered
+    ok at 6.0 s, just after the CONT: the box handled the request whose client had gone, then the
+    next, in order.) A box silent past MON_DRAIN is said ("if it makes WAYLAND-N later, its window
+    may open on your workspace"), and the rule goes off all the same: a rule left on would catch
+    every aquamarine window, the user's own nested Hyprland's too. The trap ignores INT, TERM and
+    HUP while it runs, so a second Ctrl-C cannot cut it short (at most about 25 s). An add whose
+    window did not come in 5 s after an `ok` now removes the output too (it was left in the box, its
+    window free to map later with the rule off). A refusal and a dead box are said as before, at
+    once, with no remove. In the same stand-in after the fix (two runs): the add fails at about 8.4
+    s, saying it did not answer whether it made WAYLAND-2; no window on workspace 1, focus
+    unchanged, WAYLAND-2 gone from the box and its record, the rule off, and the next add makes
+    WAYLAND-2 on 9. A box killed as the rule goes on: refused in about 2.5 s, no remove asked, the
+    rule off. Left for the 1.1 line (#349): a signal during the create can still send the trap's
+    remove before the create has reached the box, two adds at once share the one rule, a box
+    answering after 20 s, and a host taking more than 3 s to configure the late window. Tests:
+    t_monitors_window_late (new: the box's Hyprland stopped for 6 s, then killed, by the stand-in's
+    Lua; it fails on the code before the fix), t_unit_monitors (`mon_answer`'s cases; the order the
+    stand-ins were told things: create, removes until answered and "output not found" settled, the
+    line dropped, then the rule off).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

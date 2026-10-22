@@ -19,6 +19,12 @@ Boxes on Omarchy 4.5.
 
 ### Fixed
 
+- **An interactive `monitor add` could open its window on your workspace, focused**, when the box
+  took more than 5 s to make it: `hyprctl` stops waiting after 5 s, and omabox took that for a
+  refusal and turned off the rule that sends the window to the box's workspace. Now an answer that
+  says nothing either way counts as "maybe made": the add removes the monitor again, waiting for the
+  box to answer (20 s at most), and only then turns the rule off. The add still fails, saying the box
+  did not answer ([#349](https://github.com/diogochaves/omabox/issues/349)).
 - **A shell a test starts itself, under `omabox run`, no longer loses plugin hot-reload.** The box's
   stand-in that keeps its own shell from reloading a mounted plugin on every save also caught other
   shells, so Omarchy's own `runtime-smoke-test.sh` failed in a box. Now it applies to the box's
