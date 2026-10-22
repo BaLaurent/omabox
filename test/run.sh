@@ -9220,7 +9220,11 @@ t_unit_install() {
   printf '#!/bin/sh\necho "$0 $*" >> "%s/shell-called"; exit 1\n' "$stub" > "$stub/omarchy"
   cp "$stub/omarchy" "$stub/omarchy-shell"
   mkdir -p "$h/.config/omabox"; date -Is > "$h/.config/omabox/widget-declined"
-  chmod +x "$stub/sudo" "$stub/pacman" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell"
+  # cargo under this HOME has no toolchain (rustup's, or mise's shim, which refuses a config it has
+  # not been told to trust): the Rust half's build (#324) is this checkout's binary put where cargo
+  # would leave it.
+  printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --manifest-path ] && m=$2; shift; done\nd=$(dirname "$m")/target/release\nmkdir -p "$d" && cp "%s/build/bin/omabox" "$d/omabox"\n' "$ROOT" > "$stub/cargo"
+  chmod +x "$stub/sudo" "$stub/pacman" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell" "$stub/cargo"
   echo omabox-no-such-package > "$stub/missing"
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); local rc=$?
   check_eq "a missing package: install.sh installs it with sudo pacman, and stops when that fails" \
