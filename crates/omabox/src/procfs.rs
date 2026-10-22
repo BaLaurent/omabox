@@ -200,7 +200,11 @@ mod tests {
     #[test]
     fn stat_of_this_process() {
         let me = std::process::id().to_string().into_bytes();
-        assert_eq!(proc_stat(&me, 0).as_deref(), Some(&b"R"[..]));
+        // (its state is the scheduler's: R, or S or D while another thread of the test waits)
+        let st = proc_stat(&me, 0).unwrap_or_default();
+        assert!(matches!(st.as_slice(), b"R" | b"S" | b"D"), "{st:?}");
+        let ppid = std::os::unix::process::parent_id().to_string().into_bytes();
+        assert_eq!(proc_ppid(&me), Some(ppid));
         assert!(proc_start(&me).is_some_and(|s| !s.is_empty()));
         assert!(proc_stat(b"", 0).is_none());
         assert!(proc_stat(b"1x", 0).is_none());
