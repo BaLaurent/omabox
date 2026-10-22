@@ -1072,10 +1072,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
                 b"-".to_vec(),
             )
         } else {
-            let p = {
-                let _q = crate::exec::Redir::null(2);
-                cursor_now(ctx).ok().filter(|p| !p.is_empty())
-            };
+            let p = crate::exit::muted(|| cursor_now(ctx).ok().filter(|p| !p.is_empty()));
             (b"screen".to_vec(), p.unwrap_or(b"-".to_vec()))
         };
         shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr])?;
@@ -1183,10 +1180,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
             b"-".to_vec(),
         )
     } else {
-        let p = {
-            let _q = crate::exec::Redir::null(2);
-            cursor_now(ctx).ok().filter(|p| !p.is_empty())
-        };
+        let p = crate::exit::muted(|| cursor_now(ctx).ok().filter(|p| !p.is_empty()));
         (
             b"screen".to_vec(),
             b"the screen".to_vec(),
@@ -1277,10 +1271,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
     } else {
         why = b"no earlier shot of it to compare with".to_vec();
         // Shots the shot-fit setting scales leave none (#188).
-        let sf = {
-            let _q = crate::exec::Redir::null(2);
-            shot_fit_default().unwrap_or_default()
-        };
+        let sf = crate::exit::muted(|| shot_fit_default().unwrap_or_default());
         if !sf.is_empty() {
             why.extend(b" (a shot scaled by shot-fit leaves none: shot --fit 0 for one)");
         }

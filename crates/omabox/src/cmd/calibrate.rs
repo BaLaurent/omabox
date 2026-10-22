@@ -292,10 +292,7 @@ fn calib_verdict(card: &[u8], answer: &[u8], json: bool) -> Res<()> {
     if res.is_empty() {
         res = b"none".to_vec();
     }
-    let cur = {
-        let _q = crate::exec::Redir::null(2);
-        shot_fit_default().unwrap_or_default()
-    };
+    let cur = crate::exit::muted(|| shot_fit_default().unwrap_or_default());
     let vd = shell::words(&res);
     let v = |i: usize| vd.get(i).cloned().unwrap_or_default();
     let kind = v(0);

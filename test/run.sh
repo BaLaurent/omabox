@@ -3502,7 +3502,7 @@ EOF
   cat > "$fk/bin/grim" <<EOF
 #!/bin/sh
 echo "\$*" >> $fk/grim.args
-case " \$* " in *" -t ppm "*) i=grim.ppm ;; *) touch $fk/grabbing; [ ! -f $fk/grim.sleep ] || sleep \$(cat $fk/grim.sleep) ;; esac
+case " \$* " in *" -t ppm "*) i=grim.ppm; [ ! -f $fk/ppm.sleep ] || { t=\$(cat $fk/ppm.sleep); rm -f $fk/ppm.sleep; touch $fk/seen; sleep "\$t"; } ;; *) touch $fk/grabbing; [ ! -f $fk/grim.sleep ] || sleep \$(cat $fk/grim.sleep) ;; esac
 case " \$* " in *" -t ppm "*) ;; *" -g "*) i=grim-small.png ;; *) i=grim.png ;; esac
 [ ! -f $fk/grim.alt ] || [ \$(wc -l < $fk/grim.args) -le \$(cat $fk/grim.alt) ] || i=\$(cat $fk/grim.altimg 2>/dev/null || echo grim2.png)
 cat $fk/\$i 2>/dev/null || { echo "stand-in grim: no frame" >&2; exit 1; }
@@ -3687,7 +3687,7 @@ EOF
     rp_fk
     local f
     cp "$fk/active.orig" "$fk/active.json"; : > "$fk/input.args"; : > "$fk/hyprctl.args"; echo fk-pop > "$fk/kbl"
-    for f in noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep burst.fail ptr; do rm -f "${fk:?}/$f"; done
+    for f in ppm.sleep seen noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep burst.fail ptr; do rm -f "${fk:?}/$f"; done
     chmod +x "$fk/bin/omabox-burst"
     printf '{"option":"input:kb_layout","str":"us,de","set":true}\n' > "$fk/opt-input:kb_layout.json"
     printf '{"option":"input:kb_variant","str":",nodeadkeys","set":true}\n' > "$fk/opt-input:kb_variant.json"
@@ -4093,11 +4093,13 @@ while True:
     c.sendall(b"ok"); c.close()' "$r/rt/hypr/$hs/.socket.sock" "$hreq" "$r/rt/wayland-rp" & local hsrv=$!
   for i in $(seq 50); do [ -S "$r/rt/hypr/$hs/.socket.sock" ] && break; sleep 0.1; done
   rp_host() { : > "$hreq"; }; rp3_pre=(rp_host)
+  # (rp_check, after each half: the stand-in host was the one told, its passthrough then the change)
+  rp_told() { if ! grep -q 'omabox_keys_changed()' "$hreq" || ! grep -q 'omabox_pass_version' "$hreq"; then no "$1: the stand-in host told" "$(head -c 300 "$hreq")"; fi; }
+  rp_check=rp_told
   parity "keys-to-box on: the passthrough installed, the host told" keys-to-box -b fki on
-  check "...the stand-in host was the one told (its passthrough, then the change)" grep -q 'omabox_keys_changed()' "$hreq"
   rp3_pre=(rp_host rp_k2b)
   parity "keys-to-box off: the same" keys-to-box -b fki off
-  check "...the stand-in host told again" grep -q 'omabox_keys_changed()' "$hreq"
+  rp_check=""
   mkdir -p "$r/h'q"; rp_env+=(HOME="$r/h'q"); rp3_pre=(rp_host)
   parity "keys-to-box on: a theme's path not safe for the host's Lua, said, left out" keys-to-box -b fki on
   kill "$hsrv" 2>/dev/null; wait "$hsrv" 2>/dev/null; rm -rf "${r:?}/rt/hypr" "$r/rt/wayland-rp" "$hreq"
@@ -4182,6 +4184,8 @@ while True:
 # it: finding 67)
 ulimit -S -c 1 2>/dev/null || ulimit -c 0
 sig=$1 mark=$2; shift 2
+# (RP_IGN: signals it comes with ignored, as from nohup or a script's `&`)
+[ -z "${RP_IGN:-}" ] || trap '' $RP_IGN
 set -m
 "$@" & p=$!
 for i in $(seq 200); do [ -e "$mark" ] && break; sleep 0.05; done
@@ -4213,6 +4217,27 @@ EOF
     parity "shot --no-pointer and $sg during the capture: the pointer given back (QUIT ignored)" shot -b fk --no-pointer -o "$o3/n.png"
     check "...shown again, its record gone" test ! -e "$r/rt/omabox/fk/pointer" -a "$(tail -n 1 "$fk/hyprctl.args")" = "eval invisible false"
   done
+  # Signals that came ignored (nohup, a script's `&`): bash cannot trap them and leaves them ignored
+  # for what it runs, the --after action and the tools included.
+  rp3_pre=(rp_held)
+  for sg in INT QUIT; do
+    rp_wrap=(env RP_IGN="INT QUIT" "$r/rp-sig" "group-$sg" "$fk/held")
+    parity "click --mod and group-$sg, which came ignored: nothing ends" click -b fk --mod ctrl 10 10
+  done
+  rp_wrap=("$r/rp-sig" group-QUIT "$fk/held")
+  parity "shot --burst --after click --mod and group-QUIT: the action's tools keep it ignored" shot -b fk --burst 2 --every 0 -o "$o3/b" --after -- click --mod ctrl 10 10
+  check "...its keyboard tool let go at the end, not killed" grep -q ' -m ctrl -p 180000 <>$' "$fk/input.args"
+  rp3_pre=(rp_grimslow)
+  rp_wrap=(env RP_IGN=HUP "$r/rp-sig" HUP "$fk/grabbing")
+  parity "shot --no-pointer and a HUP that came ignored (nohup): the shot taken" shot -b fk --no-pointer -o "$o3/n.png"
+  rp_wrap=(env RP_IGN=INT "$r/rp-sig" group-INT "$fk/grabbing")
+  parity "shot --no-pointer and a group-INT that came ignored: the same" shot -b fk --no-pointer -o "$o3/n.png"
+  # A TERM while the hold is being set (the box-side watch that hides the pointer still running):
+  # the release once that is over, the pointer shown in the end.
+  rp_seenslow() { echo 1.5 > "$fk/ppm.sleep"; }; rp3_pre=(rp_seenslow)
+  rp_wrap=("$r/rp-sig" TERM "$fk/seen")
+  parity "shot --no-pointer and TERM while the pointer is being hidden" shot -b fk --no-pointer -o "$o3/n.png"
+  check "...shown in the end, no record left" test ! -e "$r/rt/omabox/fk/pointer" -a "$(tail -n 1 "$fk/hyprctl.args")" = "eval invisible false"
   rp_wrap=() rp3_pre=() rp_sed=$rp_sed0
   rp3_pre=() rp_env=()
   rp_prep="" rp_also="" rp_snap=1 rp_sed=""
