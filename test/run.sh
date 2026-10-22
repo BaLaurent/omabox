@@ -4183,9 +4183,11 @@ while True:
   # stand-in says it holds (or grabs); CMD's status, once what it left running had its moment.
   cat > "$r/rp-sig" <<'EOF'
 #!/bin/bash
-# (a core limit of 1 byte: a QUIT's core dump skips the core helper, so the desktop says nothing of
-# it: finding 67)
-ulimit -S -c 1 2>/dev/null || ulimit -c 0
+# (a core limit of exactly 1 byte, as bin/omabox's nocore sets it: the kernel then skips the core
+# helper for a QUIT's core, so the desktop says nothing of it (finding 67). Not `ulimit -c 1`: bash
+# counts that in 1024-byte blocks, and the helper ran, notifying the user's desktop.)
+prlimit --pid $$ --core=1: 2>/dev/null || ulimit -S -c 0
+[ "${1:-}" != --core ] || { prlimit --pid $$ --core -o SOFT --noheadings | tr -d ' '; exit 0; }
 sig=$1 mark=$2; shift 2
 # (RP_IGN: signals it comes with ignored, as from nohup or a script's `&`)
 [ -z "${RP_IGN:-}" ] || trap '' $RP_IGN
@@ -4202,6 +4204,7 @@ kill -KILL -- -"$p" 2>/dev/null
 exit "$rc"
 EOF
   chmod +x "$r/rp-sig"
+  check_eq "the signal cases' core limit is 1 byte (no core helper, no crash notification)" 1 "$("$r/rp-sig" --core)"
   rp_held() { echo 3 > "$fk/ptr.sleep"; }; rp3_pre=(rp_held)
   rp_sed0=$rp_sed; rp_sed+='; s/ line ([0-9]+): [0-9]+ Quit / line \1: PID Quit /'
   local sg; for sg in group-INT group-QUIT TERM; do
