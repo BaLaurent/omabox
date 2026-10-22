@@ -16,6 +16,8 @@ static TRAPS: Mutex<Vec<(u64, Undo)>> = Mutex::new(Vec::new());
 /// Traps that wait for main's foreground child whatever the signal (on_exit_code's).
 static FG_TRAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static NEXT: AtomicU64 = AtomicU64::new(1);
+/// The signal thread holds sig::FOREGROUND while it undoes (an INT's, which waited for that child).
+static FG_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SIG_W: AtomicI32 = AtomicI32::new(-1);
 
 /// Traps that end with an exit code (`trap 'exit 143' TERM`), not the signal: on_exit_code's.
@@ -93,6 +95,21 @@ impl Drop for FgCount {
     fn drop(&mut self) {
         FG_TRAPS.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+/// For an undo whose step in flight must land first (monitor add's remove after its create, finding
+/// 429): wait until main's foreground child is over, unless it already is (an INT's undo, a code
+/// trap's, a refusal's on main). Waiting is not holding: a second INT, TERM or HUP meanwhile ends
+/// this process at once (with no code trap on: those hold the foreground and finish their undo).
+pub fn wait_foreground() {
+    if FG_HELD.load(Ordering::SeqCst) {
+        return;
+    }
+    drop(
+        crate::sig::FOREGROUND
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
 }
 
 impl Trap {
@@ -266,6 +283,7 @@ fn arm() {
                     }
                 }
             }
+            FG_HELD.store(fg.is_some(), Ordering::SeqCst);
             run_undos();
             if code {
                 // (bash's `exit 130|143|129` in the first of its traps to run, HUP's before INT's

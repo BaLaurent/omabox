@@ -469,24 +469,32 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8], errexit: bool) -> Res<Vec<u8>> {
 
 /// monitor_add_window's EXIT trap once the box was told to make the output (MON_CREATING, mon_undo,
 /// finding 429): it is removed, so an add cut short (a refusal; INT, TERM or HUP) leaves no
-/// monitor. The box handles its IPC in order, so the remove comes after the create, however late.
-/// Nothing here keeps the window off the user's workspace (its own rule does), so signals are not
-/// held: a second one ends the trap, and a remove that fails leaves at worst a monitor on the box's
-/// workspace. Its token file stays, for a box that has yet to read it.
+/// monitor. The box handles its IPC in order, so a remove sent after the create reaches it comes after
+/// it, however late. It is sent at once; one not answered `ok` (a TERM or HUP while the create was
+/// still on its way to the box: "output not found") is sent again once main's foreground child, the
+/// create's capture, is over (trap::wait_foreground; bash's mon_undo cannot wait for its `$(...)`, and
+/// sends it again half a second on). Waiting is not holding signals:
+/// nothing here keeps the window off the user's workspace (its own rule does), so a second one ends
+/// the trap, and a remove that fails leaves at worst a monitor on the box's workspace. Its token file
+/// goes once the remove is answered `ok` (the box made the output, so read it), and stays otherwise,
+/// for a box that has yet to read it.
 struct MonUndo {
     trap: Option<crate::trap::Trap>,
     creating: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl MonUndo {
-    fn arm(ctx: &Ctx, name: &[u8]) -> MonUndo {
+    fn arm(ctx: &Ctx, name: &[u8], appid: std::path::PathBuf) -> MonUndo {
         let c = ctx.clone();
         let creating = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (cr, name) = (creating.clone(), name.to_vec());
         let trap = crate::trap::on_exit(move || {
-            if cr.load(std::sync::atomic::Ordering::SeqCst) {
-                crate::exit::muted(|| {
-                    let _ = on_box(
+            if !cr.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            crate::exit::muted(|| {
+                let remove = || {
+                    let r = on_box(
                         &c,
                         &w(&[
                             b"timeout",
@@ -497,12 +505,21 @@ impl MonUndo {
                             &name,
                         ]),
                         false,
-                        Out::Null,
+                        Out::Capture(None),
                         ErrTo::Null,
                         false,
                     );
-                });
-            }
+                    shell::subst(&r.out) == b"ok"
+                };
+                // (sent at once, as bash's: a second signal may end this before the create is over)
+                let removed = remove() || {
+                    crate::trap::wait_foreground();
+                    remove()
+                };
+                if removed {
+                    let _ = std::fs::remove_file(&appid);
+                }
+            });
         });
         MonUndo {
             trap: Some(trap),
@@ -540,7 +557,16 @@ fn mon_answer(ctx: &Ctx, rc: i32, out: &[u8]) -> Answer {
     if out == b"ok" {
         return Answer::Ok;
     }
-    match crate::boxes::box_state(&ctx.d) {
+    answer_of(crate::boxes::box_state(&ctx.d), rc, out)
+}
+
+/// mon_answer's table, once the answer is not `ok`: from the box's state (box_state), hyprctl's
+/// status and its words.
+fn answer_of(state: &str, rc: i32, out: &[u8]) -> Answer {
+    if out == b"ok" {
+        return Answer::Ok;
+    }
+    match state {
         "dead" => return Answer::No,
         "unknown" => return Answer::Unclear,
         _ => {}
@@ -647,7 +673,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
         String::from_utf8_lossy(&name)
     ));
     // A half-made monitor removed however this ends (MonUndo).
-    let mut undo = MonUndo::arm(ctx, &name);
+    let mut undo = MonUndo::arm(ctx, &name, appid.clone());
     // The rule's `move` is relative to its monitor.
     let rule = cat!(
         "hl.window_rule({ name = 'omabox-mon-",
@@ -716,14 +742,13 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     loop {
         let (rc, c) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
         if rc == 0 {
-            let (jrc, a) = jqt(
-                Args::new(&["-er"])
-                    .kv("--arg", "c", &cls)
-                    .arg(crate::jqprog::CLASS_ADDR_JQ),
-                &strip_nl(&c),
-            );
-            if jrc == 0 {
-                addr = a;
+            // (its words to /dev/null, as bash's `2>/dev/null`: a reply not JSON, a host mid-reload)
+            let j = Args::new(&["-er"])
+                .kv("--arg", "c", &cls)
+                .arg(crate::jqprog::CLASS_ADDR_JQ)
+                .run(Some(&strip_nl(&c)), jq::Err::Null);
+            if j.rc == 0 {
+                addr = j.text();
                 break;
             }
         }
@@ -809,5 +834,50 @@ mod tests {
         assert_eq!(ws_check(b"99"), Some(b"99".to_vec()));
         assert_eq!(ws_check(b"0"), None);
         assert_eq!(ws_check(b"100"), None);
+    }
+
+    #[test]
+    fn mon_answer_table() {
+        use Answer::{No, Ok, Unclear};
+        let cases: &[(&str, i32, &[u8], Answer)] = &[
+            ("up", 0, b"ok", Ok),
+            ("dead", 0, b"ok", Ok),
+            // Hyprland's own words: rc 0 ("Name already taken"), or 7 for an `error:` answer
+            ("up", 0, b"Name already taken", No),
+            ("up", 7, b"error: nope", No),
+            // hyprctl could not reach it
+            (
+                "up",
+                4,
+                b"Couldn't connect to /run/user/1000/hypr/s/.socket.sock. (4)",
+                No,
+            ),
+            ("up", 1, b"Couldn't open a socket (1)", No),
+            // the box gone, whatever hyprctl said
+            ("dead", 6, b"Couldn't read (6)", No),
+            ("dead", 124, b"", No),
+            // hyprctl's own give-up at 5 s, timeout(1)'s at 10, cut short, nothing said
+            (
+                "up",
+                6,
+                b"Hyprland IPC didn't respond in time\n\nCouldn't read (6)",
+                Unclear,
+            ),
+            ("up", 124, b"", Unclear),
+            ("up", 0, b"", Unclear),
+            ("up", 143, b"", Unclear),
+            ("up", 5, b"Couldn't write (5)", Unclear),
+            // a box whose state cannot be read: never taken for one that made none
+            ("unknown", 0, b"Name already taken", Unclear),
+            ("unknown", 4, b"Couldn't connect to x. (4)", Unclear),
+        ];
+        for (st, rc, out, want) in cases {
+            assert_eq!(
+                answer_of(st, *rc, out),
+                *want,
+                "{st} {rc} {}",
+                String::from_utf8_lossy(out)
+            );
+        }
     }
 }

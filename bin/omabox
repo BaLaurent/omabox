@@ -12276,13 +12276,19 @@ mon_answer() {
 }
 # mon_undo NAME: monitor_add_window's EXIT trap once the box was told to make NAME (finding 429): NAME
 # removed, so an add cut short (a refusal; INT, TERM or HUP) leaves no monitor. The box handles its
-# IPC in order, so the remove comes after the create, however late. Nothing here keeps the window off
-# the user's workspace (its own rule does), so signals are not held: a second one ends the trap, and
-# a remove that fails leaves at worst a monitor on the box's workspace. Its token file stays, for a box
-# that has yet to read it.
+# IPC in order, so a remove sent after the create reached it comes after it, however late. On TERM or
+# HUP this runs at once, the create's `$(...)` maybe still on its way to the box (bash cannot wait for
+# it): a remove not answered `ok` is sent once more half a second on (the Rust half waits for that
+# child, then does the same). Nothing here keeps the window off the user's workspace (its own rule
+# does), so signals are not held: a second one ends the trap, and a remove that fails leaves at worst
+# a monitor on the box's workspace. Its token file goes once the remove is answered `ok` (the box
+# made NAME, so read it), and stays otherwise, for a box that has yet to read it.
 # shellcheck disable=SC2329,SC2031 # called from monitor_add_window's EXIT trap, in its subshell
 mon_undo() {
-  (on_box timeout "$HYPR_LIMIT" hyprctl output remove "$1") >/dev/null 2>&1 || true
+  local res
+  res=$(on_box timeout "$HYPR_LIMIT" hyprctl output remove "$1" 2>/dev/null) || res=""
+  [ "$res" = ok ] || { sleep 0.5; res=$(on_box timeout "$HYPR_LIMIT" hyprctl output remove "$1" 2>/dev/null) || res=""; }
+  [ "$res" != ok ] || rm -f "$D/run/omabox.appid.$1" 2>/dev/null || true
 }
 # The box's windows on the host: "NAME ADDRESS" a line, the main one as `main` first (none when it is
 # closed), then its monitors' ($D/monitor-windows, in the order made) that are still open. From
