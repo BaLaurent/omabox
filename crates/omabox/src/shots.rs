@@ -120,7 +120,12 @@ pub fn fd_file(ctx: &Ctx, n: &[u8], write: bool, what: &str) -> Res<()> {
         return Err(ctx.die(cat!(what, ": an fd is 3 to 9, got ", n)));
     }
     let dev = cat!("/dev/fd/", n);
-    if !shell::path(&dev).is_file() {
+    // (`[ -f ]` as bash's test has it: a mode of no type, an eventfd's, is a regular file too)
+    let f_ok = std::fs::metadata(shell::path(&dev)).is_ok_and(|m| {
+        use std::os::unix::fs::MetadataExt;
+        m.is_file() || m.mode() & libc::S_IFMT == 0
+    });
+    if !f_ok {
         return Err(ctx.die(cat!(what, ": fd ", n, " is not a file")));
     }
     let info = std::fs::read(shell::path(&cat!("/proc/self/fdinfo/", n))).unwrap_or_default();
@@ -181,34 +186,7 @@ fn fit_check(v: &[u8]) -> Option<Vec<u8>> {
 /// conf_get shot-fit: the config's last `shot-fit = V` (blanks around taken off), off when none; one
 /// that does not check out is said and ignored.
 fn fit_conf() -> Vec<u8> {
-    let config = cat!(shell::env_or_empty("HOME"), "/.config/omabox/config");
-    let p = shell::path(&config);
-    let mut v = Vec::new();
-    if p.is_file() {
-        let data = std::fs::read(&p).unwrap_or_default();
-        let blank = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
-        for l in data.split(|&c| c == b'\n') {
-            let s = &l[l.iter().position(|&c| !blank(c)).unwrap_or(l.len())..];
-            let Some(rest) = s.strip_prefix(b"shot-fit".as_slice()) else {
-                continue;
-            };
-            let rest = &rest[rest.iter().position(|&c| !blank(c)).unwrap_or(rest.len())..];
-            let Some(rest) = rest.strip_prefix(b"=".as_slice()) else {
-                continue;
-            };
-            v = rest[rest.iter().position(|&c| !blank(c)).unwrap_or(rest.len())..].to_vec();
-        }
-        while v.last().is_some_and(|&c| blank(c)) {
-            v.pop();
-        }
-    }
-    if !v.is_empty() {
-        if let Some(c) = fit_check(&v) {
-            return c;
-        }
-        say(cat!(config, ": ignoring shot-fit=", v));
-    }
-    b"off".to_vec()
+    crate::conf::conf_get("shot-fit", fit_check, b"off")
 }
 
 /// shot_fit_default (#188): the --fit a shot takes when it is given none: $OMABOX_SHOT_FIT (a jailed

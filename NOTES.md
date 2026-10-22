@@ -8885,6 +8885,24 @@ from them.
     process can be named so (prctl). **Fix**: printf '%s\n' (the Rust half never used echo). Tests:
     t_unit_rust_parity4 (a stand-in process named `-n`, `--app -n`: that one alone, both ways).
 
+431. **`check diff --report` left its plan behind when the comparison failed** (2026-10-22, #324
+    wave 4b). The report's plan is a `mktemp` file in $TMPDIR, made before the comparison; magick
+    failing to compare the shots, or to draw `-o`'s marked copy, ended the command with it still
+    there: one file left each time. **Fix**: those two refusals remove it first, in bash and in the
+    Rust half alike (the Rust half removes it on any refusal past that point). Tests:
+    t_unit_rust_parity4b (a magick that fails at the comparison and at the marking, TMPDIR a dir of
+    the test's own: compared both ways, nothing left after).
+
+432. **`record stop` left the recording's input behind when it could not make the video**
+    (2026-10-22, #324 wave 4b). The input the recording saw (`$D/record.input`, what --show-input
+    draws and --cut-idle keeps) is moved into a `mktemp` file at stop, removed once the video is made;
+    ffmpeg failing to make it (the single recording's pass, or the layout's compose), or the pointer's
+    hold not given back, ended the command with that file still in $TMPDIR, and an `mv` that failed
+    left the empty one mktemp made. **Fix**: those refusals remove it first, and a failed `mv` its
+    file, in bash and in the Rust half alike (the Rust half removes it however the stop ends past
+    its making). Tests: t_unit_rust_parity4b (an ffmpeg that fails at stop with input recorded,
+    TMPDIR a dir of the test's own: compared both ways, nothing left after).
+
 435. **An interactive `monitor add` whose box answered late opened its window on the user's
     workspace, focused** (2026-10-22, #349; the 1.0.x stopgap). `hyprctl` stops reading after 5 s of
     its own (`SO_RCVTIMEO`, Hyprland 0.56.2's `hyprctl/src/main.cpp`): it prints "Hyprland IPC

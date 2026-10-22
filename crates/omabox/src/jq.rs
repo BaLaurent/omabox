@@ -72,7 +72,9 @@ pub fn tool<A: AsRef<[u8]>>(name: &str, args: &[A], input: Option<&[u8]>, err: E
         (Err::Null, _) | (Err::Out, None) => c.stderr(Stdio::null()),
         (Err::Inherit, _) => c.stderr(Stdio::inherit()),
     };
-    let child = c.spawn();
+    // (spawned as a foreground step too: bash is in its child from the fork on, and an INT to
+    // omabox alone meanwhile waits for it, trap.rs)
+    let child = crate::sig::foreground(|| c.spawn());
     drop(c);
     let mut child = match child {
         Ok(c) => c,

@@ -39,26 +39,37 @@ fn size(p: &std::path::Path) -> Option<u64> {
     std::fs::metadata(p).ok().map(|m| m.len())
 }
 
-/// The pid of this box's peek window, if one is open (`pgrep -f "^$PEEK --box $D/run/"`): a process
-/// whose command line, its words joined by spaces, starts so.
+/// Whether one of this box's peek windows is open (`peek_pid >/dev/null`).
 pub fn peek_open(ctx: &Ctx) -> bool {
+    peek_pid(ctx, None).is_some()
+}
+
+/// peek_pid [OUTPUT]: the pid of this box's peek window, if one is open, the lowest (`pgrep -f
+/// "^$PEEK --box $D/run/" | head -1`): a process whose command line, its words joined by spaces,
+/// starts so; with OUTPUT, the one showing that monitor (#122: `.* --output OUTPUT --fps ` after it).
+pub fn peek_pid(ctx: &Ctx, output: Option<&[u8]>) -> Option<Vec<u8>> {
     let want = cat!(
         shell::bytes(&crate::root().join("tools/peek/omabox-peek")),
         " --box ",
         ctx.d,
         "/run/"
     );
-    let me = std::process::id().to_string();
-    let Ok(rd) = std::fs::read_dir("/proc") else {
-        return false;
-    };
-    for e in rd.flatten() {
-        let n = e.file_name();
-        let n = n.as_encoded_bytes();
-        if n.is_empty() || !n.iter().all(u8::is_ascii_digit) || n == me.as_bytes() {
-            continue;
-        }
-        let Ok(mut c) = std::fs::read(e.path().join("cmdline")) else {
+    // (bash's pgrep is a child of its: an INT to omabox alone meanwhile is let pass, trap.rs)
+    crate::sig::foreground(|| scan(&want, output))
+}
+
+fn scan(want: &[u8], output: Option<&[u8]>) -> Option<Vec<u8>> {
+    let tail = output.map(|o| cat!(" --output ", o, " --fps "));
+    let me = std::process::id();
+    let rd = std::fs::read_dir("/proc").ok()?;
+    let mut pids: Vec<u32> = rd
+        .flatten()
+        .filter_map(|e| e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()))
+        .filter(|&p| p != me)
+        .collect();
+    pids.sort_unstable();
+    for p in pids {
+        let Ok(mut c) = std::fs::read(format!("/proc/{p}/cmdline")) else {
             continue;
         };
         while c.last() == Some(&0) {
@@ -69,11 +80,17 @@ pub fn peek_open(ctx: &Ctx) -> bool {
                 *b = b' ';
             }
         }
-        if c.starts_with(&want) {
-            return true;
+        let Some(rest) = c.strip_prefix(want) else {
+            continue;
+        };
+        if tail
+            .as_ref()
+            .is_none_or(|t| rest.windows(t.len()).any(|w| w == t.as_slice()))
+        {
+            return Some(p.to_string().into_bytes());
         }
     }
-    false
+    None
 }
 
 /// rec_input T0 LINE...: while the box records, each line with when it began (T0, µs; now when T0

@@ -876,6 +876,8 @@ pub struct ExecOpts {
     /// display, Hyprland and session bus of omabox.env, in /home/sbx, PATH=/usr/bin, its pipes not
     /// relayed and no terminal of its own.
     pub sys: bool,
+    /// Started as bash starts what it backgrounds (a `<(...)`): SIGINT and SIGQUIT ignored in it.
+    pub bg: bool,
 }
 
 /// box_sys's environment: HOME, LANG, the runtime dir, then the first WAYLAND_DISPLAY,
@@ -1042,7 +1044,7 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
             only: true,
             nocore: true,
             pid: None,
-            bg: false,
+            bg: o.bg,
         };
         let r = relays.run(&nsline, fds);
         match r {
@@ -1287,6 +1289,82 @@ fn box_pty(nsline: &[Vec<u8>], mut keep: Vec<RawFd>, fd3: Option<RawFd>) -> std:
         drain(vec![r]);
     }
     Ok(rc)
+}
+
+/// How a stdio_relay call ended: its status and what `$(...)` read.
+pub struct Relayed {
+    pub rc: i32,
+    pub out: Vec<u8>,
+}
+
+/// `stdio_relay fds_only "" ARGV...` (gdb's calls, finding 229): ARGV with no fd above 2 open, each
+/// of its stdin, stdout and stderr a box could reach relayed through a pipe held here. CAPTURE: its
+/// stdout read here (`$(...)`: a pipe, not relayed); ERR_NULL: `2>/dev/null`. A foreground command.
+pub fn stdio_relay(argv: &[Vec<u8>], capture: bool, err_null: bool) -> std::io::Result<Relayed> {
+    let null_err = if err_null {
+        Some(dev_null(true)?)
+    } else {
+        None
+    };
+    let (cap_r, cap_w) = if capture {
+        let (r, w) = pipe()?;
+        (Some(r), Some(w))
+    } else {
+        (None, None)
+    };
+    let src = [
+        0,
+        cap_w.as_ref().map_or(1, AsRawFd::as_raw_fd),
+        null_err.as_ref().map_or(2, AsRawFd::as_raw_fd),
+    ];
+    let relays = Relays::new(src, false)?;
+    drop(cap_w);
+    drop(null_err);
+    let reader = cap_r.map(|r| std::thread::spawn(move || read_all(r, None)));
+    let [i, o, e] = relays.fds;
+    let mut c = command(
+        argv,
+        Fds {
+            only: true,
+            ..Fds::default()
+        },
+    );
+    c.stdin(Stdio::from(i))
+        .stdout(Stdio::from(o))
+        .stderr(Stdio::from(e));
+    let spawned = c.spawn();
+    drop(c);
+    let rc = match spawned {
+        Ok(mut child) => crate::sig::foreground(|| wait(&mut child).0),
+        Err(e) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "{}: {}",
+                String::from_utf8_lossy(argv.first().map_or(&b""[..], |a| a)),
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    "command not found".to_string()
+                } else {
+                    e.to_string()
+                }
+            );
+            127
+        }
+    };
+    if let Some(mut c) = relays.input {
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+    drain(relays.outs);
+    let out = reader.and_then(|t| t.join().ok()).unwrap_or_default();
+    Ok(Relayed { rc, out })
+}
+
+/// `command -v NAME >/dev/null` for a program: an executable file of that name in a dir of PATH.
+pub fn executable_on_path(name: &[u8]) -> bool {
+    shell::env_or_empty("PATH")
+        .split(|&c| c == b':')
+        .map(|d| cat!(if d.is_empty() { b".".as_slice() } else { d }, "/", name))
+        .any(|p| executable(&p) && shell::path(&p).is_file())
 }
 
 // --- the relays ---------------------------------------------------------------------------------------

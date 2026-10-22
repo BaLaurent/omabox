@@ -5,6 +5,7 @@
 mod args;
 mod boxes;
 mod cmd;
+mod conf;
 mod desk;
 mod deskwin;
 mod exec;
@@ -25,6 +26,7 @@ mod mon;
 mod num;
 mod procfs;
 mod ptr;
+mod recprog;
 mod repo;
 mod screen;
 mod select;
@@ -109,6 +111,10 @@ fn main() -> ExitCode {
         Some("audio") => Some(cmd::audio::run),
         Some("ports") => Some(cmd::ports::run),
         Some("clip") => Some(cmd::clip::run),
+        Some("peek") => Some(cmd::peek::run),
+        Some("gdb") => Some(cmd::gdb::run),
+        Some("check") => Some(cmd::check::run),
+        Some("record") => Some(cmd::record::run),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.
@@ -141,7 +147,11 @@ fn main() -> ExitCode {
         }
         // The suite's check that the jq programs here are bash's, byte for byte.
         Some("_rust-jq") if rest.first().is_some_and(|a| a == "--inline") => {
-            for p in jqprog::INLINE {
+            for p in jqprog::INLINE
+                .iter()
+                .chain(jqprog::INLINE_4B)
+                .chain(recprog::ALL)
+            {
                 print!("{p}\0");
             }
             ExitCode::SUCCESS
@@ -211,4 +221,15 @@ fn back_to_bash(cmd: OsString, rest: Vec<OsString>) -> ExitCode {
     let err = c.exec();
     eprintln!("omabox: could not run {}: {err}", script.display());
     ExitCode::from(126)
+}
+
+/// CALL_US: when this omabox was called, in µs (bash's hand-off says it; now when it does not).
+pub fn call_us() -> Vec<u8> {
+    if let Some((_, Some(us))) = HANDOFF.get() {
+        let b = us.as_encoded_bytes();
+        if !b.is_empty() && b.iter().all(u8::is_ascii_digit) {
+            return b.to_vec();
+        }
+    }
+    marks::epoch_us()
 }

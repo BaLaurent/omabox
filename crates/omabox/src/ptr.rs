@@ -367,6 +367,16 @@ fn release_quiet(ctx: &Ctx, tag: &[u8]) {
     }
 }
 
+/// `trap - EXIT INT TERM HUP` once record start's recording runs (finding 320): the hold stays,
+/// `record stop` gives it back; no release at this omabox's end, nor on a signal (bash's way with
+/// one from here, trap.rs).
+pub fn hold_keep() {
+    if let Ok(mut g) = HOLD.lock() {
+        *g = None;
+    }
+    crate::trap::int_as_bash();
+}
+
 /// At this process's end (main's, after the command): the hold given back, once (bash's EXIT trap).
 pub fn release_at_exit() {
     gated(|| {

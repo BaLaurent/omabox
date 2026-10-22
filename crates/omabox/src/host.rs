@@ -175,7 +175,7 @@ pub fn host_eval(ctx: &Ctx, lua: &[u8]) -> Res<()> {
 }
 
 /// lua_str V: V for a Lua string literal, or (said) nothing: no quote, backslash or newline.
-fn lua_str(ctx: &Ctx, v: &[u8]) -> Vec<u8> {
+pub fn lua_str(ctx: &Ctx, v: &[u8]) -> Vec<u8> {
     if v.iter().any(|&c| matches!(c, b'\'' | b'"' | b'\\' | b'\n')) {
         let _ = ctx;
         say(cat!(

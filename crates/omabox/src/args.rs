@@ -58,6 +58,16 @@ fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"audio" => Some("-b= --box= --json"),
         b"ports" => Some("-b= --box= --json"),
         b"clip" => Some("-b= --box= --from-box"),
+        b"peek" => Some("-b= --box= --fps= --workspace= --focus --monitor="),
+        b"gdb" => Some("-b= --box= --shell --pid= --watch"),
+        b"record" => Some(concat!(
+            "-b= --box= -o= --output= --monitor= --no-pointer --audio --glide= --show-input --captions --cut-idle? --fps= ",
+            "--hold= --for= --sheet --frames= --every= --fit= --json"
+        )),
+        b"check" => Some(concat!(
+            "-b= --box= --approve --runs= --base= -o= --output= --speck= --ignore= --report= -w= --window= --active -g= ",
+            "--timeout= --json --size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= --theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= --omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --xwayland --autoreload --no-shell --no-pointer"
+        )),
         _ => None,
     }
 }
@@ -156,6 +166,31 @@ fn usage_head(cmd: &[u8]) -> &'static str {
         }
         b"clip" => {
             "  omabox clip [-b NAME] [--from-box]                     your clipboard into an interactive box, or back"
+        }
+        b"peek" => {
+            r#"  omabox peek [-b NAME] [--monitor NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)"#
+        }
+        b"gdb" => {
+            r#"  omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)"#
+        }
+        b"check" => {
+            r#"  omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO [ARG...]
+                                                         a visual check: the scenario's checkpoints against a baseline
+  omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
+                                                         a checkpoint, in a scenario: once still, a shot (and the tree)
+  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png] [--json]
+                                                         what differs, as a check sees it"#
+        }
+        b"record" => {
+            r#"  omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [--glide DURATION]
+                | mark TEXT [--hold DURATION] | hold DURATION | stop [SHEET] [POLISH] | status [--json])   a video of the screen
+  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--hold 1s] [--no-pointer] [--audio] [--glide DURATION]
+                [SHEET] [POLISH] -- ACTION...   one action, recorded
+  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [SHEET] [POLISH]
+                --for DURATION   the screen for that long, no action
+  omabox record [-b NAME] sheet VIDEO [-o PNG] [--frames 15 | --every DURATION] [--fit N]   a contact sheet of a video
+              SHEET: --sheet [--frames 15 | --every DURATION] [--fit N]   the recording's contact sheet, FILE.sheet.png
+              POLISH: [--show-input] [--captions] [--cut-idle [1s]]   clicks, pointer, keys and marks drawn in; still stretches cut"#
         }
         _ => "",
     }

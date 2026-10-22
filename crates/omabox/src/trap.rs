@@ -16,6 +16,9 @@ static FG_TRAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize
 static NEXT: AtomicU64 = AtomicU64::new(1);
 static SIG_W: AtomicI32 = AtomicI32::new(-1);
 
+/// Traps that end with an exit code (`trap 'exit 143' TERM`), not the signal: on_exit_code's.
+static CODE_TRAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// One thing to undo; undone when dropped (the command's end, a refusal on the way).
 pub struct Trap(u64);
 
@@ -38,6 +41,28 @@ pub fn on_exit_fg(f: impl FnOnce() + Send + 'static) -> Trap {
         drop(fg);
         f();
     })
+}
+
+/// on_exit with bash's `trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP` beside it
+/// (rec_traps, finding 320's): on any of them the undo runs once main's foreground child is over,
+/// whatever it died of, then this process exits with that code (not of the signal).
+pub fn on_exit_code(f: impl FnOnce() + Send + 'static) -> Trap {
+    CODE_TRAPS.fetch_add(1, Ordering::SeqCst);
+    FG_TRAPS.fetch_add(1, Ordering::SeqCst);
+    let c = (CodeCount, FgCount);
+    on_exit(move || {
+        drop(c);
+        f();
+    })
+}
+
+/// CODE_TRAPS' share of one on_exit_code trap.
+struct CodeCount;
+
+impl Drop for CodeCount {
+    fn drop(&mut self) {
+        CODE_TRAPS.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// FG_TRAPS' share of one on_exit_fg trap, given back when it is done with or dropped.
@@ -71,8 +96,15 @@ fn take(id: u64) -> Option<Undo> {
     Some(t.remove(i).1)
 }
 
+/// A foreground child ran when the INT came (read in the handler: by the time the thread looks, that
+/// step may be over and the next not yet begun, where bash would have been waiting all along).
+static INT_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 extern "C" fn on_signal(sig: libc::c_int) {
     let _e = crate::sig::Errno::save();
+    if sig == libc::SIGINT && crate::sig::FG_ACTIVE.load(Ordering::SeqCst) {
+        INT_BUSY.store(true, Ordering::SeqCst);
+    }
     let fd = SIG_W.load(Ordering::Relaxed);
     if fd >= 0 {
         let b = [u8::try_from(sig).unwrap_or(0)];
@@ -104,7 +136,9 @@ fn arm() {
                 return;
             }
             let sig = libc::c_int::from(b[0]);
-            let busy = crate::sig::FG_ACTIVE.load(Ordering::SeqCst);
+            let busy = crate::sig::FG_ACTIVE.load(Ordering::SeqCst)
+                || (sig == libc::SIGINT && INT_BUSY.swap(false, Ordering::SeqCst));
+            let code = CODE_TRAPS.load(Ordering::SeqCst) > 0;
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
             let wait_fg = sig == libc::SIGINT || FG_TRAPS.load(Ordering::SeqCst) > 0;
             let fg = wait_fg.then(|| {
@@ -114,7 +148,7 @@ fn arm() {
             });
             // An INT to omabox alone while a child ran that did not die of it: bash goes on (probed:
             // `kill -INT` of the script during a sleep, the rest of it ran, its EXIT trap at its end).
-            if sig == libc::SIGINT && busy && !crate::sig::FG_INT.load(Ordering::SeqCst) {
+            if !code && sig == libc::SIGINT && busy && !crate::sig::FG_INT.load(Ordering::SeqCst) {
                 if crate::sig::DEFER_INT.load(Ordering::SeqCst) {
                     crate::sig::INT_DEFERRED.store(true, Ordering::SeqCst);
                 }
@@ -128,6 +162,12 @@ fn arm() {
                 .unwrap_or_default();
             for (_, u) in all.into_iter().rev() {
                 u();
+            }
+            if code {
+                // (bash's `exit 130|143|129` in its trap, its EXIT trap run on the way)
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                // SAFETY: _exit ends this process at once, nothing left to run.
+                unsafe { libc::_exit(128 + sig) }
             }
             // SAFETY: the default disposition back, then the signal to this process: it ends of it,
             // as bash does after its EXIT trap.
@@ -143,6 +183,17 @@ fn arm() {
             std::process::exit(128 + sig);
         }
     });
+}
+
+/// No trap, but bash's way with a signal: TERM and HUP end this process at once, an INT once the
+/// foreground child is over, and not at all when that child did not die of it (an INT to omabox
+/// alone while gdb or a scenario runs: bash waits and goes on).
+pub fn int_as_bash() {
+    arm();
+    // (once more, over another module's handlers: `trap - INT TERM HUP` after record start)
+    for s in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+        crate::sig::catch(s, on_signal);
+    }
 }
 
 /// `sleep SECS` as bash runs it: a child in the foreground (a signal's trap waits for it).

@@ -174,6 +174,25 @@ pub fn cntrl_to_space(v: &[u8]) -> Vec<u8> {
     out
 }
 
+/// `${V//PATTERN/...}` with a one-character PATTERN: each character of V (as bash's pattern
+/// matching reads it in the locale) through F, its bytes given; a V with a byte that starts no
+/// character is taken byte by byte, as bash falls back to then.
+pub fn chars_map(v: &[u8], f: impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
+    let cs = mb_chars(v);
+    let wide = multibyte() && cs.iter().all(|(c, _)| c.is_some());
+    let mut out = Vec::with_capacity(v.len());
+    if !wide {
+        for b in v.chunks(1) {
+            out.extend(f(b));
+        }
+        return out;
+    }
+    for (_, b) in cs {
+        out.extend(f(b));
+    }
+    out
+}
+
 /// `${V,,}`: V in lower case, as the locale's towlower (tolower) has each character.
 pub fn lower(v: &[u8]) -> Vec<u8> {
     let multi = multibyte();
@@ -500,6 +519,25 @@ pub fn glob(dir: &Path, dirs: bool) -> Vec<Vec<u8>> {
         .collect();
     names.sort_by(|a, b| coll_cmp(a, b));
     names
+}
+
+/// `for f in "$DIR"/*EXT; do [ -f "$f" ] || continue`: DIR's regular files (links to one too) named
+/// so, hidden ones aside, in the locale's order, each as DIR/NAME.
+pub fn glob_ext(dir: &[u8], ext: &[u8]) -> Vec<Vec<u8>> {
+    let Ok(rd) = std::fs::read_dir(path(dir)) else {
+        return Vec::new();
+    };
+    let mut names: Vec<Vec<u8>> = rd
+        .flatten()
+        .map(|e| e.file_name().into_vec())
+        .filter(|n| n.first() != Some(&b'.') && n.ends_with(ext))
+        .collect();
+    names.sort_by(|a, b| coll_cmp(a, b));
+    names
+        .into_iter()
+        .map(|n| crate::cat!(dir, "/", n))
+        .filter(|p| path(p).is_file())
+        .collect()
 }
 
 /// `f=$(mktemp)`: a new temporary file, open, and its path (left there for the caller's rm); mktemp's

@@ -912,3 +912,15 @@ pub const INLINE: [&str; 106] = [
     WIN_SIZE_JQ,
     WIN_SIZE2_JQ,
 ];
+
+/// Wave 4b's inline programs (gdb, check, record), for `_rust-jq --inline` too.
+pub const INLINE_4B: &[&str] = &[
+    crate::cmd::gdb::GDB_LOG_SH,
+    crate::cmd::gdb::GDB_RUN_SH,
+    crate::cmd::check::CHK_JQ,
+    crate::cmd::check::CHK_DIFF_JQ,
+    crate::cmd::check::CHK_RUN_JQ,
+    crate::cmd::check::CHK_POINT_JQ,
+    crate::cmd::check::CHK_ENV_JQ,
+    crate::cmd::check::CHK_SETUP_JQ,
+];
