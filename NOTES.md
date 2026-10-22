@@ -8823,8 +8823,10 @@ from them.
     names, and the exec makes /proc/PID/environ the binary's, so `rust_handoff` reads it first and hands
     it over a pipe (OMABOX_ENVIRON_FD), for `run --pass` (finding 74) and for a call handed back to bash
     (the caller's value where a global overwrote it; what the broker set or took out stays so).
-    What the Rust half leaves to bash (a command's `--help`, `run --wait` and its options until the
-    settle machinery is ported with `wait`) goes back before anything is done: the same call. Tests:
+    What the Rust half leaves to bash (a `--help` after other words, in lua, log and events) goes
+    back before anything is done: the same call. Since wave 3a, run, tree and pixel print theirs
+    there as `omabox help CMD` prints it (the help text stays bash's until the front is ported), and
+    `run -d --wait` is the Rust half's, on the settle machinery `wait` shares (settle.rs). Tests:
     t_unit_rust_handoff, t_unit_rust_parity, t_rust_parity.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)

@@ -21,7 +21,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -130,6 +130,46 @@ fn core_hard_zero() -> bool {
     unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut r) == 0 && r.rlim_max == 0 }
 }
 
+/// `F >/dev/null` or `F 2>/dev/null` for a stretch of this process: fd FD is /dev/null until the guard
+/// drops, as bash's redirection of a function's call is for every word said in it and every child it
+/// starts. Only where no other thread writes to FD meanwhile.
+pub struct Redir {
+    fd: RawFd,
+    saved: Option<OwnedFd>,
+}
+
+impl Redir {
+    pub fn null(fd: RawFd) -> Redir {
+        match dev_null(true) {
+            Ok(n) => Redir::to(fd, n.as_raw_fd()),
+            Err(_) => Redir { fd, saved: None },
+        }
+    }
+
+    /// `F 2>"$file"`: fd FD the same as TO (a file of the caller's) until the guard drops.
+    pub fn to(fd: RawFd, to: RawFd) -> Redir {
+        let _ = std::io::stdout().flush();
+        let saved = dup_hi(fd).ok();
+        // SAFETY: both fds are open; dup2 only changes this process's descriptor table.
+        unsafe {
+            libc::dup2(to, fd);
+        }
+        Redir { fd, saved }
+    }
+}
+
+impl Drop for Redir {
+    fn drop(&mut self) {
+        let _ = std::io::stdout().flush();
+        if let Some(s) = &self.saved {
+            // SAFETY: as in null: the fd saved there back in its place.
+            unsafe {
+                libc::dup2(s.as_raw_fd(), self.fd);
+            }
+        }
+    }
+}
+
 // --- children -------------------------------------------------------------------------------------
 
 /// How a child is started past its stdio: the fds it keeps by number (KEEP), one given it as fd 3
@@ -141,6 +181,9 @@ pub struct Fds {
     pub fd3: Option<RawFd>,
     pub only: bool,
     pub nocore: bool,
+    /// Where held_run says the child's pid once started, and 0 once it is reaped (`$!`, for a
+    /// caller that may have to kill it: settle_end's kill_tree).
+    pub pid: Option<Arc<AtomicI32>>,
 }
 
 pub fn command(argv: &[Vec<u8>], fds: Fds) -> Command {
@@ -295,6 +338,9 @@ pub enum ErrTo {
     Inherit,
     Null,
     Out,
+    /// An fd of the caller's (`2>&FD`: settle_begin's tool, its words to the pipe read with its
+    /// answer).
+    Fd(RawFd),
 }
 
 /// The words ns_said says, given what nsenter's stderr held, the command's end RC, and a line bash
@@ -374,6 +420,10 @@ fn say_to(err: ErrTo, buf: &mut Vec<u8>, m: &[u8]) {
         }
         ErrTo::Null => {}
         ErrTo::Out => buf.extend_from_slice(m),
+        ErrTo::Fd(fd) => {
+            // SAFETY: the caller's fd, open while the call runs; m is valid for its length.
+            let _ = unsafe { libc::write(fd, m.as_ptr().cast(), m.len()) };
+        }
     }
 }
 
@@ -485,6 +535,21 @@ pub fn on_box(
     err: ErrTo,
     report: bool,
 ) -> Ran {
+    let stdin = if stdin_null { In::Null } else { In::Inherit };
+    on_box_io(ctx, args, stdin, out, err, report, None)
+}
+
+/// on_box with its stdin any fd (settle_begin's pipe), and its nsenter's pid said in PID (`$!` of a
+/// background on_box).
+pub fn on_box_io(
+    ctx: &Ctx,
+    args: &[Vec<u8>],
+    stdin: In,
+    out: Out,
+    err: ErrTo,
+    report: bool,
+    pid_to: Option<Arc<AtomicI32>>,
+) -> Ran {
     let mut buf = Vec::new();
     let refuse = |buf: &mut Vec<u8>, m: Vec<u8>| {
         say_to(err, buf, &cat!("omabox: ", m, "\n"));
@@ -556,8 +621,11 @@ pub fn on_box(
         b"sh".to_vec(),
     ];
     argv.extend(args.iter().cloned());
-    let stdin = if stdin_null { In::Null } else { In::Inherit };
-    let r = match held_run(&argv, stdin, out, err, Fds::default()) {
+    let fds = Fds {
+        pid: pid_to,
+        ..Fds::default()
+    };
+    let r = match held_run(&argv, stdin, out, err, fds) {
         Ok(r) => r,
         Err(e) => {
             say_to(
@@ -659,6 +727,7 @@ fn held_run(
     let efd = match (err, &cap) {
         (ErrTo::Out, Some((_, w))) => dup_hi(w.as_raw_fd())?,
         (ErrTo::Null, _) => dup_hi(dev_null(true)?.as_raw_fd())?,
+        (ErrTo::Fd(fd), _) => dup_hi(fd)?,
         _ => dup_hi(2)?,
     };
     let mut argv = argv.to_vec();
@@ -666,6 +735,7 @@ fn held_run(
         *w = format!("OMABOX_EFD={}", efd.as_raw_fd()).into_bytes();
     }
     fds.keep.push(efd.as_raw_fd());
+    let pid_to = fds.pid.take();
     let mut c = command(&argv, fds);
     c.stdin(match stdin {
         In::Inherit => Stdio::inherit(),
@@ -679,6 +749,9 @@ fn held_run(
     drop(efd);
     let mut child = spawned?;
     crate::sig::spawned(child.id());
+    if let Some(p) = &pid_to {
+        p.store(i32::try_from(child.id()).unwrap_or(0), Ordering::SeqCst);
+    }
     let held = hold(hr);
     let out = match cap {
         Some((r, w)) => {
@@ -688,6 +761,9 @@ fn held_run(
         None => Vec::new(),
     };
     let (rc, sig) = wait(&mut child);
+    if let Some(p) = &pid_to {
+        p.store(0, Ordering::SeqCst);
+    }
     Ok(HeldRun {
         rc,
         sig,
@@ -739,6 +815,48 @@ pub struct ExecOpts {
     pub stdout_to_stderr: bool,
     pub fd3: Option<OwnedFd>,
     pub kill_say: bool,
+    /// Its stdout an fd of the caller's (`$(box_sys ...)`: a pipe read there) rather than this
+    /// process's.
+    pub stdout: Option<RawFd>,
+    /// box_sys (BOX_SYS): one of omabox's own helpers, by its full path, with only the box's
+    /// display, Hyprland and session bus of omabox.env, in /home/sbx, PATH=/usr/bin, its pipes not
+    /// relayed and no terminal of its own.
+    pub sys: bool,
+}
+
+/// box_sys's environment: HOME, LANG, the runtime dir, then the first WAYLAND_DISPLAY,
+/// HYPRLAND_INSTANCE_SIGNATURE and DBUS_SESSION_BUS_ADDRESS of omabox.env, each only when tame.
+fn sys_env(d: &[u8]) -> Vec<Vec<u8>> {
+    let lang = shell::env("LANG")
+        .filter(|l| !l.is_empty())
+        .unwrap_or(b"C.UTF-8".to_vec());
+    let mut env = vec![
+        b"HOME=/home/sbx".to_vec(),
+        cat!("LANG=", lang),
+        format!("XDG_RUNTIME_DIR=/run/user/{}", procfs::uid()).into_bytes(),
+        b"OMABOX_SYS=1".to_vec(),
+    ];
+    let mut seen: Vec<Vec<u8>> = Vec::new();
+    // (`while IFS= read -r -d '' v`: a last record without its NUL is not read)
+    let text = run_read(d, "omabox.env").unwrap_or_default();
+    let mut recs: Vec<&[u8]> = text.split(|&c| c == 0).collect();
+    recs.pop();
+    for v in recs {
+        let i = v.iter().position(|&c| c == b'=').unwrap_or(v.len());
+        let (k, val) = (&v[..i], v.get(i + 1..).unwrap_or_default());
+        let tame = match k {
+            b"WAYLAND_DISPLAY" | b"HYPRLAND_INSTANCE_SIGNATURE" => {
+                shell::re_match("^[A-Za-z0-9_.-]+$", val)
+            }
+            b"DBUS_SESSION_BUS_ADDRESS" => shell::re_match("^unix:[A-Za-z0-9_.=/,-]{1,200}$", val),
+            _ => continue,
+        };
+        if tame && !seen.iter().any(|s| s == k) {
+            seen.push(k.to_vec());
+            env.push(v.to_vec());
+        }
+    }
+    env
 }
 
 /// box_exec ARGS: a command inside the box's namespaces (unprivileged: we own its user namespace)
@@ -754,12 +872,24 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
     };
     covers_held(ctx)?;
     let mut wd = shell::pwd();
-    // Not the session's own marker: a command run here is not the box's session (finding 424).
-    let env: Vec<Vec<u8>> = mapfile0(&run_read(&ctx.d, "omabox.env").unwrap_or_default())
-        .into_iter()
-        .filter(|v| !v.starts_with(b"OMABOX_OWN_SESSION="))
-        .collect();
-    if jail::in_jail() {
+    let env: Vec<Vec<u8>> = if o.sys {
+        if !args.first().is_some_and(|a| a.starts_with(b"/")) {
+            let a = args.first().cloned().unwrap_or(b"nothing".to_vec());
+            return Err(ctx.die(cat!(
+                "box_exec: omabox's own helper goes by its full path, got ",
+                a
+            )));
+        }
+        wd.clear();
+        sys_env(&ctx.d)
+    } else {
+        // Not the session's own marker: a command run here is not the box's session (finding 424).
+        mapfile0(&run_read(&ctx.d, "omabox.env").unwrap_or_default())
+            .into_iter()
+            .filter(|v| !v.starts_with(b"OMABOX_OWN_SESSION="))
+            .collect()
+    };
+    if jail::in_jail() && !o.sys {
         // A jailed caller's, when its jail and the host agree on it.
         wd = jail::get_raw("cwd");
     }
@@ -810,7 +940,10 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
     nsline.extend([
         b"OMABOX=1".to_vec(),
         cat!("OMABOX_NAME=", ctx.name),
-        cat!("OMABOX_CALLER_PATH=", caller_path(true)),
+        cat!(
+            "OMABOX_CALLER_PATH=",
+            if o.sys { Vec::new() } else { caller_path(true) }
+        ),
     ]);
     if !pass_word.is_empty() {
         nsline.push(pass_word);
@@ -831,7 +964,11 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
     };
     let src = [
         null_in.as_ref().map_or(0, AsRawFd::as_raw_fd),
-        if o.stdout_to_stderr { 2 } else { 1 },
+        match (o.stdout, o.stdout_to_stderr) {
+            (Some(fd), _) => fd,
+            (None, true) => 2,
+            (None, false) => 1,
+        },
         2,
     ];
     if o.fd3.is_some() {
@@ -841,15 +978,16 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
     let rc;
     let mut held = Vec::new();
     let mut killed = KillLine::None;
-    if isatty(src[0]) && isatty(src[1]) && fg_tty() && executable(b"/usr/bin/script") {
+    if !o.sys && isatty(src[0]) && isatty(src[1]) && fg_tty() && executable(b"/usr/bin/script") {
         rc = box_pty(&nsline, keep, fd3).map_err(|_| Exit(1))?;
     } else {
-        let relays = Relays::new(src, true).map_err(|_| Exit(1))?;
+        let relays = Relays::new(src, !o.sys).map_err(|_| Exit(1))?;
         let fds = Fds {
             keep,
             fd3,
             only: true,
             nocore: true,
+            pid: None,
         };
         let r = relays.run(&nsline, fds);
         match r {
@@ -1082,6 +1220,7 @@ fn box_pty(nsline: &[Vec<u8>], mut keep: Vec<RawFd>, fd3: Option<RawFd>) -> std:
             fd3,
             only: true,
             nocore: true,
+            pid: None,
         },
     );
     let mut child = c.spawn()?;

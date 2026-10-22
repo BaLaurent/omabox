@@ -3335,6 +3335,120 @@ t_unit_rust_parity() {
   parity "events --until of a dead box" events -b dl --until x
   parity "events of a live box with none recorded" events -b own
   parity "events of no box" events -b nobox
+  # Wave 3a: wait (and the settle machinery), run --wait, windows, tree, pixel. The jq programs are
+  # bash's, byte for byte (the desktop's answers are jq's); their refusals; shell_note's warnings on
+  # live stand-ins whose box.json says a shell (its pid file, crash reports, relaunch lines); and the
+  # stand-ins' Hyprland that does not answer.
+  local v
+  for v in LAYER_SPAN_JQ WIN_JQ WIN_SEL_JQ WIN_DESC_JQ DESK_FACTS_JQ DESK_TARGET_JQ LAYER_LIST_JQ JQ_MON; do
+    check_eq "the Rust half's $v is bash's" "$(lib eval "printf %s \"\$$v\"")" "$("$ROOT/build/bin/omabox" _rust-jq "$v")"
+  done
+  rp_w3() {
+    rp_w2
+    local d=$r/rt/omabox c
+    # shell_note (#147, #303): a shell up (pid 1, the stand-in's), crashes since the last look, a
+    # launcher's relaunches since; one gone after crashes; one whose seen files are junk.
+    rp_live sh1 ',"shell":true'; echo 1 > "$d/sh1/run/omabox-shell.pid"; echo 0 > "$d/sh1/shell-crashes-seen"
+    for c in r1 r2; do mkdir -p "$d/sh1/home/.cache/quickshell/crashes/$c"; printf 'x\nConfig Path: /usr/share/omarchy//shell/shell.qml\n' > "$d/sh1/home/.cache/quickshell/crashes/$c/report.txt"; done
+    mkdir -p "$d/sh1/home/.cache/quickshell/crashes/other"; printf 'Config Path: /elsewhere/shell.qml\n' > "$d/sh1/home/.cache/quickshell/crashes/other/report.txt"
+    rp_live sh2 ',"shell":true'; echo 1 > "$d/sh2/run/omabox-shell.pid"; echo 5 > "$d/sh2/run/omabox-shell.mark"
+    printf 'omarchy-shell: Omarchy shell exited with status 1; relaunching\nx omarchy-shell: Omarchy shell exited with status 137; relaunching\n' > "$d/sh2/home/shell.log"
+    echo '5 0 -' > "$d/sh2/shell-relaunches-seen"
+    rp_live sh3 ',"shell":true'; mkdir -p "$d/sh3/home/.cache/quickshell/crashes/r1"; printf 'Config Path: /usr/share/omarchy/shell/x\n' > "$d/sh3/home/.cache/quickshell/crashes/r1/report.txt"
+    rp_live sh4 ',"shell":true'; echo 1 > "$d/sh4/run/omabox-shell.pid"; echo x > "$d/sh4/shell-crashes-seen"; printf 'a b\n' > "$d/sh4/shell-relaunches-seen"
+    printf 'omarchy-shell: Omarchy shell exited with status 2; relaunching\n' > "$d/sh4/home/shell.log"
+  }
+  rp_prep=rp_w3 rp_env=() rp_dir=$r/norepo
+  parity "wait: for what?" wait
+  parity "wait: an unknown condition, the nearest" wait stil
+  parity "wait cmd: refused since 1.0" wait cmd -- true
+  parity "wait: -- without until" wait still -- true
+  parity "wait until: nothing to run" wait until
+  parity "wait until --ignore" wait until --ignore '1,2 3x4' -- true
+  parity "wait window: which?" wait window
+  parity "wait window --quiet" wait window x --quiet 1s
+  parity "wait layer: which?" wait layer
+  parity "wait layer --focused" wait layer x --focused
+  parity "wait layer -g" wait layer x -g '1,2 3x4'
+  parity "wait layer: a second word" wait layer x y
+  parity "wait still --gone" wait still --gone
+  parity "wait still -g and --window" wait still -g '1,2 3x4' --window x
+  parity "wait change --quiet" wait change --quiet 300ms
+  parity "wait --timeout: no duration" wait still --timeout x
+  parity "wait --timeout past 10m" wait still --timeout 11m
+  parity "wait --quiet: no duration" wait still --quiet 1x
+  parity "wait --quiet past 10m" wait still --quiet 601s
+  parity "wait --ignore: no region" wait still --ignore 1,2
+  local ign=(); for v in $(seq 17); do ign+=(--ignore "1,1,1,1"); done
+  parity "wait --ignore: 17 of them" wait still "${ign[@]}"
+  parity "wait -b with no value" wait -b
+  parity "wait --window with no value" wait still --window
+  parity "wait: an unknown option" wait still --stict
+  parity "wait still: a word after it" wait still x
+  parity "...one that names a box" wait still dead1
+  parity "wait still of no box" wait -b nobox still
+  parity "wait still of a dead box" wait -b dead1 still
+  parity "wait still of a box gone idle" wait -b gone still
+  parity "wait still of a box this namespace cannot read" wait -b unk still
+  parity "wait still of a box still starting (covers)" wait -b cov still
+  parity "wait still: a Hyprland that does not answer (cursor_now)" wait -b own still
+  parity "wait still -g: not a region" wait -b own still -g 1,2
+  parity "wait window: a Hyprland that does not answer (a probe that fails)" wait -b own window x --timeout 300ms
+  parity "wait layer: the same" wait -b own layer x --timeout 300ms
+  rp_sed='s/after [0-9]+\.[0-9]+s/after Ts/; s/"elapsed":[0-9.]+/"elapsed":T/'
+  parity "wait until: a command in the box" wait -b own until -- true
+  parity "wait until: still failing at the deadline, 124" wait -b own until --timeout 300ms -- false
+  parity "wait until --json" wait -b own until --json --timeout 300ms -- sh -c 'exit 3'
+  parity "wait until: a command not there" wait -b own until --timeout 200ms -- rp-no-such-command
+  rp_sed=""
+  parity "wait until of a box still starting (covers): box_exec's refusal" wait -b cov until -- true
+  parity "shell_note: crashes since the last look (seen file written)" wait -b sh1 layer x --timeout 300ms
+  parity "shell_note: a relaunch since the last look, by its status" windows -b sh2
+  parity "shell_note: gone after a crash" pixel -b sh3 1 1
+  parity "shell_note: seen files of junk" wait -b sh4 window x --timeout 300ms
+  parity "windows -x" windows -x
+  parity "windows: a word" windows x
+  parity "windows: a word that names a box" windows dead1
+  parity "windows of a dead box" windows -b dead1
+  parity "windows: a Hyprland that does not answer" windows -b own
+  parity "windows --json: the same" windows -b own --json
+  parity "tree: --window and --layer" tree --window a --layer b
+  parity "tree --fnd" tree --fnd x
+  parity "tree: a word" tree x
+  parity "tree --layer with no value" tree --layer
+  parity "tree: --help after the options" tree --find x --help
+  parity "tree of a dead box" tree -b dead1
+  parity "tree: no omabox-tree in the box (an older one)" tree -b own
+  parity "pixel: no point" pixel
+  parity "pixel: an X alone" pixel 1
+  parity "pixel: three numbers" pixel 1 2 3
+  parity "pixel: 33 points" pixel $(seq 66)
+  parity "pixel: not a number" pixel 1 x
+  parity "pixel: six digits" pixel 1 123456
+  parity "pixel: a negative one is an option" pixel 1 -2
+  parity "pixel: --in and --window" pixel --in f --window w 1 1
+  parity "pixel: --help after the points" pixel 1 1 --help
+  parity "pixel: zeros in front, decimal" pixel -b dead1 007 08
+  parity "pixel of a dead box" pixel -b dead1 1 1
+  parity "pixel: a Hyprland that does not answer (extent)" pixel -b own 1 1
+  parity "pixel --window: the same (box_windows)" pixel -b own --window x 1 1
+  parity "pixel --in: no such file" pixel -b own --in "$r/nonexistent" 1 1
+  : > "$r/rp-shot.png"
+  parity "pixel --in: not a shot of the box" pixel -b own --in "$r/rp-shot.png" 1 1
+  parity "run --wait without -d" run -b own --wait -- true
+  parity "run --json without --wait" run -b own -d --json -- true
+  parity "run --timeout without --wait" run -b own -d --timeout 2s -- true
+  parity "run --quiet: no duration (-q is the flag)" run -b own -d --wait --quiet -- true
+  parity "run --quiet past 10m" run -b own -d --wait --quiet 11m -- true
+  parity "run --start: no duration" run -b own -d --wait --start x -- true
+  parity "run -g: not a region" run -b own -d --wait -g 1,2 -- true
+  parity "run -g twice" run -b own -d --wait -g 1,2,3,4 -g 1,2,3,4 -- true
+  parity "run --ignore: no value" run -b own -d --wait --ignore
+  parity "run --ignore outside -g's region: said, then on" run -b dead1 -d --wait -g 0,0,10,10 --ignore 100,100,5,5 -- true
+  parity "run --ignore with a zero in front (bash's arithmetic: octal)" run -b dead1 -d --wait -g 0,0,10,10 --ignore 010,0,5,5 -- true
+  parity "run -d --wait of a dead box" run -b dead1 -d --wait -- true
+  parity "run -d --wait: a Hyprland that does not answer (cursor_now), 125" run -b own -d --wait -- true
+  parity "run: --help after the options" run -b own -d --wait --help
   rp_prep="" rp_env=() rp_dir=/
   # The namespaces' PID 1s first: their unshares and the stand-in pasta end with them.
   kill -KILL "$l1" "$lp" "$nd" 2>/dev/null
@@ -9854,6 +9968,70 @@ t_rust_parity() {
   parity "log: a --grep that matches nothing" log -b "$B" shell --grep 'rp-never-said'
   parity "log gdb: none yet" log -b "$B" gdb
   parity "log run -n 1: the latest run -d's" log -b "$B" run -n 1
+  # Wave 3a: wait, windows, tree, pixel, run -d --wait. Times, frame counts and the events log's size
+  # differ from call to call (sed); so do the pixels the screen settled on (animation frames: where
+  # the last change was, what was ignored), which only the tool's timing decides.
+  rp_sed='s/\b[0-9]+\.[0-9]+s\b/Ts/g; s/"(elapsed|first_change|last_change)":[0-9.]+/"\1":T/g; s/"frames":[0-9]+/"frames":N/; s/"events_since":[0-9]+/"events_since":N/; s/run-[0-9]+\.log/run-N.log/g'
+  parity "windows: none yet" windows -b "$B"
+  parity "windows --json: none" windows -b "$B" --json
+  parity "wait layer: the bar" wait -b "$B" layer omarchy-bar
+  parity "wait layer --gone --json: none such" wait -b "$B" layer rp-none --gone --json
+  parity "wait layer: none such, 124" wait -b "$B" layer rp-none --timeout 300ms
+  parity "wait window --json: none such, 124" wait -b "$B" window rp-none --timeout 300ms --json
+  parity "wait until: a command that succeeds" wait -b "$B" until -- true
+  parity "wait until: one still failing, 124" wait -b "$B" until --timeout 400ms -- false
+  parity "wait still: a part of the background" wait -b "$B" still -g '900,300 40x40' --quiet 200ms
+  parity "wait change: nothing changed, 124" wait -b "$B" change -g '900,300 40x40' --timeout 400ms
+  parity "wait still --json, an --ignore outside the region (said)" wait -b "$B" still --json -g '900,300 40x40' --quiet 200ms --ignore '0,0 10x10'
+  parity "pixel: one point" pixel -b "$B" 920 320
+  parity "pixel --json: several" pixel -b "$B" --json 920 320 10 10
+  parity "pixel: off the screen" pixel -b "$B" 5000 1
+  parity "tree: no window" tree -b "$B"
+  parity "tree --layer: the bar" tree -b "$B" --layer omarchy-bar
+  parity "tree --layer: none such, 2" tree -b "$B" --layer rp-none
+  # Windows of its own, the same for both sides: two of one class.
+  ob run -b "$B" -d -q -- foot -a rp-a -T 'rp "one"' sleep 600 >/dev/null 2>&1
+  ob run -b "$B" -d -q -- foot -a rp-a -T 'rp two' sleep 600 >/dev/null 2>&1
+  ob wait -b "$B" window rp-a title:two >/dev/null 2>&1; ob wait -b "$B" window 'title:"one' >/dev/null 2>&1
+  ob wait -b "$B" still --quiet 500ms >/dev/null 2>&1
+  parity "windows: two of a class and the layers over them" windows -b "$B"
+  parity "windows --json" windows -b "$B" --json
+  parity "wait window: two match, both named" wait -b "$B" window rp-a
+  parity "wait window --focused --json: one of two" wait -b "$B" window rp-a --focused --json
+  parity "wait window --gone: still there, 124" wait -b "$B" window rp-a --gone --timeout 300ms
+  parity "wait window: a bad selector, 2" wait -b "$B" window 'class:('
+  parity "wait still --window: two match, 2" wait -b "$B" still --window rp-a
+  parity "wait still --window: --ignore in its own coordinates, one outside it" wait -b "$B" still --window 'title:"one' --quiet 200ms --ignore '0,0 10x10' --ignore '5000,0 10x10'
+  parity "tree --window: a terminal has none" tree -b "$B" --window 'title:"one'
+  parity "tree: two match, 2" tree -b "$B" --window rp-a
+  parity "pixel --window" pixel -b "$B" --window 'title:"one' 5 5 20 20
+  parity "pixel --window: outside it" pixel -b "$B" --window 'title:"one' 5000 5
+  OMABOX_BASH=1 ob shot -b "$B" -o "$TMP/rp-s.png" >/dev/null 2>&1
+  OMABOX_BASH=1 ob shot -b "$B" --window 'title:"one' -o "$TMP/rp-w.png" >/dev/null 2>&1
+  parity "pixel --in: a shot's pixel" pixel -b "$B" --in "$TMP/rp-s.png" 920 320
+  parity "pixel --in: a window shot's" pixel -b "$B" --in "$TMP/rp-w.png" 5 5
+  parity "pixel --in: outside the image" pixel -b "$B" --in "$TMP/rp-s.png" 99999 1
+  # run -d --wait: each side's window closed before the other's opens (the same layout). Its own
+  # addresses and pids differ, and the screen's settling is the tool's timing (above).
+  rp_sed+='; s/\b0x[0-9a-f]+/0xA/g; s/pid [0-9]+/pid P/g; s/at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/at G/g; s/[0-9]+x[0-9]+ at -?[0-9]+,-?[0-9]+/G/g'
+  rp_sed+='; s/"(change|late_changes|ignored)":(null|\{[^}]*\})/"\1":G/g'
+  rp_sed+='; s/-?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/G/g'
+  # A small part that never stops changing (a counter): 124, its place named for an --ignore, in the
+  # screen's coordinates (-g) and in the window's (--window).
+  ob run -b "$B" -d -q -- foot -a rp-tick -T tick sh -c 'while :; do printf "\r%s" "$(date +%N)"; sleep 0.03; done' >/dev/null 2>&1
+  ob wait -b "$B" window rp-tick >/dev/null 2>&1
+  local tg; tg=$(ob windows -b "$B" --json | jq -r '.[] | select(.class == "rp-tick") | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')
+  parity "wait still: one part never still, 124, its place named for an --ignore" wait -b "$B" still -g "$tg" --timeout 1500ms
+  parity "...with --window: in the window's own coordinates (--json)" wait -b "$B" still --window rp-tick --timeout 1500ms --json
+  ob run -b "$B" -- sh -c 'pkill -f rp-tick; true' >/dev/null 2>&1
+  rp_w3_kill() { ob run -b "$B" -- sh -c 'pkill -f rp-w3; true' >/dev/null 2>&1; ob wait -b "$B" window rp-w3 --gone >/dev/null 2>&1; }
+  rp_prep=rp_w3_kill
+  parity "run -d --wait: its window opened, the screen settled" run -b "$B" -d --wait -- foot -a rp-w3 -T w3 sleep 600
+  parity "run -d --wait --json: what changed, its target" run -b "$B" -d --wait --json -- foot -a rp-w3 -T w3 sleep 600
+  parity "run -d --wait: a command that exits 3, its end said (124)" run -b "$B" -d --wait --timeout 1s -- sh -c 'exit 3'
+  parity "run -d --wait: one that exits 0 and changes nothing (124)" run -b "$B" -d --wait --timeout 1s -- true
+  rp_prep="" rp_sed=""
+  ob run -b "$B" -- sh -c 'pkill -x foot; true' >/dev/null 2>&1
   rp_rt="" rp_snap=1
   ob down "$B" >/dev/null 2>&1
 }

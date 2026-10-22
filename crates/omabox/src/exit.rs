@@ -31,6 +31,7 @@ pub fn say(m: impl AsRef<[u8]>) {
 }
 
 /// What bash's globals hold for one call: the refusal conventions and the box selected.
+#[derive(Clone)]
 pub struct Ctx {
     pub parsing: bool,
     pub die_rc: Option<u8>,

@@ -1,8 +1,9 @@
 //! `omabox run [-b NAME] [-d ...] [--pass VAR]... [--env-file FILE]... [UP OPTIONS] -- CMD [ARG...]`:
 //! a command in the box (box_exec), its exit status passed through, run's own failures 125 (#273);
 //! with -d a job of its own, recorded (#215, #286); with no box up, a throwaway box for the one
-//! command (its own `up` and `down`, as subprocesses until those are ported). `--wait` and its
-//! options (the settle machinery `wait`, `keys` and `click` share) stay with bash for now.
+//! command (its own `up` and `down`, as subprocesses until those are ported). run -d --wait: until
+//! what it opens has settled (settle.rs, the machinery `wait`, `keys` and `click` share), and what
+//! the desktop did meanwhile (#274).
 
 use crate::args::{optarg, unknown_opt_hint};
 use crate::boxes::{box_alive, need_box, take_over, touch};
@@ -11,8 +12,10 @@ use crate::exec::{ExecOpts, box_exec, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::jail::in_jail;
 use crate::jobs::{job_ended, job_note, job_record, job_replace, run_mark_begin, run_mark_end};
+use crate::num::ms_duration;
 use crate::repo::{jail_root, refuse_src, repo_top, run_cwd_note, run_link_notes};
 use crate::select::{env_names_box, select_box, session_boxes};
+use crate::settle::{Settle, cursor_now, cursor_rect, settle_sent};
 use crate::shell::{self, Re};
 use std::os::unix::ffi::OsStrExt;
 use std::time::Duration;
@@ -138,11 +141,10 @@ fn envfile_read(ctx: &Ctx, f: &[u8]) -> Res<Vec<Vec<u8>>> {
     Ok(out)
 }
 
-/// The settle options (--wait's): with any of them the call is bash's for now.
-const SETTLE: [&str; 8] = [
+/// The settle options (--wait's), taken by settle_opt.
+const SETTLE: [&str; 7] = [
     "--wait",
     "--start",
-    "--quiet",
     "--timeout",
     "--strict",
     "--json",
@@ -156,6 +158,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut name, mut detach, mut quiet, mut print_log, mut replace) =
         (Vec::new(), false, false, false, false);
     let (mut up_args, mut envs): (Vec<Vec<u8>>, Vec<Vec<u8>>) = (Vec::new(), Vec::new());
+    let mut st = Settle::default();
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
@@ -170,8 +173,19 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             "-q" => quiet = true,
             "--print-log" => print_log = true,
             "--replace" => replace = true,
-            _ if SETTLE.contains(&s) => return crate::to_bash(ctx, args),
-            "-h" | "--help" => return crate::to_bash(ctx, args),
+            "--quiet" => {
+                if !args.get(i + 1).is_some_and(|v| ms_duration(v).is_some()) {
+                    return Err(ctx.die(
+                        "run: --quiet takes a duration (--wait's quiet period); -q is the flag that silences run -d",
+                    ));
+                }
+                st.opt(ctx, &args[i..])?;
+                i += st.took - 1;
+            }
+            _ if SETTLE.contains(&s) => {
+                st.opt(ctx, &args[i..])?;
+                i += st.took - 1;
+            }
             "--pass" => {
                 optarg(ctx, a, args.get(i + 1))?;
                 let v = &args[i + 1];
@@ -231,6 +245,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 i += 1;
             }
             _ if UP_FLAGS.contains(&s) => up_args.push(a.clone()),
+            "-h" | "--help" => return crate::args::usage("run"),
             "--" => {
                 i += 1;
                 break;
@@ -250,6 +265,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let cmd: Vec<Vec<u8>> = args[i.min(args.len())..].to_vec();
     if cmd.is_empty() {
         return Err(ctx.die("run: nothing to run (omabox run -- CMD ...)"));
+    }
+    st.opts_check(ctx, 0)?;
+    if st.wait && !detach {
+        return Err(
+            ctx.die("run: --wait goes with -d (a command run to its end has nothing to wait for)")
+        );
     }
     if (quiet || print_log || replace) && !detach {
         return Err(ctx.die("run: -q, --print-log and --replace go with -d"));
@@ -274,7 +295,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         run_link_notes(ctx, "down, then up", false, &cmd); // through a link out of the repo (#235)
         run_cwd_note(ctx, "down, then up", &cmd); // a path in this dir the box does not have (#251)
         if detach {
-            return detached(ctx, quiet, print_log, replace, &cmd);
+            return detached(ctx, &mut st, quiet, print_log, replace, &cmd);
         }
         let mark = run_mark_begin(ctx); // (a job it stops is no news: job_note)
         let opts = ExecOpts {
@@ -355,6 +376,7 @@ const RUN_D_SH: &str = r#"/usr/bin/rm -f -- "$1" && set -C && exec >"$1" 2>&1 ||
 /// run -d: the command as a job of its own, recorded; its first moments watched (#286).
 fn detached(
     ctx: &mut Ctx,
+    st: &mut Settle,
     quiet: bool,
     print_log: bool,
     replace: bool,
@@ -377,6 +399,22 @@ fn detached(
         ns,
         ".exit"
     );
+    // --wait: until what it opens has settled (a first frame within 5 s unless --start says).
+    if st.wait {
+        let p = cursor_now(ctx)?;
+        if !p.is_empty() {
+            // (bash's arithmetic refusing a number: its own words, then exit 1)
+            let r = cursor_rect(&p).ok_or(Exit(1))?;
+            st.args.extend([b"--ignore".to_vec(), r]);
+        }
+        st.facts = "run";
+        let mut tool: Vec<Vec<u8>> =
+            vec![b"settle".to_vec(), b"--start".to_vec(), b"5000".to_vec()];
+        tool.extend(st.args.iter().cloned());
+        st.begin(ctx, &tool)?;
+        let json = st.json;
+        st.ready(ctx, json)?;
+    }
     let mut argv = vec![
         b"/usr/bin/bash".to_vec(),
         b"-c".to_vec(),
@@ -395,7 +433,7 @@ fn detached(
         stdin_null: true,
         stdout_to_stderr: true,
         fd3: Some(w),
-        kill_say: false,
+        ..ExecOpts::default()
     };
     let started = box_exec(ctx, &argv, opts);
     let jpid = shell::strip_nl(&reader.join().unwrap_or_default());
@@ -419,18 +457,19 @@ fn detached(
     let numeric = shell::re_match("^[0-9]+$", &jpid);
     if numeric {
         job_record(ctx, &jpid, &log, cmd);
+        st.fpid = jpid.clone();
     }
     if print_log {
         out(cat!(log, "\n"))?;
     }
     // Its first moments (#286): a job over by then is said with its status and log instead of
-    // "started", and run -d exits with that status.
-    if numeric {
+    // "started", and run -d exits with that status. --wait has its own answer, below.
+    if !st.wait && numeric {
         let exf = ex.rsplit(|&c| c == b'/').next().unwrap_or(&ex).to_vec();
         let there = ctx.at("run").join(std::ffi::OsStr::from_bytes(&exf));
         for _ in 0..6 {
             if there.exists() || there.is_symlink() {
-                if let Some(rc) = job_ended(ctx, quiet, &jpid, &lname, &ex, cmd)? {
+                if let Some(rc) = job_ended(ctx, false, quiet, &jpid, &lname, &ex, cmd)? {
                     return code(rc);
                 }
                 break;
@@ -441,7 +480,19 @@ fn detached(
     if !quiet {
         say(cat!("started in box '", ctx.name, "' (log: ", log, ")"));
     }
-    Ok(())
+    if !st.wait {
+        return Ok(());
+    }
+    let json = st.json;
+    let rc = st.end(ctx, "settle", json, b"")?;
+    // Not settled, and the job already over: that, not the screen, is the answer (#215).
+    if rc == 124 {
+        if let Some(r) = job_ended(ctx, true, true, &jpid, &lname, &ex, cmd)? {
+            return code(r);
+        }
+    }
+    settle_sent(rc, b"the command was started", st.looked);
+    code(rc)
 }
 
 /// A throwaway box for this one command, its repo as an overlay (the host checkout never changes);

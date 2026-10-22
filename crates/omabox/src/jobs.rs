@@ -375,6 +375,37 @@ pub fn job_procs(procs: &[[Vec<u8>; 4]], pid: &[u8], start: &[u8]) -> Vec<(Vec<u
     out
 }
 
+/// job_failed PID (#297, finding 404): run -d --wait's job has died, killed or with a status other
+/// than 0 (its waiter's status file, read here in $D/run), nothing of its session left. A 0 is no
+/// death: a one-shot changes the screen and ends with 0.
+pub fn job_failed(ctx: &Ctx, pid: &[u8]) -> bool {
+    if !shell::re_match("^[0-9]+$", pid) {
+        return false;
+    }
+    let f = ctx.at("jobs").join(shell::path(pid));
+    if !f.is_file() {
+        return false;
+    }
+    let (log, ok) = crate::json::field(&f, "log");
+    if !ok {
+        return false;
+    }
+    let base = log.rsplit(|&c| c == b'/').next().unwrap_or(&log).to_vec();
+    let Some(ns) = shell::re_group(r"^run-([0-9]{1,19})\.log$", &base, 1) else {
+        return false;
+    };
+    let st = run_read(
+        &ctx.d,
+        &format!("omabox.run-{}.exit", String::from_utf8_lossy(&ns)),
+    )
+    .map(|v| shell::subst(&v[..v.len().min(64)]))
+    .unwrap_or_default();
+    if !shell::re_match("^[0-9]+$", &st) || st == b"0" {
+        return false;
+    }
+    job_live(ctx, std::slice::from_ref(&f)).is_empty()
+}
+
 /// The processes of the jobs recorded in FILES. A record whose job has ended is removed once its end
 /// has been dealt with (job_said): until then job_note needs it to name what ended (finding 405).
 pub fn job_live(ctx: &Ctx, files: &[std::path::PathBuf]) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -746,10 +777,12 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
 /// job_ended WHEN QUIET PID LOG EXIT_FILE ARGV... (#215, #286): whether job PID had ended, nothing of
 /// its session left running; if so it is said, with its exit status (run-job.sh's EXIT_FILE, read in
 /// the box) and its log's last lines, and its JOB_RC returned: the status (`start`, a plain run -d's
-/// first moments: 0 too, a 0 under QUIET not said), 1 when it was not kept.
+/// first moments: 0 too, a 0 under QUIET not said; WAIT, run -d --wait's answer that did not settle:
+/// a 0 is 124, said, as its screen is not the command's), 1 when it was not kept.
 #[allow(clippy::too_many_arguments)]
 pub fn job_ended(
     ctx: &Ctx,
+    wait: bool,
     quiet: bool,
     jpid: &[u8],
     log: &[u8],
@@ -797,10 +830,12 @@ pub fn job_ended(
     let what = job_how(&st);
     let rc = if st.is_empty() {
         1
+    } else if st == b"0" && wait {
+        124
     } else {
         shell::test_int(&st).map_or(1, |n| (n & 0xff) as i32)
     };
-    if st == b"0" && quiet {
+    if !wait && st == b"0" && quiet {
         return Ok(Some(rc));
     }
     let mut miss = Vec::new();
@@ -841,17 +876,31 @@ pub fn job_ended(
         }
     }
     let tail = shell::subst(&tail);
-    say(cat!(
-        "the command ",
-        what,
-        " at once in box '",
-        ctx.name,
-        "', and left nothing running (log: ",
-        ctx.d,
-        "/home/",
-        log,
-        ")"
-    ));
+    if wait {
+        let zero: &[u8] = if st == b"0" {
+            b": what the screen shows is not its (124 is about the screen)"
+        } else {
+            b""
+        };
+        say(cat!(
+            "the command ",
+            what,
+            " before the screen settled, and left nothing running",
+            zero
+        ));
+    } else {
+        say(cat!(
+            "the command ",
+            what,
+            " at once in box '",
+            ctx.name,
+            "', and left nothing running (log: ",
+            ctx.d,
+            "/home/",
+            log,
+            ")"
+        ));
+    }
     if !miss.is_empty() {
         say(cat!(
             "its arguments name host paths box '",

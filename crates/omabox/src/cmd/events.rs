@@ -25,21 +25,7 @@ fn now_ms() -> i64 {
     crate::jobs::now_us() / 1000
 }
 
-/// ms_duration: the one duration grammar (#273): 300ms, 2s, 1.5s, 2m, 1h, or a bare number of
-/// seconds, as milliseconds (at least 1).
-pub fn ms_duration(v: &[u8]) -> Option<i64> {
-    let re = Re::new(r"^([0-9]{1,6}(\.[0-9]{1,6})?)(ms|s|m|h)?$")?;
-    let n: f64 = String::from_utf8_lossy(&re.group(v, 1)?).parse().ok()?;
-    let unit = re.group(v, 3).unwrap_or_default();
-    let mult = match unit.as_slice() {
-        b"ms" => 1.0,
-        b"h" => 3_600_000.0,
-        b"m" => 60_000.0,
-        _ => 1000.0,
-    };
-    let ms = (n * mult + 0.5).trunc();
-    (ms >= 1.0).then_some(ms as i64)
-}
+pub use crate::num::ms_duration;
 
 /// events_show's first step, bash's awk program as it is.
 const AWK_KEEP: &str = r#"
@@ -770,17 +756,6 @@ impl LineReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn durations() {
-        assert_eq!(ms_duration(b"500ms"), Some(500));
-        assert_eq!(ms_duration(b"1.5s"), Some(1500));
-        assert_eq!(ms_duration(b"2m"), Some(120_000));
-        assert_eq!(ms_duration(b"3"), Some(3000));
-        assert_eq!(ms_duration(b"0.0004"), None);
-        assert_eq!(ms_duration(b"0.0005"), Some(1));
-        assert_eq!(ms_duration(b"x"), None);
-    }
 
     #[test]
     fn shown() {

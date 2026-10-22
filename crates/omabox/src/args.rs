@@ -26,6 +26,12 @@ fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"events" => Some(
             "-b= --box= --since= --mark? --grep= -i --json -f --follow --until= --timeout= -n=",
         ),
+        b"wait" => Some(
+            "-b= --box= --json --ignore= --timeout= --quiet= --strict -g= -w= --window= --active --gone --focused",
+        ),
+        b"windows" => Some("-b= --box= --json"),
+        b"tree" => Some("-b= --box= -w= --window= --active -l= --layer= --find= --json --all"),
+        b"pixel" => Some("-b= --box= -w= --window= --active --in= --json"),
         _ => None,
     }
 }
@@ -49,6 +55,18 @@ fn usage_head(cmd: &[u8]) -> &'static str {
         }
         b"log" | b"logs" => LOG_HEAD,
         b"events" => EVENTS_HEAD,
+        b"wait" => {
+            "  omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time\n         COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]\n               | change [-g GEOM | --window SEL] [--ignore GEOM]...\n               | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | until -- CMD [ARG...]"
+        }
+        b"windows" => {
+            "  omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them"
+        }
+        b"tree" => {
+            "  omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text"
+        }
+        b"pixel" => {
+            "  omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb"
+        }
         _ => "",
     }
 }
@@ -276,6 +294,15 @@ pub fn name_arg(ctx: &Ctx, cmd: &str, args: &[Vec<u8>]) -> Res<Vec<u8>> {
         i += 1;
     }
     Ok(strip_nl(&name))
+}
+
+/// `usage CMD` (a command's --help after its other words): its help as `omabox help CMD` prints it,
+/// its status the command's. The help text is bash's until the front is ported (#324, wave 6).
+pub fn usage(cmd: &str) -> Res<()> {
+    let mut c = crate::sig::omabox_cmd();
+    c.args(["help", cmd]);
+    let rc = c.status().map(|s| crate::exec::status(s).0).unwrap_or(126);
+    crate::cmd::hyprctl::code(rc)
 }
 
 #[cfg(test)]
