@@ -4227,7 +4227,7 @@ while True:
   rp_sig_write "$r/rp-sig"
   check_eq "the signal cases' core limit is 1 byte (no core helper, no crash notification)" 1 "$("$r/rp-sig" --core)"
   rp_held() { echo 3 > "$fk/ptr.sleep"; }; rp3_pre=(rp_held)
-  rp_sed0=$rp_sed; rp_sed+='; s/ line ([0-9]+): [0-9]+ Quit / line \1: PID Quit /'
+  rp_sed0=$rp_sed; rp_sed+='; s/ line ([0-9]+): +[0-9]+ Quit / line \1: PID Quit /'
   local sg; for sg in group-INT group-QUIT TERM; do
     rp_wrap=("$r/rp-sig" "$sg" "$fk/held")
     parity "click --mod and $sg while the keys are held: the keyboard tool lets go" click -b fk --mod ctrl 10 10
