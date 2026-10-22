@@ -776,7 +776,7 @@ pub const BW_JQ: &str = r#".int // empty"#;
 /// desk_relay: the host monitor's sides (after JQ_MON).
 pub const LW_FLOOR_JQ: &str = r#"lw | floor"#;
 pub const LH_FLOOR_JQ: &str = r#"lh | floor"#;
-/// monitor_add_window: the box's aquamarine (findings 238, 239).
+/// monitor add: the box's aquamarine, which must have +appid (finding 429).
 pub const AQ_VERSION_JQ: &str = r#".aquamarine.version // "?""#;
 /// gpu release: a box's GPU, "DRIVER SLOT".
 pub const RENDER_PAIR_JQ: &str = r#".render | "\(.driver) \(.pci)""#;

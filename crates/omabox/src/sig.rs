@@ -110,6 +110,9 @@ pub fn run_child<T>(
         let st = end(&mut ch);
         return Ok((t, st));
     }
+    // Nothing new starts once a trap is on its way, as bash starts nothing after its trap: a TERM
+    // between two steps of monitor add must not see the box's output made after the trap's remove
+    // (a monitor no one listed).
     let r = loop {
         park_while_stopping();
         let g = FOREGROUND

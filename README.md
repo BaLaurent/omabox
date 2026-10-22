@@ -591,8 +591,9 @@ monitor; closing it unplugs it. For an exact large resolution at full size use a
 `peek --monitor`. This needs omabox's build of aquamarine (`omabox setup --aquamarine`, whatever
 your system's aquamarine has; `monitor add` refuses a box without it): it gives each monitor's
 window a class of its own, `aquamarine-omabox-<token>`, with a rule of your Hyprland's for that class
-alone, so the window opens on the box's workspace however the add ends (the rule stays until your
-Hyprland reloads its config); the pointer lands on the monitor whose window it is in, and your cursor
+alone, so the window opens on the box's workspace however the add ends, unless your Hyprland reloads
+its config (a theme change, a saved config) between that rule and the window's first map: a reload
+drops the rule; the pointer lands on the monitor whose window it is in, and your cursor
 stays shown from one window to the next. Two adds on one box take turns.
 
 </details>
