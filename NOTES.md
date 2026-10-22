@@ -8899,8 +8899,22 @@ from them.
       or 7; `Couldn't connect`/`Couldn't open a socket`; the box gone). Anything else, hyprctl's 5 s
       give-up first, is unclear and removed. The trap no longer holds INT, TERM or HUP: a second one
       ends it at once (the Rust half's signal thread sets them back to default before an undo, as
-      bash's trap dies of a second one; on_exit_fg is gone). The token file stays when the add did not
-      finish (the box may still read it); on success it is removed.
+      bash's trap dies of a second one). The remove must reach the box after the create: a TERM or
+      HUP can land while the create is still on its way (on_box, nsenter, sh, `timeout`, then hyprctl
+      connects, tens of ms), and a remove that gets there first finds nothing ("output not found")
+      while the create then makes a monitor no one listed. Both halves send the remove at once (a
+      second signal may end the trap before the create is over: the remove is on its way by then) and
+      send it again when it is not answered `ok`: the Rust half once main's foreground child, the
+      create's capture, is over (`trap::wait_foreground`; that capture is held open by `timeout`'s
+      hyprctl, a process group of its own a group signal never reaches; a second signal during the
+      wait still ends it at once, waiting is not holding), bash half a second on (it runs its EXIT
+      trap at once on TERM and HUP and cannot wait for its `$(...)`). Left in bash only: a create still
+      not at the box half a second after the signal leaves a monitor on the box's workspace, its
+      window not in `monitor-windows` and its line still in `omabox.monitors` (the signal path keeps
+      both). The token file goes once a remove is answered `ok` (the box made NAME, so it read the
+      token: left, a later window of that name, confirm-close's unnamed fallback say, would take this
+      add's class and rule); it stays when none was (the box may still read it; a remove queued
+      behind a create the box handles past 5 s gives up too), and goes on success.
     - Interactive `monitor add` runs under the box's lock (`.lock-NAME`, as up and down): a second add
       on that box waits up to 60 s, then says "busy".
     - Refused without +appid (box.json's aquamarine version: the system's, or a box started before the
@@ -8932,11 +8946,18 @@ from them.
     (passthrough v5; the suite's keys-to-box checks use the main window), `up --interactive
     --monitor` refused without +appid (the `monitor add` refusal is tested both ways). Tests:
     t_unit_rust_parity4 (its stand-in box hyprctl now gives up at 5 s, exit 6, as the real one does,
-    and names a window by its token file; signals INT, TERM, HUP and KILL during the rule, between
-    the token and the create, during the create and the window wait, twice during the trap; a create
-    handled 6 s and 10 s late, with and without a TERM; two adds at once on one box; the box's lock
-    held; unpatched aquamarine refused: each side checked that every window it made had its own rule on
-    before it and that no rule went off), t_monitors_window (each monitor's window its own class on a
+    and names a window by its token file; it exits 7 for an `error:` answer, as hyprctl does, and
+    answers "output not found" to a remove of no output; signals INT, TERM, HUP and KILL during the
+    rule, between the token and the create, during the create and the window wait, twice during the
+    trap; a group TERM and HUP while the create is still on its way to the box (`create.arrive`:
+    removed after it, the token gone); a create handled 6 s late, with and without a TERM; one never
+    delivered until `timeout 10` ends hyprctl (124, no answer: unclear, removed twice, token kept); a
+    create refused in words (exit 0 and 7), hyprctl unable to connect, the box gone at the create (no
+    remove, token gone), an empty answer (unclear); two adds at once on one box; the box's lock held;
+    unpatched aquamarine refused: each side checked that every window it made had its own rule on
+    before it, that no rule went off, and where its class token was left), the Rust unit test
+    `deskwin::tests::mon_answer_table` (mon_answer's table, the box's state with hyprctl's status and
+    words), t_monitors_window (each monitor's window its own class on a
     stand-in host; two adds on one box and one on another at once: on 9, floating, focus unchanged),
     t_guard (confirm-close with a token left for the window's name: plain aquamarine).
 

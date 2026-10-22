@@ -13,6 +13,8 @@ type Undo = Box<dyn FnOnce() + Send>;
 
 static TRAPS: Mutex<Vec<(u64, Undo)>> = Mutex::new(Vec::new());
 static NEXT: AtomicU64 = AtomicU64::new(1);
+/// The signal thread holds sig::FOREGROUND while it undoes (an INT's, which waited for that child).
+static FG_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SIG_W: AtomicI32 = AtomicI32::new(-1);
 
 /// One thing to undo; undone when dropped (the command's end, a refusal on the way).
@@ -26,6 +28,20 @@ pub fn on_exit(f: impl FnOnce() + Send + 'static) -> Trap {
         t.push((id, Box::new(f)));
     }
     Trap(id)
+}
+
+/// For an undo whose step in flight must land first (monitor add's remove after its create, finding
+/// 429): wait until main's foreground child is over, unless it already is (an INT's undo, a refusal's
+/// on main). Waiting is not holding: a second INT, TERM or HUP meanwhile ends this process at once.
+pub fn wait_foreground() {
+    if FG_HELD.load(Ordering::SeqCst) {
+        return;
+    }
+    drop(
+        crate::sig::FOREGROUND
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
 }
 
 impl Trap {
@@ -109,6 +125,7 @@ fn arm() {
                     }
                 }
             }
+            FG_HELD.store(fg.is_some(), Ordering::SeqCst);
             let all: Vec<(u64, Undo)> = TRAPS
                 .lock()
                 .map(|mut t| std::mem::take(&mut *t))

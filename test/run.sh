@@ -4492,10 +4492,28 @@ elif a[:1] == ["eval"]:
         sys.exit(1)
 elif cmd in ("output create",):
     kind, n = a[2], a[3]
+    # (create.arrive: the request reaches the box's Hyprland so many seconds after hyprctl started,
+    # its mark create-sent: hyprctl not yet connected, say; a remove sent meanwhile is handled first.
+    # Past `timeout 10`, it never arrives: timeout ends this hyprctl, 124 and no answer)
+    if has("create.arrive"):
+        open(os.path.join(ST, "create-sent"), "w").close()
+        time.sleep(float(rd("create.arrive", "") or "0.5"))
     log("output create", kind, n)
+    # (create.dead: the box ends as it gets the create; hyprctl's read cut short)
+    if has("create.dead"):
+        d = (rd("boxdir", "") or "").strip()
+        try:
+            os.remove(os.path.join(d, "info.json"))
+        except OSError:
+            pass
+        print("Couldn't read (6)")
+        sys.exit(6)
+    # (create.out: the box's answer instead, with hyprctl's status: create.rc, else 7 for an `error:`
+    # answer and 0 for any other, as hyprctl's own)
     if has("create.out"):
-        print(rd("create.out").strip())
-        sys.exit(0)
+        out = rd("create.out").strip()
+        print(out)
+        sys.exit(int(rd("create.rc", "") or (7 if out.startswith("error:") else 0)))
     m = mons()
     line = next((l for l in lines() if l[0] == n), None)
     w, h, r, s = 960, 540, 60.0, 1.0
@@ -4550,6 +4568,9 @@ elif cmd == "output remove":
         import fcntl
         lk = os.open(os.path.join(ST, "create.lock"), os.O_RDWR | os.O_CREAT)
         fcntl.flock(lk, fcntl.LOCK_EX)
+        # (none of that name: Hyprland's words, the remove before the create it was meant to follow)
+        if not has("remove.out") and not any(x["name"] == n for x in mons()):
+            return "output not found"
         # (its window closed on the host, an interactive box's)
         hc = os.path.join(ST, "host/clients.json")
         c = json.loads(rd_abs(hc) or "[]")
@@ -5204,7 +5225,9 @@ EOF
   # on before the box can make that window, and never turned off; so nothing (a signal at any step, a
   # slow box, a second add) puts it on the user's workspace. rp4_safe checks it on each side, from what
   # the stand-in host saw; rp4_want says what else: none (no window made), closed (each one made closed
-  # again by the trap's remove), kept (made and left: a monitor on workspace 9), N (that many made).
+  # again by the trap's remove), kept (made and left: a monitor on workspace 9), N (that many made);
+  # rp4_tok whether WAYLAND-2's class token is gone (the box read it, or made none) or kept (a box that
+  # may have yet to read it).
   rp4_safe() {
     local why; why=$(python3 - "$st/host.log" "${rp4_want:-}" <<'PYEOF'
 import re, sys
@@ -5239,7 +5262,12 @@ if want.isdigit() and len(made) != int(want):
 print("; ".join(bad))
 PYEOF
 )
-    [ -z "$why" ] || { no "finding 429 on the $1 side (${rp4_want:-safe})" "$why"; return 1; }
+    local tf=$r/rt/omabox/fki/run/omabox.appid.WAYLAND-2
+    case ${rp4_tok:-} in
+      gone) [ ! -e "$tf" ] || why+="${why:+; }its class token left" ;;
+      kept) [ -e "$tf" ] || why+="${why:+; }its class token gone" ;;
+    esac
+    [ -z "$why" ] || { no "finding 429 on the $1 side (${rp4_want:-safe}${rp4_tok:+, token $rp4_tok})" "$why"; return 1; }
   }
   # rp4_safe_only LABEL ARGS...: each side run as parity runs it, but only rp4_safe's checks (where the
   # halves may end differently, both safe).
@@ -5269,7 +5297,7 @@ PYEOF
   # (and rp-sig's own line for its child, whose line number is where it noticed: its wait, or RP_TWICE's)
   rp_sed+='; s/rp-sig: line [0-9]+: PID /rp-sig: line N: PID /'
   rp_sed+='; s/ line ([0-9]+): +[0-9]+ Killed / line \1: PID Killed /'
-  rp4_nowin() { rp4_imain; : > "$st/nohostwin"; }; rp4_pre=(rp4_nowin) rp4_want=none
+  rp4_nowin() { rp4_imain; : > "$st/nohostwin"; }; rp4_pre=(rp4_nowin) rp4_want=none rp4_tok=gone
   for sg in group-INT group-TERM; do
     rp_wrap=("$r/rp-sig" "$sg" "$st/creating")
     parity "monitor add, interactive, and $sg while it waits for the window: the monitor removed, no rule off (finding 429)" monitor -b fki add 800x600
@@ -5278,6 +5306,18 @@ PYEOF
   rp4_late() { rp4_imain; : > "$st/create.later"; }; rp4_pre=(rp4_late) rp4_want=closed
   rp_wrap=("$r/rp-sig" group-TERM "$st/creating")
   parity "monitor add, interactive, and group-TERM during the create: its window on 9 by its rule, then closed (finding 429)" monitor -b fki add 800x600
+  # The create still on its way to the box (hyprctl not yet connected) when the signal comes: the
+  # trap's remove gets there first ("output not found"), so it is sent again after the create: by the
+  # Rust half once the create's capture is over (held open by timeout's hyprctl, a process group of its
+  # own the signal never reaches), by bash half a second on.
+  rp4_arrive() { rp4_imain; echo 0.4 > "$st/create.arrive"; }; rp4_pre=(rp4_arrive) rp4_tok=gone
+  rp_wrap=(env RP_LINGER=2 "$r/rp-sig" group-TERM "$st/create-sent")
+  parity "monitor add, interactive, and group-TERM before the create reaches the box: removed after it, the token gone (finding 429)" monitor -b fki add 800x600
+  check_eq "...a remove before the create, then one after it" "remove create remove" \
+    "$(grep -oE '^output (create|remove)' "$st/hypr.log" | sed 's/output //' | paste -sd' ')"
+  rp_wrap=(env RP_LINGER=2 "$r/rp-sig" group-HUP "$st/create-sent") rp4_want="" rp4_tok=""
+  rp4_safe_only "monitor add, interactive, and group-HUP before the create reaches the box: its window on 9 by its rule, both ways (finding 429)" monitor -b fki add 800x600
+  rp4_want=closed
   # A group HUP there: a bash with jobs (on_box's capture of the create has some) sends them a HUP of
   # its own, and they share its group: a second HUP, which can end bash's trap before it starts
   # (probed: 3 to 5 traps run in 15). At worst a monitor left on 9; the Rust half removes it.
@@ -5304,19 +5344,28 @@ PYEOF
     check_eq "...the box was told to make none" 0 "$(grep -c 'output create' "$st/hypr.log" 2>/dev/null || true)"
     check "...the token left names a rule that is on" grep -qF "initial_class = '^aquamarine-$(cat "$r/rt/omabox/fki/run/omabox.appid.WAYLAND-2" 2>/dev/null)\$'" "$st/host.log"
   done
-  # A box that handles the create late, past hyprctl's own 5 s (it gives up: "Couldn't read (6)"),
-  # or past `timeout 10`: unclear, so the trap removes the output, after the late create.
+  # A box that handles the create late, past hyprctl's own 5 s (it gives up: "Couldn't read (6)"):
+  # unclear, so the trap removes the output, after the late create, and its token goes.
   rp4_later() { rp4_imain; echo "$1" > "$st/create.later"; }
-  rp4_l6() { rp4_later 6; }; rp4_l10() { rp4_later 10; }
-  rp_wrap=(env RP_LINGER=2 "$r/rp-linger") rp4_pre=(rp4_l6) rp4_want=closed
+  rp4_l6() { rp4_later 6; }
+  rp_wrap=(env RP_LINGER=2 "$r/rp-linger") rp4_pre=(rp4_l6) rp4_want=closed rp4_tok=gone
   parity "monitor add, interactive, the box's create handled 6 s late: given up, removed after it (finding 429)" monitor -b fki add 800x600
-  rp4_pre=(rp4_l10)
-  parity "monitor add, interactive, the box's create handled 10 s late: the same (finding 429)" monitor -b fki add 800x600
-  rp_wrap=(env RP_LINGER=8 "$r/rp-sig" group-TERM "$st/creating") rp4_pre=(rp4_l6)
+  # A hyprctl that never gets the create to the box (stuck before it connects) until `timeout 10` ends
+  # it: 124 and no answer, unclear; the remove finds no output, twice, so the token stays, for a box
+  # that has yet to read it (there is none to read it here).
+  rp4_hang() { rp4_imain; echo 12 > "$st/create.arrive"; }
+  rp_wrap=() rp4_pre=(rp4_hang) rp4_want=none rp4_tok=kept
+  parity "monitor add, interactive, the create past timeout 10: unclear, removed, nothing made (finding 429)" monitor -b fki add 800x600
+  check_eq "...the box never got it, the remove sent twice" "0 2" \
+    "$(grep -c '^output create' "$st/hypr.log" 2>/dev/null || true) $(grep -c '^output remove WAYLAND-2' "$st/hypr.log" 2>/dev/null || true)"
+  rp4_tok=""
+  # (the trap's remove queued behind that create gives up at 5 s too, and is handled after it; the one
+  # sent again then finds no output: the token stays, both ways)
+  rp_wrap=(env RP_LINGER=8 "$r/rp-sig" group-TERM "$st/creating") rp4_pre=(rp4_l6) rp4_want=closed rp4_tok=kept
   parity "monitor add, interactive, and group-TERM, the box's create handled 6 s late (finding 429)" monitor -b fki add 800x600
   # A second signal while the trap removes the output: it ends there (signals are not held: the
   # window is safe by its rule), the remove already asked for.
-  rp4_twice() { rp4_imain; echo 1.5 > "$st/create.later"; }; rp4_pre=(rp4_twice) rp4_want=""
+  rp4_twice() { rp4_imain; echo 1.5 > "$st/create.later"; }; rp4_pre=(rp4_twice) rp4_want="" rp4_tok=""
   for sg in group-TERM group-INT; do
     rp_wrap=(env RP_LINGER=4 RP_TWICE=0.4 "$r/rp-sig" "$sg" "$st/creating")
     parity "monitor add, interactive, and $sg twice, the second during the trap: no rule off (finding 429)" monitor -b fki add 800x600
@@ -5331,7 +5380,25 @@ PYEOF
   rp4_held() { rp4_imain; : > "$r/rt/omabox/.lock-fki"; flock "$r/rt/omabox/.lock-fki" sleep 1.5 & sleep 0.2; }
   rp_wrap=() rp4_pre=(rp4_held) rp4_want=kept
   parity "monitor add, interactive, the box's lock held 1.5 s: waits, then adds" monitor -b fki add 800x600
-  rp_check="" rp4_want=""
+  # What the box's answer to the create says when it is not `ok` (mon_answer), on an interactive box:
+  # Hyprland's own words (7 for an `error:` answer, 0 for others), hyprctl unable to connect, the box
+  # gone as it got it: it made none, so nothing to remove, and its token goes now.
+  rp4_irefuse() { rp4_imain; echo "$1" > "$st/create.out"; [ -z "${2:-}" ] || echo "$2" > "$st/create.rc"; }
+  rp4_ir7() { rp4_irefuse "error: nope"; }; rp4_ir0() { rp4_irefuse "Name already taken"; }
+  rp4_irc() { rp4_irefuse "Couldn't connect to /run/user/1000/hypr/sig1/.socket.sock. (4)" 4; }
+  rp4_idead() { rp4_imain; : > "$st/create.dead"; }
+  rp_wrap=() rp4_want=none rp4_tok=gone
+  local c; for c in "rp4_ir7:refused in words, 7" "rp4_ir0:refused in words, 0" "rp4_irc:hyprctl cannot connect" "rp4_idead:the box gone at it"; do
+    rp4_pre=("${c%%:*}")
+    parity "monitor add, interactive, the create ${c#*:}: none made, nothing removed (finding 429)" monitor -b fki add 800x600
+    check_eq "...no remove sent" 0 "$(grep -c '^output remove' "$st/hypr.log" 2>/dev/null || true)"
+  done
+  # An answer neither `ok` nor a clear refusal (nothing said, status 0): unclear, so removed; no output
+  # there, so the token stays.
+  rp4_iempty() { rp4_irefuse ""; }; rp4_pre=(rp4_iempty) rp4_tok=kept
+  parity "monitor add, interactive, the create answered with nothing: unclear, removed (finding 429)" monitor -b fki add 800x600
+  check_eq "...the remove sent twice" 2 "$(grep -c '^output remove WAYLAND-2' "$st/hypr.log" 2>/dev/null || true)"
+  rp_check="" rp4_want="" rp4_tok=""
   # An INT to omabox alone (kill -INT PID) while a child runs that does not die of it: bash goes on,
   # so does the Rust half: the figures, the monitor made.
   rp_wrap=("$r/rp-sig" INT "$st/sleeping") rp4_pre=()
