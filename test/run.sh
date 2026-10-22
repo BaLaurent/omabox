@@ -2976,6 +2976,230 @@ t_unit_rust_handoff() {
   check_eq "a command the binary lacks goes back to bash" "0 $("$CLI" help path 2>&1)" "$rc $out"
 }
 
+# The Rust half's parity (#324), which every wave reuses: `parity LABEL ARGS...` runs `omabox ARGS` both
+# ways (OMABOX_BASH=1 keeps it in bash), from $rp_dir, with XDG_RUNTIME_DIR=$rp_rt and ${rp_env[@]}
+# (env's words: -u NAME, NAME=VALUE), and compares exit code, stdout and stderr byte for byte, and
+# with rp_snap=1 what the runtime dir holds after (paths, types, file contents: what a command left
+# or removed; not times). $rp_prep, a function, puts the fixture back before each side. Under
+# --installed (no binary) both are bash: trivially the same. RP_SHOW=FILE: what bash said for each
+# call is appended there, to read the cases over.
+rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1
+rp_state() {
+  [ "$rp_snap" = 1 ] || return 0
+  (cd "$rp_rt" && command find . -printf '%p %y\n' | LC_ALL=C sort && command find . -type f -exec md5sum {} + | LC_ALL=C sort)
+}
+parity() {
+  local label=$1 side d=$TMP/rp-out.$BASHPID; shift
+  mkdir -p "$d"
+  for side in bash rust; do
+    [ -z "$rp_prep" ] || "$rp_prep"
+    local how=OMABOX_BASH=1; [ "$side" = bash ] || how=OMABOX_BASH=
+    (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL -u OMABOX_RELAY_DEFAULT -u SELECT_PLAIN \
+      ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
+      "$CLI" "$@" >"$d/$side.out" 2>"$d/$side.err" </dev/null; echo $? > "$d/$side.rc")
+    rp_state > "$d/$side.state"
+  done
+  [ -z "${RP_SHOW:-}" ] || { echo "== $label: rc $(cat "$d/bash.rc")"; cat "$d/bash.out" "$d/bash.err"; } >> "$RP_SHOW"
+  local f diffs=""
+  for f in rc out err state; do
+    cmp -s "$d/bash.$f" "$d/rust.$f" || diffs+="$f: bash [$(head -c 400 "$d/bash.$f")] rust [$(head -c 400 "$d/rust.$f")]; "
+  done
+  if [ -z "$diffs" ]; then ok "$label"; else no "$label" "omabox $* -> $diffs"; fi
+}
+
+# The commands ported so far (path, env, which), their refusals and box selection, against boxes faked
+# in a runtime dir of the test's own: dead ones (how their Hyprland ended), one gone idle, one whose
+# state this user namespace cannot read (a non-dumpable process: its ns is unreadable), live ones (a
+# process in a pid namespace of its own, straight or behind a stand-in pasta), a session's boxes
+# (finding 88, #136), an agent resumed (take_over, finding 93) and early ends of run -d jobs (job_note).
+t_unit_rust_parity() {
+  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  local r=$TMP/rp sid=0123456789abcdef s8=89abcdef
+  rm -rf "$r"; mkdir -p "$r/rt" "$r/norepo" "$r/bin"
+  local repo; repo=$r/rp-repo; mkdir -p "$repo" && git -C "$repo" init -q
+  local long; long=$r/$(printf 'l%.0s' {1..45}); mkdir -p "$long" && git -C "$long" init -q
+  rp_rt=$r/rt rp_dir=$r/norepo rp_env=() rp_snap=1
+  # Live stand-ins: a process in a pid namespace of its own; one behind a script named pasta (its
+  # child, bwrap's place, has the box's PID 1 as its pid 1); one no ns of which can be read.
+  unshare -Urpf --mount-proc sleep 600 >/dev/null 2>&1 & local u1=$!
+  cp /usr/bin/sleep "$r/bin/nd"; chmod 111 "$r/bin/nd"; "$r/bin/nd" 600 >/dev/null 2>&1 & local nd=$!
+  printf '#!/bin/sh\nunshare -Urpf --mount-proc sleep 600 & wait\n' > "$r/bin/pasta"; chmod +x "$r/bin/pasta"
+  "$r/bin/pasta" -P "$r/rt/omabox/pst/pasta.pid" >/dev/null 2>&1 & local pst=$!
+  local l1="" lp="" i
+  for i in $(seq 50); do
+    l1=$(pgrep -P "$u1") lp=$(pgrep -P "$(pgrep -P "$pst" | head -1)" 2>/dev/null)
+    [ -n "$l1" ] && [ -n "$lp" ] && [ "$(readlink "/proc/$l1/ns/pid")" != "$(readlink /proc/self/ns/pid)" ] && break
+    sleep 0.1
+  done
+  local ns1 nsp; ns1=$(readlink "/proc/$l1/ns/pid") nsp=$(readlink "/proc/$lp/ns/pid")
+  local now; now=$(date +%s)
+  # A box dir: rp_box NAME BOX_JSON [CHILD_PID]
+  rp_box() { local d=$r/rt/omabox/$1; mkdir -p "$d/home" "$d/run"; printf '%s\n' "$2" > "$d/box.json"; [ -z "${3:-}" ] || echo "{\"child-pid\": $3}" > "$d/info.json"; }
+  rp_live() {
+    rp_box "$1" "{\"mode\":\"headless\",\"pidns\":\"$ns1\"${2:-}}" "$l1"
+    printf 'WAYLAND_DISPLAY=wayland-1\0HYPRLAND_INSTANCE_SIGNATURE=sig1\0' > "$r/rt/omabox/$1/run/omabox.env"
+  }
+  rp_fixture() {
+    rm -rf "$r/rt/omabox"; mkdir -p "$r/rt/omabox"
+    rp_box dead1 '{"mode":"headless"}'; echo "x spawned child 12 terminated with signal 11" > "$r/rt/omabox/dead1/home/labwc.log"
+    rp_box dead2 '{"mode":"headless"}'; printf 'spawned child 9 exited with 3\nspawned child 10 exited with -' > "$r/rt/omabox/dead2/home/labwc.log"
+    rp_box dead3 '{"mode":"interactive"}'; printf 'a\nomabox: Hyprland terminated with signal 32\n' > "$r/rt/omabox/dead3/home/hyprland.log"
+    rp_box Zed '{"mode":"headless"}'; ln -s /etc/passwd "$r/rt/omabox/Zed/home/labwc.log"
+    mkdir -p "$r/rt/omabox/half"; echo '{"child-pid": 999999999}' > "$r/rt/omabox/half/info.json"
+    echo 30m > "$r/rt/omabox/.expired-gone"
+    rp_box unk '{"mode":"headless"}' "$nd"
+    rp_live live; echo shell > "$r/rt/omabox/live/home/shell.log"; echo b > "$r/rt/omabox/live/box.log"
+    : > "$r/rt/omabox/live/home/run-1700000000000000000.log"; : > "$r/rt/omabox/live/home/run-1700000000100000000.log"
+    mkdir -p "$r/rt/omabox/live/run/hypr/sig1"; : > "$r/rt/omabox/live/run/hypr/sig1/hyprland.log"
+    rp_live cov; : > "$r/rt/omabox/cov/covers-pending"
+    rp_live noenv; rm "$r/rt/omabox/noenv/run/omabox.env"
+    rp_live badenv; printf 'WAYLAND_DISPLAY=../x\0' > "$r/rt/omabox/badenv/run/omabox.env"
+    rp_box reused "{\"mode\":\"headless\",\"pidns\":\"pid:[1]\"}" "$l1"
+    rp_box pst "{\"mode\":\"headless\",\"pidns\":\"$nsp\"}" 1; echo "$pst" > "$r/rt/omabox/pst/pasta.pid"
+    printf 'WAYLAND_DISPLAY=wayland-1\0' > "$r/rt/omabox/pst/run/omabox.env"
+    # Early ends of run -d jobs (#286): said once, by the record's words; 0, late and junk noted.
+    local j=$r/rt/omabox/jobs t=$((now - 3600)) n k st ms ns i=0
+    rp_live jobs; : > "$j/jobs-noted"; mkdir -p "$j/jobs"
+    # NAME:STATUS:MS (its end, after its start): a, f said with their records' words; b without
+    # one; e's status never written; c (0), d (late) and the junk name noted, unsaid.
+    for n in a:4:1200 b:143:2500 c:0:1000 d:1:40000 e::5000 f:7:300; do
+      IFS=: read -r k st ms <<<"$n"; i=$((i + 1)); ns=$((t * 1000000000 + i))
+      printf '%s' "$st" > "$j/run/omabox.run-$ns.exit"
+      touch -d "@$((t + ms / 1000)).$(printf %03d $((ms % 1000)))" "$j/run/omabox.run-$ns.exit"
+      [ "$k" != a ] || { echo "{\"pid\":\"122\",\"start\":\"-\",\"log\":\"/home/sbx/run-$ns.log\",\"argv\":[\"./w\",\"--port\",\"8080\"]}" > "$j/jobs/122"; : > "$j/home/run-$ns.log"; }
+      [ "$k" != f ] || echo "{\"pid\":7,\"start\":\"-\",\"log\":\"/home/sbx/run-$ns.log\",\"argv\":[\"$(printf 'w%.0s' {1..70})\"]}" > "$j/jobs/7"
+    done
+    : > "$j/run/omabox.run-x.exit"
+  }
+  rp_prep=rp_fixture
+  rp_fixture
+  check_eq "path runs in the binary, no bash behind it" "$r/rt/omabox/dead1" \
+    "$(cd "$r/norepo" && XDG_RUNTIME_DIR=$r/rt OMABOX_ROOT=/nonexistent "$ROOT/build/bin/omabox" path dead1 2>&1)"
+  parity "path: the default box's dir" path
+  parity "path NAME" path dead1
+  parity "path -b NAME" path -b dead1
+  parity "path --box NAME" path --box dead1
+  parity "path --box=NAME (split by main)" path --box=dead1
+  parity "omabox -b NAME path" -b dead1 path
+  parity "path: two names" path a b
+  parity "path -b with no value" path -b
+  parity "path --box with no value" path --box
+  parity "path -b ''" path -b ''
+  parity "path: an unknown option" path --bogus
+  parity "...the nearest named" path --lgs
+  parity "path --x=y unknown" path --lgs=1
+  parity "path --home --run" path --home --run
+  parity "path --json alone" path --json
+  parity "path: a name with other characters" path 'a b'
+  parity "path: a name past 40" path "$(printf 'x%.0s' {1..41})"
+  parity "path: a name that starts wrong" path _x
+  parity "path: a name of no ASCII" path é
+  parity "path --home of a dead box (its dir is there)" path --home dead1
+  parity "path --run of no box" path --run nobox
+  parity "path --logs of a box gone idle" path --logs gone
+  parity "path --logs of a dead box" path --logs dead1
+  parity "path --logs --json of a dead box" path --logs --json dead1
+  parity "env: the default box, none up" env
+  parity "env of a dead box: SIGSEGV" env dead1
+  parity "env of a dead box: exited" env -b dead2
+  parity "env of a dead box: signal 32 (no name)" env dead3
+  parity "env of a dead box whose labwc.log is a link" env Zed
+  parity "env of a dir with info.json alone" env half
+  parity "env of a box gone idle" env gone
+  parity "env: no such box" env nobox
+  parity "env of a box this namespace cannot read" env unk
+  parity "path of it" path unk
+  parity "env of a box whose pid is another namespace's (reused)" env reused
+  parity "env -b with no value" env -b
+  parity "env --bogus" env --bogus
+  parity "env -x=1" env -x=1
+  parity "env: two names" env a b
+  parity "env -b a b" env -b a b
+  parity "env of a live box" env live
+  parity "env of a live box behind its pasta (pid recorded)" env pst
+  parity "path of a live box" path live
+  parity "path --home of a live box" path --home live
+  parity "path --run of a live box" path --run live
+  parity "path --logs of a live box" path --logs live
+  parity "path --logs --json of a live box" path --logs --json live
+  parity "env of a box still starting (covers)" env cov
+  parity "path of it (no check: path)" path cov
+  parity "env: no WAYLAND_DISPLAY" env noenv
+  parity "env: an untame WAYLAND_DISPLAY" env badenv
+  parity "env: run -d jobs that ended early, said once" env jobs
+  parity "path: the same" path jobs
+  parity "which: no PID" which
+  parity "which: two" which 1 2
+  parity "which: not a pid" which x
+  parity "which --json alone" which --json
+  parity "which -x" which -x 1
+  parity "which --jsn" which --jsn 1
+  parity "which: this shell" which $$
+  parity "which --json: this shell" which --json $$
+  parity "which: root's" which 1
+  parity "which --json: root's" which --json 1
+  parity "which: no such pid" which 999999999
+  parity "which: a live box's process" which "$l1"
+  parity "which --json: a live box's process" which --json "$l1"
+  parity "which: its pasta's box" which "$lp"
+  parity "which: a process the box's ancestor holds (not in it)" which "$u1"
+  env OMABOX_BOX=elsewhere sleep 600 >/dev/null 2>&1 & local e1=$!
+  env OMABOX_BOX='../x y' sleep 600 >/dev/null 2>&1 & local e2=$!
+  env OMABOX_BOX=é sleep 600 >/dev/null 2>&1 & local e3=$!
+  until_ok 5 grep -qa OMABOX_BOX= "/proc/$e3/environ"
+  parity "which: by OMABOX_BOX" which "$e1"
+  parity "which --json: by OMABOX_BOX" which --json "$e1"
+  parity "which: an OMABOX_BOX no box can have" which "$e2"
+  parity "which: OMABOX_BOX in the locale's letters" which "$e3"
+  kill "$e1" "$e2" "$e3" 2>/dev/null
+  # Naming: OMABOX=, the repo's name, the agent session's suffix.
+  rp_env=(OMABOX=dead1); parity "OMABOX=NAME" env
+  rp_env=(OMABOX=1 OMABOX_NAME=x); parity "OMABOX=1 under run: no name" env
+  rp_env=(OMABOX=1); parity "OMABOX=1 alone: box 1" env
+  rp_env=(OMABOX=-n); parity "OMABOX=-n (echo's option)" env
+  rp_env=(OMABOX='a b'); parity "OMABOX with other characters: made to fit" env
+  rp_env=(OMABOX=dead1); parity "...-b wins" env -b dead2
+  rp_env=(CLAUDE_CODE_SESSION_ID="$sid"); parity "a session's box: its suffix" path
+  rp_env=(CLAUDE_CODE_SESSION_ID="$sid" OMABOX_SESSION=); parity "OMABOX_SESSION= opts out" path
+  rp_env=(CODEX_THREAD_ID=019a-short); parity "an id of 8 letters and digits: its suffix" path
+  rp_env=(CODEX_THREAD_ID=01-9a-x); parity "...of fewer: none" path
+  rp_env=(CODEX_THREAD_ID=0199aaaa-bbbb-7ccc-8ddd-EEEEFFFF0000); parity "Codex's id" path
+  rp_dir=$repo
+  rp_env=(); parity "in a repo: its name" path
+  rp_env=(CLAUDE_CODE_SESSION_ID="$sid"); parity "...with the session's suffix" env
+  rp_dir=$long; parity "a long repo name cut to fit the suffix" path
+  rp_env=(); parity "...and to 40 without one" env
+  rp_dir=$r/norepo
+  # This session's boxes from another directory (#136): one is used, said once; two are named.
+  rp_session1() { rp_fixture; rp_live "rp-repo-$s8"; }
+  rp_session2() { rp_session1; rp_live "other-$s8"; }
+  rp_prep=rp_session1 rp_env=(CLAUDE_CODE_SESSION_ID="$sid")
+  parity "the session's box from outside its repo: used, said" env
+  parity "...path too" path
+  parity "...not for a name given" env nobox
+  rp_prep=rp_session2; parity "two: named, none used" env
+  parity "...path: the derived dir" path
+  # A resumed session (finding 93): the box records an agent gone; this command's agent takes it.
+  rp_resumed() { rp_fixture; rp_live "rp-repo-$s8" ',"agent":999999999,"agent_start":"1","n":1.50,"e":1e3'; }
+  rp_prep=rp_resumed rp_dir=$repo rp_env=(CLAUDE_CODE_SESSION_ID="$sid" CLAUDE_PID="$$")
+  parity "a resumed session takes its box over (box.json rewritten)" env
+  check_eq "...to this command's agent" "$$ $(lib proc_start $$)" "$(jq -r '"\(.agent) \(.agent_start)"' "$r/rt/omabox/rp-repo-$s8/box.json")"
+  parity "...path too" path
+  rp_env=(CLAUDE_CODE_SESSION_ID="$sid" CLAUDE_PID=1); parity "...not for an agent it does not run under" env
+  # ai-jail's (finding 99): a jail's boxes only.
+  rp_prep=rp_fixture rp_dir=$r/norepo rp_env=(OMABOX_JAIL='{"id":"j1"}')
+  parity "a jail: not its box" env dead1
+  parity "...none of its own up" env nobox
+  rp_env=(OMABOX_JAIL='{"id":"j1"}' OMABOX_RELAY_DEFAULT=jd); parity "...its caller's default" path
+  # A dir no box name can be, listed: which selects each box by name.
+  rp_odd() { rp_fixture; rp_box _odd '{}'; }
+  rp_prep=rp_odd rp_env=(); parity "which with a box dir named as no box is" which $$
+  rp_prep="" rp_env=() rp_dir=/
+  # The namespaces' PID 1s first: their unshares and the stand-in pasta end with them.
+  kill -KILL "$l1" "$lp" "$nd" 2>/dev/null
+  wait "$u1" "$nd" "$pst" 2>/dev/null
+}
+
 # evidence() puts back a box's idle clock after its reads (#111, finding 180), but not over another
 # test's use of that box meanwhile (finding 237). A stand-in omabox lists one box; each read touches its
 # `used` as omabox does; with USE set, the shot read is followed 1.5 s on by another use (USE's time).
@@ -9416,6 +9640,28 @@ t_own_processes() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# The Rust half's parity (#324) on a real box: what t_unit_rust_parity checks on fakes, against a box
+# up (its own processes, logs and runtime dir), each call both ways.
+t_rust_parity() {
+  local B=$P-rp sp="" p ns
+  up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
+  ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
+  for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_prep="" rp_snap=0
+  parity "env of a box up" env -b "$B"
+  parity "path" path -b "$B"
+  parity "path --home" path --home "$B"
+  parity "path --run" path -b "$B" --run
+  parity "path --logs" path --logs -b "$B"
+  parity "path --logs --json" path --logs --json -b "$B"
+  check_eq "which names the box by its shell (what the next two compare)" "$B" "$(ob which "${sp:-0}" 2>/dev/null)"
+  parity "which: its shell's host pid" which "${sp:-0}"
+  parity "which --json: the same" which --json "${sp:-0}"
+  parity "which: the host shell" which $$
+  rp_rt="" rp_snap=1
+  ob down "$B" >/dev/null 2>&1
+}
+
 # omabox which PID (#172): a box's shell has the desktop's command line on the host; OMABOX_BOX in
 # every process of its session and `which` tell them apart.
 t_which() {
@@ -14857,10 +15103,10 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_brief t_link_out t_run_cwd t_clean t_check)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
