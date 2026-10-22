@@ -94,9 +94,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .and_then(|f| {
                 let f2 = f.try_clone()?;
                 c.stdout(f).stderr(f2);
-                crate::sig::foreground(|| c.status())
+                crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0))
             })
-            .is_ok_and(|s| s.success());
+            .is_ok_and(|rc| rc == 0);
         if !ok {
             let p = std::fs::read(shell::path(&at("pmon"))).unwrap_or_default();
             let head: Vec<u8> = p

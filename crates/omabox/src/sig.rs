@@ -73,16 +73,54 @@ pub fn foreground<T>(f: impl FnOnce() -> T) -> T {
     if MAIN.get() != Some(&std::thread::current().id()) {
         return f();
     }
+    // Nothing new starts once a trap is on its way, as bash starts nothing after its trap: a TERM
+    // between two steps of monitor add must not see the host rule turned off and the window made.
+    park_while_stopping();
     let r = {
         let _g = FOREGROUND
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        f()
+        FG_INT.store(false, Ordering::SeqCst);
+        FG_ACTIVE.store(true, Ordering::SeqCst);
+        let r = f();
+        FG_ACTIVE.store(false, Ordering::SeqCst);
+        r
     };
+    park_while_stopping();
+    r
+}
+
+/// Main waits here while a trap is on its way (it ends this process, or lets main go on).
+fn park_while_stopping() {
     while STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    r
+}
+
+/// A foreground child is running (FG_ACTIVE), and one of the children it waited for died of SIGINT
+/// (FG_INT, exec::status): bash's test for an INT to itself alone, which it lets pass when the child
+/// it waited for did not die of it.
+pub static FG_ACTIVE: AtomicBool = AtomicBool::new(false);
+pub static FG_INT: AtomicBool = AtomicBool::new(false);
+
+/// DEFER_INT: main runs what bash runs in a `$(...)` subshell (monitor_add_window): an INT to omabox
+/// alone ends bash's main at once (its read of the substitution is cut short, 130) while the subshell,
+/// which got no signal, finishes the step. INT_DEFERRED: one came; the step goes on, then this ends
+/// of it, having said nothing more.
+pub static DEFER_INT: AtomicBool = AtomicBool::new(false);
+pub static INT_DEFERRED: AtomicBool = AtomicBool::new(false);
+
+/// An INT deferred (INT_DEFERRED) ends this process now, of SIGINT, as bash's main did.
+pub fn int_deferred_end() {
+    if INT_DEFERRED.load(Ordering::SeqCst) {
+        // SAFETY: the default disposition back, then the signal to this process: it ends of it.
+        unsafe {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            libc::kill(libc::getpid(), libc::SIGINT);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        std::process::exit(130);
+    }
 }
 
 /// A handler's errno given back as it found it.

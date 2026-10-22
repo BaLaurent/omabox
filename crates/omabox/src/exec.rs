@@ -243,6 +243,9 @@ pub fn command(argv: &[Vec<u8>], fds: Fds) -> Command {
 
 /// A child's end as bash's `$?`: its status, or 128+N for signal N; and the signal.
 pub fn status(s: std::process::ExitStatus) -> (i32, Option<i32>) {
+    if s.signal() == Some(libc::SIGINT) {
+        crate::sig::FG_INT.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
     match (s.code(), s.signal()) {
         (Some(c), _) => (c, None),
         (None, Some(sig)) => (128 + sig, Some(sig)),

@@ -497,7 +497,7 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8], errexit: bool) -> Res<Vec<u8>> {
             if now == want || secs() >= end {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(50));
+            crate::trap::sleep(b"0.05");
         }
     }
     Ok(strip_nl(&said))
@@ -506,24 +506,38 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8], errexit: bool) -> Res<Vec<u8>> {
 const RULE_OFF: &[u8] = b"if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end";
 
 /// monitor_add_window's EXIT trap (MON_RULE_ON): the host rule off however the subshell ends (a
-/// refusal; INT, TERM or HUP once its foreground child is over), quietly.
+/// refusal; INT, TERM or HUP), quietly; once its window is there when the box was told to make it
+/// (MON_CREATING: finding 429), at most 5 s: turned off first, the window the box makes anyway
+/// would open on the user's active workspace, focused (finding 70).
 struct RuleGuard {
     ctx: Ctx,
     trap: Option<crate::trap::Trap>,
+    creating: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl RuleGuard {
-    fn arm(ctx: &Ctx) -> RuleGuard {
+    fn arm(ctx: &Ctx, pid: &[u8], n0: &[u8]) -> RuleGuard {
         let c = ctx.clone();
+        let creating = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (cr, pid, n0) = (creating.clone(), pid.to_vec(), n0.to_vec());
         let trap = crate::trap::on_exit(move || {
             crate::exit::muted(|| {
+                if cr.load(std::sync::atomic::Ordering::SeqCst) {
+                    window_wait(&c, &pid, &n0);
+                }
                 host_hyprctl(&c, &[b"eval", RULE_OFF], true);
             });
         });
         RuleGuard {
             ctx: ctx.clone(),
             trap: Some(trap),
+            creating,
         }
+    }
+
+    /// `MON_CREATING=1` / `MON_CREATING=""`.
+    fn creating(&self, on: bool) {
+        self.creating.store(on, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// `host_eval "omabox_monitor_rule:set_enabled(false)"; MON_RULE_ON=""`.
@@ -533,6 +547,32 @@ impl RuleGuard {
             t.forget();
         }
         Ok(())
+    }
+}
+
+/// mon_window_wait PID N0: until the host has more than N0 windows of PID, 5 s at most (the trap's).
+fn window_wait(ctx: &Ctx, pid: &[u8], n0: &[u8]) {
+    for _ in 0..50 {
+        let (rc, c) = host_hyprctl(ctx, &[b"-j", b"clients"], true);
+        let n = jq::tool(
+            "jq",
+            &[
+                b"--argjson".to_vec(),
+                b"p".to_vec(),
+                pid.to_vec(),
+                crate::jqprog::PID_COUNT_JQ.as_bytes().to_vec(),
+            ],
+            Some(&c),
+            jq::Err::Null,
+        )
+        .text();
+        let more = shell::test_int(&n)
+            .zip(shell::test_int(n0))
+            .is_some_and(|(a, b)| a > b);
+        if rc == 0 && more {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -607,7 +647,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     }
     let n0 = n_of(&pid, &strip_nl(&clients));
     let r4 = shell::read_fields(&rect, 4);
-    let mut guard = RuleGuard::arm(ctx);
+    let mut guard = RuleGuard::arm(ctx, &pid, &n0);
     // The rule's `move` is relative to its monitor; always given: a rule of the same name keeps an
     // earlier one's.
     host_eval(
@@ -626,6 +666,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
             "' })"
         ),
     )?;
+    guard.creating(true);
     let r = on_box(
         ctx,
         &w(&[
@@ -644,6 +685,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     );
     let res = shell::subst(&r.out);
     if res != b"ok" {
+        guard.creating(false);
         monitors_write(ctx, &rest);
         return Err(ctx.die(cat!(
             "monitor add: the box could not make another window: ",
@@ -665,13 +707,14 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
             }
         }
         if secs() >= end {
+            guard.creating(false);
             return Err(ctx.die(cat!(
                 "monitor add: no new window of box '",
                 ctx.name,
                 "' on your desktop in 5 s"
             )));
         }
-        std::thread::sleep(Duration::from_millis(50));
+        crate::trap::sleep(b"0.05");
     }
     guard.off()?;
     // The new window: the box's one that is neither the main one nor a known monitor's.
@@ -709,7 +752,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
         if secs() >= end {
             return Err(ctx.die(cat!("monitor add: the box lists no monitor ", name)));
         }
-        std::thread::sleep(Duration::from_millis(50));
+        crate::trap::sleep(b"0.05");
     }
     if !addr.is_empty() {
         use std::io::Write;
@@ -732,7 +775,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
             " is there, but setting its place and scale failed"
         )));
     }
-    std::thread::sleep(Duration::from_millis(300));
+    crate::trap::sleep(b"0.3");
     monitors_record(ctx, false)?;
     // (`hypr_json monitors | jq ...` last: its status the subshell's, pipefail's)
     let m = hypr_json(ctx, &["monitors"])?;

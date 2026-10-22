@@ -1,8 +1,9 @@
 //! bash's EXIT trap for what a command made on its way (gpu's and cpu's temporary dir, a host rule
 //! monitor add turned on): undone when the command ends, however it ends, and on INT, TERM or HUP,
 //! the signal then raised again: bash runs its EXIT trap and dies of the signal (probed: at once for
-//! TERM and HUP, its foreground child left running; for INT once that child is over). A signal
-//! ignored when omabox started stays ignored (sig::catch).
+//! TERM and HUP, its foreground child left running; for INT once that child is over, and not at all
+//! when that child did not die of it: an INT to omabox alone). Nothing new starts meanwhile
+//! (sig::foreground). A signal ignored when omabox started stays ignored (sig::catch).
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -75,36 +76,49 @@ fn arm() {
     }
     std::thread::spawn(move || {
         let mut f = std::fs::File::from(r);
-        let mut b = [0u8; 1];
-        if std::io::Read::read_exact(&mut f, &mut b).is_err() {
-            return;
-        }
-        let sig = libc::c_int::from(b[0]);
-        crate::sig::STOPPING.store(true, Ordering::SeqCst);
-        let _f = (sig == libc::SIGINT).then(|| {
-            crate::sig::FOREGROUND
+        loop {
+            let mut b = [0u8; 1];
+            if std::io::Read::read_exact(&mut f, &mut b).is_err() {
+                return;
+            }
+            let sig = libc::c_int::from(b[0]);
+            let busy = crate::sig::FG_ACTIVE.load(Ordering::SeqCst);
+            crate::sig::STOPPING.store(true, Ordering::SeqCst);
+            let fg = (sig == libc::SIGINT).then(|| {
+                crate::sig::FOREGROUND
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            });
+            // An INT to omabox alone while a child ran that did not die of it: bash goes on (probed:
+            // `kill -INT` of the script during a sleep, the rest of it ran, its EXIT trap at its end).
+            if sig == libc::SIGINT && busy && !crate::sig::FG_INT.load(Ordering::SeqCst) {
+                if crate::sig::DEFER_INT.load(Ordering::SeqCst) {
+                    crate::sig::INT_DEFERRED.store(true, Ordering::SeqCst);
+                }
+                crate::sig::STOPPING.store(false, Ordering::SeqCst);
+                drop(fg);
+                continue;
+            }
+            let all: Vec<(u64, Undo)> = TRAPS
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-        });
-        let all: Vec<(u64, Undo)> = TRAPS
-            .lock()
-            .map(|mut t| std::mem::take(&mut *t))
-            .unwrap_or_default();
-        for (_, u) in all.into_iter().rev() {
-            u();
+                .map(|mut t| std::mem::take(&mut *t))
+                .unwrap_or_default();
+            for (_, u) in all.into_iter().rev() {
+                u();
+            }
+            // SAFETY: the default disposition back, then the signal to this process: it ends of it,
+            // as bash does after its EXIT trap.
+            unsafe {
+                libc::signal(sig, libc::SIG_DFL);
+                let mut set: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut set);
+                libc::sigaddset(&mut set, sig);
+                libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+                libc::kill(libc::getpid(), sig);
+            }
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            std::process::exit(128 + sig);
         }
-        // SAFETY: the default disposition back, then the signal to this process: it ends of it, as
-        // bash does after its EXIT trap.
-        unsafe {
-            libc::signal(sig, libc::SIG_DFL);
-            let mut set: libc::sigset_t = std::mem::zeroed();
-            libc::sigemptyset(&mut set);
-            libc::sigaddset(&mut set, sig);
-            libc::pthread_sigmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
-            libc::kill(libc::getpid(), sig);
-        }
-        std::thread::sleep(std::time::Duration::from_secs(5));
-        std::process::exit(128 + sig);
     });
 }
 

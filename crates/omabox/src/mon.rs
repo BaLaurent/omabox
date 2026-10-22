@@ -603,7 +603,8 @@ pub fn monitors_place(ctx: &Ctx) -> Result<Vec<u8>, ()> {
         if lay.is_empty() || placed_as(ctx, &m, &lay) {
             break;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        // (`sleep 0.1`, a foreground child as bash's: a trap's test for an INT to omabox alone)
+        crate::trap::sleep(b"0.1");
     }
     let r = Args::new(&["-r"])
         .kv("--argjson", "a", &m0)

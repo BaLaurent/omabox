@@ -12,7 +12,7 @@ use crate::host::host_hyprctl;
 use crate::jail::in_jail;
 use crate::jq;
 use crate::select::select_box;
-use crate::shell::{self, strip_nl};
+use crate::shell;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -380,7 +380,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             Ok(o) => (crate::exec::status(o.status).0, o.stdout),
             Err(_) => (127, Vec::new()),
         };
-        types = strip_nl(&out);
+        types = shell::subst(&out);
         if r != 0 {
             if crate::exit::contains(&err_all(&e), b"Nothing is copied") {
                 return Err(ctx.die("clip: your clipboard is empty: nothing handed over"));
@@ -408,7 +408,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             65536,
             None,
         );
-        types = strip_nl(&out);
+        types = shell::subst(&out);
         if r == 3 {
             return Err(ctx.die(cat!(
                 "clip: box '",
@@ -526,7 +526,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "clip: could not put it on box '",
                 n,
                 "''s clipboard: ",
-                last_line_tame(&strip_nl(&said))
+                last_line_tame(&shell::subst(&said))
             )));
         }
         say(cat!(

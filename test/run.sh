@@ -3044,7 +3044,8 @@ for i in $(seq 200); do [ -e "$mark" ] && break; sleep 0.05; done
 sleep 0.2
 case $sig in group-*) kill -"${sig#group-}" -- -"$p" ;; *) kill -"$sig" "$p" ;; esac
 wait "$p"; rc=$?
-sleep 1
+# (RP_LINGER: how long what it left running gets, 1 s by default)
+sleep "${RP_LINGER:-1}"
 # (what is left of it then goes: bash's capture subshell ignores INT, lives on and would write the
 # next case's files; listed)
 kill -KILL -- -"$p" 2>/dev/null
@@ -4482,12 +4483,27 @@ elif cmd in ("output create",):
             h.write("Config Path: /usr/share/omarchy/shell/shell.qml\n")
     open(os.path.join(ST, "creating"), "w").close()
     if has("interactive") and not has("nohostwin"):
+        # (create.later: the window half a second on, as the box's Hyprland makes it, whatever happens to
+        # this hyprctl meanwhile)
+        if has("create.later") and os.fork() > 0:
+            print("ok")
+            sys.exit(0)
+        if has("create.later"):
+            os.setsid()
+            for fd in (0, 1, 2):
+                os.dup2(os.open(os.devnull, os.O_RDWR), fd)
+            import time
+            time.sleep(0.5)
         hc = os.path.join(ST, "host/clients.json")
         c = json.loads(rd_abs(hc) or "[]")
         c.append({"address": "0xw%d" % len(c), "pid": int(rd("wpid", "0")), "workspace": {"id": 9, "name": "9"},
                   "floating": True, "monitor": 0, "class": "aquamarine", "title": "aquamarine - " + n})
         with open(hc, "w") as h:
             json.dump(c, h)
+        with open(os.path.join(ST, "host.log"), "a") as h:
+            h.write("== window mapped " + n + "\n")
+        if has("create.later"):
+            sys.exit(0)
     print("ok")
 elif cmd == "output remove":
     n = a[2]
@@ -4625,6 +4641,10 @@ while True:
         out = rd("host/border.json", '{"option":"general:border_size","int":2,"set":true}')
     elif d.startswith("/eval"):
         out = rd("host/eval.out", "ok").strip()
+        if "window_rule(" in d and rd("host/rule.sleep", None):
+            open(os.path.join(ST, "rule-asked"), "w").close()
+            import time
+            time.sleep(float(rd("host/rule.sleep", "0")))
         m = re.search(r"window\.resize\(\{ window = 'address:(\w+)', x = (\d+), y = (\d+) \}\)", d)
         if m:
             cl = json.loads(rd("host/clients.json", "[]"))
@@ -4643,7 +4663,11 @@ while True:
                 json.dump(cl, h)
     else:
         out = "unknown request"
-    c.sendall(out.encode())
+    # (a client killed meanwhile, a signal case's: the next one is answered all the same)
+    try:
+        c.sendall(out.encode())
+    except OSError:
+        pass
     c.close()
 PYEOF
   python3 "$r/fakehost.py" "$r/rt/hypr/$hs/.socket.sock" "$st" "$r/rt/wayland-rp4" & local hsrv=$!
@@ -5114,6 +5138,72 @@ EOF
   rp_wrap=("$r/rp-sig" group-INT "$st/creating")
   parity "monitor add, interactive, and group-INT while the host rule is on: the rule off" monitor -b fki add 800x600
   check "...the stand-in host was told so" grep -q 'omabox_monitor_rule:set_enabled(false)' "$st/host.log"
+  # A signal once the box was told to make its window (finding 429): the rule off only once the window
+  # is there (the stand-in box makes it half a second late, whatever happens to its hyprctl).
+  rp4_late() { rp4_imain; : > "$st/create.later"; }; rp4_pre=(rp4_late)
+  # (where the stand-in host had it: the window first)
+  rp4_order() { [ "$(grep -n -m1 '^== window mapped' "$st/host.log" | cut -d: -f1)" -lt "$(grep -n 'set_enabled(false)' "$st/host.log" | tail -1 | cut -d: -f1)" ] 2>/dev/null; }
+  # (bash's own line for the child of its subshell the signal ended, `Terminated  sleep 0.05` and
+  # the like, out: which child it was is timing, and the Rust half has no such line)
+  rp_sed+='; /^(Terminated|Hangup) +[^ ]/d; /bin\/omabox: line [0-9]+: PID (Hangup|Terminated) /d'
+  for sg in group-TERM group-HUP; do
+    rp_wrap=("$r/rp-sig" "$sg" "$st/creating")
+    parity "monitor add, interactive, and $sg once the box makes its window: the rule off after it (finding 429)" monitor -b fki add 800x600
+    check "...the window mapped before the rule went off" rp4_order
+  done
+  # A TERM while the rule is being turned on (the stand-in host slow to answer it): no create follows.
+  rp4_rslow() { rp4_imain; echo 0.4 > "$st/host/rule.sleep"; }; rp4_pre=(rp4_rslow)
+  rp_wrap=("$r/rp-sig" group-TERM "$st/rule-asked")
+  parity "monitor add, interactive, and group-TERM while the rule is turned on: no window asked for" monitor -b fki add 800x600
+  check_eq "...the box was told to make none" 0 "$(grep -c 'output create' "$st/hypr.log" 2>/dev/null || true)"
+  # An INT to omabox alone (kill -INT PID) while a child runs that does not die of it: bash goes on,
+  # so does the Rust half: the figures, the monitor made.
+  rp_wrap=("$r/rp-sig" INT "$st/sleeping") rp4_pre=()
+  rp_sed='s/"pss_kb": [0-9]+/"pss_kb": PSS/g; s/([0-9.]+[MG]) +[0-9.]+[MG]/\1 PSS/'
+  parity "cpu and INT to omabox alone in its window: it goes on" cpu -b fk 2s
+  parity "gpu and INT to omabox alone: the same" gpu -b fk 2s
+  rp_sed='s/ line ([0-9]+): [0-9]+ (Hangup|Terminated|Interrupt) / line \1: PID \2 /'
+  # (bash's main ends at once, 130, its subshell finishing the monitor: given the time to)
+  rp4_pre=(rp4_late); rp_wrap=(env RP_LINGER=4 "$r/rp-sig" INT "$st/creating")
+  parity "monitor add, interactive, and INT to omabox alone: 130, the monitor made all the same" monitor -b fki add 800x600
+  check "...it is in the box's record" grep -q '^WAYLAND-2 ' "$r/rt/omabox/fki/run/omabox.monitors"
+  rp_wrap=() rp4_pre=() rp_env=("${rp_env4[@]}") rp_sed=""
+  # A process named -n (finding 430): --app -n is that one alone, not every process.
+  nsenter -t "$lfk" -U -m -p --preserve-credentials python3 -c 'import ctypes, time; ctypes.CDLL(None).prctl(15, b"-n", 0, 0, 0); time.sleep(3600)' >/dev/null 2>&1 & local un4=$!
+  local ln4=""; for i in $(seq 100); do ln4=$(pgrep -P "$un4") && [ "$(cat "/proc/$ln4/comm" 2>/dev/null)" = -n ] && break; sleep 0.05; done
+  rp_sed='s/"pss_kb": [0-9]+/"pss_kb": PSS/g'
+  rp4_minus() { if [ "$(grep -c '"name":' "$2")" != 1 ] || ! grep -q '"name": "-n"' "$2"; then no "$1: the process named -n alone (finding 430)" "$(head -c 400 "$2")"; fi; }
+  rp_check=rp4_minus
+  parity "cpu --app -n: the process so named alone (finding 430)" cpu -b fk 200ms --app -n --json
+  rp_check="" rp_sed=""
+  kill -KILL "$ln4" "$un4" 2>/dev/null
+  # mode's box gone while it waits for the box's lock: a stand-in desktop of each side's own, ended by
+  # the lock's holder before it lets go.
+  rp4_dying() {
+    local u k p=""; u=$(unshare -Urpfui --mount-proc sh -c 'mount --bind "$1/hyprctl" /usr/bin/hyprctl && exec sleep 600' sh "$r/bin" >/dev/null 2>&1 & echo $!)
+    for k in $(seq 100); do p=$(pgrep -P "$u" -x sleep) && break; sleep 0.05; done
+    rp4_box fkd "{\"mode\":\"headless\",\"pidns\":\"$(readlink "/proc/$p/ns/pid")\"}" "$p"
+    printf 'WAYLAND_DISPLAY=wayland-1\0HYPRLAND_INSTANCE_SIGNATURE=sig1\0' > "$r/rt/omabox/fkd/run/omabox.env"
+    : > "$r/rt/omabox/.lock-fkd"
+    flock "$r/rt/omabox/.lock-fkd" sh -c 'sleep 1.5; kill -KILL "$0"' "$p" & sleep 0.2
+  }
+  rp4_pre=(rp4_dying) rp_snap=0
+  parity "mode: the box gone while it waited for its lock" mode -b fkd 1280x720
+  check_eq "...box.json not given the new size" "" "$(jq -r '.size // empty' "$r/rt/omabox/fkd/box.json")"
+  rp4_pre=() rp_snap=1
+  # Agents told by an ancestor's name (claude, codex) or a node running one, whatever the environment.
+  cp /usr/bin/bash "$r/claude"; cp /usr/bin/bash "$r/codex"; cp /usr/bin/bash "$r/node"
+  rp_sed='s/pid [0-9]+/pid P/g'
+  for i in claude codex; do
+    rp_wrap=(env RP4_PATH="$r/hostbin:/usr/local/bin:/usr/bin" "$r/rp-orphan" "$r/$i" -c '"$@"; true' sh)
+    parity "clip: refused under a program named $i" clip -b fki
+  done
+  rp_wrap=(env RP4_PATH="$r/hostbin:/usr/local/bin:/usr/bin" "$r/rp-orphan" "$r/node" -c 'shift; "$@"; true' sh /x/@anthropic-ai/claude-code/cli.js)
+  parity "clip: refused under node running Claude Code" clip -b fki
+  # The item past CLIP_MAX (64 MiB): nothing handed over.
+  rp4_cbig() { echo 'image/png' > "$st/host.types"; head -c $((64 * 1024 * 1024 + 1)) /dev/zero > "$st/host.data"; }
+  rp4_pre=(rp4_cbig) rp_wrap=(env RP4_PATH="$r/hostbin:/usr/local/bin:/usr/bin" "$r/rp-orphan") rp_sed=""
+  parity "clip: an item over 64 MiB" clip -b fki
   rp_wrap=() rp4_pre=() rp_env=("${rp_env4[@]}") rp_sed=""
   rp_prep="" rp_also="" rp_snap=1 rp_env=() rp_dir=/ rp_rt=""
   check "the stand-in boxes lived through every case (a dead one fails both halves alike)" kill -0 "$lfk" "$l1" "$ln" "$ln2" "$hsrv"
@@ -11844,7 +11934,9 @@ t_rust_parity() {
   rp_sed='s/[0-9]+\.[0-9]+(%|M|G)/N\1/g; s/: [0-9]+(\.[0-9]+)?(,?)$/: N\2/'
   parity "gpu --json (both ways)" gpu -b "$B" 500ms --json
   parity "cpu --pid 1 (both ways)" cpu -b "$B" 300ms --pid 1
-  parity "cpu --pid 1 --threads --json (both ways)" cpu -b "$B" 300ms --pid 1 --threads --json
+  # (--threads of a one-thread process of its own: PID 1's threads come in CPU order, which flakes)
+  ob run -b "$B" -d -q -- sleep 600 >/dev/null 2>&1
+  parity "cpu --app --threads --json (both ways)" cpu -b "$B" 300ms --app sleep --threads --json
   rp_sed='s/^  [^ ]+ +[0-9]+\.[0-9]%$/  ROW/'
   parity "gpu (both ways): its rows" gpu -b "$B" 300ms
   rp_sed=""

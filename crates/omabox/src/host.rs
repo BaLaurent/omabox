@@ -146,16 +146,19 @@ pub fn host_eval(ctx: &Ctx, lua: &[u8]) -> Res<()> {
                     if let Some(w2) = w2 {
                         c.stderr(Stdio::from(w2));
                     }
-                    let child = c.spawn();
-                    drop(c);
-                    let got = crate::exec::read_all(r, None);
-                    match child {
-                        Ok(mut ch) => {
-                            let _ = ch.wait();
-                            shell::subst(&got)
+                    // (a foreground child: a trap on its way waits for it, and nothing new starts)
+                    crate::sig::foreground(|| {
+                        let child = c.spawn();
+                        drop(c);
+                        let got = crate::exec::read_all(r, None);
+                        match child {
+                            Ok(mut ch) => {
+                                let _ = ch.wait().map(crate::exec::status);
+                                shell::subst(&got)
+                            }
+                            Err(_) => b"hyprctl: command not found".to_vec(),
                         }
-                        Err(_) => b"hyprctl: command not found".to_vec(),
-                    }
+                    })
                 }
                 Err(_) => Vec::new(),
             }
