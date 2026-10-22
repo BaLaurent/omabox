@@ -6,7 +6,7 @@
 use crate::exec::{feed, read_all};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// Where jq's stderr goes: this process's (the caller's 2>), nowhere, or into the output (`2>&1`).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -35,7 +35,7 @@ impl Ran {
 
 /// `jq ARGS... <<<"$INPUT"` (INPUT None: no stdin, for -n).
 pub fn jq<A: AsRef<[u8]>>(args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
-    let mut c = Command::new("jq");
+    let mut c = crate::sig::command("jq");
     c.args(args.iter().map(|a| OsStr::from_bytes(a.as_ref())));
     c.stdin(if input.is_some() {
         Stdio::piped()
@@ -86,11 +86,16 @@ pub fn jq<A: AsRef<[u8]>>(args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
         (Some(i), Some(si)) => Some(feed(si.into(), crate::cat!(i, "\n"))),
         _ => None,
     };
-    let out = read_all(r, None);
-    if let Some(f) = feeder {
-        let _ = f.join();
-    }
-    let rc = child.wait().map(|s| crate::exec::status(s).0).unwrap_or(1);
+    let (out, rc) = crate::sig::foreground(|| {
+        let out = read_all(r, None);
+        if let Some(f) = feeder {
+            let _ = f.join();
+        }
+        (
+            out,
+            child.wait().map(|s| crate::exec::status(s).0).unwrap_or(1),
+        )
+    });
     Ran { rc, out }
 }
 

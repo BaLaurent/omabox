@@ -3483,7 +3483,8 @@ case "\$1 \$2" in
   "-j clients") cat "\$f/clients.json" ;;
   "-j monitors") [ ! -f "\$f/monfail" ] || [ ! -s "\$f/grim.args" ] || exit 1; cat "\$f/monitors.json" ;;
   "-j activewindow") cat "\$f/active.json" ;; "-j layers") cat "\$f/layers.json" ;;
-  "-j cursorpos") cat "\$f/cursor.json" ;; "version ") [ ! -f "\$f/noversion" ] || exit 1; echo "Hyprland 0.56.2" ;;
+  "-j cursorpos") if [ -f "\$f/cursor.sleep" ] && grep -q '^-l 1' "\$f/grim.args"; then t=\$(cat "\$f/cursor.sleep"); rm -f "\$f/cursor.sleep"; touch "\$f/cursoring"; sleep "\$t"; fi
+    cat "\$f/cursor.json" ;; "version ") [ ! -f "\$f/noversion" ] || exit 1; echo "Hyprland 0.56.2" ;;
   "--batch "*) for k in clients layers active workspace monitors; do cat "\$f/\$k.json"; done ;;
   "-j getoption") cat "\$f/opt-\$3.json" 2>/dev/null || echo '{"option":"\$3","str":"","set":false}' ;;
   "dispatch "*) echo "dispatch \$2" >> "\$f/hyprctl.args"; a=\$(printf '%s' "\$2" | sed -n "s/^hl.dsp.focus({ window = 'address:\\(0x[0-9a-f]*\\)' })\$/\\1/p")
@@ -3502,7 +3503,8 @@ EOF
   cat > "$fk/bin/grim" <<EOF
 #!/bin/sh
 echo "\$*" >> $fk/grim.args
-case " \$* " in *" -t ppm "*) i=grim.ppm; [ ! -f $fk/ppm.sleep ] || { t=\$(cat $fk/ppm.sleep); rm -f $fk/ppm.sleep; touch $fk/seen; sleep "\$t"; } ;; *) touch $fk/grabbing; [ ! -f $fk/grim.sleep ] || sleep \$(cat $fk/grim.sleep) ;; esac
+case " \$* " in *" -t ppm "*) i=grim.ppm; [ ! -f $fk/ppm.sleep ] || { t=\$(cat $fk/ppm.sleep); rm -f $fk/ppm.sleep; touch $fk/seen; sleep "\$t"; }
+    [ ! -f $fk/ppm.late ] || ! grep -q '^-l 1' $fk/grim.args || { t=\$(cat $fk/ppm.late); rm -f $fk/ppm.late; touch $fk/seen; sleep "\$t"; } ;; *) touch $fk/grabbing; [ ! -f $fk/grim.sleep ] || sleep \$(cat $fk/grim.sleep) ;; esac
 case " \$* " in *" -t ppm "*) ;; *" -g "*) i=grim-small.png ;; *) i=grim.png ;; esac
 [ ! -f $fk/grim.alt ] || [ \$(wc -l < $fk/grim.args) -le \$(cat $fk/grim.alt) ] || i=\$(cat $fk/grim.altimg 2>/dev/null || echo grim2.png)
 cat $fk/\$i 2>/dev/null || { echo "stand-in grim: no frame" >&2; exit 1; }
@@ -3512,6 +3514,7 @@ EOF
   # what --mod and drag --shot wait on ("paused"); a status of the test's choosing.
   cat > "$fk/bin/omabox-keyboard" <<EOF
 #!/bin/sh
+[ ! -f $fk/kb.sigign ] || sh -c 'kill -PIPE \$\$; echo "kb SIGPIPE ignored"' >> $fk/input.args || echo "kb SIGPIPE default" >> $fk/input.args
 case " \$* " in *" -m "*) [ -f $fk/kb.nopause ] || { echo paused; touch $fk/held; }; cat > /dev/null; i="" ;; *) i=\$(od -An -c | tr -s ' \\n' ' ') ;; esac
 echo "kb \$* <\$i>" >> $fk/input.args
 exit \$(cat $fk/kb.rc 2>/dev/null || echo 0)
@@ -3687,7 +3690,7 @@ EOF
     rp_fk
     local f
     cp "$fk/active.orig" "$fk/active.json"; : > "$fk/input.args"; : > "$fk/hyprctl.args"; echo fk-pop > "$fk/kbl"
-    for f in ppm.sleep seen noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep burst.fail ptr; do rm -f "${fk:?}/$f"; done
+    for f in kb.sigign cursor.sleep cursoring ppm.late ppm.sleep seen noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep burst.fail ptr; do rm -f "${fk:?}/$f"; done
     chmod +x "$fk/bin/omabox-burst"
     printf '{"option":"input:kb_layout","str":"us,de","set":true}\n' > "$fk/opt-input:kb_layout.json"
     printf '{"option":"input:kb_variant","str":",nodeadkeys","set":true}\n' > "$fk/opt-input:kb_variant.json"
@@ -4238,6 +4241,26 @@ EOF
   rp_wrap=("$r/rp-sig" TERM "$fk/seen")
   parity "shot --no-pointer and TERM while the pointer is being hidden" shot -b fk --no-pointer -o "$o3/n.png"
   check "...shown in the end, no record left" test ! -e "$r/rt/omabox/fk/pointer" -a "$(tail -n 1 "$fk/hyprctl.args")" = "eval invisible false"
+  # A TERM while the hold is given back at the command's end: bash's trap once that is over, then its
+  # exit (143); one while a child runs in the foreground after the hold (the baseline's cursorpos):
+  # once that child is over, nothing more of the command, then the release.
+  rp_relslow() { echo 1.5 > "$fk/ppm.late"; }; rp3_pre=(rp_relslow)
+  rp_wrap=("$r/rp-sig" TERM "$fk/seen")
+  parity "shot --no-pointer and TERM while the pointer is given back: 143 once it is" shot -b fk --no-pointer -o "$o3/n.png"
+  rp_curslow() { echo 1.5 > "$fk/cursor.sleep"; }; rp3_pre=(rp_curslow)
+  rp_wrap=("$r/rp-sig" TERM "$fk/cursoring")
+  parity "shot --no-pointer and TERM during a foreground child: the trap after it" shot -b fk --no-pointer -o "$o3/n.png"
+  check "...shown in the end, no record left" test ! -e "$r/rt/omabox/fk/pointer" -a "$(tail -n 1 "$fk/hyprctl.args")" = "eval invisible false"
+  # SIGPIPE as it came, for what omabox runs: ignored stays ignored (bash's children keep it; std's
+  # spawn reset it), the default stays the default; the keyboard tool says which it got (a SIGPIPE to
+  # a shell of its own: /proc there is the stand-in's pid namespace's).
+  rp_kbsig() { touch "$fk/kb.sigign"; }; rp3_pre=(rp_kbsig)
+  local pd want; for pd in SIG_IGN SIG_DFL; do
+    rp_wrap=(python3 -c 'import os, signal, sys; signal.signal(signal.SIGPIPE, getattr(signal, sys.argv[1])); os.execvp(sys.argv[2], sys.argv[2:])' "$pd")
+    parity "keys with SIGPIPE $pd on entry: the tool's the same" keys -b fk a
+    want=ignored; [ "$pd" = SIG_IGN ] || want=default
+    check_eq "...in Rust's half too" "kb SIGPIPE $want" "$(grep -a '^kb SIGPIPE' "$fk/input.args" || cat "$fk/input.args")"
+  done
   rp_wrap=() rp3_pre=() rp_sed=$rp_sed0
   rp3_pre=() rp_env=()
   rp_prep="" rp_also="" rp_snap=1 rp_sed=""

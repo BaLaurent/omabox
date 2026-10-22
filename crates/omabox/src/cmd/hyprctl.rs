@@ -95,7 +95,7 @@ pub fn code(rc: i32) -> Res<()> {
 
 /// `f=$(mktemp)`, opened and unlinked: mktemp's own words on stderr when it cannot.
 fn temp_file() -> Option<std::fs::File> {
-    let o = std::process::Command::new("mktemp")
+    let o = crate::sig::command("mktemp")
         .stderr(std::process::Stdio::inherit())
         .output()
         .ok()

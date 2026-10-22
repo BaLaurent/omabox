@@ -47,7 +47,7 @@ impl Reading {
     /// log_cat: log KIND PATH whole (`$(...)`'s input: a refusal said, nothing read).
     pub fn cat(&self, ctx: &Ctx, kind: Kind, p: &[u8]) -> Vec<u8> {
         let host = |p: &[u8]| {
-            Command::new("cat")
+            crate::sig::command("cat")
                 .arg("--")
                 .arg(std::ffi::OsStr::from_bytes(p))
                 .stderr(Stdio::inherit())
@@ -94,7 +94,7 @@ impl Reading {
 
 /// `grep --line-buffered -E [-i] -- RE`.
 fn grep_cmd(re: &[u8], icase: bool) -> Command {
-    let mut c = Command::new("grep");
+    let mut c = crate::sig::command("grep");
     c.args(["--line-buffered", "-E"]);
     if icase {
         c.arg("-i");

@@ -86,7 +86,7 @@ impl Show {
 
     /// The expression through the environment: awk -v would take the backslashes out of it.
     fn awk_cmd(&self) -> std::process::Command {
-        let mut c = std::process::Command::new("awk");
+        let mut c = crate::sig::command("awk");
         c.arg(AWK_KEEP)
             .env(
                 "EV_RE",
@@ -491,7 +491,7 @@ fn events_from(ctx: &Ctx, rd: &Reading, from: i64) -> Vec<u8> {
         on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Inherit, false).out
     } else {
         let p = log_dead_path(ctx, EVENTS_LOG).unwrap_or_default();
-        std::process::Command::new("tail")
+        crate::sig::command("tail")
             .arg("-c")
             .arg(format!("+{from}"))
             .arg("--")

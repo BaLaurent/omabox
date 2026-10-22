@@ -158,7 +158,7 @@ fn print_values(vals: &[u8], as_json: bool) -> Res<()> {
     } else {
         r#".[] | if type == "string" then . elif type == "null" then "nil" else tojson end"#
     };
-    let mut c = std::process::Command::new("jq");
+    let mut c = crate::sig::command("jq");
     c.arg(if as_json { "-c" } else { "-r" }).arg(prog);
     c.stdin(std::process::Stdio::piped());
     let Ok(mut child) = c.spawn() else {

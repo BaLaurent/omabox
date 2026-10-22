@@ -387,7 +387,7 @@ fn detached(
         job_replace(ctx, quiet, cmd)?;
     }
     // `$(date +%s%N)`, by the date on PATH (as bash's; the suite's stand-in names a log by it).
-    let ns = std::process::Command::new("date")
+    let ns = crate::sig::command("date")
         .arg("+%s%N")
         .stderr(std::process::Stdio::inherit())
         .output()

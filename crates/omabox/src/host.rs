@@ -9,7 +9,7 @@ use crate::shell;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileTypeExt;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// What toggles the passthrough, as share/passthrough.lua is told it.
 pub const PASS_KEY: &str = "SUPER + ALT + ESCAPE";
@@ -21,7 +21,7 @@ const GUARD: &str = "omabox-guard";
 fn host_session(ctx: &Ctx) -> Result<Vec<u8>, Vec<u8>> {
     let rt = shell::env_or_empty("XDG_RUNTIME_DIR");
     let sig = shell::env_or_empty("HYPRLAND_INSTANCE_SIGNATURE");
-    let all = Command::new("hyprctl")
+    let all = crate::sig::command("hyprctl")
         .args(["-j", "instances"])
         .env("HYPRLAND_INSTANCE_SIGNATURE", GUARD)
         .stdin(Stdio::inherit())
@@ -86,7 +86,7 @@ pub fn host_eval(ctx: &Ctx, lua: &[u8]) -> Res<()> {
     let out = match host_session(ctx) {
         Err(m) => cat!("omabox: ", m),
         Ok(sig) => {
-            let mut c = Command::new("hyprctl");
+            let mut c = crate::sig::command("hyprctl");
             c.arg("eval")
                 .arg(OsStr::from_bytes(lua))
                 .env("HYPRLAND_INSTANCE_SIGNATURE", OsStr::from_bytes(&sig))

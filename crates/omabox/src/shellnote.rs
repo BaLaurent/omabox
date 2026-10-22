@@ -160,7 +160,7 @@ pub fn shell_crash_dirs(ctx: &Ctx) -> Vec<u8> {
     }
     let w = strip_nl(&w);
     let w = w.strip_suffix(b"/").unwrap_or(&w).to_vec();
-    let mut c = std::process::Command::new("awk");
+    let mut c = crate::sig::command("awk");
     c.arg("-v")
         .arg(OsStr::from_bytes(&cat!("want=", w)))
         .arg(CRASH_AWK)

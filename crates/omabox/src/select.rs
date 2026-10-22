@@ -7,7 +7,7 @@ use crate::exit::{Ctx, Res, say};
 use crate::jail::{in_jail, jail_id};
 use crate::procfs;
 use crate::shell::{self, env, env_or_empty};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// Whether $OMABOX names a box. `omabox run` marks its commands with OMABOX=1 and OMABOX_NAME: that 1
 /// is not a box named "1". A command under it that sets OMABOX=NAME does name one (issue #19).
@@ -54,7 +54,7 @@ pub fn default_name() -> Vec<u8> {
     if env_names_box() {
         return shell::echo_sub(&env_or_empty("OMABOX"));
     }
-    let top = Command::new("git")
+    let top = crate::sig::command("git")
         .args(["rev-parse", "--show-toplevel"])
         .stderr(Stdio::null())
         .output()

@@ -498,7 +498,7 @@ pub fn mktemp_in(template: &[u8]) -> Result<(std::fs::File, Vec<u8>), crate::exi
 /// `$(mktemp ARGS...)`: what it made, opened, and its path; its own words on stderr and its status
 /// when it cannot.
 pub fn mktemp_args(args: &[&[u8]]) -> Result<(std::fs::File, Vec<u8>), crate::exit::Exit> {
-    let o = std::process::Command::new("mktemp")
+    let o = crate::sig::command("mktemp")
         .args(args.iter().map(|a| OsStr::from_bytes(a)))
         .stderr(std::process::Stdio::inherit())
         .output()

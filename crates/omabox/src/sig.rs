@@ -15,13 +15,98 @@ use std::sync::{Arc, Mutex};
 
 /// bin/omabox, for a command this half leaves to it, with this process's environment.
 pub fn omabox_cmd() -> Command {
-    Command::new(crate::root().join("bin/omabox"))
+    command(crate::root().join("bin/omabox"))
+}
+
+/// SIGPIPE as this process came, before Rust's runtime set it ignored (in main's preamble): read by
+/// a constructor, which runs before that.
+static PIPE_IGNORED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn pipe_as_it_came() {
+    PIPE_IGNORED.store(ignored(libc::SIGPIPE), Ordering::Relaxed);
+}
+
+#[used]
+#[unsafe(link_section = ".init_array")]
+static PIPE_AS_IT_CAME: extern "C" fn() = pipe_as_it_came;
+
+/// Whether SIGPIPE came ignored.
+pub fn pipe_ignored() -> bool {
+    PIPE_IGNORED.load(Ordering::Relaxed)
+}
+
+/// `Command::new` for every child of this half: std's spawn sets SIGPIPE back to the default in it,
+/// where bash's children keep an ignored one (a write to a closed pipe is EPIPE there, not death).
+pub fn command(prog: impl AsRef<OsStr>) -> Command {
+    let mut c = Command::new(prog);
+    if pipe_ignored() {
+        // SAFETY: signal is async-signal-safe; run between fork and exec, after std's own reset.
+        unsafe {
+            std::os::unix::process::CommandExt::pre_exec(&mut c, || {
+                libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+                Ok(())
+            });
+        }
+    }
+    c
+}
+
+/// The command's foreground child running (held_run, jq on the main thread): a signal's trap waits
+/// for it, as bash runs a trap once the command in the foreground is over.
+pub static FOREGROUND: Mutex<()> = Mutex::new(());
+
+static MAIN: std::sync::OnceLock<std::thread::ThreadId> = std::sync::OnceLock::new();
+
+/// This thread is main's (set at its start).
+pub fn set_main() {
+    let _ = MAIN.set(std::thread::current().id());
+}
+
+/// A terminating signal's trap is on its way (shot --no-pointer's release); GATED: main holds the
+/// pointer's gate (ptr.rs), where it must not stop.
+pub static STOPPING: AtomicBool = AtomicBool::new(false);
+pub static GATED: AtomicBool = AtomicBool::new(false);
+
+/// F as a foreground command: on main's thread, with FOREGROUND held; once it is over, a trap on its
+/// way runs before anything more (main waits there for it to end this process), as bash's does.
+pub fn foreground<T>(f: impl FnOnce() -> T) -> T {
+    if MAIN.get() != Some(&std::thread::current().id()) {
+        return f();
+    }
+    let r = {
+        let _g = FOREGROUND
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f()
+    };
+    while STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    r
+}
+
+/// A handler's errno given back as it found it.
+pub struct Errno(libc::c_int);
+
+impl Errno {
+    pub fn save() -> Errno {
+        // SAFETY: errno is this thread's; reading it is async-signal-safe.
+        Errno(unsafe { *libc::__errno_location() })
+    }
+}
+
+impl Drop for Errno {
+    fn drop(&mut self) {
+        // SAFETY: as in save: this thread's errno set back.
+        unsafe { *libc::__errno_location() = self.0 }
+    }
 }
 
 /// The write end of the pipe a signal handler tells a watcher thread through.
 static SIG_PIPE: AtomicI32 = AtomicI32::new(-1);
 
 extern "C" fn to_pipe(sig: libc::c_int) {
+    let _e = Errno::save();
     let fd = SIG_PIPE.load(Ordering::Relaxed);
     if fd >= 0 {
         let b = [u8::try_from(sig).unwrap_or(0)];
