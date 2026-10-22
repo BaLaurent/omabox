@@ -8915,7 +8915,22 @@ from them.
       (drawn while hidden) while their rule lasts, adds on one box take turns, and an aquamarine
       without +appid is refused. A host reload between the rule and the window's map still opens it on
       the user's workspace (no runtime rule survives a reload).
-    Verified: patch 0004 built (`setup --aquamarine`); see the commit for the box tests run. Tests:
+    - Signals the halves still take differently, both safe: a group INT during the create ends bash
+      (its capture of the create dies of it: trap, monitor removed, 130), while the Rust half's child
+      there (`timeout`, a process group of its own) does not die of it, so it takes it for an INT to
+      itself alone and finishes the add, then 130 (older than this fix). A group HUP there can end
+      bash's trap before it starts: a bash with jobs (on_box's capture has some) sends them a HUP of
+      its own, and they share its group, so the subshell gets a second one (probed: the trap ran 3 to
+      5 times in 15; a plain `$(sleep)` 15 in 15). bash then leaves a monitor on the box's workspace,
+      the Rust half removes it. The parity suite checks both cases for safety on each side only.
+    Verified in boxes (a stand-in host, finding 26, real Hyprland 0.56.2 and the +appid build): each
+    monitor's window has its own `aquamarine-omabox-*` class and lands on 9, floating, the stand-in's
+    focus and workspace unchanged (so the rule applies by `initial_class` at the first map), for `up
+    --interactive --monitor`, `monitor add`, and two adds on one box with one on another at once;
+    confirm-close with a token left for its name reopens a plain `aquamarine` window. Read in source,
+    not seen: hyprctl's 5 s give-up (the stand-in models it), keys-to-box inside a monitor's window
+    (passthrough v5; the suite's keys-to-box checks use the main window), `up --interactive
+    --monitor` refused without +appid (the `monitor add` refusal is tested both ways). Tests:
     t_unit_rust_parity4 (its stand-in box hyprctl now gives up at 5 s, exit 6, as the real one does,
     and names a window by its token file; signals INT, TERM, HUP and KILL during the rule, between
     the token and the create, during the create and the window wait, twice during the trap; a create
