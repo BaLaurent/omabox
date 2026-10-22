@@ -111,6 +111,21 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Then drop:** the patch, `+cursor` in `AQ_BUILD` and its note in `monitor_add_window`;
   `t_monitors_window`'s cursor check then checks any build.
 
+## aquamarine: no way to set a Wayland output's app_id (not reported)
+
+- **Needed for:** an interactive box's monitor windows kept off your workspace (NOTES finding 429).
+  Each gets a host rule of its own, which needs a class of its own to match.
+- **Waiting for:** an aquamarine that lets its consumer choose a Wayland output's app_id (in
+  `src/backend/Wayland.cpp` at `7bb8bdf4`, every output's toplevel is `sendSetAppId("aquamarine")`),
+  and a Hyprland that passes one through, e.g. `output create wayland NAME [APPID]`. Not reported;
+  whether it is worth proposing is the maintainer's call.
+- **Until then:** `patches/aquamarine/0004-*.patch` (`AQ_BUILD` `+appid`): with
+  `AQ_WAYLAND_APP_ID_FILES=PREFIX`, an output NAME whose file PREFIX+NAME holds a token gets the
+  app_id `aquamarine-TOKEN`. Interactive `monitor add` and `up --interactive --monitor` are refused on
+  any other aquamarine.
+- **Then drop:** the patch and `+appid` in `AQ_BUILD`; `monitor_add_window` names its class through
+  the new way instead of the token file.
+
 ## Omarchy: the shell's crash dialog takes focus (not reported yet)
 
 - **Needed for:** driving a box after its shell crashed. Quickshell's crash reporter opens a dialog

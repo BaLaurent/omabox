@@ -1,0 +1,44 @@
+diff --git a/src/backend/Wayland.cpp b/src/backend/Wayland.cpp
+index f2a812b..1bdec57 100644
+--- a/src/backend/Wayland.cpp
++++ b/src/backend/Wayland.cpp
+@@ -1,4 +1,5 @@
+ #include <algorithm>
++#include <cctype>
+ #include <aquamarine/backend/Wayland.hpp>
+ #include <wayland.hpp>
+ #include <xdg-shell.hpp>
+@@ -417,6 +418,24 @@ static bool layoutAbsolute(const std::string& name, Vector2D& abs) {
+     return true;
+ }
+ 
++// A consumer whose compositor must tell one output's window from another's (each gets its own window
++// rule) sets AQ_WAYLAND_APP_ID_FILES to a path prefix P: an output NAME whose file P+NAME holds a token
++// (1-64 of [A-Za-z0-9_-]) gets the app_id "aquamarine-TOKEN"; any other output, and every output without
++// the env, keeps "aquamarine". Read once, when the output is made.
++static std::string appIdFor(const std::string& name) {
++    const char* prefix = getenv("AQ_WAYLAND_APP_ID_FILES");
++    if (!prefix || !*prefix || name.empty() || name.find('/') != std::string::npos)
++        return "aquamarine";
++
++    std::ifstream f(std::string{prefix} + name);
++    std::string   token;
++    if (!(f >> token) || token.size() > 64 ||
++        !std::ranges::all_of(token, [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_'; }))
++        return "aquamarine";
++
++    return "aquamarine-" + token;
++}
++
+ void Aquamarine::CWaylandPointer::emitWarp(uint32_t timeMs, wl_fixed_t x, wl_fixed_t y) {
+     const auto output = backend->focusedOutput.lock();
+     if (!output || output->waylandState.surfaceSize.x <= 0 || output->waylandState.surfaceSize.y <= 0)
+@@ -654,7 +673,7 @@ Aquamarine::CWaylandOutput::CWaylandOutput(const std::string& name_, Hyprutils::
+     waylandState.xdgToplevel->setClose([this](CCXdgToplevel* r) { destroy(); });
+ 
+     waylandState.xdgToplevel->sendSetTitle(std::format("aquamarine - {}", name).c_str());
+-    waylandState.xdgToplevel->sendSetAppId("aquamarine");
++    waylandState.xdgToplevel->sendSetAppId(appIdFor(name).c_str());
+ 
+     auto inputRegion = makeShared<CCWlRegion>(backend->waylandState.compositor->sendCreateRegion());
+     inputRegion->sendAdd(0, 0, INT32_MAX, INT32_MAX);
