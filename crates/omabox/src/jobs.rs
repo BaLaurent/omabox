@@ -292,18 +292,23 @@ fn job_run_stopped(ctx: &Ctx, end: i64) -> bool {
 
 /// The box's processes, as host pids: everything in its pid namespace.
 pub fn box_pids(ctx: &Ctx) -> Vec<Vec<u8>> {
+    box_pids_try(ctx).unwrap_or_default()
+}
+
+/// box_pids, None where bash's fails (the box's pid namespace cannot be read).
+pub fn box_pids_try(ctx: &Ctx) -> Option<Vec<Vec<u8>>> {
     let pid = match box_pid(&ctx.d) {
         BoxPid::Pid(p) => p,
         _ => Vec::new(),
     };
-    let Some(ns) = procfs::pidns(&pid) else {
-        return Vec::new();
-    };
-    shell::glob(std::path::Path::new("/proc"), false)
-        .into_iter()
-        .filter(|p| p.iter().all(u8::is_ascii_digit))
-        .filter(|p| procfs::pidns(p).is_some_and(|n| n == ns))
-        .collect()
+    let ns = procfs::pidns(&pid)?;
+    Some(
+        shell::glob(std::path::Path::new("/proc"), false)
+            .into_iter()
+            .filter(|p| p.iter().all(u8::is_ascii_digit))
+            .filter(|p| procfs::pidns(p).is_some_and(|n| n == ns))
+            .collect(),
+    )
 }
 
 /// Each live process of the box: "HOST_PID BOX_PID BOX_SID START".

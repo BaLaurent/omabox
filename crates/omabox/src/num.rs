@@ -19,6 +19,26 @@ pub fn ms_duration(v: &[u8]) -> Option<i64> {
     (ms >= 1.0).then_some(ms as i64)
 }
 
+/// s_duration V [zero]: a duration (ms_duration's) as seconds, decimals only where it has them
+/// (1.5s, 1500ms: 1.5; 5: 5); ZERO lets 0 in, in any unit.
+pub fn s_duration(v: &[u8], zero: bool) -> Option<String> {
+    if zero && crate::shell::re_match(r"^0+(\.0+)?(ms|s|m|h)?$", v) {
+        return Some("0".to_string());
+    }
+    let ms = ms_duration(v)?;
+    // (awk's `sprintf("%.3f", m / 1000)` and `sub(/\.?0+$/, "")`)
+    let mut s = fixed(ms as f64 / 1000.0, 3);
+    if s.contains('.') {
+        while s.ends_with('0') {
+            s.pop();
+        }
+        if s.ends_with('.') {
+            s.pop();
+        }
+    }
+    Some(s)
+}
+
 /// `printf "%.Nf"` of X, as awk and printf(1) write it (glibc's rounding of the exact value).
 pub fn fixed(x: f64, prec: usize) -> String {
     let fmt = format!("%.{prec}f\0");
@@ -180,6 +200,14 @@ mod tests {
         assert_eq!(ms_duration(b"2m"), Some(120_000));
         assert_eq!(ms_duration(b"3"), Some(3000));
         assert_eq!(ms_duration(b"0.0004"), None);
+        assert_eq!(s_duration(b"5", false).as_deref(), Some("5"));
+        assert_eq!(s_duration(b"500ms", false).as_deref(), Some("0.5"));
+        assert_eq!(s_duration(b"10s", false).as_deref(), Some("10"));
+        assert_eq!(s_duration(b"1.25s", false).as_deref(), Some("1.25"));
+        assert_eq!(s_duration(b"2m", false).as_deref(), Some("120"));
+        assert_eq!(s_duration(b"0", false), None);
+        assert_eq!(s_duration(b"0ms", true).as_deref(), Some("0"));
+        assert_eq!(s_duration(b"00.0s", true).as_deref(), Some("0"));
         assert_eq!(ms_duration(b"0.0005"), Some(1));
         assert_eq!(ms_duration(b"x"), None);
     }

@@ -322,6 +322,14 @@ pub fn shell_note(ctx: &Ctx) -> Res<()> {
     Ok(())
 }
 
+/// shell_seen: what the next shell_note compares with, as things are now (a command said it).
+pub fn shell_seen(ctx: &Ctx) {
+    let n = shell_crashes(ctx);
+    let _ = std::fs::write(ctx.at("shell-crashes-seen"), format!("{n}\n"));
+    let rl = shell_relaunches(ctx);
+    let _ = std::fs::write(ctx.at("shell-relaunches-seen"), cat!(rl, "\n"));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

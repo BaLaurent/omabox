@@ -50,6 +50,14 @@ fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
             "-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every= --sheet --diff --changed --since= --ignore= --after --json",
         ),
         b"calibrate" => Some("-b= --box= -o= --output= --size= --answer= --json"),
+        b"mode" => Some("-b= --box= --json"),
+        b"output" => Some("-b= --box= --for= --cycles="),
+        b"monitor" => Some("-b= --box= --name= --json"),
+        b"gpu" => Some("-b= --box= --json"),
+        b"cpu" => Some("-b= --box= --settle= --pid= --app= --threads --json"),
+        b"audio" => Some("-b= --box= --json"),
+        b"ports" => Some("-b= --box= --json"),
+        b"clip" => Some("-b= --box= --from-box"),
         _ => None,
     }
 }
@@ -124,6 +132,30 @@ fn usage_head(cmd: &[u8]) -> &'static str {
         b"calibrate" => {
             r#"  omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
   omabox calibrate [CARD] --answer "A X,Y B X,Y ..." [--json]   where you see each mark: 1:1, or the --fit N that maps it"#
+        }
+        b"mode" => {
+            "  omabox mode [-b NAME] [--json | WxH[@HZ][,scale=S]|host]   show or change a headless box's screen mode"
+        }
+        b"output" => {
+            "  omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back"
+        }
+        b"monitor" => {
+            "  omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors"
+        }
+        b"gpu" => {
+            "  omabox gpu [-b NAME] [DURATION] [--json]               GPU engine time of this box's processes (default 5s)\n  omabox gpu release GPU                                 take down the headless boxes rendering on that GPU"
+        }
+        b"cpu" => {
+            "  omabox cpu [-b NAME] [DURATION] [--settle DURATION] [--pid PID | --app NAME] [--threads] [--json]\n                                                         CPU (% of one core) and memory of this box's processes (default 5s)"
+        }
+        b"audio" => {
+            "  omabox audio [-b NAME] [DURATION] [--json]             an up --audio box's sound for DURATION (3s): when, how loud"
+        }
+        b"ports" => {
+            "  omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches"
+        }
+        b"clip" => {
+            "  omabox clip [-b NAME] [--from-box]                     your clipboard into an interactive box, or back"
         }
         _ => "",
     }

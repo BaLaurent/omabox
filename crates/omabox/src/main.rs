@@ -6,8 +6,10 @@ mod args;
 mod boxes;
 mod cmd;
 mod desk;
+mod deskwin;
 mod exec;
 mod exit;
+mod gpu;
 mod host;
 mod hypr;
 mod input;
@@ -19,6 +21,7 @@ mod json;
 mod layer;
 mod logs;
 mod marks;
+mod mon;
 mod num;
 mod procfs;
 mod ptr;
@@ -30,6 +33,7 @@ mod shell;
 mod shellnote;
 mod shots;
 mod sig;
+mod trap;
 mod win;
 
 use std::ffi::OsString;
@@ -97,6 +101,14 @@ fn main() -> ExitCode {
         Some("shot" | "screenshot") => Some(cmd::shot::run),
         Some("calibrate") => Some(cmd::calibrate::run),
         Some("keys-to-box") => Some(cmd::keys_to_box::run),
+        Some("monitor") => Some(cmd::monitor::run),
+        Some("output") => Some(cmd::output::run),
+        Some("mode") => Some(cmd::mode::run),
+        Some("gpu") => Some(cmd::gpu::run),
+        Some("cpu") => Some(cmd::cpu::run),
+        Some("audio") => Some(cmd::audio::run),
+        Some("ports") => Some(cmd::ports::run),
+        Some("clip") => Some(cmd::clip::run),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.

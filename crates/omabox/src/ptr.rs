@@ -5,7 +5,7 @@
 //! true|false` (cursor:invisible before omabox hid it). The box's config hides it on every load while
 //! its runtime dir's omabox.pointer says so. Changed under $D/.pointer.lock.
 
-use crate::boxes::{box_alive, lock_file, meta, run_read};
+use crate::boxes::{box_alive, box_file, lock_file, meta, run_read};
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, say};
@@ -111,20 +111,6 @@ fn ptr_seen(ctx: &Ctx, v: &[u8]) -> Result<(), Vec<u8>> {
         ],
     );
     if rc == 0 { Ok(()) } else { Err(out) }
-}
-
-/// box_file PATH VALUE: VALUE written to a file in the box's runtime dir without opening what is
-/// there (a link, a FIFO: finding 74): a new file in the box dir, renamed over it.
-fn box_file(ctx: &Ctx, p: &std::path::Path, value: &[u8]) -> bool {
-    let Ok((mut f, tmp)) = crate::shell::mktemp_in(&cat!(ctx.d, "/.write.XXXXXX")) else {
-        return false;
-    };
-    let ok = std::io::Write::write_all(&mut f, &cat!(value, "\n")).is_ok()
-        && std::fs::rename(shell::path(&tmp), p).is_ok();
-    if !ok {
-        let _ = std::fs::remove_file(shell::path(&tmp));
-    }
-    ok
 }
 
 /// What ptr_change does to the record.

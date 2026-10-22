@@ -8851,6 +8851,15 @@ from them.
     grim a frame, TMPDIR a dir of the test's own; a --changed whose box stops answering once the frame
     is taken: compared both ways, nothing left after).
 
+428. **`cpu --app` cut a name to 15 characters where the kernel keeps 15 bytes** (2026-10-22, #324
+    wave 4a). A process's name (/proc/PID/comm) is the first 15 bytes of what it set, and `cpu` keeps
+    the processes whose tamed name is `--app`'s, cut to the same 15 (cpu_tame's words: "bytes, as the
+    kernel truncates a name"). The cut was `${app:0:15}` in the caller's locale, which counts
+    characters in UTF-8: a name of characters past one byte (`ééééééééé`, 18 bytes, 15 kept by the
+    kernel) kept all of its 18 bytes, matched none, and `cpu` said "ran no process". **Fix**: the cut
+    is cpu_tame's own, under its `LC_ALL=C`, where a character is a byte; the Rust half cuts bytes.
+    Tests: t_unit_rust_parity4 (a stand-in process named so, found by `--app` both ways).
+
 435. **An interactive `monitor add` whose box answered late opened its window on the user's
     workspace, focused** (2026-10-22, #349; the 1.0.x stopgap). `hyprctl` stops reading after 5 s of
     its own (`SO_RCVTIMEO`, Hyprland 0.56.2's `hyprctl/src/main.cpp`): it prints "Hyprland IPC

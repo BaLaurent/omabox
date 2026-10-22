@@ -35,7 +35,20 @@ impl Ran {
 
 /// `jq ARGS... <<<"$INPUT"` (INPUT None: no stdin, for -n).
 pub fn jq<A: AsRef<[u8]>>(args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
-    let mut c = crate::sig::command("jq");
+    let input = input.map(|i| crate::cat!(i, "\n"));
+    tool("jq", args, input.as_deref(), err)
+}
+
+/// `awk ARGS... <<<"$INPUT"`: awk as bash runs it, its program verbatim (gawk's numbers are its
+/// own); INPUT None: no stdin.
+pub fn awk<A: AsRef<[u8]>>(args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
+    let input = input.map(|i| crate::cat!(i, "\n"));
+    tool("awk", args, input.as_deref(), err)
+}
+
+/// `NAME ARGS...` fed INPUT exactly as given (a pipe's bytes; None: /dev/null).
+pub fn tool<A: AsRef<[u8]>>(name: &str, args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
+    let mut c = crate::sig::command(name);
     c.args(args.iter().map(|a| OsStr::from_bytes(a.as_ref())));
     c.stdin(if input.is_some() {
         Stdio::piped()
@@ -67,7 +80,7 @@ pub fn jq<A: AsRef<[u8]>>(args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
             let _ = read_all(r, None);
             // bash's own line for a command it could not run (in the child, after its
             // redirections: where jq's stderr goes), less its "SCRIPT: line N: ".
-            let (rc, m) = not_run(&e);
+            let (rc, m) = not_run(name, &e);
             match err {
                 Err::Inherit => {
                     let _ = std::io::Write::write_all(&mut std::io::stderr(), &m);
@@ -81,9 +94,8 @@ pub fn jq<A: AsRef<[u8]>>(args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
             };
         }
     };
-    // A here-string's newline after the input.
     let feeder = match (input, child.stdin.take()) {
-        (Some(i), Some(si)) => Some(feed(si.into(), crate::cat!(i, "\n"))),
+        (Some(i), Some(si)) => Some(feed(si.into(), i.to_vec())),
         _ => None,
     };
     let (out, rc) = crate::sig::foreground(|| {
@@ -99,15 +111,15 @@ pub fn jq<A: AsRef<[u8]>>(args: &[A], input: Option<&[u8]>, err: Err) -> Ran {
     Ran { rc, out }
 }
 
-/// Bash's status and words for jq not run: 127 "jq: command not found" when no jq is on PATH, else
+/// Bash's status and words for a tool not run: 127 "jq: command not found" when none is on PATH, else
 /// 126 "PATH_OF_JQ: REASON" (an argument past 128 KiB: "Argument list too long").
-fn not_run(e: &std::io::Error) -> (i32, Vec<u8>) {
+fn not_run(name: &str, e: &std::io::Error) -> (i32, Vec<u8>) {
     let found = crate::shell::env_or_empty("PATH")
         .split(|&c| c == b':')
-        .map(|d| crate::cat!(if d.is_empty() { b".".as_slice() } else { d }, "/jq"))
+        .map(|d| crate::cat!(if d.is_empty() { b".".as_slice() } else { d }, "/", name))
         .find(|p| crate::exec::executable(p) && crate::shell::path(p).is_file());
     match (found, e.raw_os_error()) {
-        (None, _) | (_, Some(libc::ENOENT)) => (127, b"jq: command not found\n".to_vec()),
+        (None, _) | (_, Some(libc::ENOENT)) => (127, crate::cat!(name, ": command not found\n")),
         (Some(p), code) => {
             // SAFETY: strerror's string for a valid errno, read at once.
             let why = unsafe {
@@ -141,6 +153,21 @@ impl Args {
     pub fn run(&self, input: Option<&[u8]>, err: Err) -> Ran {
         jq(&self.0, input, err)
     }
+
+    /// The words as built.
+    pub fn into_words(self) -> Vec<Vec<u8>> {
+        self.0
+    }
+
+    /// jq reading the file its last word names (no here-string).
+    pub fn run_file(&self, err: Err) -> Ran {
+        jq(&self.0, None, err)
+    }
+
+    /// The same words given to awk (`awk -v K=V ... PROGRAM <<<"$INPUT"`).
+    pub fn awk(&self, input: Option<&[u8]>, err: Err) -> Ran {
+        awk(&self.0, input, err)
+    }
 }
 
 #[cfg(test)]
@@ -159,6 +186,9 @@ mod tests {
         assert_eq!(r.rc, 126);
         assert!(r.out.ends_with(b"/jq: Argument list too long\n"));
         let e = std::io::Error::from_raw_os_error(libc::ENOENT);
-        assert_eq!(not_run(&e), (127, b"jq: command not found\n".to_vec()));
+        assert_eq!(
+            not_run("jq", &e),
+            (127, b"jq: command not found\n".to_vec())
+        );
     }
 }
