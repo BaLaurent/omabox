@@ -99,6 +99,12 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         // The suite's check that the jq programs here are bash's, byte for byte.
+        Some("_rust-jq") if rest.first().is_some_and(|a| a == "--inline") => {
+            for p in jqprog::INLINE {
+                print!("{p}\0");
+            }
+            ExitCode::SUCCESS
+        }
         Some("_rust-jq") => match rest
             .first()
             .and_then(|n| jqprog::by_name(&n.to_string_lossy()))

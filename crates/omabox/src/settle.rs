@@ -34,6 +34,14 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// bash's SECONDS, as its deadlines read it: whole seconds of the wall clock (`end=$((SECONDS + N))`
+/// then `[ $SECONDS -lt $end ]` is `time() < start + N`), so a deadline here ends where bash's does,
+/// 0 to 1 s short of N.
+pub fn secs() -> i64 {
+    // SAFETY: time with a null pointer only returns the time.
+    unsafe { libc::time(std::ptr::null_mut()) }
+}
+
 /// geom_parse: a -g value as its X Y W H, from grim's "X,Y WxH" or X,Y,W,H and X,Y W,H (#27).
 pub fn geom_parse(v: &[u8]) -> Option<[Vec<u8>; 4]> {
     let re = shell::Re::new(r"^(-?[0-9]+),(-?[0-9]+)[\ ,]([1-9][0-9]*)[x,]([1-9][0-9]*)$")?;
@@ -97,10 +105,7 @@ pub fn cursor_rect(p: &[u8]) -> Option<Vec<u8>> {
 pub fn cursor_now(ctx: &Ctx) -> Res<Vec<u8>> {
     let j = shell::strip_nl(&hypr_json(ctx, &["cursorpos"])?);
     let r = jq::jq(
-        &[
-            "-r",
-            r#"select((.x | type) == "number" and (.y | type) == "number") | "\(.x | floor) \(.y | floor)""#,
-        ],
+        &["-r", crate::jqprog::CURSOR_JQ],
         Some(&j),
         jq::Err::Inherit,
     );
@@ -388,6 +393,19 @@ impl Settle {
     /// `ready`, or its answer), 12 s at most: a hung compositor is the tool's own "unknown hung" at
     /// 10 s (finding 181).
     pub fn begin(&mut self, ctx: &Ctx, tool_args: &[Vec<u8>]) -> Res<()> {
+        // OMABOX_STILL_DUMP=DIR (a path in the box; the suite's, for a flaky check: #222), refused
+        // before anything is made (finding 426).
+        let mut argv = vec![BOX_STILL.as_bytes().to_vec()];
+        argv.extend(tool_args.iter().cloned());
+        if let Some(d) = shell::env("OMABOX_STILL_DUMP").filter(|d| !d.is_empty()) {
+            if !shell::re_match("^/[A-Za-z0-9._/-]+$", &d) {
+                return Err(ctx.die(cat!(
+                    "OMABOX_STILL_DUMP: a plain absolute path in the box, got ",
+                    d
+                )));
+            }
+            argv.extend([b"--dump".to_vec(), d]);
+        }
         // (Before any input is sent: a box started by an omabox without the tool cannot watch.)
         let t = on_box(
             ctx,
@@ -414,18 +432,6 @@ impl Settle {
             )));
         }
         self.snap_start(ctx);
-        // OMABOX_STILL_DUMP=DIR (a path in the box; the suite's, for a flaky check: #222).
-        let mut argv = vec![BOX_STILL.as_bytes().to_vec()];
-        argv.extend(tool_args.iter().cloned());
-        if let Some(d) = shell::env("OMABOX_STILL_DUMP").filter(|d| !d.is_empty()) {
-            if !shell::re_match("^/[A-Za-z0-9._/-]+$", &d) {
-                return Err(ctx.die(cat!(
-                    "OMABOX_STILL_DUMP: a plain absolute path in the box, got ",
-                    d
-                )));
-            }
-            argv.extend([b"--dump".to_vec(), d]);
-        }
         argv.push(b"--tied".to_vec());
         let ((in_r, in_w), (out_r, out_w)) = match (pipe(), pipe()) {
             (Ok(a), Ok(b)) => (a, b),
@@ -461,7 +467,7 @@ impl Settle {
             pid,
         });
         self.err.clear();
-        let end = Instant::now() + Duration::from_secs(12);
+        let end = secs() + 12;
         let (mut line, mut part) = (Vec::new(), Vec::new());
         let answer = shell::Re::new(r"^(satisfied|unsatisfied|unknown)\ ");
         let is_answer = |l: &[u8]| answer.as_ref().is_some_and(|r| r.is_match(l));
@@ -483,7 +489,7 @@ impl Settle {
                     Got::Timeout(p) => {
                         part.extend(p);
                         line.clear();
-                        if Instant::now() >= end {
+                        if secs() >= end {
                             break;
                         }
                     }
@@ -549,7 +555,7 @@ impl Settle {
         if line.starts_with(b"ready") {
             line.clear();
             let mut part = Vec::new();
-            let mut used = Instant::now();
+            let mut used = secs();
             if let Some(tool) = self.tool.as_mut() {
                 loop {
                     match tool.lines.read(Duration::from_secs(1)) {
@@ -575,9 +581,9 @@ impl Settle {
                         }
                     }
                     // Waiting is using the box (idle expiry, finding 59).
-                    if used.elapsed() >= Duration::from_secs(30) {
+                    if secs() - used >= 30 {
                         touch(&ctx.at("used"));
-                        used = Instant::now();
+                        used = secs();
                     }
                 }
             }
@@ -661,8 +667,8 @@ impl Settle {
                 _ => {
                     // Its compositor gone: the box is (being) taken down.
                     let gone = now_ms() - self.t0;
-                    let end = Instant::now() + Duration::from_secs(2);
-                    while box_alive(ctx)? && Instant::now() < end {
+                    let end = secs() + 2;
+                    while box_alive(ctx)? && secs() < end {
                         std::thread::sleep(Duration::from_millis(200));
                     }
                     if !box_alive(ctx)? {
@@ -747,21 +753,32 @@ impl Settle {
                 // was watched: `ready WxH area=N`, finding 231): an animation there is --ignore'd by
                 // name (#131).
                 let la = dash("late");
-                let area = shell::Re::new("^([0-9]+)x([0-9]+)( area=([0-9]+))?$").and_then(|re| {
-                    let c = re.captures(&scr, false)?;
-                    let g = |i: usize| c.get(i).copied().flatten().map(|(a, b)| &scr[a..b]);
-                    // (`-le "$area"`: test's reading of N; the product, arithmetic's)
-                    match g(4) {
-                        Some(a) => shell::test_int(a),
-                        None => Some(bash_int(g(1)?)?.wrapping_mul(bash_int(g(2)?)?)),
+                // (`-le "$area"`: test's reading of N; the product, arithmetic's. A number bash's
+                // arithmetic refuses, an 08: its own words, then exit 1.)
+                let mut area: Option<Vec<u8>> = None;
+                if let Some(re) = shell::Re::new("^([0-9]+)x([0-9]+)( area=([0-9]+))?$") {
+                    if let Some(c) = re.captures(&scr, false) {
+                        let g = |i: usize| c.get(i).copied().flatten().map(|(a, b)| &scr[a..b]);
+                        area = Some(match g(4) {
+                            Some(a) => a.to_vec(),
+                            None => {
+                                let (w, h) = (g(1).unwrap_or_default(), g(2).unwrap_or_default());
+                                let (Some(w), Some(h)) = (bash_int(w), bash_int(h)) else {
+                                    return Err(Exit(1));
+                                };
+                                w.wrapping_mul(h).to_string().into_bytes()
+                            }
+                        });
                     }
-                });
+                }
                 if la != b"-" {
                     if let Some(area) = area {
                         let [_, _, lw, lh] = csv4(&la);
-                        let small = bash_int(&lw)
-                            .zip(bash_int(&lh))
-                            .is_some_and(|(w, h)| 4i64.wrapping_mul(w).wrapping_mul(h) <= area);
+                        let (Some(w), Some(h)) = (bash_int(&lw), bash_int(&lh)) else {
+                            return Err(Exit(1));
+                        };
+                        let small = shell::test_int(&area)
+                            .is_some_and(|a| 4i64.wrapping_mul(w).wrapping_mul(h) <= a);
                         if small {
                             // (in the window's own coordinates when the --ignore given was, F8)
                             let (ox, oy) = self
@@ -770,7 +787,10 @@ impl Settle {
                                 .unwrap_or((b"0".to_vec(), b"0".to_vec()));
                             let lo = xywh_less(&la, &ox, &oy);
                             let laz = xywh_words(&la);
-                            let half = ms_s((bash_int(&get("t")).unwrap_or(0) / 2).to_string());
+                            let Some(t) = bash_int(&get("t")) else {
+                                return Err(Exit(1));
+                            };
+                            let half = ms_s((t / 2).to_string());
                             if self.origin.is_some() {
                                 m = cat!(
                                     m,
@@ -887,7 +907,7 @@ impl Settle {
                 .kv("--argjson", "changes", &changes)
                 .kv("--argjson", "target", &target)
                 .kv("--argjson", "evs", &evs)
-                .arg(SETTLE_JSON_JQ)
+                .arg(crate::jqprog::SETTLE_JSON_JQ)
                 .run(None, jq::Err::Inherit);
             // (a write that fails is not settle_end's end: its status is the answer's)
             let _ = out(&r.out);
@@ -911,16 +931,6 @@ impl Settle {
         })
     }
 }
-
-/// settle_end's --json.
-const SETTLE_JSON_JQ: &str = r#"
-      def secs: if . == "" or . == "-" then null else tonumber / 1000 end;
-      def box: if . == "-" then null else split(",") | map(tonumber) | {x: .[0], y: .[1], w: .[2], h: .[3]} end;
-      {result: $res, condition: $cond, message: $msg, elapsed: ($t | secs), first_change: ($first | secs),
-       last_change: ($last | secs), change: ($ch | box), late_changes: ($late | box),
-       ignored: (($ig | box) as $b | if $b then $b + {why: $why} else null end),
-       frames: (if $frames == "" then null else $frames | tonumber end)}
-      + if $facts == "" then {} else {changes: $changes, target: $target, events_since: $evs} end"#;
 
 /// settle_sent RC SENT: what an action did when the answer was not yes.
 pub fn settle_sent(rc: i32, sent: &[u8], looked: bool) {

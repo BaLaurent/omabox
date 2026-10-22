@@ -13,14 +13,14 @@ use crate::jqprog::WIN_DESC_JQ;
 use crate::num::{fixed, ms_duration, ms_s, xywh_less};
 use crate::select::select_box;
 use crate::settle::{
-    Settle, WAIT_MAX_MS, cursor_now, cursor_rect, geom_csv, geom_parse, now_ms, rects_meet,
+    Settle, WAIT_MAX_MS, cursor_now, cursor_rect, geom_csv, geom_parse, now_ms, rects_meet, secs,
 };
 use crate::shell::{bash_int, strip_nl};
 use crate::shellnote::shell_note;
 use crate::win::{
     box_windows, joined, jq_error_text, jq_length, jq_r, win_desc, win_hits, win_select,
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// A polled condition's one try (win_probe, layer_probe, until_probe): "yes DETAIL" or "no DETAIL";
 /// status 2 a selector never answered (a bad regex), any other failure the box not answering.
@@ -48,9 +48,10 @@ impl Probe<'_> {
                     let _quiet = Redir::null(2);
                     box_windows(ctx, None)
                 };
+                // (`wins=$(box_windows 2>/dev/null) || return 1`)
                 match wins {
                     Ok(w) => win_answer(want, &w, sels),
-                    Err(Exit(rc)) => (i32::from(rc), Vec::new()),
+                    Err(_) => (1, Vec::new()),
                 }
             }
             Probe::Layer(want, ns) => {
@@ -63,10 +64,7 @@ impl Probe<'_> {
                 };
                 let l = Args::new(&["-r"])
                     .kv("--arg", "n", ns)
-                    .arg(
-                        r#"first(.. | objects | select(.namespace? == $n and .w > 1 and .h > 1)
-    | "\(.x),\(.y) \(.w)x\(.h)") // empty"#,
-                    )
+                    .arg(crate::jqprog::LAYER_AT_JQ)
                     .run(Some(&strip_nl(&layers)), jq::Err::Inherit)
                     .text();
                 let o: Vec<u8> = match (*want, l.is_empty()) {
@@ -96,9 +94,11 @@ impl Probe<'_> {
                     let _e = Redir::null(2);
                     box_exec(ctx, &argv, ExecOpts::default())
                 };
+                // box_exec's die ends the probe's `$(...)` with its status: no answer from the
+                // box, poll_until's to say (its "went down" or "could not ask").
                 let rc = match rc {
                     Ok(rc) => rc,
-                    Err(Exit(rc)) => i32::from(rc),
+                    Err(Exit(rc)) => return (i32::from(rc), Vec::new()),
                 };
                 if rc == 0 {
                     (0, b"yes".to_vec())
@@ -138,18 +138,8 @@ fn win_answer(want: &str, wins: &[u8], sels: &[Vec<u8>]) -> (i32, Vec<u8>) {
             };
             return (0, o);
         }
-        "focused" => {
-            r#"
-        (first(.[] | select(.active)) // null) as $f
-        | if length == 0 then "no"
-          elif $f == null then if length == 1 then "no \(.[0] | n) is there" else "no \(length) matching, none focused" end
-          else "yes \($f | d)" + (if length > 1 then " (1 of \(length) matching)" else "" end) end"#
-        }
-        _ => {
-            r#"
-        if length == 0 then "no" elif length == 1 then "yes \(.[0] | d)"
-        else "yes \(length) windows: \(map(d) | join("; "))" end"#
-        }
+        "focused" => crate::jqprog::WIN_FOCUSED_JQ,
+        _ => crate::jqprog::WIN_PRESENT_JQ,
     };
     let r = jq::jq(
         &["-r", &format!("{WIN_DESC_JQ}{prog}")],
@@ -172,7 +162,8 @@ fn poll_until(
     probe: Probe,
 ) -> Res<()> {
     let t0 = now_ms();
-    let mut used = Instant::now();
+    // (bash's SECONDS: settle::secs)
+    let mut used = secs();
     let (mut yes, mut detail) = (0u32, Vec::new());
     let mut now: i64;
     let (res, msg): (&str, Vec<u8>);
@@ -229,9 +220,9 @@ fn poll_until(
             msg = cat!(no_text, " after ", ms_s(now.to_string()), d);
             break;
         }
-        if used.elapsed() >= Duration::from_secs(30) {
+        if secs() - used >= 30 {
             touch(&ctx.at("used"));
-            used = Instant::now();
+            used = secs();
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -242,10 +233,7 @@ fn poll_until(
             .kv("--arg", "msg", &msg)
             .kv("--arg", "t", now.to_string())
             .kv("--arg", "d", &detail)
-            .arg(
-                r#"{result: $res, condition: ($cond | sub("_probe$"; "") | sub("^win$"; "window")), message: $msg, elapsed: ($t | tonumber / 1000),
-        detail: (if $d == "" then null else $d end)}"#,
-            )
+            .arg(crate::jqprog::POLL_JSON_JQ)
             .run(None, jq::Err::Inherit);
         out(&r.out)?;
     } else {
@@ -355,8 +343,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 } else if cond == b"layer" && ns.is_empty() {
                     ns = a.clone();
                 } else {
-                    let label = format!("wait {}", String::from_utf8_lossy(&cond));
-                    return Err(unexpected(ctx, &label, a, ""));
+                    return Err(unexpected(ctx, cat!("wait ", cond), a, ""));
                 }
             }
         }
@@ -424,7 +411,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
-    shell_note(ctx);
+    shell_note(ctx)?;
     match cond.as_slice() {
         b"window" => {
             let w = cat!("window ", joined(&sels));
@@ -503,7 +490,7 @@ fn screen(
                 " watches its place on the screen"
             )));
         }
-        region = jq_r(r#""\(.at[0]),\(.at[1]),\(.size[0]),\(.size[1])""#, &w);
+        region = jq_r(crate::jqprog::WIN_REGION_JQ, &w);
     }
     if !region.is_empty() {
         args.extend([b"--region".to_vec(), region.clone()]);

@@ -2985,12 +2985,17 @@ t_unit_rust_handoff() {
 # call is appended there, to read the cases over. Since wave 2: ${rp_wrap[@]} goes before omabox (a
 # `timeout` for what follows a log), $rp_in is its stdin (/dev/null), and $rp_sed, a sed -E script,
 # is run over stdout and stderr first (what differs from call to call: a run -d log's name, a time).
-rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1 rp_wrap=() rp_in=/dev/null rp_sed=""
+# Since wave 3a: $rp_also, a function, adds to the state what it prints (a stand-in tool's arguments,
+# the job records a call left, normalised); $rp_check, a function, is given each side's raw stdout and
+# stderr files before the sed, to check what the sed then evens out.
+rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1 rp_wrap=() rp_in=/dev/null rp_sed="" rp_also="" rp_check=""
 rp_state() {
-  [ "$rp_snap" = 1 ] || return 0
-  # (run's marks, $D/runs, are named by pid and time: by kind here)
-  (cd "$rp_rt" && command find . -printf '%p %y\n' | LC_ALL=C sort && command find . -type f -exec md5sum {} + | LC_ALL=C sort) |
-    sed -E 's#/runs/(o|c)\.[0-9]+\.[0-9]+#/runs/\1.MARK#'
+  if [ "$rp_snap" = 1 ]; then
+    # (run's marks, $D/runs, are named by pid and time: by kind here)
+    (cd "$rp_rt" && command find . -printf '%p %y\n' | LC_ALL=C sort && command find . -type f -exec md5sum {} + | LC_ALL=C sort) |
+      sed -E 's#/runs/(o|c)\.[0-9]+\.[0-9]+#/runs/\1.MARK#'
+  fi
+  [ -z "$rp_also" ] || "$rp_also"
 }
 parity() {
   local label=$1 side d=$TMP/rp-out.$BASHPID; shift
@@ -3002,6 +3007,7 @@ parity() {
       ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
       ${rp_wrap[@]+"${rp_wrap[@]}"} "$CLI" "$@" >"$d/$side.out" 2>"$d/$side.err" <"$rp_in"; echo $? > "$d/$side.rc")
     rp_state > "$d/$side.state"
+    [ -z "$rp_check" ] || "$rp_check" "$side" "$d/$side.out" "$d/$side.err"
     if [ -n "$rp_sed" ]; then local f; for f in out err; do sed -i -E "$rp_sed" "$d/$side.$f"; done; fi
   done
   [ -z "${RP_SHOW:-}" ] || { echo "== $label: rc $(cat "$d/bash.rc")"; cat "$d/bash.out" "$d/bash.err"; } >> "$RP_SHOW"
@@ -3343,6 +3349,11 @@ t_unit_rust_parity() {
   for v in LAYER_SPAN_JQ WIN_JQ WIN_SEL_JQ WIN_DESC_JQ DESK_FACTS_JQ DESK_TARGET_JQ LAYER_LIST_JQ JQ_MON; do
     check_eq "the Rust half's $v is bash's" "$(lib eval "printf %s \"\$$v\"")" "$("$ROOT/build/bin/omabox" _rust-jq "$v")"
   done
+  # Its programs that are inline in bash's functions: each in bin/omabox as it is (a path, .[0] and
+  # length aside).
+  local script p missing="" n=0; script=$(cat "$ROOT/bin/omabox")
+  while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"$p"* ]] || missing+="[$p] "; done < <("$ROOT/build/bin/omabox" _rust-jq --inline)
+  check_eq "the Rust half's $n inline jq programs are in bin/omabox, byte for byte" "" "$missing"
   rp_w3() {
     rp_w2
     local d=$r/rt/omabox c
@@ -3449,10 +3460,176 @@ t_unit_rust_parity() {
   parity "run -d --wait of a dead box" run -b dead1 -d --wait -- true
   parity "run -d --wait: a Hyprland that does not answer (cursor_now), 125" run -b own -d --wait -- true
   parity "run: --help after the options" run -b own -d --wait --help
+  parity "wait window --strict" wait window x --strict
+  parity "wait layer --strict" wait layer x --strict
+  parity "run --strict without --wait" run -b own -d --strict -- true
+  parity "run --strict --start 2s, an --ignore inside -g's region (unsaid)" run -b dead1 -d --wait --strict --start 2s -g 0,0,100,100 --ignore 10,10,5,5 -- true
+  parity "wait: a condition of bytes no UTF-8 holds, a word after it" wait $'\xff' x
+  # A stand-in desktop (wave 3a's review): a box whose Hyprland, grim, omabox-still and omabox-tree
+  # are scripts of the test's own, bound over the real ones in the stand-in's mount namespace, each
+  # answering from files here: two windows of one class and one off screen, two monitors with a gap,
+  # layers (one 1x1, two of one pid and size, one with no pid), a PPM, the tool's lines.
+  local fk=$r/fk; mkdir -p "$fk/bin"
+  cat > "$fk/bin/hyprctl" <<EOF
+#!/bin/sh
+f=$fk
+case "\$1 \$2" in
+  "-j clients") cat "\$f/clients.json" ;; "-j monitors") cat "\$f/monitors.json" ;;
+  "-j activewindow") cat "\$f/active.json" ;; "-j layers") cat "\$f/layers.json" ;;
+  "-j cursorpos") cat "\$f/cursor.json" ;; "version ") echo "Hyprland 0.56.2" ;;
+  "--batch "*) for k in clients layers active workspace monitors; do cat "\$f/\$k.json"; done ;;
+  "eval "*) printf 'error: omabox-kbl:%s\n' "\$(cat "\$f/kbl" 2>/dev/null)" ;;
+  *) echo "stand-in hyprctl: \$*" >&2; exit 1 ;;
+esac
+EOF
+  cat > "$fk/bin/grim" <<EOF
+#!/bin/sh
+echo "\$*" >> $fk/grim.args
+cat $fk/grim.ppm 2>/dev/null || { echo "stand-in grim: no frame" >&2; exit 1; }
+EOF
+  cat > "$fk/bin/omabox-still" <<EOF
+#!/bin/sh
+echo "\$*" >> $fk/still.args
+while IFS= read -r l; do case \$l in "sleep "*) sleep "\${l#sleep }" ;; *) printf '%s\n' "\$l" ;; esac; done < $fk/still
+EOF
+  cat > "$fk/bin/omabox-tree" <<'EOF'
+#!/bin/sh
+echo "tree $*"
+rc=0 prev=""
+for a; do [ "$prev" != --find ] || case $a in rc*) rc=${a#rc} ;; note) echo "omabox-tree: a note" >&2 ;; esac; prev=$a; done
+[ "$rc" = 0 ] || printf 'omabox-tree: why %s\nomabox-tree: and more\n' "$rc" >&2
+exit "$rc"
+EOF
+  chmod +x "$fk"/bin/*
+  local win='"mapped":true,"hidden":false,"floating":false,"fullscreen":0,"xwayland":false,"pid":1,"monitor":0'
+  printf '[{"address":"0xa1","at":[10,10],"size":[400,300],"workspace":{"id":1,"name":"1"},"class":"fk-a","title":"fk \\"one\\"","initialClass":"fk-a","initialTitle":"one","stableId":"a1",%s},
+{"address":"0xa2","at":[420,10],"size":[400,300],"workspace":{"id":1,"name":"1"},"class":"fk-a","title":"two","initialClass":"fk-a","initialTitle":"two","stableId":"a2",%s},
+{"address":"0xb1","at":[0,0],"size":[800,600],"workspace":{"id":2,"name":"2"},"class":"fk-off","title":"off","initialClass":"fk-off","initialTitle":"off","stableId":"zz",%s}]\n' "$win" "$win" "$win" > "$fk/clients.json"
+  printf '{"address":"0xa2","class":"fk-a","title":"two","workspace":{"id":1,"name":"1"}}\n' > "$fk/active.json"
+  printf '[{"id":0,"name":"HEADLESS-2","width":1920,"height":1080,"refreshRate":60.0,"x":0,"y":0,"scale":1.0,"transform":0,"disabled":false,"reserved":[42,0,0,0],"activeWorkspace":{"id":1,"name":"1"},"specialWorkspace":{"id":0,"name":""}},
+{"id":1,"name":"HEADLESS-3","width":800,"height":600,"refreshRate":60.0,"x":1920,"y":480,"scale":1.0,"transform":0,"disabled":false,"reserved":[0,0,0,0],"activeWorkspace":{"id":3,"name":"3"},"specialWorkspace":{"id":0,"name":""}}]\n' > "$fk/monitors.json"
+  printf '{"HEADLESS-2":{"levels":{"0":[{"address":"0xl0","x":0,"y":0,"w":1920,"h":1080,"namespace":"fk-bg","pid":1}],"2":[{"address":"0xl1","x":0,"y":0,"w":42,"h":1080,"namespace":"fk-bar","pid":1},{"address":"0xl2","x":100,"y":100,"w":200,"h":200,"namespace":"fk-pop","pid":1},{"address":"0xl3","x":500,"y":100,"w":200,"h":200,"namespace":"fk-pop2","pid":1},{"address":"0xl4","x":5,"y":5,"w":1,"h":1,"namespace":"fk-menu","pid":1},{"address":"0xl5","x":900,"y":900,"w":50,"h":50,"namespace":"fk-nopid","pid":0}],"3":[]}}}\n' > "$fk/layers.json"
+  echo '{"x": 960.7, "y": 540.2}' > "$fk/cursor.json"; echo '{"id":1,"name":"1"}' > "$fk/workspace.json"; echo fk-pop > "$fk/kbl"
+  unshare -Urpfui --mount-proc sh -c 'mount -t tmpfs none /opt && mkdir -p /opt/omabox/bin && cp "$1/omabox-still" "$1/omabox-tree" /opt/omabox/bin/ &&
+    mount -t tmpfs none /home && mkdir /home/sbx && mount -t tmpfs none /run/user &&
+    mount --bind "$1/hyprctl" /usr/bin/hyprctl && { [ ! -e /usr/bin/grim ] || mount --bind "$1/grim" /usr/bin/grim; } && exec sleep 600' sh "$fk/bin" >/dev/null 2>&1 & local ufk=$!
+  local lfk=""; for i in $(seq 50); do lfk=$(pgrep -P "$ufk" -x sleep) && break; sleep 0.1; done
+  local nsfk; nsfk=$(readlink "/proc/$lfk/ns/pid")
+  rp_fk() {
+    rp_w3
+    rp_box fk "{\"mode\":\"headless\",\"pidns\":\"$nsfk\",\"hyprland\":\"/x/Hyprland\",\"hyprland_version\":\"0.57-dev\",\"quickshell\":\"/x/qs\",\"quickshell_version\":\"0.3.9\"}" "$lfk"
+    printf 'WAYLAND_DISPLAY=wayland-1\0HYPRLAND_INSTANCE_SIGNATURE=sig1\0' > "$r/rt/omabox/fk/run/omabox.env"
+    printf 'P6\n2 2\n255\n\001\002\003\004\005\006\007\010\011\012\013\014' > "$fk/grim.ppm"
+    printf 'ready 1920x1080 area=2073600\nsatisfied still t=300 frames=2\n' > "$fk/still"
+    : > "$fk/still.args"; : > "$fk/grim.args"
+    # Two shots of its, as shot records them (a file, its size and time, the mode, what, its sizes).
+    local f st; for f in s w; do echo "$f" > "$r/fk-$f.png"; done
+    st=$(stat -L -c '%s %.9Y' -- "$r/fk-s.png")
+    printf '%s\t%s\t1920x1080@60\tscreen 0,0\t1920x1080 960x540\n' "$r/fk-s.png" "$st" > "$r/rt/omabox/fk/shots.tsv"
+    st=$(stat -L -c '%s %.9Y' -- "$r/fk-w.png")
+    printf '%s\t%s\t1920x1080@60\twindow 0xa1 5,5 400x300\t390x290 390x290\n' "$r/fk-w.png" "$st" >> "$r/rt/omabox/fk/shots.tsv"
+  }
+  # What a stand-in tool was given, and the job records a call left (their pid and times aside).
+  rp_fk_also() {
+    printf 'still: '; cat "$fk/still.args"; printf 'grim: '; cat "$fk/grim.args"
+    local j; for j in "$r/rt/omabox/fk/jobs"/*; do [ -f "$j" ] && jq -c '.pid = "P" | .start = "S" | .log |= sub("run-[0-9]+"; "run-N")' "$j"; done
+  }
+  rp_prep=rp_fk rp_also=rp_fk_also rp_snap=0 rp_dir=$r/norepo
+  # (bash's own line for a number its arithmetic refuses, the one difference left: the status is the same)
+  rp_sed='s/run-[0-9]+\.log/run-N.log/g; s/pid [0-9]+/pid P/g; s/\b[0-9]+\.[0-9]+s\b/Ts/g; s/"elapsed":[0-9.]+/"elapsed":T/; /: line [0-9]+: 08: value too great for base/d'
+  parity "windows: its Hyprland and Quickshell builds said, two of a class, one off screen, layers over them" windows -b fk
+  parity "windows --json" windows -b fk --json
+  parity "wait window: two match, both named" wait -b fk window fk-a
+  parity "wait window --focused --json: one of two" wait -b fk window fk-a --focused
+  parity "wait window --active" wait -b fk window --active
+  parity "wait window --gone: one off screen is still there, 124" wait -b fk window fk-off --gone --timeout 300ms
+  parity "wait window: a bad selector, 2" wait -b fk window 'class:('
+  parity "wait layer: there, where" wait -b fk layer fk-bar
+  parity "wait layer: a 1x1 one is not there, 124" wait -b fk layer fk-menu --timeout 300ms --json
+  parity "wait layer --gone: the 1x1 one" wait -b fk layer fk-menu --gone
+  parity "wait still: the tool's line, its arguments (--strict, the cursor's --ignore)" wait -b fk still --strict --quiet 300ms
+  parity "wait still --window: off screen" wait -b fk still --window fk-off
+  parity "wait still --window: two match" wait -b fk still --window fk-a
+  parity "wait still --window: its place, --ignore in its coordinates" wait -b fk still --window title:one --ignore '5,5 10x10'
+  rp_fk_still() { rp_fk; printf '%s\n' "$@" > "$fk/still"; }
+  rp_s1() { rp_fk_still 'ready 1920x1080 area=2073600' 'unsatisfied changing t=1500 last=1400 change=10,10,100,20 late=12,12,30,8 frames=40'; }
+  rp_prep=rp_s1
+  parity "wait still: changing, its late part named for an --ignore" wait -b fk still
+  parity "...in the window's own coordinates (--json)" wait -b fk still --window title:one --json
+  rp_s2() { rp_fk_still 'ready 1920x1080' 'unsatisfied changing t=1500 last=1400 change=10,10,100,20 late=0,0,1000,1000'; }
+  rp_prep=rp_s2; parity "wait still: changing all over (no area= given: W x H)" wait -b fk still
+  rp_s3() { rp_fk_still 'ready 08x10' 'unsatisfied changing t=1500 last=1400 change=1,1,1,1 late=0,0,1,1'; }
+  rp_prep=rp_s3; parity "wait still: a ready size bash's arithmetic refuses (08), 1" wait -b fk still
+  rp_s4() { rp_fk_still 'ready 1920x1080 area=2073600' 'satisfied settled t=500 last=100 change=1,2,3,4 ignored=5,6,7,8 why=caret'; }
+  rp_prep=rp_s4; parity "wait still: settled, a caret ignored" wait -b fk still --json
+  rp_s5() { rp_fk_still 'ready 1920x1080 area=2073600' 'unsatisfied nothing t=400 ignored=5,6,7,8 why=mask'; }
+  rp_prep=rp_s5; parity "wait change: nothing, an --ignore'd part" wait -b fk change
+  rp_s6() { rp_fk_still 'ready 1920x1080 area=2073600' 'satisfied changed last=200 change=1,2,3,4 first=100'; }
+  rp_prep=rp_s6; parity "wait change: changed" wait -b fk change --json
+  rp_s7() { rp_fk_still 'omabox-still: cannot capture' 'unknown refused'; }
+  rp_prep=rp_s7; parity "wait still: refused, the tool's words with it" wait -b fk still
+  rp_s8() { rp_fk_still 'unknown off-screen'; }
+  rp_prep=rp_s8; parity "wait still: off the screen" wait -b fk still -g '5000,0 10x10'
+  rp_s9() { rp_fk_still 'unknown not-rendered'; }
+  rp_prep=rp_s9; parity "wait still: no frame from a headless box that answers" wait -b fk still
+  rp_s10() { rp_fk_still 'unknown hung'; }
+  rp_prep=rp_s10; parity "wait still: hung (the tool's 10 s)" wait -b fk still
+  rp_s11() { rp_fk_still 'ready 1920x1080 area=2073600' 'some noise'; }
+  rp_prep=rp_s11; parity "wait still: the tool gone without an answer (2 s, then lost)" wait -b fk still
+  rp_s12() { rp_fk_still 'ready 1920x1080 area=2073600' 'satisfied still t=300' 'sleep 30'; }
+  rp_prep=rp_s12; parity "wait still: the tool still running 2 s after its answer, killed" wait -b fk still
+  rp_s13() { rp_fk_still 'satisfied still t=1'; }
+  rp_prep=rp_s13; parity "run -d --wait: no ready, nothing sent" run -b fk -d --wait --strict --start 2s -- true
+  rp_prep=rp_fk
+  # (A refused OMABOX_STILL_DUMP leaves nothing in TMPDIR, finding 426: both halves.)
+  mkdir -p "$r/tmpd"
+  rp_env=(OMABOX_STILL_DUMP=rel TMPDIR="$r/tmpd")
+  parity "wait still: OMABOX_STILL_DUMP refused" wait -b fk still
+  parity "run -d --wait: the same" run -b fk -d --wait -- true
+  check_eq "...nothing of either left in TMPDIR (finding 426)" "" "$(ls -A "$r/tmpd")"
+  rp_env=()
+  parity "pixel: one point" pixel -b fk 920 320
+  parity "pixel --json: points on both monitors" pixel -b fk --json 920 320 2000 600
+  parity "pixel: a point in the gap between the monitors" pixel -b fk 2000 100
+  parity "pixel --active" pixel -b fk --active 5 5 30 30
+  parity "pixel --window: no stableId" pixel -b fk --window fk-off 5 5
+  parity "pixel --window: none such" pixel -b fk --window nope 1 1
+  rp_ppm() { rp_fk; printf '%b' "$1" > "$fk/grim.ppm"; }
+  rp_p1() { rp_ppm 'P6\n2 2\n255'; }
+  rp_prep=rp_p1; parity "pixel: grim's image with no newline after 255: 1, unsaid" pixel -b fk 1 1
+  rp_p2() { rp_ppm 'P6\n2 2\n255\n\001\002'; }
+  rp_prep=rp_p2; parity "pixel: an image short of its pixels" pixel -b fk 1 1 2 2
+  rp_p3() { rp_ppm 'P6\n2 2\n255\n'; }
+  rp_prep=rp_p3; parity "pixel: an image of its header alone: nothing read, 1" pixel -b fk 1 1 900 900
+  rp_prep=rp_p3; parity "...a point past its end (od's own words)" pixel -b fk 1 900 1 1
+  rp_p4() { rp_ppm 'P6\n08 2\n255\n\001\002\003'; }
+  rp_prep=rp_p4; parity "pixel: a width bash's arithmetic refuses (08), 1" pixel -b fk 1 1
+  rp_p5() { rp_ppm 'P5\n2 2\n255\n\001\002\003'; }
+  rp_prep=rp_p5; parity "pixel: not a PPM it reads" pixel -b fk 1 1
+  rp_p6() { rp_fk; rm -f "$fk/grim.ppm"; }
+  rp_prep=rp_p6; parity "pixel: no frame, grim's words" pixel -b fk 1 1
+  rp_prep=rp_fk
+  parity "pixel --in --json: a shot's pixels, on the screen" pixel -b fk --in "$r/fk-s.png" --json 100 100 10 10
+  parity "pixel --in: a window crop's, in the window" pixel -b fk --in "$r/fk-w.png" 1 1
+  parity "pixel --in: outside the image" pixel -b fk --in "$r/fk-w.png" 391 1
+  parity "tree: the active window, the tool's words" tree -b fk --find note
+  parity "tree --json --all" tree -b fk --window title:one --json --all
+  local rc; for rc in 1 3 4 5 6 7 124 9; do
+    parity "tree: the tool's status $rc" tree -b fk --window title:one --find "rc$rc"
+    parity "tree --layer: the tool's status $rc" tree -b fk --layer fk-bar --find "rc$rc"
+  done
+  parity "tree --layer: two of one pid and size, the one holding the keyboard" tree -b fk --layer fk-pop
+  parity "tree --layer: the other" tree -b fk --layer fk-pop2 --find rc6
+  parity "tree --layer: mapped at 1x1" tree -b fk --layer fk-menu
+  parity "tree --layer: no pid" tree -b fk --layer fk-nopid
+  parity "tree --layer pid:1: several" tree -b fk --layer pid:1
+  parity "tree --layer address:" tree -b fk --layer address:0xl1
+  parity "tree --window: none such" tree -b fk --window nope
+  rp_prep="" rp_also="" rp_snap=1 rp_sed=""
   rp_prep="" rp_env=() rp_dir=/
   # The namespaces' PID 1s first: their unshares and the stand-in pasta end with them.
-  kill -KILL "$l1" "$lp" "$nd" 2>/dev/null
-  wait "$u1" "$nd" "$pst" 2>/dev/null
+  kill -KILL "$l1" "$lp" "$nd" "$lfk" 2>/dev/null
+  wait "$u1" "$nd" "$pst" "$ufk" 2>/dev/null
 }
 
 # evidence() puts back a box's idle clock after its reads (#111, finding 180), but not over another
@@ -10014,23 +10191,56 @@ t_rust_parity() {
   # run -d --wait: each side's window closed before the other's opens (the same layout). Its own
   # addresses and pids differ, and the screen's settling is the tool's timing (above).
   rp_sed+='; s/\b0x[0-9a-f]+/0xA/g; s/pid [0-9]+/pid P/g; s/at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/at G/g; s/[0-9]+x[0-9]+ at -?[0-9]+,-?[0-9]+/G/g'
-  rp_sed+='; s/"(change|late_changes|ignored)":(null|\{[^}]*\})/"\1":G/g'
+  rp_sed+='; s/"(change|late_changes|ignored)":\{[^}]*\}/"\1":OBJ/g'
   rp_sed+='; s/-?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/G/g'
   # A small part that never stops changing (a counter): 124, its place named for an --ignore, in the
   # screen's coordinates (-g) and in the window's (--window).
   ob run -b "$B" -d -q -- foot -a rp-tick -T tick sh -c 'while :; do printf "\r%s" "$(date +%N)"; sleep 0.03; done' >/dev/null 2>&1
   ob wait -b "$B" window rp-tick >/dev/null 2>&1
   local tg; tg=$(ob windows -b "$B" --json | jq -r '.[] | select(.class == "rp-tick") | "\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')
-  parity "wait still: one part never still, 124, its place named for an --ignore" wait -b "$B" still -g "$tg" --timeout 1500ms
-  parity "...with --window: in the window's own coordinates (--json)" wait -b "$B" still --window rp-tick --timeout 1500ms --json
+  # Each side's own words, before the sed evens the rectangles out: the part named for an --ignore is
+  # inside the region watched, and in the window's coordinates it is that place less the window's.
+  local tx ty tw th; IFS=', x' read -r tx ty tw th <<<"$tg"
+  rp_rect() { sed -E 's/^(-?[0-9]+),(-?[0-9]+) ([0-9]+)x([0-9]+)$/\1 \2 \3 \4/' <<<"$1"; }
+  rp_late_screen() {
+    local m x y w h; m=$(grep -oE 'changed only at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+: --ignore "[^"]*"' "$2") ||
+      { no "$1: a part named for an --ignore" "$(cat "$2")"; return; }
+    read -r x y w h <<<"$(rp_rect "$(sed -E 's/^changed only at ([^:]*):.*/\1/' <<<"$m")")"
+    check_eq "$1: the --ignore is that part" "$x,$y ${w}x$h" "$(sed -E 's/.*--ignore "(.*)"$/\1/' <<<"$m")"
+    check "$1: inside the region watched ($tg)" test "$x" -ge "$tx" -a "$y" -ge "$ty" -a $((x + w)) -le $((tx + tw)) -a $((y + h)) -le $((ty + th))
+  }
+  rp_late_window() {
+    local m x y w h ox oy ow oh; m=$(grep -oE 'changed only at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+ \(the window.s -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+\): --ignore \\"[^\\]*' "$2") ||
+      { no "$1: a part named for an --ignore" "$(cat "$2")"; return; }
+    read -r x y w h <<<"$(rp_rect "$(sed -E 's/^changed only at ([^ ]+ [^ ]+) .*/\1/' <<<"$m")")"
+    read -r ox oy ow oh <<<"$(rp_rect "$(sed -E 's/.*the window.s ([^)]*)\).*/\1/' <<<"$m")")"
+    check_eq "$1: the window's own place of it" "$((x - tx)) $((y - ty)) $w $h" "$ox $oy $ow $oh"
+    check_eq "$1: the --ignore is that" "$ox,$oy ${ow}x$oh" "$(sed -E 's/.*--ignore \\"//' <<<"$m")"
+    check_eq "$1: late_changes is the screen's place" "$x $y $w $h" "$(jq -r '.late_changes | "\(.x) \(.y) \(.w) \(.h)"' "$2")"
+  }
+  rp_check=rp_late_screen; parity "wait still: one part never still, 124, its place named for an --ignore" wait -b "$B" still -g "$tg" --timeout 1500ms
+  rp_check=rp_late_window; parity "...with --window: in the window's own coordinates (--json)" wait -b "$B" still --window rp-tick --timeout 1500ms --json
+  rp_check=""
   ob run -b "$B" -- sh -c 'pkill -f rp-tick; true' >/dev/null 2>&1
   rp_w3_kill() { ob run -b "$B" -- sh -c 'pkill -f rp-w3; true' >/dev/null 2>&1; ob wait -b "$B" window rp-w3 --gone >/dev/null 2>&1; }
-  rp_prep=rp_w3_kill
+  # What each side's run -d left in the box dir: its job records, the ends it noted, run's marks (their
+  # pids, times and log names aside).
+  local jd=$XDG_RUNTIME_DIR/omabox/$B rp_noted=0
+  rp_w3_prep() { rp_w3_kill; touch "$TMP/rp-mark"; rp_noted=$(cat "$jd/jobs-noted" 2>/dev/null | wc -l); }
+  rp_w3_also() {
+    local j; for j in "$jd"/jobs/*; do
+      [ "$j" -nt "$TMP/rp-mark" ] && jq -c '.pid = "P" | .start = "S" | .log |= sub("run-[0-9]+"; "run-N")' "$j"
+    done
+    tail -n +$((rp_noted + 1)) "$jd/jobs-noted" 2>/dev/null | sed -E 's/run-[0-9]+/run-N/'
+    find "$jd/runs" -newer "$TMP/rp-mark" -printf '%f\n' 2>/dev/null | sed -E 's/^(o|c)\.[0-9]+\.[0-9]+/\1.MARK/' | sort
+  }
+  rp_prep=rp_w3_prep rp_also=rp_w3_also
   parity "run -d --wait: its window opened, the screen settled" run -b "$B" -d --wait -- foot -a rp-w3 -T w3 sleep 600
   parity "run -d --wait --json: what changed, its target" run -b "$B" -d --wait --json -- foot -a rp-w3 -T w3 sleep 600
   parity "run -d --wait: a command that exits 3, its end said (124)" run -b "$B" -d --wait --timeout 1s -- sh -c 'exit 3'
   parity "run -d --wait: one that exits 0 and changes nothing (124)" run -b "$B" -d --wait --timeout 1s -- true
-  rp_prep="" rp_sed=""
+  parity "run -d --wait --strict --start 3s -g, an --ignore inside it" run -b "$B" -d --wait --strict --start 3s -g '0,0 1920x1080' --ignore '0,0 10x10' -- foot -a rp-w3 -T w3 sleep 600
+  rp_prep="" rp_sed="" rp_also=""
   ob run -b "$B" -- sh -c 'pkill -x foot; true' >/dev/null 2>&1
   rp_rt="" rp_snap=1
   ob down "$B" >/dev/null 2>&1

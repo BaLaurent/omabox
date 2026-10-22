@@ -19,14 +19,6 @@ use crate::win::{box_windows, jq_r, win_desc, win_select};
 use std::io::{Read, Seek, SeekFrom};
 use std::os::fd::AsRawFd;
 
-/// A point past the layout's extent is "outside the screen", below; one inside it on no monitor is
-/// in a gap between monitors (#161), where grim fails alone and reads black beside a point on one.
-const OFF_JQ: &str = r#"[.[] | select(.disabled | not)] as $m |
-      [range(0; $p | length; 2) | [$p[.], $p[. + 1]] | select(. as [$x, $y] | $x < $lw and $y < $lh and ($m | all(.[];
-        $x < .x or $y < .y or $x >= .x + (lw | floor) or $y >= .y + (lh | floor))))] |
-      if length == 0 or ($m | length) == 0 then empty
-      else "\(.[0][0]),\(.[0][1]) is not on any monitor (\($m | map("\(.name) \(.x),\(.y) \(lw | floor)x\(lh | floor)") | join(", ")))" end"#;
-
 /// `[ A -lt B ]`.
 fn lt(a: &[u8], b: &[u8]) -> bool {
     shell::test_int(a)
@@ -85,7 +77,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
-    shell_note(ctx);
+    shell_note(ctx)?;
     let (mut pts, mut window, mut addr): (Vec<i64>, bool, Vec<u8>) =
         (Vec::new(), false, Vec::new());
     if !inp.is_empty() {
@@ -113,7 +105,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         } else {
             Args::new(&["-c"])
                 .kv("--arg", "a", &addr)
-                .arg("first(.[] | select(.address == $a)) // empty")
+                .arg(crate::jqprog::BY_ADDRESS_JQ)
                 .run(Some(&wins), jq::Err::Inherit)
                 .text()
         };
@@ -127,7 +119,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 ")"
             )));
         }
-        let f = shell::read_fields(&jq_r(r#""\(.size[0]) \(.size[1])""#, &w), 2);
+        let f = shell::read_fields(&jq_r(crate::jqprog::WIN_SIZE2_JQ, &w), 2);
         (lim_w, lim_h) = (f[0].clone(), f[1].clone());
     } else {
         let ext = extent(ctx)?;
@@ -146,7 +138,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .kv("--argjson", "p", p)
             .kv("--argjson", "lw", &lim_w)
             .kv("--argjson", "lh", &lim_h)
-            .arg(format!("{JQ_MON}{OFF_JQ}"))
+            .arg(format!("{JQ_MON}{}", crate::jqprog::PIXEL_OFF_JQ))
             .run(Some(&mons), jq::Err::Inherit);
         let off = if r.ok() { r.text() } else { Vec::new() };
         if !off.is_empty() {
@@ -262,9 +254,21 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     // grim's PPM: "P6\nW H\n255\n", then RGB. At an output scale over 1 the grab is larger than the
     // box.
+    // (`{ read -r magic; read -r dims; read -r maxv; } < "$f"` under set -e: a line without its
+    // newline ends the command, 1, unsaid, the image left where it is)
     let mut lines = img.splitn(4, |&c| c == b'\n');
-    let mut line = || shell::read_fields(lines.next().unwrap_or_default(), 1).remove(0);
-    let (magic, dims, maxv) = (line(), line(), line());
+    let mut whole = Vec::new();
+    for _ in 0..3 {
+        whole.push(lines.next().unwrap_or_default());
+    }
+    if lines.next().is_none() {
+        return Err(Exit(1));
+    }
+    let line = |l: &[u8]| -> Vec<u8> {
+        let l: Vec<u8> = l.iter().copied().filter(|&c| c != 0).collect();
+        shell::read_fields(&l, 1).remove(0)
+    };
+    let (magic, dims, maxv) = (line(whole[0]), line(whole[1]), line(whole[2]));
     let d = shell::read_fields(&dims, 2);
     let (iw, ih) = (&d[0], &d[1]);
     let num = |v: &[u8]| shell::re_match("^[0-9]+$", v);
@@ -273,10 +277,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Err(ctx.die("pixel: grim's image is not a PPM it reads"));
     }
     let hdr = (magic.len() + dims.len() + maxv.len() + 3) as i64;
-    let (iw, ih) = (
-        shell::bash_int(iw).unwrap_or(0),
-        shell::bash_int(ih).unwrap_or(0),
-    );
+    // (bash's arithmetic refusing one, an 08: its own words, then exit 1, the image left)
+    let (Some(iw), Some(ih)) = (shell::bash_int(iw), shell::bash_int(ih)) else {
+        return Err(Exit(1));
+    };
     let mut text = Vec::new();
     for k in (0..pts.len()).step_by(2) {
         let px = (pts[k] - x0).wrapping_mul(iw) / bw;
@@ -288,8 +292,19 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .and_then(|at| f.seek(SeekFrom::Start(at)).ok())
             .and_then(|_| f.read_exact(&mut rgb).ok());
         if got.is_none() {
-            let _ = std::fs::remove_file(shell::path(&fp));
             out(&text)?;
+            // Nothing from od (the offset at or past the end; past it, od's own line): bash's `read`
+            // of it fails under set -e, 1, unsaid, the image left. Part of a pixel: "short".
+            if at >= img.len() as i64 {
+                if at > img.len() as i64 {
+                    let _ = std::io::Write::write_all(
+                        &mut std::io::stderr(),
+                        b"od: cannot skip past end of combined input\n",
+                    );
+                }
+                return Err(Exit(1));
+            }
+            let _ = std::fs::remove_file(shell::path(&fp));
             return Err(ctx.die("pixel: grim's image is short"));
         }
         let hex = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);

@@ -8829,6 +8829,15 @@ from them.
     `run -d --wait` is the Rust half's, on the settle machinery `wait` shares (settle.rs). Tests:
     t_unit_rust_handoff, t_unit_rust_parity, t_rust_parity.
 
+426. **A refused OMABOX_STILL_DUMP left a temporary dir behind** (2026-10-22, #324 wave 3a's review).
+    settle_begin made its `mktemp -d` dir for the tool's two fifos, and an action's before snapshot
+    its `mktemp` file (desk_snap_start: run -d --wait), before it checked OMABOX_STILL_DUMP (the
+    suite's frame dump, #222); a value it refused (not a plain absolute path) ended the command there,
+    and both were left in $TMPDIR. **Fix**: the check comes first, before the tool's test and before
+    anything is made, in bash and in the Rust half alike; no other refusal of settle_begin's comes
+    after them. Tests: t_unit_rust_parity (wait still and run -d --wait on a stand-in desktop, both
+    ways, with TMPDIR a dir of the test's own: empty after).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

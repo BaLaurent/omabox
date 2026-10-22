@@ -10906,19 +10906,20 @@ desk_target() {
 # SETTLE_IN/SETTLE_OUT (fds), SETTLE_PID; SETTLE_T0 is when the baseline was there (ms, for messages).
 # settle_begin MODE TOOL_ARGS...
 settle_begin() {
+  # OMABOX_STILL_DUMP=DIR (a path in the box; the suite's, for a flaky check: #222): the tool keeps the
+  # frames before and after the last significant change there. Refused before anything is made: the
+  # fifos' dir and the snapshot's file were left behind (finding 426).
+  local dump=()
+  if [ -n "${OMABOX_STILL_DUMP:-}" ]; then
+    [[ $OMABOX_STILL_DUMP =~ ^/[A-Za-z0-9._/-]+$ ]] || die "OMABOX_STILL_DUMP: a plain absolute path in the box, got $OMABOX_STILL_DUMP"
+    dump=(--dump "$OMABOX_STILL_DUMP")
+  fi
   # (Before any input is sent: a box started by an omabox without the tool cannot watch.)
   on_box test -x "$BOX_STILL" || die "box '$NAME' has no $BOX_STILL (started by an older omabox): omabox down $NAME, then up again"
   # An action's: the desktop before it, read while the tool starts (#274).
   desk_snap_start
   local dir line; dir=$(mktemp -d)
   mkfifo "$dir/in" "$dir/out"
-  # OMABOX_STILL_DUMP=DIR (a path in the box; the suite's, for a flaky check: #222): the tool keeps the
-  # frames before and after the last significant change there.
-  local dump=()
-  if [ -n "${OMABOX_STILL_DUMP:-}" ]; then
-    [[ $OMABOX_STILL_DUMP =~ ^/[A-Za-z0-9._/-]+$ ]] || die "OMABOX_STILL_DUMP: a plain absolute path in the box, got $OMABOX_STILL_DUMP"
-    dump=(--dump "$OMABOX_STILL_DUMP")
-  fi
   on_box "$BOX_STILL" "$@" "${dump[@]}" --tied < "$dir/in" > "$dir/out" 2>&1 &
   SETTLE_PID=$!
   exec {SETTLE_IN}>"$dir/in" {SETTLE_OUT}<"$dir/out"

@@ -19,14 +19,7 @@ use std::os::unix::fs::MetadataExt;
 pub fn extent(ctx: &Ctx) -> Res<Vec<u8>> {
     let m = strip_nl(&hypr_json(ctx, &["monitors"])?);
     let r = jq::jq(
-        &[
-            "-er",
-            &format!(
-                "{JQ_MON}{}",
-                r#"[.[] | select(.disabled | not)] |
-    "\(map(.x + lw) | max | floor)x\(map(.y + lh) | max | floor)""#
-            ),
-        ],
+        &["-er", &format!("{JQ_MON}{}", crate::jqprog::EXTENT_JQ)],
         Some(&m),
         jq::Err::Null,
     );
@@ -44,20 +37,16 @@ pub fn extent(ctx: &Ctx) -> Res<Vec<u8>> {
 /// (WAYLAND-1 on NVIDIA), an interactive box's first window; never one of `monitor add`'s.
 pub fn main_screen(ctx: &Ctx) -> &'static str {
     if meta(&ctx.d, "mode").0 == b"interactive" {
-        r#"map(select((.disabled | not) and (.name | startswith("WAYLAND-")))) | .[0]"#
+        crate::jqprog::MAIN_SCREEN_I_JQ
     } else {
-        r#"map(select((.disabled | not) and (.name == "HEADLESS-2" or .name == "WAYLAND-1"))) | .[0]"#
+        crate::jqprog::MAIN_SCREEN_H_JQ
     }
 }
 
 /// box_screen: the main screen's output name and mode ("NAME WxH@HZ").
 pub fn box_screen(ctx: &Ctx) -> Res<Vec<u8>> {
     let m = strip_nl(&hypr_json(ctx, &["monitors"])?);
-    let prog = format!(
-        "{}{}",
-        main_screen(ctx),
-        r#" // empty | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100)""#
-    );
+    let prog = format!("{}{}", main_screen(ctx), crate::jqprog::BOX_SCREEN_JQ);
     let r = jq::jq(&["-r", &prog], Some(&m), jq::Err::Inherit);
     if !r.ok() {
         return Err(Exit(u8::try_from(r.rc).unwrap_or(1)));
@@ -73,7 +62,7 @@ pub fn win_scale(ctx: &Ctx, addr: &[u8]) -> Res<Vec<u8>> {
     let r = Args::new(&["-r"])
         .kv("--arg", "a", addr)
         .kv("--argjson", "m", &mons)
-        .arg("first(.[] | select(.address == $a) | .monitor) as $id | first($m[] | select(.id == $id) | .scale) // 1")
+        .arg(crate::jqprog::WIN_SCALE_JQ)
         .run(Some(&cl), jq::Err::Null);
     let sc = if r.ok() { r.text() } else { b"1".to_vec() };
     Ok(if shell::re_match(r"^[0-9]+(\.[0-9]+)?$", &sc) {
@@ -254,13 +243,13 @@ pub fn shot_point(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
         let wins = box_windows(ctx, None)?;
         let w = Args::new(&["-c"])
             .kv("--arg", "a", &addr)
-            .arg("first(.[] | select(.address == $a)) // empty")
+            .arg(crate::jqprog::BY_ADDRESS_JQ)
             .run(Some(&wins), jq::Err::Inherit)
             .text();
         if w.is_empty() {
             return Err(ctx.die(cat!("--in: the window of that shot (", addr, ") is gone")));
         }
-        let size = jq_r(r#""\(.size[0])x\(.size[1])""#, &w);
+        let size = jq_r(crate::jqprog::WIN_SIZE_JQ, &w);
         if size != wsz {
             return Err(ctx.die(cat!(
                 "--in: window ",

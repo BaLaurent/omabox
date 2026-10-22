@@ -6,7 +6,7 @@
 use crate::boxes::{box_home_file, meta, run_read};
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
-use crate::exit::{Ctx, say};
+use crate::exit::{Ctx, Exit, Res, say};
 use crate::jobs::job_how;
 use crate::repo::readlink_e;
 use crate::shell::{self, strip_nl};
@@ -223,9 +223,9 @@ fn relaunch_lines(text: &[u8]) -> (usize, Vec<u8>) {
 /// shell_note: one line from shot, wait, windows, tree, pixel, keys and click: the shell gone or
 /// hung, crashed since the last command said so, or killed and started again by its launcher; then
 /// what the next one compares with.
-pub fn shell_note(ctx: &Ctx) {
+pub fn shell_note(ctx: &Ctx) -> Res<()> {
     if meta(&ctx.d, "shell").0 != b"true" {
-        return;
+        return Ok(());
     }
     let n = shell_crashes(ctx);
     let seen = std::fs::read(ctx.at("shell-crashes-seen"))
@@ -247,11 +247,15 @@ pub fn shell_note(ctx: &Ctx) {
     let (om, oc) = (ow[0].clone(), ow[1].clone());
     let mut new = 0i64;
     if shell::re_match("^[0-9]+$", &om) && shell::re_match("^[0-9]+$", &oc) {
-        let ci = shell::bash_int(&c).unwrap_or(0);
         new = if m == om {
-            ci.wrapping_sub(shell::bash_int(&oc).unwrap_or(0))
+            // (`$((c - oc))`: a number bash's arithmetic refuses, an 08 in the seen file, is its
+            // own words, then exit 1)
+            let (Some(ci), Some(oi)) = (shell::bash_int(&c), shell::bash_int(&oc)) else {
+                return Err(Exit(1));
+            };
+            ci.wrapping_sub(oi)
         } else {
-            ci
+            shell::test_int(&c).unwrap_or(0)
         };
     }
     let state = shell_state(ctx);
@@ -315,6 +319,7 @@ pub fn shell_note(ctx: &Ctx) {
     }
     let _ = std::fs::write(ctx.at("shell-crashes-seen"), format!("{n}\n"));
     let _ = std::fs::write(ctx.at("shell-relaunches-seen"), cat!(rl, "\n"));
+    Ok(())
 }
 
 #[cfg(test)]

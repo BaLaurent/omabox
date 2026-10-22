@@ -35,10 +35,20 @@ pub fn ms_s(ms: impl AsRef<[u8]>) -> String {
     format!("{}s", fixed(awk_num(ms.as_ref()) / 1000.0, 2))
 }
 
-/// awk's value of a string as a number: its leading number (blanks first), 0 for none.
+/// awk's value of a string as a number: its leading number (blanks first: space, \t, \n, \v, \f,
+/// \r), 0 for none; gawk's +inf, -inf, +nan, -nan as such (exactly those, blanks around).
 pub fn awk_num(v: &[u8]) -> f64 {
     let s = String::from_utf8_lossy(v);
-    let t = s.trim_start_matches([' ', '\t', '\n']);
+    let blank = [' ', '\t', '\n', '\u{b}', '\u{c}', '\r'];
+    let t = s.trim_start_matches(blank);
+    let whole = t.trim_end_matches(blank).to_ascii_lowercase();
+    match whole.as_str() {
+        "+inf" => return f64::INFINITY,
+        "-inf" => return f64::NEG_INFINITY,
+        "+nan" => return f64::NAN,
+        "-nan" => return -f64::NAN,
+        _ => {}
+    }
     let b = t.as_bytes();
     let mut i = 0;
     if i < b.len() && (b[i] == b'+' || b[i] == b'-') {
@@ -72,17 +82,27 @@ pub fn awk_num(v: &[u8]) -> f64 {
     t[..i].parse().unwrap_or(0.0)
 }
 
-/// A number as awk writes it with %s or print: an integral value as an integer, else CONVFMT's %.6g.
+/// A number as gawk writes it with %s or print: an integral value whole, every digit (%.0f, -0 as
+/// 0), +inf, -inf, +nan, -nan as such, anything else CONVFMT's %.6g.
 pub fn awk_str(x: f64) -> String {
-    if x == x.trunc() && x.abs() < 1e16 {
-        format!("{}", x as i64)
-    } else {
-        let mut buf = [0u8; 64];
-        // SAFETY: buf has its length given; the format is NUL-ended and takes one double.
-        let n = unsafe { libc::snprintf(buf.as_mut_ptr().cast(), buf.len(), c"%.6g".as_ptr(), x) };
-        let n = usize::try_from(n).unwrap_or(0).min(buf.len() - 1);
-        String::from_utf8_lossy(&buf[..n]).into_owned()
+    if x.is_nan() {
+        return if x.is_sign_negative() { "-nan" } else { "+nan" }.to_string();
     }
+    if x.is_infinite() {
+        return if x > 0.0 { "+inf" } else { "-inf" }.to_string();
+    }
+    if x == x.trunc() {
+        return if x == 0.0 {
+            "0".to_string()
+        } else {
+            fixed(x, 0)
+        };
+    }
+    let mut buf = [0u8; 64];
+    // SAFETY: buf has its length given; the format is NUL-ended and takes one double.
+    let n = unsafe { libc::snprintf(buf.as_mut_ptr().cast(), buf.len(), c"%.6g".as_ptr(), x) };
+    let n = usize::try_from(n).unwrap_or(0).min(buf.len() - 1);
+    String::from_utf8_lossy(&buf[..n]).into_owned()
 }
 
 /// `awk -F, '{ printf "%s,%s %sx%s", $1, $2, $3, $4 }' <<<"$V"`: X,Y,W,H as "X,Y WxH" (the fields as
@@ -186,6 +206,19 @@ mod tests {
         assert_eq!(awk_str(5.0), "5");
         assert_eq!(awk_str(-0.5), "-0.5");
         assert_eq!(awk_str(1.0 / 3.0), "0.333333");
+        // (gawk 5.4's words for each)
+        assert_eq!(
+            awk_str(awk_num(b"-12345678901234567")),
+            "-12345678901234568"
+        );
+        assert_eq!(awk_str(1e20), "100000000000000000000");
+        assert_eq!(awk_str(1234567.5), "1.23457e+06");
+        assert_eq!(awk_str(-0.0), "0");
+        assert_eq!(awk_str(awk_num(b"1e999")), "+inf");
+        assert_eq!(awk_str(awk_num(b" -INF ")), "-inf");
+        assert_eq!(awk_str(awk_num(b"-nan")), "-nan");
+        assert_eq!(awk_num(b"+inf5"), 0.0);
+        assert_eq!(awk_num(b"\x0b\x0c\r12"), 12.0);
         assert_eq!(xywh_words(b"1,2,30,40"), b"1,2 30x40");
         assert_eq!(xywh_words(b"1,2"), b"1,2 x");
         assert_eq!(xywh_less(b"110,220,30,40", b"100", b"200"), b"10,20 30x40");

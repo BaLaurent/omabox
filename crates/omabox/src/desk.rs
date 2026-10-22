@@ -15,9 +15,6 @@ pub const EVENTS_LOG: &str = "/home/sbx/events.log";
 const DESK_BATCH: &str = "j/clients; j/layers; j/activewindow; j/activeworkspace; j/monitors";
 const SNAP_SH: &str =
     r#"stat -L -c %s -- "$1" 2>/dev/null || echo -; exec timeout 2 hyprctl --batch "$2""#;
-const SNAP_JQ: &str = r#"select(length == 5 and (.[0] | type) == "array" and (.[1] | type) == "object"
-    and (.[2] | type) == "object" and (.[4] | type) == "array")
-    | {events: ($s | tonumber? // null), clients: .[0], layers: .[1], active: .[2], workspace: .[3], monitors: .[4]}"#;
 
 /// desk_snap: the desktop now as one JSON object {events (the events log's size, null when unread),
 /// clients, layers, active, workspace, monitors}, or nothing when the box does not answer in 2 s.
@@ -46,7 +43,7 @@ pub fn desk_snap(ctx: &Ctx, stdin_null: bool) -> Vec<u8> {
     };
     Args::new(&["-c", "-s"])
         .kv("--arg", "s", size)
-        .arg(SNAP_JQ)
+        .arg(crate::jqprog::SNAP_JQ)
         .run(Some(js), jq::Err::Null)
         .text()
 }
