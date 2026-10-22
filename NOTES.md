@@ -8816,7 +8816,14 @@ from them.
     not with `OMABOX_BASH=1` (to compare the two; this call's only, not what it starts), not when the
     binary is missing. A command the binary lacks (one built before a pull) goes back to bash with
     `OMABOX_BASH=1`. The hand-off costs bash's parse of the script (~50 ms, as every call does today)
-    until the end, when `bin/omabox` becomes the binary. Tests: t_unit_rust_handoff.
+    until the end, when `bin/omabox` becomes the binary. The caller's environment goes along as it
+    came (wave 2): bash's own globals (ROOT, BOXES, ...) overwrite what a caller exported under those
+    names, and the exec makes /proc/PID/environ the binary's, so `rust_handoff` reads it first and hands
+    it over a pipe (OMABOX_ENVIRON_FD), for `run --pass` (finding 74) and for a call handed back to bash
+    (the caller's value where a global overwrote it; what the broker set or took out stays so).
+    What the Rust half leaves to bash (a command's `--help`, `run --wait` and its options until the
+    settle machinery is ported with `wait`) goes back before anything is done: the same call. Tests:
+    t_unit_rust_handoff, t_unit_rust_parity, t_rust_parity.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

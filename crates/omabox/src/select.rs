@@ -151,15 +151,10 @@ pub fn session_box(ctx: &Ctx) -> bool {
     if in_jail() || env_names_box() || agent_session().is_none() {
         return false;
     }
-    let plain = Ctx {
-        parsing: false,
-        die_rc: ctx.die_rc,
-        main_cmd: ctx.main_cmd.clone(),
-        boxes: ctx.boxes.clone(),
-        name: Vec::new(),
-        d: Vec::new(),
-        name_derived: true,
-    };
+    let mut plain = Ctx::new(&ctx.main_cmd, ctx.boxes.clone());
+    plain.parsing = false;
+    plain.die_rc = ctx.die_rc;
+    plain.name_derived = true;
     pick_name(&plain, b"").is_ok_and(|n| n == ctx.name)
 }
 

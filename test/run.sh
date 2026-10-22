@@ -2982,11 +2982,15 @@ t_unit_rust_handoff() {
 # with rp_snap=1 what the runtime dir holds after (paths, types, file contents: what a command left
 # or removed; not times). $rp_prep, a function, puts the fixture back before each side. Under
 # --installed (no binary) both are bash: trivially the same. RP_SHOW=FILE: what bash said for each
-# call is appended there, to read the cases over.
-rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1
+# call is appended there, to read the cases over. Since wave 2: ${rp_wrap[@]} goes before omabox (a
+# `timeout` for what follows a log), $rp_in is its stdin (/dev/null), and $rp_sed, a sed -E script,
+# is run over stdout and stderr first (what differs from call to call: a run -d log's name, a time).
+rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1 rp_wrap=() rp_in=/dev/null rp_sed=""
 rp_state() {
   [ "$rp_snap" = 1 ] || return 0
-  (cd "$rp_rt" && command find . -printf '%p %y\n' | LC_ALL=C sort && command find . -type f -exec md5sum {} + | LC_ALL=C sort)
+  # (run's marks, $D/runs, are named by pid and time: by kind here)
+  (cd "$rp_rt" && command find . -printf '%p %y\n' | LC_ALL=C sort && command find . -type f -exec md5sum {} + | LC_ALL=C sort) |
+    sed -E 's#/runs/(o|c)\.[0-9]+\.[0-9]+#/runs/\1.MARK#'
 }
 parity() {
   local label=$1 side d=$TMP/rp-out.$BASHPID; shift
@@ -2996,8 +3000,9 @@ parity() {
     local how=OMABOX_BASH=1; [ "$side" = bash ] || how=OMABOX_BASH=
     (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL -u OMABOX_RELAY_DEFAULT -u SELECT_PLAIN \
       ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
-      "$CLI" "$@" >"$d/$side.out" 2>"$d/$side.err" </dev/null; echo $? > "$d/$side.rc")
+      ${rp_wrap[@]+"${rp_wrap[@]}"} "$CLI" "$@" >"$d/$side.out" 2>"$d/$side.err" <"$rp_in"; echo $? > "$d/$side.rc")
     rp_state > "$d/$side.state"
+    if [ -n "$rp_sed" ]; then local f; for f in out err; do sed -i -E "$rp_sed" "$d/$side.$f"; done; fi
   done
   [ -z "${RP_SHOW:-}" ] || { echo "== $label: rc $(cat "$d/bash.rc")"; cat "$d/bash.out" "$d/bash.err"; } >> "$RP_SHOW"
   local f diffs=""
@@ -3194,6 +3199,132 @@ t_unit_rust_parity() {
   # A dir no box name can be, listed: which selects each box by name.
   rp_odd() { rp_fixture; rp_box _odd '{}'; }
   rp_prep=rp_odd rp_env=(); parity "which with a box dir named as no box is" which $$
+  # Wave 2: run, hyprctl, lua, log, events. Their refusals; the box entry (on_box, box_exec) into the
+  # live stand-ins, whose Hyprland is none (no socket under its signature: nothing of the desktop's
+  # answers); a dead box's logs and events, read from the host.
+  rp_w2() {
+    rp_fixture
+    local d=$r/rt/omabox
+    # A dead box with its logs: a crash in gdb.log, run -d logs, events with a mark.
+    rp_box dl '{"mode":"headless"}'
+    printf 's1\ns2 needle\ns3' > "$d/dl/home/shell.log"; : > "$d/dl/home/apps.log"; echo b1 > "$d/dl/box.log"
+    printf 'x spawned child 12 terminated with signal 11\n' > "$d/dl/home/labwc.log"
+    printf '%s\n' '== omabox gdb --watch Hyprland (pid 5) ==' 'Thread 1 "Hyprland" received signal SIGSEGV, Segmentation fault.' \
+      '== omabox: a fatal signal; the thread it hit:' '#0  0x1 in f ()' '' '#1  0x2 in g ()' '== omabox: every thread' '#0 x' > "$d/dl/home/gdb.log"
+    echo old > "$d/dl/home/run-1700000000000000000.log"; printf 'r1\nr2\n' > "$d/dl/home/run-1700000000100000000.log"
+    printf '1700000000.100 workspace>>2\n1700000001.250 openwindow>>a,2,foot,t>>x\nbad line\n1700000002.000 activewindow>>foot,T\n' > "$d/dl/home/events.log"
+    printf 'm1 30\nm2 9999\n' > "$d/dl/events.marks"
+    rp_box dg '{"mode":"headless"}'; printf 'nothing\n' > "$d/dg/home/gdb.log"
+    # A live stand-in whose omabox.env carries the session's own marker (finding 424).
+    rp_live own; printf 'WAYLAND_DISPLAY=rp-none\0HYPRLAND_INSTANCE_SIGNATURE=rp-none\0OMABOX_OWN_SESSION=1\0RPX=1\0' > "$d/own/run/omabox.env"
+    printf 'A=1\nexport B="two words"\n# c\n\nC='"'"'q'"'"'\r\n' > "$r/envf"; printf 'A=1\nnot a line\n' > "$r/envbad"; printf 'PATH=/x\n' > "$r/envres"
+  }
+  rp_prep=rp_w2 rp_env=() rp_dir=$r/norepo
+  parity "hyprctl: the default box, none up" hyprctl version
+  parity "hyprctl -b with no value" hyprctl -b
+  parity "hyprctl of a dead box" hyprctl -b dead1 version
+  parity "hyprctl of a box gone idle" hyprctl -b gone version
+  parity "hyprctl of a box this namespace cannot read" hyprctl -b unk version
+  parity "hyprctl of a box still starting (covers)" hyprctl -b cov version
+  parity "hyprctl: no WAYLAND_DISPLAY in omabox.env (on_box)" hyprctl -b noenv version
+  parity "hyprctl: an untame one" hyprctl -b badenv version
+  parity "hyprctl: no HYPRLAND_INSTANCE_SIGNATURE" hyprctl -b pst version
+  parity "hyprctl: a box whose Hyprland does not answer" hyprctl -b own version
+  parity "lua: nothing" lua
+  parity "lua --json alone" lua --json
+  parity "lua -x" lua -x 1
+  parity "lua - with nothing on stdin" lua -b dead1 -
+  parity "lua: spaces only" lua ' '
+  parity "lua of a dead box" lua -b dead1 'return 1'
+  parity "lua -- -1 of no box" lua -- -1
+  parity "lua: a refusal inside \$(...) (on_box)" lua -b noenv 1
+  parity "lua: a box whose Hyprland does not answer" lua -b own 1
+  parity "run: nothing to run" run -b own
+  parity "run: -q without -d" run -b own -q -- true
+  parity "run: --replace without -d" run -b own --replace -- true
+  parity "run: an unknown option" run --bgus -- true
+  parity "run -b with no value" run -b
+  parity "run --pass: not a name" run --pass 1x -- true
+  parity "run --pass PATH" run --pass PATH -- true
+  parity "run --pass: not exported" run --pass RP_NOT_SET_X -- true
+  parity "run --env: not KEY=VAL" run --env x -- true
+  parity "run --env HOME=" run --env HOME=/x -- true
+  parity "run --env-file: none" run --env-file "$r/nonexistent" -- true
+  parity "run --env-file: a bad line" run --env-file "$r/envbad" -- true
+  parity "run --env-file: a reserved name" run --env-file "$r/envres" -- true
+  parity "run --size with no value" run --size
+  parity "run -d: no box" run -d -- true
+  parity "run -d of a dead box" run -b dead1 -d -- true
+  parity "run -b of a dead box (no throwaway)" run -b dead1 -- true
+  parity "run of a box gone idle" run -b gone -- true
+  parity "run of a box this namespace cannot read" run -b unk -- true
+  parity "run of a box still starting (covers)" run -b cov -- true
+  parity "run -b of no box (no throwaway)" run -b nobox -- true
+  parity "run: a command, its status and both outputs" run -b own -- sh -c 'echo out; echo err >&2; exit 3'
+  parity "run: the session's marker left out (finding 424), the rest kept" run -b own -- sh -c 'echo "${OMABOX_OWN_SESSION:-none} $RPX $OMABOX $OMABOX_NAME"'
+  parity "run: the caller's dir, the same in the box" run -b own -- pwd
+  parity "run: up options on a box up, ignored" run -b own --size 800x600 --clean -- true
+  rp_env=(ROOT="/x y"); parity "run --pass ROOT: the caller's, not bin/omabox's own (finding 74)" run -b own --pass ROOT -- sh -c 'echo "$ROOT"'
+  parity "...and bash's when it takes the call back (-h after the options)" run -b own --pass ROOT -h
+  rp_env=(RPP=p1); parity "run --env-file, --env, --pass" run -b own --env-file "$r/envf" --env A=9 --pass RPP -- sh -c 'echo "$A|$B|$C|$RPP"'
+  rp_env=()
+  parity "run: a command not there" run -b own -- rp-no-such-command
+  parity "run: a command killed by SIGKILL" run -b own -- sh -c 'kill -KILL $$'
+  parity "run: by SIGTERM (bash's line for it is no own line)" run -b own -- sh -c 'kill -TERM $$'
+  parity "run: by SIGINT (bash says nothing)" run -b own -- sh -c 'kill -INT $$'
+  parity "run: exit 137 of its own" run -b own -- sh -c 'exit 137'
+  rp_in=$r/envf; parity "run: stdin passed through" run -b own -- cat; rp_in=/dev/null
+  rp_sed='s/run-[0-9]+\.log/run-N.log/g'
+  parity "run -d: its log cannot be made (the stand-in has no /home/sbx)" run -b own -d -- true
+  rp_sed=""
+  parity "log: an unknown log" log -b dl bogus
+  parity "log -n x" log -b dl -n x
+  parity "log --grep -x" log -b dl --grep -x
+  parity "log --grep -i with no RE" log -b dl --grep -i
+  parity "log --grep: not an RE (grep's words first)" log -b dl --grep '('
+  parity "log --crash of another log" log -b dl shell --crash
+  parity "log --crash -f" log -b dl gdb --crash -f
+  parity "log --bogus" log --bogus
+  parity "log of no box" log -b nobox
+  parity "log of a dead box: no hyprland log" log -b dl
+  parity "log shell of a dead box" log -b dl shell
+  parity "logs shell -n 1" logs -b dl shell -n 1
+  parity "log shell -n all --grep" log -b dl shell -n all --grep needle
+  parity "log --grep -i" log -b dl shell --grep -i NEEDLE
+  parity "log: several, each under its name" log -b dl shell box apps -n 2
+  parity "log all" log -b dl all
+  parity "log run: the latest run -d's" log -b dl run
+  parity "log gdb --crash" log -b dl gdb --crash
+  parity "log gdb --crash: none" log -b dg gdb --crash
+  parity "log -f of a dead box: as they were" log -b dl shell -f
+  parity "log keyring of a dead box: none yet" log -b dl keyring
+  parity "log of a live box: in its namespace, none yet" log -b own shell
+  parity "log box of a live box (the host's)" log -b live box
+  parity "events: unexpected word" events -b dl dl
+  parity "events: a bad mark name" events -b dl --mark 1x
+  parity "events --mark with --since" events -b dl --mark --since 3
+  parity "events --until with -f" events -b dl --until x -f
+  parity "events --timeout: no duration" events -b dl --timeout x
+  parity "events --timeout past 10m" events -b dl --timeout 11m
+  parity "events -n x" events -b dl -n x
+  rp_sed='/: line [0-9]+: \[\[: invalid regular expression/d'
+  parity "events --grep: not an RE (bash's own [[ line aside)" events -b dl --grep '('
+  rp_sed=""
+  parity "events of a dead box" events -b dl
+  parity "events --json" events -b dl --json
+  parity "events -n 1" events -b dl -n 1
+  parity "events --grep -i (awk's)" events -b dl --grep -i OPENWINDOW
+  parity "events --since an offset" events -b dl --since 30
+  parity "events --since a mark" events -b dl --since m1
+  parity "events --since a mark past the end" events -b dl --since m2
+  parity "events --since no mark" events -b dl --since nope
+  parity "events --since a time ago" events -b dl --since 30s
+  parity "events --since: neither" events -b dl --since 1-x
+  parity "events --mark of a dead box" events -b dl --mark m3
+  parity "events -f of a dead box" events -b dl -f
+  parity "events --until of a dead box" events -b dl --until x
+  parity "events of a live box with none recorded" events -b own
+  parity "events of no box" events -b nobox
   rp_prep="" rp_env=() rp_dir=/
   # The namespaces' PID 1s first: their unshares and the stand-in pasta end with them.
   kill -KILL "$l1" "$lp" "$nd" 2>/dev/null
@@ -6128,6 +6259,10 @@ t_user_hypr() {
   # whose stop came too late is taken again; t_unit_hypr_errors_note has the logic without the race.
   printf '\nif os.remove("%s/stop-once") then omabox_test_stop = hl.timer(function() os.execute("kill -STOP $PPID") end, { timeout = 1, type = "oneshot" }) end\n' \
     "$c" >> "$H/.config/hypr/looknfeel.lua"
+  # (This box has nothing to draw, --no-shell: its Hyprland ran the timer late, after the next request,
+  # so a CLI as quick as the Rust half's got its configerrors answered first every time. A request every
+  # few ms from inside the box keeps its loop turning, and the timer on time.)
+  ob run -b "$B" -d -q -- sh -c 'while :; do hyprctl version >/dev/null 2>&1; sleep 0.002; done' omabox-t353-tick
   local rc cmd k cont='kill -CONT $(pidof Hyprland)'
   for m in "hyprctl -b $B reload" "reload -b $B"; do
     read -ra cmd <<<"$m"
@@ -6144,6 +6279,7 @@ t_user_hypr() {
     check_match "Hyprland stopped after the reload: $m says it did not answer, exit 1" \
       "its Hyprland did not answer hyprctl configerrors.*omabox gdb -b $B.*omabox down $B\) 1$" "${out//$'\n'/ } $rc"
   done
+  ob run -b "$B" -- pkill -f omabox-t353-tick >/dev/null 2>&1
   check "...it answers again once continued" ob hyprctl -b "$B" version
   ob down "$B" >/dev/null 2>&1
 }
@@ -9658,6 +9794,56 @@ t_rust_parity() {
   parity "which: its shell's host pid" which "${sp:-0}"
   parity "which --json: the same" which --json "${sp:-0}"
   parity "which: the host shell" which $$
+  # Wave 2: events first (a reload below is an event), then hyprctl, lua, run, log.
+  parity "events -n 3" events -b "$B" -n 3
+  parity "events --json -n 2" events -b "$B" --json -n 2
+  parity "events --grep" events -b "$B" --grep 'monitor|workspace' -n 2
+  parity "events --mark" events -b "$B" --mark rp
+  parity "events --mark --json" events -b "$B" --mark rp --json
+  parity "events --since the mark: nothing since" events -b "$B" --since rp
+  parity "events --until: none in time, 124" events -b "$B" --until 'rp-never' --timeout 300ms
+  rp_wrap=(timeout -s TERM 1); parity "events -f: ended by TERM" events -b "$B" -f
+  parity "log -f box: ended by TERM" log -b "$B" -f box; rp_wrap=()
+  parity "hyprctl version" hyprctl -b "$B" version
+  parity "hyprctl -j monitors" hyprctl -b "$B" -j monitors
+  parity "hyprctl: a bad dispatch, hyprctl's own status" hyprctl -b "$B" dispatch rp-bogus
+  parity "hyprctl getoption of none" hyprctl -b "$B" getoption rp:none
+  parity "hyprctl reload: its config errors (none)" hyprctl -b "$B" reload
+  parity "hyprctl alone: its usage, its status" hyprctl -b "$B"
+  parity "lua" lua -b "$B" 1+1
+  parity "lua --json: its values" lua -b "$B" --json 'return "a", nil, {x = 1.5}, 960.0, 1e300'
+  parity "lua: values as text" lua -b "$B" 'return "a", nil, {1, 2}, true, "\255x"'
+  parity "lua: an error" lua -b "$B" 'error("boom")'
+  parity "lua: a source with ]] in it" lua -b "$B" 'return "]]", "]=]"'
+  parity "lua: a function returned" lua -b "$B" 'return print'
+  rp_sed='s/0x[0-9a-f]+/0xADDR/g'; parity "lua: a dispatcher returned" lua -b "$B" 'hl.dsp.window.close()'; rp_sed=""
+  echo 'return 6 * 7' > "$TMP/rp-lua"; rp_in=$TMP/rp-lua; parity "lua -: the source on stdin" lua -b "$B" -; rp_in=/dev/null
+  parity "run: its output, its status" run -b "$B" -- sh -c 'echo out; echo err >&2; exit 3'
+  parity "run: the box HOME from /, the session's marker left out (finding 424)" run -b "$B" -- sh -c 'pwd; echo "${OMABOX_OWN_SESSION:-none} $OMABOX $OMABOX_NAME"'
+  parity "run: a command not there" run -b "$B" -- rp-no-such-command
+  parity "run: killed by SIGKILL" run -b "$B" -- sh -c 'kill -KILL $$'
+  parity "run: by SIGTERM" run -b "$B" -- sh -c 'kill -TERM $$'
+  parity "run: by SIGSEGV" run -b "$B" -- sh -c 'kill -SEGV $$'
+  parity "run: by SIGINT" run -b "$B" -- sh -c 'kill -INT $$'
+  printf 'A=1\nexport B="b b"\n' > "$TMP/rp-env"
+  rp_env=(RPP=p1); parity "run --env-file, --env, --pass" run -b "$B" --env-file "$TMP/rp-env" --env A=2 --pass RPP -- sh -c 'echo "$A $B $RPP"'; rp_env=()
+  rp_in=$TMP/rp-env; parity "run: stdin passed through" run -b "$B" -- cat; rp_in=/dev/null
+  rp_sed='s/run-[0-9]+\.log/run-N.log/g; s/stopped the earlier job \(0 windows\) in [0-9.]+s/stopped the earlier job (0 windows) in Ts/; s/pid [0-9]+/pid P/g'
+  parity "run -d: a job that exits at once, its status" run -b "$B" -d -- sh -c 'echo said; exit 4'
+  parity "run -d -q: a 0 at once is not said" run -b "$B" -d -q -- true
+  parity "run -d: a host path the box has not" run -b "$B" -d -- ls "$TMP"
+  parity "run -d --print-log: started" run -b "$B" -d --print-log -- sleep 610
+  rp_jobs() { ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1; OMABOX_BASH=1 ob run -b "$B" -d -q -- sleep 611 >/dev/null 2>&1; }
+  rp_prep=rp_jobs
+  parity "run -d --replace: the earlier job stopped" run -b "$B" -d --replace -- sleep 611
+  parity "run -d --replace: another job of the program named" run -b "$B" -d --replace -- sleep 612
+  parity "run -d --replace -q: none of this command" run -b "$B" -d --replace -q -- true
+  rp_prep="" rp_sed=""
+  ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1
+  parity "log box" log -b "$B" box
+  parity "log: a --grep that matches nothing" log -b "$B" shell --grep 'rp-never-said'
+  parity "log gdb: none yet" log -b "$B" gdb
+  parity "log run -n 1: the latest run -d's" log -b "$B" run -n 1
   rp_rt="" rp_snap=1
   ob down "$B" >/dev/null 2>&1
 }

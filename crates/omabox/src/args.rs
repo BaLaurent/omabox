@@ -12,6 +12,20 @@ fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"path" => Some("-b= --box= --logs --run --home --json"),
         b"env" => Some("-b= --box="),
         b"which" => Some("--json"),
+        b"run" => Some(concat!(
+            "-b= --box= -d --detach -q --print-log --replace --pass= --env-file= ",
+            "--wait --start= --quiet= --timeout= --strict --json --ignore= -g= ",
+            "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
+            "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
+            "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --xwayland ",
+            "--autoreload --no-shell --no-pointer"
+        )),
+        b"hyprctl" => Some("-b= --box="),
+        b"lua" => Some("-b= --box= --json"),
+        b"log" | b"logs" => Some("-b= --box= -f --follow --crash --grep= -i -n="),
+        b"events" => Some(
+            "-b= --box= --since= --mark? --grep= -i --json -f --follow --until= --timeout= -n=",
+        ),
         _ => None,
     }
 }
@@ -28,9 +42,21 @@ fn usage_head(cmd: &[u8]) -> &'static str {
         b"which" => {
             "  omabox which [--json] PID                              the box a host process is in, or \"not in a box\" (exit 1)"
         }
+        b"run" => RUN_HEAD,
+        b"hyprctl" => "  omabox hyprctl [-b NAME] ARGS...",
+        b"lua" => {
+            "  omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns"
+        }
+        b"log" | b"logs" => LOG_HEAD,
+        b"events" => EVENTS_HEAD,
         _ => "",
     }
 }
+
+/// run's help shows up's lines too: its UP OPTIONS are up's, for a throwaway box.
+const RUN_HEAD: &str = "  omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...\n             [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only\n  omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...\n            [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...]\n            [--env KEY=VAL]...\n            [--no-seed extensions,fonts]                 your plugins' settings files, your fonts left on the desk\n            [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/\n            [--theme NAME]                               start on that theme, not your desktop's current one\n            [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors\n            [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]\n            [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files\n            [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic\n            [--no-pointer]                               the pointer hidden from the start (omabox pointer show)\n            [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   only what is tested moves\n            [--hyprland PATH]                            a Hyprland build of yours instead of the installed one\n            [--quickshell PATH]                          a Quickshell build of yours for the box's shell\n            [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy\n            [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)\n            [--new]                                      start it under a free name, box-1, box-2, ... (printed)\n            [--json]                                     the box as ls --json lists it, on stdout";
+const LOG_HEAD: &str = "  omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]\n                                                         a box's logs: hyprland (the default), shell, apps, run,\n                                                         events, keyring, labwc, systemd, audio, gdb,\n                                                         journal, box, reap\n  omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit";
+const EVENTS_HEAD: &str = "  omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events\n  omabox events [-b NAME] --mark [MARK] [--json]         from here: prints the offset, keeps MARK for --since\n  omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]";
 
 /// The form help gives OPT's value in, as ": OPT VALUE" (": -g \"X,Y WxH\""), from the command's
 /// lines in `omabox help CMD`; nothing when help shows none.
@@ -156,6 +182,11 @@ pub fn did_you_mean(word: &str, candidates: &[&str]) -> String {
 /// An option the command does not take: a usage error, with the nearest one it does when one is
 /// close. LABEL is what the message starts with, its first word the command.
 pub fn unknown_opt(ctx: &Ctx, label: &str, opt: &[u8]) -> Exit {
+    unknown_opt_hint(ctx, label, opt, "")
+}
+
+/// unknown_opt, the message ending in HINT (when there is one).
+pub fn unknown_opt_hint(ctx: &Ctx, label: &str, opt: &[u8], hint: &str) -> Exit {
     let cmd = label.split(' ').next().unwrap_or_default();
     let mut known: Vec<&str> = cmd_opts(cmd.as_bytes())
         .map(|o| {
@@ -166,16 +197,52 @@ pub fn unknown_opt(ctx: &Ctx, label: &str, opt: &[u8]) -> Exit {
         .unwrap_or_default();
     known.extend(["-h", "--help"]);
     let word = String::from_utf8_lossy(opt.split(|&c| c == b'=').next().unwrap_or_default());
+    let hint = if hint.is_empty() {
+        String::new()
+    } else {
+        format!(" {hint}")
+    };
     ctx.usage_die(cat!(
         label,
         ": unknown option ",
         opt,
-        did_you_mean(&word, &known)
+        did_you_mean(&word, &known),
+        hint
     ))
 }
 
+/// A word that is not one of CHOICES where one of them goes: "LABEL: unknown WHAT WORD (did you
+/// mean X?) TEXT", a usage error.
+pub fn unknown_word(
+    ctx: &Ctx,
+    label: &str,
+    what: &str,
+    w: &[u8],
+    text: &str,
+    choices: &[&str],
+) -> Exit {
+    let near = did_you_mean(&String::from_utf8_lossy(w), choices);
+    let text = if text.is_empty() {
+        String::new()
+    } else {
+        format!(" {text}")
+    };
+    ctx.usage_die(cat!(label, ": unknown ", what, " ", w, near, text))
+}
+
+/// A word with no place in LABEL's command line: a usage error. One that names a box says the box
+/// goes with -b (audit E4).
+pub fn unexpected(ctx: &Ctx, label: &str, w: &[u8], hint: &str) -> Exit {
+    let mut why = hint.as_bytes().to_vec();
+    if crate::shell::re_match("^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$", w) && ctx.in_boxes(w).is_dir() {
+        why = cat!("(box '", w, "'? a box goes with -b: -b ", w, ")");
+    }
+    let sep: &[u8] = if why.is_empty() { b"" } else { b" " };
+    ctx.usage_die(cat!(label, ": unexpected ", w, sep, why))
+}
+
 /// `optarg "$@"`: an option with no value is a usage error naming the form help gives it.
-fn optarg(ctx: &Ctx, opt: &[u8], value: Option<&Vec<u8>>) -> Res<()> {
+pub fn optarg(ctx: &Ctx, opt: &[u8], value: Option<&Vec<u8>>) -> Res<()> {
     if value.is_some_and(|v| !v.is_empty()) {
         return Ok(());
     }

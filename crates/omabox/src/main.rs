@@ -5,19 +5,28 @@
 mod args;
 mod boxes;
 mod cmd;
+mod exec;
 mod exit;
+mod hypr;
 mod jail;
 mod jobs;
 mod json;
+mod logs;
 mod procfs;
+mod repo;
 mod select;
 mod shell;
+mod sig;
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
+
+/// OMABOX_ROOT and OMABOX_CALL_US as bash's hand-off set them.
+static HANDOFF: std::sync::OnceLock<(Option<OsString>, Option<OsString>)> =
+    std::sync::OnceLock::new();
 
 type Run = fn(&mut exit::Ctx, &[Vec<u8>]) -> exit::Res<()>;
 
@@ -29,6 +38,19 @@ fn main() -> ExitCode {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
     shell::init_locale();
+    // What bash's hand-off adds to the environment is this call's, not its children's (bin/omabox up
+    // and down, nsenter, git): kept here and taken out, before any thread.
+    let _ = HANDOFF.set((
+        std::env::var_os("OMABOX_ROOT"),
+        std::env::var_os("OMABOX_CALL_US"),
+    ));
+    exec::caller_environ_take();
+    // SAFETY: at the start, before any other thread reads the environment.
+    unsafe {
+        std::env::remove_var("OMABOX_ROOT");
+        std::env::remove_var("OMABOX_CALL_US");
+        std::env::remove_var("OMABOX_ENVIRON_FD");
+    }
     let mut args = std::env::args_os().skip(1);
     let cmd = args.next().unwrap_or_default();
     let rest: Vec<OsString> = args.collect();
@@ -36,6 +58,11 @@ fn main() -> ExitCode {
         Some("path") => Some(cmd::path::run),
         Some("env") => Some(cmd::env::run),
         Some("which") => Some(cmd::which::run),
+        Some("hyprctl") => Some(cmd::hyprctl::run),
+        Some("lua") => Some(cmd::lua::run),
+        Some("run") => Some(cmd::run::run),
+        Some("log" | "logs") => Some(cmd::log::run),
+        Some("events") => Some(cmd::events::run),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.
@@ -65,8 +92,8 @@ fn main() -> ExitCode {
 }
 
 /// The checkout this binary belongs to: OMABOX_ROOT from bash, else two levels up from build/bin.
-fn root() -> PathBuf {
-    if let Some(r) = std::env::var_os("OMABOX_ROOT") {
+pub fn root() -> PathBuf {
+    if let Some((Some(r), _)) = HANDOFF.get() {
         return PathBuf::from(r);
     }
     let exe = std::env::current_exe().unwrap_or_default();
@@ -77,13 +104,38 @@ fn root() -> PathBuf {
         .unwrap_or_default()
 }
 
+/// A call the Rust half leaves to bash (help text, what a later wave ports): bash runs it from the
+/// start, told not to hand it back. Nothing has been done by then: it is the same call.
+pub fn to_bash(ctx: &exit::Ctx, args: &[Vec<u8>]) -> exit::Res<()> {
+    let rest: Vec<OsString> = args.iter().map(|a| OsString::from_vec(a.clone())).collect();
+    back_to_bash(OsString::from_vec(ctx.main_cmd.clone()), rest);
+    Err(exit::Exit(126))
+}
+
 fn back_to_bash(cmd: OsString, rest: Vec<OsString>) -> ExitCode {
     let script = root().join("bin/omabox");
-    let err = Command::new(&script)
-        .arg(cmd)
-        .args(rest)
-        .env("OMABOX_BASH", "1")
-        .exec();
+    let mut c = Command::new(&script);
+    c.arg(cmd).args(rest);
+    // This process's environment, but where bash's globals overwrote a variable the caller exported
+    // under the same name (ROOT, BOXES, ...): the caller's value (finding 74). What the broker set
+    // (OMABOX_JAIL) or took out (its peer's pidfd, closed by now) stays as it is.
+    if let Some(env) = exec::caller_environ() {
+        for e in env.split(|&b| b == 0).filter(|e| !e.is_empty()) {
+            let i = e.iter().position(|&b| b == b'=').unwrap_or(e.len());
+            let (k, v) = (
+                OsString::from_vec(e[..i].to_vec()),
+                OsString::from_vec(e.get(i + 1..).unwrap_or_default().to_vec()),
+            );
+            if std::env::var_os(&k).is_some_and(|now| now != v) {
+                c.env(k, v);
+            }
+        }
+    }
+    c.env("OMABOX_BASH", "1");
+    if let Some((_, Some(us))) = HANDOFF.get() {
+        c.env("OMABOX_CALL_US", us);
+    }
+    let err = c.exec();
     eprintln!("omabox: could not run {}: {err}", script.display());
     ExitCode::from(126)
 }

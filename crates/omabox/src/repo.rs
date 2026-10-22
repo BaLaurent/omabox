@@ -1,0 +1,578 @@
+//! The caller's repo and paths, as `run` looks at them before its command: which repo it is in
+//! (repo_top), what a box may not mount (refuse_src, finding 63), and the notes `run` says about a
+//! word of its command the box will not have: one reached through a link out of the repo (#235), one
+//! relative to a dir the box runs it outside of (#251).
+
+use crate::boxes::{BoxPid, box_pid};
+use crate::cat;
+use crate::exit::{Ctx, say};
+use crate::jail::in_jail;
+use crate::json;
+use crate::shell::{self, strip_nl};
+use serde_json::Value;
+use std::collections::HashSet;
+use std::process::{Command, Stdio};
+
+/// `realpath -ms -- P`: absolute (from the physical cwd), `.` and `..` and repeated slashes taken out
+/// as text, no link followed.
+pub fn realpath_ms(p: &[u8]) -> Option<Vec<u8>> {
+    let mut full = if p.first() == Some(&b'/') {
+        p.to_vec()
+    } else {
+        let cwd = std::env::current_dir().ok()?;
+        cat!(shell::bytes(&cwd), "/", p)
+    };
+    if full.is_empty() {
+        full = b"/".to_vec();
+    }
+    let mut parts: Vec<&[u8]> = Vec::new();
+    for c in full.split(|&c| c == b'/') {
+        match c {
+            b"" | b"." => {}
+            b".." => {
+                parts.pop();
+            }
+            _ => parts.push(c),
+        }
+    }
+    Some(cat!("/", parts.join(&b'/')))
+}
+
+/// `readlink -e -- P`: every link followed, all of it there.
+pub fn readlink_e(p: &[u8]) -> Option<Vec<u8>> {
+    std::fs::canonicalize(shell::path(p))
+        .ok()
+        .map(|r| shell::bytes(&r).to_vec())
+}
+
+/// `readlink -f -- P`: as -e, but its last part may be missing.
+pub fn readlink_f(p: &[u8]) -> Option<Vec<u8>> {
+    if let Some(r) = readlink_e(p) {
+        return Some(r);
+    }
+    let t = p.strip_suffix(b"/").unwrap_or(p);
+    let (dir, last) = match t.iter().rposition(|&c| c == b'/') {
+        Some(0) => (b"/".to_vec(), &t[1..]),
+        Some(i) => (t[..i].to_vec(), &t[i + 1..]),
+        None => (b".".to_vec(), t),
+    };
+    if last.is_empty() || last == b"." || last == b".." {
+        return None;
+    }
+    let d = readlink_e(&dir)?;
+    if d == b"/" {
+        Some(cat!("/", last))
+    } else {
+        Some(cat!(d, "/", last))
+    }
+}
+
+/// `pwd -P`.
+fn pwd_physical() -> Option<Vec<u8>> {
+    std::env::current_dir()
+        .ok()
+        .map(|d| shell::bytes(&d).to_vec())
+}
+
+/// The repo the caller is in: git's top (outside a jail), or the jail's folder its cwd is in that a
+/// box may mount, with what the jail hides in it covered (#210).
+pub fn repo_top() -> Option<Vec<u8>> {
+    if !in_jail() {
+        let o = Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        return o.status.success().then(|| strip_nl(&o.stdout));
+    }
+    let cwd = crate::jail::get_raw("cwd");
+    if cwd.is_empty() {
+        return None;
+    }
+    let (vals, _) = json::values(&shell::env_or_empty("OMABOX_JAIL"));
+    let pol = vals.first()?;
+    let cwd = String::from_utf8_lossy(&cwd).into_owned();
+    let mut best: Option<String> = None;
+    for root in pol.get("roots")?.as_array()? {
+        let Some(r) = root.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        if !coverable(pol, root) || !(cwd == r || cwd.starts_with(&format!("{r}/"))) {
+            continue;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|b| r.chars().count() >= b.chars().count())
+        {
+            best = Some(r.to_string());
+        }
+    }
+    let r = best?;
+    std::path::Path::new(&r)
+        .join(".git")
+        .exists()
+        .then(|| r.into_bytes())
+}
+
+/// JAIL_COVERABLE: a jail's folder a box may mount with what the jail hides in it covered again: not
+/// one of the hidden paths itself, and one with nothing hidden or whose hidden paths the policy lists.
+fn coverable(pol: &Value, root: &Value) -> bool {
+    let path = root.get("path");
+    let masks = pol.get("masks").and_then(Value::as_array);
+    let hidden = masks.is_some_and(|m| m.iter().any(|x| Some(x) == path));
+    let masked = root
+        .get("masked")
+        .is_some_and(|m| !matches!(m, Value::Null | Value::Bool(false)));
+    !hidden && (!masked || pol.get("masks").is_some())
+}
+
+/// jail_root P: P resolved, when it is one of the jail's folders, whole (nothing of the jail's own
+/// mounted inside).
+pub fn jail_root(p: &[u8]) -> Option<Vec<u8>> {
+    let r = readlink_e(p)?;
+    let (vals, _) = json::values(&shell::env_or_empty("OMABOX_JAIL"));
+    let rs = String::from_utf8_lossy(&r).into_owned();
+    let ok = vals
+        .first()
+        .and_then(|pol| pol.get("roots")?.as_array())
+        .is_some_and(|roots| {
+            roots.iter().any(|x| {
+                x.get("path").and_then(Value::as_str) == Some(rs.as_str())
+                    && x.get("masked")
+                        .is_none_or(|m| matches!(m, Value::Null | Value::Bool(false)))
+            })
+        });
+    ok.then_some(r)
+}
+
+fn home() -> Vec<u8> {
+    shell::env_or_empty("HOME")
+}
+
+/// `${VAR:-DEFAULT}`.
+fn env_or(name: &str, default: Vec<u8>) -> Vec<u8> {
+    shell::env(name)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(default)
+}
+
+/// `"$DIR"/PREFIX*` unquoted in a for list: its matches in glob order, the word itself for none.
+fn glob_prefix(dir: &str, prefix: &str) -> Vec<Vec<u8>> {
+    let m: Vec<Vec<u8>> = shell::glob(std::path::Path::new(dir), false)
+        .into_iter()
+        .filter(|n| n.starts_with(prefix.as_bytes()))
+        .map(|n| cat!(dir, "/", n))
+        .collect();
+    if m.is_empty() {
+        vec![format!("{dir}/{prefix}*").into_bytes()]
+    } else {
+        m
+    }
+}
+
+/// refuse_path ABSPATH [look]: why a box may not mount ABSPATH (taken as it is), or None.
+fn refuse_path(p: &[u8], look: bool) -> Option<Vec<u8>> {
+    let slash = |x: &[u8]| cat!(x.strip_suffix(b"/").unwrap_or(x), "/");
+    let s = slash(p);
+    let h = home();
+    let oc = cat!(h, "/.config/omarchy");
+    let o = readlink_f(&oc).unwrap_or_else(|| oc.clone());
+    for x in [h.clone(), oc.clone(), o.clone(), b"/tmp".to_vec()] {
+        let x = slash(&x);
+        if x.starts_with(&s) {
+            return Some(cat!("it contains ", x));
+        }
+    }
+    for x in [&oc, &o] {
+        let x = slash(x);
+        let Some(rest) = s.strip_prefix(x.as_slice()) else {
+            continue;
+        };
+        if rest.starts_with(b"plugins/") || rest.starts_with(b"themes/") {
+            continue;
+        }
+        if look && (rest.starts_with(b"branding/") || rest.starts_with(b"extensions/")) {
+            continue;
+        }
+        return Some(cat!(
+            "it is inside ",
+            x,
+            " (api-keys.env, your hooks): only plugins/ and themes/ may go into a box"
+        ));
+    }
+    let data = env_or("XDG_DATA_HOME", cat!(h, "/.local/share"));
+    let cache = env_or("XDG_CACHE_HOME", cat!(h, "/.cache"));
+    let uid = crate::procfs::uid();
+    let mut list: Vec<Vec<u8>> = [
+        "/.ssh",
+        "/.gnupg",
+        "/.local/share/keyrings",
+        "/.password-store",
+        "/.aws",
+        "/.kube",
+        "/.docker",
+        "/.netrc",
+        "/.config/gh",
+        "/.config/gcloud",
+        "/.azure",
+        "/.config/op",
+        "/.git-credentials",
+        "/.config/git/credentials",
+    ]
+    .iter()
+    .map(|x| cat!(h, x))
+    .collect();
+    list.push(cat!(data, "/omabox"));
+    list.push(cat!(cache, "/omabox"));
+    list.extend(["/.claude", "/.claude.json"].iter().map(|x| cat!(h, x)));
+    list.push(shell::env_or_empty("CLAUDE_CONFIG_DIR"));
+    list.push(cat!(h, "/.codex"));
+    list.push(shell::env_or_empty("CODEX_HOME"));
+    list.extend(
+        [
+            "/.config/opencode",
+            "/.local/share/opencode",
+            "/.pi",
+            "/.hermes",
+            "/.gemini",
+            "/.mozilla",
+            "/.config/chromium",
+            "/.config/google-chrome",
+            "/.config/BraveSoftware",
+            "/.config/vivaldi",
+            "/.config/microsoft-edge",
+            "/.pki",
+        ]
+        .iter()
+        .map(|x| cat!(h, x)),
+    );
+    list.push(env_or(
+        "XDG_RUNTIME_DIR",
+        format!("/run/user/{uid}").into_bytes(),
+    ));
+    for x in [
+        "/run",
+        "/dev",
+        "/proc",
+        "/sys",
+        "/tmp/.X11-unix",
+        "/tmp/.ICE-unix",
+    ] {
+        list.push(x.as_bytes().to_vec());
+    }
+    for pre in ["tmux-", "ssh-", "gpg-"] {
+        list.extend(glob_prefix("/tmp", pre));
+    }
+    for x in list {
+        // (a glob that matched nothing; an agent's config dir variable that is not set)
+        if x.contains(&b'*') || x.is_empty() {
+            continue;
+        }
+        let x = slash(&x);
+        if s.starts_with(&x) {
+            return Some(cat!("it is inside ", x, " (secrets or live sockets)"));
+        }
+        if x.starts_with(&s) {
+            return Some(cat!("it contains ", x, " (secrets or live sockets)"));
+        }
+    }
+    None
+}
+
+/// refuse_src P: why a box may not mount P, or None: P resolved, and as written.
+pub fn refuse_src(p: &[u8]) -> Option<Vec<u8>> {
+    let r = readlink_f(p).unwrap_or_else(|| p.to_vec());
+    let l = realpath_ms(p).unwrap_or_else(|| r.clone());
+    refuse_path(&r, false).or_else(|| if l != r { refuse_path(&l, false) } else { None })
+}
+
+/// `${V//[[:cntrl:]]/?}`.
+fn no_cntrl(v: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < v.len() {
+        let n = if v[i] < 0x80 {
+            1
+        } else {
+            utf8_char_len(&v[i..])
+        };
+        let ch = std::str::from_utf8(&v[i..i + n])
+            .ok()
+            .and_then(|s| s.chars().next());
+        if ch.is_some_and(char::is_control) {
+            out.push(b'?');
+        } else {
+            out.extend_from_slice(&v[i..i + n]);
+        }
+        i += n;
+    }
+    out
+}
+
+fn utf8_char_len(v: &[u8]) -> usize {
+    (2..=4.min(v.len()))
+        .find(|&n| std::str::from_utf8(&v[..n]).is_ok())
+        .unwrap_or(1)
+}
+
+/// repo_link_out TOP PATH (#235): PATH (under TOP, there on the host) reached through a link in TOP
+/// that leads out of it: (that link, where it leads, where PATH is then).
+fn repo_link_out(top: &[u8], p: &[u8]) -> Option<[Vec<u8>; 3]> {
+    let under = |x: &[u8]| x.starts_with(&cat!(top, "/"));
+    if !under(p) || !shell::path(p).exists() {
+        return None;
+    }
+    let mut p = p.to_vec();
+    let w = cat!("/", p, "/");
+    if crate::exit::contains(&w, b"/../") || crate::exit::contains(&w, b"/./") {
+        p = realpath_ms(&p)?;
+        if !under(&p) {
+            return None;
+        }
+    }
+    let mut rest: &[u8] = &p[top.len() + 1..];
+    let mut cur = top.to_vec();
+    while !rest.is_empty() {
+        let (c, r) = match rest.iter().position(|&c| c == b'/') {
+            Some(i) => (&rest[..i], &rest[i + 1..]),
+            None => (rest, &b""[..]),
+        };
+        rest = r;
+        if c.is_empty() {
+            continue;
+        }
+        cur = cat!(cur, "/", c);
+        if !shell::path(&cur).is_symlink() {
+            continue;
+        }
+        let r = readlink_e(&cur)?;
+        if r == top || under(&r) {
+            continue;
+        }
+        let rp = readlink_e(&p)?;
+        let all = cat!(cur, r, rp);
+        if all.contains(&b'\t') || all.contains(&b'\n') {
+            return None;
+        }
+        return Some([cur, r, rp]);
+    }
+    None
+}
+
+/// link_dangles PID LINK RESOLVED: the box has LINK (the repo is mounted) but not where it leads.
+fn link_dangles(pid: &[u8], link: &[u8], resolved: &[u8]) -> bool {
+    shell::path(&cat!("/proc/", pid, "/root", link)).is_symlink()
+        && !shell::path(&cat!("/proc/", pid, "/root", resolved)).exists()
+}
+
+/// link_mountable TARGET: why no mount is offered for a link's target, or None when one may be.
+fn link_mountable(t: &[u8]) -> Option<Vec<u8>> {
+    let t = cat!(t.strip_suffix(b"/").unwrap_or(t), "/");
+    let h = home();
+    let c = env_or("XDG_CACHE_HOME", cat!(h, "/.cache"));
+    let c = cat!(c.strip_suffix(b"/").unwrap_or(&c), "/");
+    if t.starts_with(&c) && t.len() > c.len() {
+        return None;
+    }
+    let hr = readlink_f(&h).unwrap_or_else(|| h.clone());
+    for x in [&h, &hr] {
+        let x = cat!(x.strip_suffix(b"/").unwrap_or(x), "/");
+        let Some(rest) = t.strip_prefix(x.as_slice()) else {
+            continue;
+        };
+        if crate::exit::contains(&cat!("/", rest), b"/.") {
+            return Some(
+                b"it is in a hidden folder of your HOME, where settings and keys live".to_vec(),
+            );
+        }
+    }
+    for v in ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"] {
+        let x = shell::env_or_empty(v);
+        if x.is_empty() {
+            continue;
+        }
+        if t.starts_with(&cat!(x.strip_suffix(b"/").unwrap_or(&x), "/")) {
+            return Some(cat!("it is in ", x, ", where settings and keys live"));
+        }
+    }
+    None
+}
+
+/// link_note WHAT LINK TARGET HOW: LINK -> TARGET outside the box, and the mount that gives it, or
+/// why a box may not have it.
+fn link_note(what: &[u8], link: &[u8], target: &[u8], how: &str) {
+    let (w, l, t) = (no_cntrl(what), no_cntrl(link), no_cntrl(target));
+    let head = cat!(
+        "note: ",
+        w,
+        l,
+        " -> ",
+        t,
+        ": outside the box, where the link dangles; "
+    );
+    if let Some(why) = refuse_src(target) {
+        say(cat!(head, "a box may not mount it (", why, ")"));
+    } else if let Some(why) = link_mountable(target) {
+        say(cat!(head, "no mount is offered for it (", why, ")"));
+    } else {
+        say(cat!(head, how, " --ro-bind ", t, " mounts it"));
+    }
+}
+
+/// The box's PID 1, when its root can be read (`[ -d /proc/PID/root/usr ]`).
+fn box_root_pid(ctx: &Ctx) -> Option<Vec<u8>> {
+    match box_pid(&ctx.d) {
+        BoxPid::Pid(p) if shell::path(&cat!("/proc/", p, "/root/usr")).is_dir() => Some(p),
+        _ => None,
+    }
+}
+
+/// run_link_notes HOW TOP-SAID WORD... (#235): each word of the command that is a path in the repo
+/// reached through a link out of it to what the box does not have, said before the command runs.
+/// TOP_SAID: links at the top of the repo left out (a throwaway's `up` said them).
+pub fn run_link_notes(ctx: &Ctx, how: &str, top_said: bool, words: &[Vec<u8>]) {
+    if in_jail() {
+        return;
+    }
+    let Some(here) = pwd_physical() else { return };
+    let mut said: HashSet<Vec<u8>> = HashSet::new();
+    let mut top_pid: Option<(Vec<u8>, Vec<u8>)> = None;
+    for w in words {
+        if w.is_empty() || w.starts_with(b"-") {
+            continue;
+        }
+        let p = if w.starts_with(b"/") {
+            w.clone()
+        } else {
+            cat!(here, "/", w)
+        };
+        if !shell::path(&p).exists() {
+            continue;
+        }
+        if top_pid.is_none() {
+            let Some(top) = repo_top() else { return };
+            let Some(pid) = box_root_pid(ctx) else { return };
+            top_pid = Some((top, pid));
+        }
+        let Some((top, pid)) = &top_pid else { return };
+        let Some([c, r, rp]) = repo_link_out(top, &p) else {
+            continue;
+        };
+        if said.contains(&c) {
+            continue;
+        }
+        let parent = &c[..c.iter().rposition(|&x| x == b'/').unwrap_or(0)];
+        if top_said && parent == top.as_slice() {
+            continue;
+        }
+        if !link_dangles(pid, &c, &rp) {
+            continue;
+        }
+        said.insert(c.clone());
+        link_note(&cat!(w, " leads through "), &c, &r, how);
+    }
+}
+
+/// cwd_path_word DIR BOXHOME WORD... (#251): the first word of a command, or of a script in one,
+/// that is a relative path there in DIR, and not one BOXHOME has too; 64 looked at at most.
+fn cwd_path_word(dir: &[u8], home: &[u8], words: &[Vec<u8>]) -> Option<Vec<u8>> {
+    let mut n = 0;
+    for w in words {
+        for t in shell::words(w) {
+            n += 1;
+            if n > 64 {
+                return None;
+            }
+            if t.starts_with(b"-") || t.starts_with(b"/") || t.starts_with(b"~") {
+                continue;
+            }
+            if !shell::path(&cat!(dir, "/", t)).exists() {
+                continue;
+            }
+            if !crate::exit::contains(&cat!("/", t, "/"), b"/../")
+                && shell::path(&cat!(home, "/", t)).exists()
+            {
+                continue;
+            }
+            return Some(t);
+        }
+    }
+    None
+}
+
+/// run_cwd_note HOW WORD... (#251): when a word of the command is a path in the caller's dir and
+/// the box runs it in its HOME, not there, says so (with the mount that brings the dir in).
+pub fn run_cwd_note(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
+    if in_jail() {
+        return;
+    }
+    let pwd = shell::pwd();
+    let Some(w) = cwd_path_word(&pwd, &cat!(ctx.d, "/home"), words) else {
+        return;
+    };
+    let BoxPid::Pid(pid) = box_pid(&ctx.d) else {
+        return;
+    };
+    if crate::exec::box_cwd(&ctx.d, &pid, &pwd) != b"/home/sbx" {
+        return;
+    }
+    let norepo = how == "run" && repo_top().is_none();
+    let (w, d) = (no_cntrl(&w), no_cntrl(&pwd));
+    let wher = if norepo {
+        b"is in no repo, so not in this throwaway box".to_vec()
+    } else {
+        cat!("box '", ctx.name, "' does not have")
+    };
+    let fix = match refuse_src(&pwd) {
+        Some(why) => cat!("a box may not mount it (", why, ")"),
+        None => cat!(
+            how,
+            " --overlay ",
+            d,
+            " (or --ro-bind, read-only) mounts it"
+        ),
+    };
+    say(cat!(
+        "note: ",
+        w,
+        " is relative to ",
+        d,
+        ", which ",
+        wher,
+        ": the command runs in the box HOME (/home/sbx); ",
+        fix
+    ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lexical_paths() {
+        assert_eq!(realpath_ms(b"/a/./b/../c//d/"), Some(b"/a/c/d".to_vec()));
+        assert_eq!(realpath_ms(b"/.."), Some(b"/".to_vec()));
+        assert_eq!(realpath_ms(b"/"), Some(b"/".to_vec()));
+    }
+
+    #[test]
+    fn controls_shown_as_question_marks() {
+        assert_eq!(no_cntrl(b"a\tb\x1bc"), b"a?b?c");
+        assert_eq!(no_cntrl("é\u{85}x".as_bytes()), "é?x".as_bytes());
+        assert_eq!(no_cntrl(b"\xffz"), b"\xffz");
+    }
+
+    #[test]
+    fn path_words() {
+        let d = std::env::temp_dir();
+        let dir = shell::bytes(&d).to_vec();
+        assert_eq!(
+            cwd_path_word(&dir, b"/nonexistent", &[b"-x .".to_vec()]),
+            Some(b".".to_vec())
+        );
+        assert_eq!(
+            cwd_path_word(&dir, b"/nonexistent", &[b"/abs ~x".to_vec()]),
+            None
+        );
+    }
+}

@@ -1,20 +1,14 @@
 //! `omabox path`: the box dir, its HOME, its runtime dir, or where each of its logs is.
 
 use crate::args::name_arg;
-use crate::boxes::{box_alive, box_env, need_box, take_over, touch};
+use crate::boxes::{box_alive, need_box, take_over, touch};
 use crate::cat;
 use crate::exit::{Ctx, Res, out};
 use crate::json;
-use crate::procfs;
+use crate::logs::{LOG_NAMES, log_host_path, log_where};
 use crate::select::select_box;
 use crate::shell;
 use serde_json::{Map, Value};
-
-/// A box's logs (issue #41, finding 107), by name.
-const LOG_NAMES: [&str; 13] = [
-    "hyprland", "shell", "apps", "run", "events", "keyring", "labwc", "systemd", "audio", "gdb",
-    "journal", "box", "reap",
-];
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut logs, mut rundir, mut home, mut as_json) = (false, false, false, false);
@@ -88,49 +82,4 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         .flat_map(|(s, w)| cat!(format!("{s:<9} "), w, "\n"))
         .collect();
     out(text)
-}
-
-/// Where log NAME of the selected box is, as the box sees it (`box PATH`) or the host does (`host
-/// PATH`, the box dir's own); None when the box has none.
-fn log_where(ctx: &Ctx, s: &str) -> Option<Vec<u8>> {
-    match s {
-        "hyprland" => {
-            let sig = box_env(&ctx.d, "HYPRLAND_INSTANCE_SIGNATURE")?;
-            Some(cat!(
-                format!("/run/user/{}/hypr/", procfs::uid()),
-                sig,
-                "/hyprland.log"
-            ))
-        }
-        // The latest `run -d` (their names are run-<ns since 1970>.log: in order as text).
-        "run" => {
-            let home = ctx.at("home");
-            std::fs::read_dir(&home).ok()?;
-            let mut runs: Vec<Vec<u8>> = shell::glob(&home, false)
-                .into_iter()
-                .filter(|n| {
-                    n.strip_prefix(b"run-")
-                        .and_then(|r| r.strip_suffix(b".log"))
-                        .is_some_and(|d| !d.is_empty() && d.iter().all(u8::is_ascii_digit))
-                })
-                .collect();
-            runs.sort_by(|a, b| shell::coll_cmp(a, b));
-            let r = runs.pop()?;
-            Some(cat!("/home/sbx/", r))
-        }
-        "box" | "reap" => Some(cat!(ctx.d, "/", s, ".log")),
-        _ => Some(cat!("/home/sbx/", s, ".log")),
-    }
-}
-
-/// A path as the box sees it, from the host (the box dir's HOME and runtime dir).
-fn log_host_path(ctx: &Ctx, p: &[u8]) -> Vec<u8> {
-    let run = format!("/run/user/{}/", procfs::uid());
-    if let Some(r) = p.strip_prefix(b"/home/sbx/") {
-        cat!(ctx.d, "/home/", r)
-    } else if let Some(r) = p.strip_prefix(run.as_bytes()) {
-        cat!(ctx.d, "/run/", r)
-    } else {
-        p.to_vec()
-    }
 }
