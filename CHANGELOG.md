@@ -13,8 +13,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   config, so those windows stay drawn while hidden. A rule of yours matching `^aquamarine$` no longer
   applies to them; `^aquamarine` matches both. `monitor add` on an interactive box and `up
   --interactive --monitor` need omabox's own aquamarine build for this: on the system's aquamarine,
-  or in a box started before you rebuilt it, they are refused, saying so (`omabox setup
-  --aquamarine`, then a new box). Two `monitor add`s on one interactive box now take turns (the
+  or in a box started before you rebuilt it or by an older omabox, they are refused, saying so
+  (`omabox setup --aquamarine`, then a new box). Two `monitor add`s on one interactive box now take turns (the
   box's lock: the second waits up to 60 s, then says the box is busy)
   ([#349](https://github.com/diogochaves/omabox/issues/349)).
 

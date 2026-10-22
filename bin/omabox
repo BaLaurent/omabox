@@ -12241,8 +12241,9 @@ monitor_add_window() (
   # Its window, by its class: this add's alone, whatever else opens meanwhile.
   end=$((SECONDS + 5))
   until clients=$(host_hyprctl -j clients) && addr=$(jq -er --arg c "$cls" 'first(.[] | select(.initialClass == $c)) | .address' <<<"$clients" 2>/dev/null); do
-    # (MON_CREATING kept: the trap removes the output, whose window may still come)
-    [ $SECONDS -lt $end ] || die "monitor add: no new window of box '$NAME' on your desktop in 5 s"
+    # (MON_CREATING kept: the trap removes the output, whose window may still come; and its line)
+    [ $SECONDS -lt $end ] || { box_file "$D/run/omabox.monitors" "$rest" || true
+      die "monitor add: no new window of box '$NAME' on your desktop in 5 s"; }
     sleep 0.05
   done
   # (made: the box read its token)
@@ -12499,6 +12500,12 @@ cmd_monitor() {
       local aq; aq=$(jq -r '.aquamarine.version // "?"' "$D/box.json")
       [[ $aq == *+appid* ]] ||
         die "monitor add: box '$NAME''s aquamarine ($aq) cannot give a monitor's window a class of its own, which keeps that window off your workspace (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
+      # ...and its Hyprland asked for it: an older omabox's `up` (a worktree on the main checkout's
+      # build, an older release) started it without AQ_WAYLAND_APP_ID_FILES, and the window would
+      # come up plain aquamarine, its rule catching nothing. share/start-hyprland.sh leaves this file
+      # when it sets that env.
+      [ -f "$D/run/omabox.appid-files" ] ||
+        die "monitor add: box '$NAME' was started by an omabox that does not give a monitor's window a class of its own, which keeps that window off your workspace: start a new box with this omabox"
     fi
   elif [ "$act" = add ] && [ "$(meta wayland_screen)" = true ]; then
     # A box started before #165 runs labwc with no config of omabox's: a window it opened for a

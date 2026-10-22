@@ -140,6 +140,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     ") cannot give a monitor's window a class of its own, which keeps that window off your workspace (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
                 )));
             }
+            // ...and its Hyprland asked for it: an older omabox's `up` started it without
+            // AQ_WAYLAND_APP_ID_FILES (share/start-hyprland.sh leaves this file when it sets it).
+            if !ctx.at("run/omabox.appid-files").is_file() {
+                return Err(ctx.die(cat!(
+                    "monitor add: box '",
+                    n,
+                    "' was started by an omabox that does not give a monitor's window a class of its own, which keeps that window off your workspace: start a new box with this omabox"
+                )));
+            }
         }
     } else if act == b"add" && meta(&ctx.d, "wayland_screen").0 == b"true" {
         // A box started before #165 runs labwc with no config of omabox's.

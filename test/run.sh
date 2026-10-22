@@ -1343,6 +1343,22 @@ t_unit_refusals() {
     check_match "--monitor on an interactive box without aquamarine's fix: refused" "opens a window per monitor, which needs aquamarine's fix" \
       "$(OMABOX_AQUAMARINE=system ob up "$P-r28" --interactive --monitor 800x600 2>&1)"
   fi
+  # (finding 429) ...and on one with the fix but not omabox's +appid (a private build an older
+  # `omabox setup --aquamarine` made): each window needs a class of its own. The box's aquamarine is
+  # aq_pick's answer for such a build (its .omabox-commit without +appid), nothing else changed.
+  local aqo=$TMP/$P-aqold aqso; aqso=$(lib hypr_aq_soname 2>/dev/null) || aqso=""
+  if [ -n "$aqso" ]; then
+    mkdir -p "$aqo/lib"; : > "$aqo/lib/libaquamarine.so.0.15.1"; ln -sf libaquamarine.so.0.15.1 "$aqo/lib/$aqso"
+    echo 7bb8bdf4+keys+layout+cursor > "$aqo/.omabox-commit"
+    # shellcheck disable=SC2016 # the script's own expansions
+    check_match "--monitor on an interactive box, an omabox build without +appid: refused, naming setup" \
+      "up: --monitor on an interactive box needs omabox's aquamarine build.*\(boxes use a private build, 0\.15\.1@7bb8bdf4\+keys\+layout\+cursor .*omabox setup --aquamarine" \
+      "$(OMABOX_BASH=1 bash -c 'source "$1"; ROOT=$2 POINTER=$2/tools/pointer/omabox-pointer KEYBOARD=$2/tools/keyboard/omabox-keyboard
+        STILL=$2/tools/still/omabox-still EVENTS=$2/tools/events/omabox-events AQD=$3
+        aq_resolve() { local r; r=$(aq_pick "$1" "$AQ_SYSDIR" "$AQD") || return 1; IFS="|" read -r AQ_KIND AQ_LIB AQ_VER AQ_FIXED <<<"$r"; AQ_MAIN=""; }
+        shift 3; main "$@"' lib "$TMP/lib/bin/omabox" "$ROOT" "$aqo/lib" up "$P-r31" --interactive --monitor 800x600 2>&1)"
+    check_fails "...nothing made" test -e "$XDG_RUNTIME_DIR/omabox/$P-r31"
+  fi
   check_match "--monitor with a bad SPEC refused" "a size is WxH" "$(ob up "$P-r29" --monitor big 2>&1)"
   check_fails "--seed of ~/.config/omarchy refused (api-keys.env)" ob up "$P-r20" --seed "$HOME/.config/omarchy:x"
   check_fails "--plugin HOME refused" bash -c "mkdir -p '$TMP/fakehome' && echo '{\"id\":\"x.y\"}' > '$TMP/fakehome/manifest.json' && HOME='$TMP/fakehome' '$CLI' up '$P-r18' --plugin '$TMP/fakehome'"
@@ -4798,6 +4814,7 @@ PYEOF
     python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$r/rt/omabox/fkn/run/wayland-9"
     rp4_fk fki ',"workspace":"9","aquamarine":{"kind":"private","version":"0.15.1+layout+cursor+appid","fixed":true}'
     sed -i 's/"mode":"headless"/"mode":"interactive"/' "$r/rt/omabox/fki/box.json"
+    : > "$r/rt/omabox/fki/run/omabox.appid-files"   # (its Hyprland given AQ_WAYLAND_APP_ID_FILES: start-hyprland.sh)
     rp4_fk fka ',"audio":true,"shell":true'
     echo fk > "$st/boxdir.name"; echo "$r/rt/omabox/fk" > "$st/boxdir"
     rp4_mons HEADLESS-2:1920x1080
@@ -4950,6 +4967,12 @@ PYEOF
   rp4_inoappid() { rp4_imain; sed -i 's/+layout+cursor+appid/+layout+cursor/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_inoappid)
   parity "monitor add: interactive, an older build of omabox's (no +appid) refused" monitor -b fki add 800x600
   parity "monitor remove: interactive, an aquamarine without +appid: not refused" monitor -b fki remove WAYLAND-9
+  # (+appid in box.json, but an older omabox's `up` started its Hyprland: no AQ_WAYLAND_APP_ID_FILES,
+  # its windows plain aquamarine, a rule for their class would catch none)
+  rp4_inomark() { rp4_imain; rm -f "$r/rt/omabox/fki/run/omabox.appid-files"; }; rp4_pre=(rp4_inomark)
+  parity "monitor add: interactive, +appid but started by an omabox that set no AQ_WAYLAND_APP_ID_FILES: refused" monitor -b fki add 800x600
+  check_eq "...nothing asked of the host or the box" 0 "$(cat "$st/host.log" "$st/hypr.log" 2>/dev/null | grep -cE 'window_rule|output create')"
+  check "...no class token written" test ! -e "$r/rt/omabox/fki/run/omabox.appid.WAYLAND-2"
   rp4_iunfixed() { rp4_imain; sed -i 's/"fixed":true/"fixed":false/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_iunfixed)
   parity "monitor add: interactive, aquamarine without #415's fix" monitor -b fki add 800x600
   rp4_ihave() {
@@ -5317,6 +5340,10 @@ PYEOF
     parity "monitor add, interactive, and $sg while it waits for the window: the monitor removed, no rule off (finding 429)" monitor -b fki add 800x600
     check "...the box told to remove it" grep -q '^output remove WAYLAND-2' "$st/hypr.log"
   done
+  rp_wrap=("$r/rp-linger")
+  parity "monitor add, interactive, no window on the host in 5 s: refused, the monitor removed (finding 429)" monitor -b fki add 800x600
+  check "...the box told to remove it" grep -q '^output remove WAYLAND-2' "$st/hypr.log"
+  check_fails "...its line not left in the box's record" grep -q '^WAYLAND-2 ' "$r/rt/omabox/fki/run/omabox.monitors"
   rp4_late() { rp4_imain; : > "$st/create.later"; }; rp4_pre=(rp4_late) rp4_want=closed
   rp_wrap=("$r/rp-sig" group-TERM "$st/creating")
   parity "monitor add, interactive, and group-TERM during the create: its window on 9 by its rule, then closed (finding 429)" monitor -b fki add 800x600
@@ -7813,6 +7840,33 @@ t_unit_cli() {
   check "confirm-close calls the box's own hyprctl and jq (#113: a stub must not end the box)" \
     grep -qE '^hyprctl\(\) \{ /usr/bin/hyprctl .*$' "$ROOT/share/confirm-close.sh"
   check "...and jq" grep -qE '^jq\(\) \{ /usr/bin/jq ' "$ROOT/share/confirm-close.sh"
+  # (finding 429) Its new window never unnamed, which the box could name after a class token another
+  # `monitor add` left: the closed window's name, else the first WAYLAND-N with no token that the box
+  # takes. Run with a stub of the box's hyprctl (by path, as the script calls it).
+  local ccx=$TMP/$P-ccx; mkdir -p "$ccx/rt"
+  cat > "$ccx/hyprctl" <<'EOF'
+#!/bin/sh
+echo "$*" >> "$CCX/log"
+[ ! -e "$CCX/down" ] || exit 1
+case "$*" in
+  "output create wayland WAYLAND-4") echo ok ;;
+  "output create wayland"*) echo "Name already taken" ;;
+  "-j monitors") echo '[{"name":"WAYLAND-4"}]' ;;
+esac
+EOF
+  chmod +x "$ccx/hyprctl"
+  sed "s|/usr/bin/hyprctl|$ccx/hyprctl|" "$ROOT/share/confirm-close.sh" > "$ccx/cc.sh"
+  echo omabox-0123456789abcdef > "$ccx/rt/omabox.appid.WAYLAND-1"; echo omabox-fedcba9876543210 > "$ccx/rt/omabox.appid.WAYLAND-3"
+  CCX=$ccx XDG_RUNTIME_DIR=$ccx/rt OMABOX_SHELL=0 bash "$ccx/cc.sh" WAYLAND-1 >/dev/null 2>&1
+  check_eq "confirm-close: its window under the closed one's name, else the first WAYLAND-N with no class token (finding 429)" \
+    "WAYLAND-1 WAYLAND-2 WAYLAND-4" "$(grep '^output create wayland' "$ccx/log" | awk '{print $4 "" ($4 == "" ? "(unnamed)" : "")}' | paste -sd ' ')"
+  check "...the closed one's token gone" test ! -e "$ccx/rt/omabox.appid.WAYLAND-1"
+  check "...another add's kept" test -e "$ccx/rt/omabox.appid.WAYLAND-3"
+  check "...and the box kept" test ! -e "$ccx/rt/omabox.closed"
+  rm -f "$ccx/log"; : > "$ccx/down"
+  CCX=$ccx XDG_RUNTIME_DIR=$ccx/rt OMABOX_SHELL=0 bash "$ccx/cc.sh" WAYLAND-1 >/dev/null 2>&1
+  check_eq "...a box whose Hyprland does not answer: asked once, then ended" "1 1" \
+    "$(grep -c '^output create' "$ccx/log") $(cat "$ccx/rt/omabox.closed" 2>/dev/null)"
   check_match "...up's: --new starts the box, so its options go on that call (#148)" "--new\] +start it under a free name" "$(ob help up)"
   check_match "...as the skill says" "up --new \[--plugin …\]\` starts a box" "$(cat "$ROOT/skill/SKILL.md")"
   check_eq "...an unknown one: one line, exit 2" "1 2" "$(ob help shoot 2>&1 | wc -l) $(ob help shoot >/dev/null 2>&1; echo $?)"
@@ -14670,7 +14724,9 @@ t_monitors_window() {
   # (finding 429: each monitor's window a class of its own, for a rule of its own; the main one aquamarine)
   check_eq "...each monitor's window a class of its own, the main one aquamarine (finding 429)" "1 2" \
     "$(ob hyprctl -b "$S" -j clients | jq -r '"\(map(select(.class == "aquamarine")) | length) \(map(.initialClass | select(test("^aquamarine-omabox-[0-9a-f]{16}$"))) | unique | length)"')"
-  check_eq "...their class tokens gone from the box's runtime dir" "" "$(ob run -b "$S" -- sh -c "ls '$("${in[@]}" path wm)/run' | grep appid" 2>/dev/null)"
+  local wmrun; wmrun=$(ob run -b "$S" -- ls "$("${in[@]}" path wm)/run" 2>/dev/null) || wmrun=""
+  check_eq "...their class tokens gone from the box's runtime dir" "" "$(grep '^omabox\.appid\.' <<<"$wmrun")"
+  check_eq "...its mark that its Hyprland was given AQ_WAYLAND_APP_ID_FILES there (start-hyprland.sh)" omabox.appid-files "$(grep -x 'omabox\.appid-files' <<<"$wmrun")"
   # The layout file the box's Lua writes for its aquamarine (finding 238; #200) against `monitors`:
   # each monitor's place and its size in the layout (its pixels over its scale, the sides swapped by a
   # 90/270 transform), rounded.

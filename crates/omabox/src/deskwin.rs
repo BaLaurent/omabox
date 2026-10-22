@@ -753,7 +753,9 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
             }
         }
         if secs() >= end {
-            // (MON_CREATING kept: the trap removes the output, whose window may still come)
+            // (MON_CREATING kept: the trap removes the output, whose window may still come; and
+            // its line)
+            monitors_write(ctx, &rest);
             return Err(ctx.die(cat!(
                 "monitor add: no new window of box '",
                 ctx.name,

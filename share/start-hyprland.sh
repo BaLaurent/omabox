@@ -21,8 +21,13 @@ lib=(); [ ! -d /opt/omabox/lib ] || lib=(LD_LIBRARY_PATH=/opt/omabox/lib)
 [ "${OMABOX_INTERACTIVE:-0}" != 1 ] || lib+=(AQ_WAYLAND_LAYOUT="$XDG_RUNTIME_DIR/omabox.layout")
 # And a class of its own for each window `monitor add` makes (finding 429): omabox writes
 # omabox.appid.NAME before it asks for output NAME, and its host rule matches that class alone. Any
-# other window keeps class aquamarine.
-[ "${OMABOX_INTERACTIVE:-0}" != 1 ] || lib+=(AQ_WAYLAND_APP_ID_FILES="$XDG_RUNTIME_DIR/omabox.appid.")
+# other window keeps class aquamarine. omabox.appid-files says this Hyprland has it: `monitor add`
+# refuses a box without (one an older omabox started, whose start-hyprland.sh set no such env, even
+# on a library with +appid: box.json's version alone cannot tell).
+if [ "${OMABOX_INTERACTIVE:-0}" = 1 ]; then
+  lib+=(AQ_WAYLAND_APP_ID_FILES="$XDG_RUNTIME_DIR/omabox.appid.")
+  : > "$XDG_RUNTIME_DIR/omabox.appid-files"
+fi
 # The box's own copy of omabox's config (#140): share/ is the checkout's or package's, live, and a
 # change to it (a pull, an upgrade) reloaded every running box, dropping what agents had added in Lua.
 # Autoreload is off too (hyprland.lua); `omabox reload` refreshes the copy and reloads it.
