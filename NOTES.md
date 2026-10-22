@@ -8825,7 +8825,8 @@ from them.
     (the caller's value where a global overwrote it; what the broker set or took out stays so).
     What the Rust half leaves to bash (a `--help` after other words, in lua, log and events) goes
     back before anything is done: the same call. Since wave 3a, run, tree and pixel print theirs
-    there as `omabox help CMD` prints it (the help text stays bash's until the front is ported), and
+    there as `omabox help CMD` prints it (the help text stays bash's until the front is ported; wave
+    3b's scroll and keys-to-box too), and
     `run -d --wait` is the Rust half's, on the settle machinery `wait` shares (settle.rs). Tests:
     t_unit_rust_handoff, t_unit_rust_parity, t_rust_parity.
 
@@ -8837,6 +8838,14 @@ from them.
     anything is made, in bash and in the Rust half alike; no other refusal of settle_begin's comes
     after them. Tests: t_unit_rust_parity (wait still and run -d --wait on a stand-in desktop, both
     ways, with TMPDIR a dir of the test's own: empty after).
+
+427. **A failed `shot --burst` left a temporary file behind** (2026-10-22, #324 wave 3b). shot_burst
+    keeps the burst tool's (or a grim's) words in a `mktemp` file, and a frame that failed ended the
+    command (the box gone, a Hyprland that stopped answering, the frame not taken) with those words
+    in its message before the file was removed: one file left in $TMPDIR each time. **Fix**: the words
+    are read and the file removed first, then the command ends as before, in bash and in the Rust half
+    alike. Tests: t_unit_rust_parity (a burst whose third frame fails on the stand-in desktop, from the
+    burst tool and a grim a frame, TMPDIR a dir of the test's own: compared both ways, and empty after).
 
 435. **An interactive `monitor add` whose box answered late opened its window on the user's
     workspace, focused** (2026-10-22, #349; the 1.0.x stopgap). `hyprctl` stops reading after 5 s of

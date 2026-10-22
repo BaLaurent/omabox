@@ -32,6 +32,24 @@ fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"windows" => Some("-b= --box= --json"),
         b"tree" => Some("-b= --box= -w= --window= --active -l= --layer= --find= --json --all"),
         b"pixel" => Some("-b= --box= -w= --window= --active --in= --json"),
+        b"keys" => Some(
+            "-b= --box= -w= --window= --active -t= -s= --pass= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
+        ),
+        b"keys-to-box" => Some("-b= --box="),
+        b"click" => Some(
+            "-b= --box= -w= --window= --active --in= --no-raise --double --steps= --glide= --mod= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
+        ),
+        b"scroll" => Some(
+            "-b= --box= -w= --window= --active --in= --no-raise --mod= --source= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
+        ),
+        b"pointer" => Some("-b= --box= -w= --window= --active --in= --steps= --glide= --mod="),
+        b"drag" => Some(
+            "-b= --box= -w= --window= --active --in= --no-raise --steps= --glide= --hold= --shot= --shot-fit= --shot-g= --shot-monitor= --mod= --wait --start= --quiet= --timeout= --strict --json --ignore= -g=",
+        ),
+        b"shot" | b"screenshot" => Some(
+            "-b= --box= -o= --output= --no-pointer -g= -w= --window= --active --monitor= --fit= --zoom= --burst= --every= --sheet --diff --changed --since= --ignore= --after --json",
+        ),
+        b"calibrate" => Some("-b= --box= -o= --output= --size= --answer= --json"),
         _ => None,
     }
 }
@@ -66,6 +84,46 @@ fn usage_head(cmd: &[u8]) -> &'static str {
         }
         b"pixel" => {
             "  omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb"
+        }
+        b"keys" => {
+            r#"  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s DURATION | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return"#
+        }
+        b"keys-to-box" => {
+            r#"  omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys to the box while focused, pointer on it"#
+        }
+        b"click" => {
+            r#"  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
+               [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click"#
+        }
+        b"scroll" => {
+            r#"  omabox scroll [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y DY [DX] [--source wheel|finger|continuous|tilt]
+                [--mod MODS]
+                                                         scroll there (DX: sideways; 15 is a wheel notch)"#
+        }
+        b"pointer" => {
+            r#"  omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N | --glide DURATION] [--mod MODS] -- ARGS...
+                 raw: move X Y [--steps N], click/down/up [BTN], scroll DY, hscroll DX,
+                 source wheel|finger|continuous|tilt, sleep DURATION
+  omabox pointer [-b NAME] hide | show                   the pointer out of shots and recordings (it still moves), over reloads"#
+        }
+        b"drag" => {
+            r#"  omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [BTN]
+              [--steps 10 | --glide DURATION] [--hold DURATION] [--mod MODS]  press, move, hold, release
+              [--shot-fit N | --shot-g "X,Y WxH" | --shot-monitor NAME]   (with --shot: as shot's --fit, -g, --monitor)"#
+        }
+        b"shot" => {
+            r#"  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
+              [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
+              [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time"#
+        }
+        b"screenshot" => {
+            r#"  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
+              [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
+              [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time"#
+        }
+        b"calibrate" => {
+            r#"  omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
+  omabox calibrate [CARD] --answer "A X,Y B X,Y ..." [--json]   where you see each mark: 1:1, or the --fit N that maps it"#
         }
         _ => "",
     }

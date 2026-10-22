@@ -118,11 +118,25 @@ fn img_px(p: &[u8], image: &[u8], screen: &[u8]) -> Option<i64> {
 }
 
 /// `stat -L -c '%s %.9Y' -- FILE`.
-fn stamp(f: &[u8]) -> Vec<u8> {
+pub fn stamp(f: &[u8]) -> Vec<u8> {
     match std::fs::metadata(shell::path(f)) {
         Ok(m) => format!("{} {}.{:09}", m.size(), m.mtime(), m.mtime_nsec()).into_bytes(),
         Err(_) => Vec::new(),
     }
+}
+
+/// `$(P=KEY awk -F'\t' '$1 == ENVIRON["P"]' "$D/shots.tsv" | tail -n 1)`: the last record of a shot.
+pub fn shot_rec(ctx: &Ctx, key: &[u8]) -> Vec<u8> {
+    tsv_last(&ctx.at("shots.tsv"), key)
+}
+
+/// The last line of a tab-separated FILE whose first field is KEY (awk's), empty for none.
+pub fn tsv_last(file: &std::path::Path, key: &[u8]) -> Vec<u8> {
+    let tsv = std::fs::read(file).unwrap_or_default();
+    tsv.split(|&c| c == b'\n')
+        .rfind(|l| l.split(|&c| c == b'\t').next() == Some(key) && !l.is_empty())
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default()
 }
 
 /// Where a shot's pixel is on the box.
@@ -156,13 +170,7 @@ pub fn shot_point(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
             None => return Err(ctx.die(cat!("--in: no such file: ", file))),
         }
     };
-    // (awk's last line whose first tab-separated field is KEY)
-    let tsv = std::fs::read(ctx.at("shots.tsv")).unwrap_or_default();
-    let rec = tsv
-        .split(|&c| c == b'\n')
-        .rfind(|l| l.split(|&c| c == b'\t').next() == Some(key.as_slice()) && !l.is_empty())
-        .map(<[u8]>::to_vec)
-        .unwrap_or_default();
+    let rec = shot_rec(ctx, &key);
     if rec.is_empty() {
         return Err(ctx.die(cat!(
             "--in: ",

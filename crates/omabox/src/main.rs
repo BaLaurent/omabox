@@ -8,7 +8,9 @@ mod cmd;
 mod desk;
 mod exec;
 mod exit;
+mod host;
 mod hypr;
+mod input;
 mod jail;
 mod jobs;
 mod jq;
@@ -16,14 +18,17 @@ mod jqprog;
 mod json;
 mod layer;
 mod logs;
+mod marks;
 mod num;
 mod procfs;
+mod ptr;
 mod repo;
 mod screen;
 mod select;
 mod settle;
 mod shell;
 mod shellnote;
+mod shots;
 mod sig;
 mod win;
 
@@ -76,6 +81,14 @@ fn main() -> ExitCode {
         Some("windows") => Some(cmd::windows::run),
         Some("tree") => Some(cmd::tree::run),
         Some("pixel") => Some(cmd::pixel::run),
+        Some("keys") => Some(cmd::keys::run),
+        Some("click") => Some(cmd::click::run),
+        Some("scroll") => Some(cmd::click::scroll),
+        Some("pointer") => Some(cmd::pointer::run),
+        Some("drag") => Some(cmd::drag::run),
+        Some("shot" | "screenshot") => Some(cmd::shot::run),
+        Some("calibrate") => Some(cmd::calibrate::run),
+        Some("keys-to-box") => Some(cmd::keys_to_box::run),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.
@@ -83,7 +96,10 @@ fn main() -> ExitCode {
     if let (Some(run), false) = (ported, runtime.is_empty()) {
         let words: Vec<Vec<u8>> = rest.into_iter().map(OsString::into_vec).collect();
         let mut ctx = exit::Ctx::new(cmd.as_encoded_bytes(), cat!(runtime, "/omabox"));
-        return match run(&mut ctx, &words) {
+        let r = run(&mut ctx, &words);
+        // (shot --no-pointer's hold, given back however the command ended: bash's EXIT trap)
+        ptr::release_at_exit();
+        return match r {
             Ok(()) => ExitCode::SUCCESS,
             Err(exit::Exit(rc)) => ExitCode::from(rc),
         };

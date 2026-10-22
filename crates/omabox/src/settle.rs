@@ -149,21 +149,30 @@ pub fn kill_tree(pid: &[u8]) {
 
 /// One line of the tool's, as `IFS= read -r -t 1` gives it: a whole line, what came of one before
 /// the second was over, or what came of one before the end.
-enum Got {
+pub enum Got {
     Line(Vec<u8>),
     Timeout(Vec<u8>),
     Eof(Vec<u8>),
 }
 
-/// The tool's stdout and stderr (SETTLE_OUT), read a line at a time.
-struct Lines {
+/// The tool's stdout and stderr (SETTLE_OUT), read a line at a time (and with_mods' keyboard tool's,
+/// drag --shot's pointer tool's).
+pub struct Lines {
     fd: OwnedFd,
     buf: Vec<u8>,
     eof: bool,
 }
 
 impl Lines {
-    fn read(&mut self, t: Duration) -> Got {
+    pub fn new(fd: OwnedFd) -> Lines {
+        Lines {
+            fd,
+            buf: Vec::new(),
+            eof: false,
+        }
+    }
+
+    pub fn read(&mut self, t: Duration) -> Got {
         let end = Instant::now() + t;
         loop {
             if let Some(i) = self.buf.iter().position(|&c| c == b'\n') {
@@ -349,7 +358,6 @@ impl Settle {
 
     /// settle_in_window X Y (F8, #287): the caller's regions, given in the window's coordinates,
     /// moved by the window's place. None where bash's arithmetic refuses a number of theirs.
-    #[allow(dead_code)] // keys, click and drag --window (wave 3b of #324)
     pub fn in_window(&mut self, x: &[u8], y: &[u8]) -> Option<()> {
         self.origin = Some((x.to_vec(), y.to_vec()));
         let (ox, oy) = (bash_int(x)?, bash_int(y)?);

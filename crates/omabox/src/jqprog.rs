@@ -308,8 +308,142 @@ pub const WIN_SIZE2_JQ: &str = r#""\(.size[0]) \(.size[1])""#;
 /// layer_select: the ones drawn (over 1x1, finding 146).
 pub const LAYER_BIG_JQ: &str = r#"map(select(.w > 1 and .h > 1))"#;
 
-/// Every inline program, for `_rust-jq --inline` (the rest are a path, .kind, .[0], length).
-pub const INLINE: [&str; 30] = [
+/// win_blocked: why a point of a window cannot be clicked, or nothing.
+pub const WIN_BLOCKED_JQ: &str = r#"(.at[0] + $x) as $px | (.at[1] + $y) as $py
+    | if .onscreen | not then "not on screen (workspace \(.workspace))"
+      else first(.cover[] | select($px >= .at[0] and $px < .at[0] + .size[0] and $py >= .at[1] and $py < .at[1] + .size[1])
+        | "covered there by \(.address) \(.class) \(.title | tojson)") // empty end"#;
+/// win_layer: the layer surface over a point of a window (#263, findings 398, 421).
+pub const WIN_LAYER_JQ: &str = r#"(.at[0] + $x) as $px | (.at[1] + $y) as $py
+    | [.layers[]? | select($px >= .at[0] and $px < .at[0] + .size[0] and $py >= .at[1] and $py < .at[1] + .size[1])]
+    | select(length > 0) | (map(select(.certain != false)) | last) // last
+    | "\(if .certain == false then "possible" else "certain" end) \(.namespace | tojson) \(.layer) \(.size[0])x\(.size[1]) at \(.at[0]),\(.at[1])""#;
+/// win_point: the point inside the window.
+pub const WIN_INSIDE_JQ: &str = r#"$x < .size[0] and $y < .size[1]"#;
+/// win_point: its screen point.
+pub const WIN_AT_JQ: &str = r#""\(.at[0] + $x) \(.at[1] + $y)""#;
+/// win_raise: the active window's address.
+pub const ACTIVE_ADDR_JQ: &str = r#".address // empty"#;
+
+/// zero_note: the outputs listed 0x0 (#213).
+pub const ZERO_NOTE_JQ: &str =
+    r#"[.[] | select((.disabled | not) and (.width == 0 or .height == 0)) | .name] | join(", ")"#;
+/// shot --json (#273, audit J2): what the shot is.
+pub const SHOT_SAID_JQ: &str = r#"
+    def n: if . == "" then null else tonumber end;
+    ($p != "") as $img
+    | {path: (if $img then $p else null end), kind: $k,
+       region: (if $img then {x: ($x | n), y: ($y | n), w: ($w | n), h: ($h | n)} else null end),
+       image: (if $img then {w: ($iw | n), h: ($ih | n)} else null end),
+       scale: (if $img then (($iw | n) / ($w | n) * 10000 | round / 10000) else null end),
+       window: ($win | if . == null then null else {address, class, title, workspace, x: .at[0], y: .at[1], w: .size[0], h: .size[1]} end),
+       monitor: (if $mon == "" then null else $mon end), fit: ($fit | n), zoom: ($zoom | n),
+       changed: (if $ch == 1 then {result: $res, since: (if $since == "" then null else $since end),
+         why: (if $why == "" then null else $why end)} else null end)}"#;
+/// shot --monitor (#122): that monitor's part of the layout (after JQ_MON).
+pub const SHOT_MON_JQ: &str = r#"first(.[] | select(.name == $n and (.disabled | not))) |
+      "\(.x) \(.y) \(lw | floor) \(lh | floor)""#;
+/// shot --monitor: the monitors there are.
+pub const MON_NAMES_JQ: &str = r#"map(.name) | join(", ")"#;
+/// shot --monitor: the one named, for zero_note.
+pub const MON_NAMED_JQ: &str = r#"map(select(.name == $n))"#;
+/// shot --fit (#227): the highest scale of the outputs captured (after JQ_MON).
+pub const SHOT_SCALE_JQ: &str = r#"[.[] | select((.disabled | not) and .x < $x + $w and $x < .x + lw and .y < $y + $h and $y < .y + lh) | .scale]
+         | max // 1"#;
+/// shot --window: whether it is on screen, what covers it.
+pub const WIN_STATE_JQ: &str = r#"if .onscreen | not then ", not on screen"
+      elif .cover != [] then ", covered by \(.cover[0].address) \(.cover[0].class) \(.cover[0].title | tojson)"
+        + (if (.cover | length) > 1 then " and \(.cover | length - 1) more" else "" end)
+      else "" end"#;
+/// shot --window: where it is, X,Y.
+pub const WIN_AT2_JQ: &str = r#""\(.at[0]),\(.at[1])""#;
+/// calibrate: a full shot's size (finding 299; after JQ_MON).
+pub const CALIB_SIZE_JQ: &str = r#"[.[] | select(.disabled | not)] | (map(.scale) | max) as $s |
+         "\(map(.x + lw) | max * $s + 0.5 | floor)x\(map(.y + lh) | max * $s + 0.5 | floor)""#;
+/// calibrate --answer --json (#273, audit J8): the verdict.
+pub const CALIB_JSON_JQ: &str = r#"
+      def num: tonumber? // null;
+      ($r | split(" ")) as $v
+      | {result: (if $v[0] == "one" or $v[0] == "fit" or $v[0] == "up" then $v[0] else "none" end),
+         card: {w: ($w | num), h: ($h | num)}, marks: $n, scale: null, scale_x: null, scale_y: null, fit: null,
+         fit_size: null, error_px: null, worst: null, tolerance_px: null, off: {}, shot_fit: ($cur | num)}
+      + if $v[0] == "one" then {scale: 1, error_px: ($v[1] | num), worst: $v[2]}
+        elif $v[0] == "fit" then {scale: ($v[1] | num), scale_x: ($v[2] | num), scale_y: ($v[3] | num), fit: ($v[4] | num),
+          fit_size: $v[5], error_px: ($v[6] | num), worst: $v[7]}
+        elif $v[0] == "up" then {scale: ($v[1] | num)}
+        elif $v[0] == "off" then {scale: (($v[1] | num) as $s | if $s == 0 then null else $s end), tolerance_px: ($v[2] | num),
+          off: ([$v[3:][] | select(test("^[A-Z]:[0-9]+$")) | split(":") | {(.[0]): (.[1] | tonumber)}] | add // {})}
+        else {} end"#;
+
+/// calib_marks (#188): one mark in each cell of a 3 x 2 grid, at a random point of its middle (awk's
+/// rand: the same seed, the same marks).
+pub const CALIB_MARKS_AWK: &str = r#"BEGIN {
+    srand(seed)
+    for (i = 0; i < n; i++) p[i] = i
+    for (i = n - 1; i > 0; i--) { j = int(rand() * (i + 1)); t = p[i]; p[i] = p[j]; p[j] = t }
+    for (i = 0; i < n; i++) {
+      x = w * (i % 3 + 0.2 + 0.6 * rand()) / 3; y = h * (int(i / 3) + 0.2 + 0.6 * rand()) / 2
+      if (x < 0.08 * w) x = 0.08 * w; if (x > 0.92 * w) x = 0.92 * w
+      if (y < 0.08 * h) y = 0.08 * h; if (y > 0.92 * h) y = 0.92 * h
+      printf "%c %d %d\n", 65 + p[i], x, y
+    }}"#;
+/// calib_fit: which scale maps the readings onto the marks (awk).
+pub const CALIB_FIT_AWK: &str = r#"
+  function hyp(a, b) { return sqrt(a * a + b * b) }
+  BEGIN {
+    long = w > h ? w : h; short = w > h ? h : w; tol = long / 160; if (tol < 8) tol = 8
+    split(marks, ml, "\n"); for (i in ml) if (split(ml[i], f, " ") == 3) { mx[f[1]] = f[2]; my[f[1]] = f[3] }
+    n = 0; split(reads, rl, "\n")
+    for (i = 1; i in rl; i++) if (split(rl[i], f, " ") == 3 && (f[1] in mx)) { n++; L[n] = f[1]; rx[n] = f[2]; ry[n] = f[3] }
+    if (n == 0) { print "none"; exit 1 }
+    m = 0; worst = L[1]
+    for (i = 1; i <= n; i++) { e = hyp(rx[i] - mx[L[i]], ry[i] - my[L[i]]); if (e > m) { m = e; worst = L[i] } }
+    if (m <= tol) { printf "one %d %s\n", m + 0.5, worst; exit 0 }
+    k = 0
+    for (i = 1; i <= n; i++) { r[++k] = rx[i] / mx[L[i]]; r[++k] = ry[i] / my[L[i]] }
+    for (i = 2; i <= k; i++) { v = r[i]; for (j = i - 1; j >= 1 && r[j] > v; j--) r[j + 1] = r[j]; r[j + 1] = v }
+    s0 = k % 2 ? r[(k + 1) / 2] : (r[k / 2] + r[k / 2 + 1]) / 2
+    if (s0 <= 0) { printf "off 0 %d", tol; for (i = 1; i <= n; i++) printf " %s:%d", L[i], hyp(rx[i] - mx[L[i]], ry[i] - my[L[i]]) + 0.5; print ""; exit 1 }
+    # (None near it: all of them.)
+    for (pass = 1; pass <= 2 && !dx; pass++)
+      for (i = 1; i <= n; i++) {
+        x = mx[L[i]]; y = my[L[i]]
+        if (pass == 1 && hyp(rx[i] / s0 - x, ry[i] / s0 - y) > 3 * tol) continue
+        cx += x * rx[i]; dx += x * x; cy += y * ry[i]; dy += y * y
+      }
+    s = (cx + cy) / (dx + dy); sx = cx / dx; sy = cy / dy
+    out = ""
+    for (i = 1; i <= n; i++) {
+      e = hyp(rx[i] / s - mx[L[i]], ry[i] / s - my[L[i]])
+      if (e > tol) out = out sprintf(" %s:%d", L[i], e + 0.5)
+    }
+    if (out != "" || s < 0.2) { printf "off %.3f %d%s\n", s, tol, out; exit 1 }
+    if (s > 1) { printf "up %.3f\n", s; exit 1 }
+    N = int(s * long / 8 + 0.5) * 8; k = N / long; S = int(short * k + 0.5)
+    m = 0; worst = L[1]
+    for (i = 1; i <= n; i++) { e = hyp(rx[i] / k - mx[L[i]], ry[i] / k - my[L[i]]); if (e > m) { m = e; worst = L[i] } }
+    printf "fit %.3f %.3f %.3f %d %s %d %s\n", s, sx, sy, N, w >= h ? N "x" S : S "x" N, m + 0.5, worst
+  }"#;
+
+/// Every inline program (and the awk ones), for `_rust-jq --inline` (the rest are a path, .kind, .[0], length).
+pub const INLINE: [&str; 47] = [
+    CALIB_MARKS_AWK,
+    CALIB_FIT_AWK,
+    ZERO_NOTE_JQ,
+    SHOT_SAID_JQ,
+    SHOT_MON_JQ,
+    MON_NAMES_JQ,
+    MON_NAMED_JQ,
+    SHOT_SCALE_JQ,
+    WIN_STATE_JQ,
+    WIN_AT2_JQ,
+    CALIB_SIZE_JQ,
+    CALIB_JSON_JQ,
+    WIN_BLOCKED_JQ,
+    WIN_LAYER_JQ,
+    WIN_INSIDE_JQ,
+    WIN_AT_JQ,
+    ACTIVE_ADDR_JQ,
     LAYER_BIG_JQ,
     WIN_LINES_JQ,
     WIN_DESC_ONE_JQ,

@@ -65,6 +65,120 @@ unsafe extern "C" {
         ps: *mut libc::mbstate_t,
     ) -> libc::size_t;
     fn __ctype_get_mb_cur_max() -> libc::size_t;
+    fn wcrtomb(s: *mut libc::c_char, wc: libc::wchar_t, ps: *mut libc::mbstate_t) -> libc::size_t;
+    fn iswcntrl(wc: u32) -> libc::c_int;
+    fn towlower(wc: u32) -> u32;
+}
+
+/// Whether the locale's characters may take more than a byte.
+fn multibyte() -> bool {
+    // SAFETY: reads the current locale's constant.
+    unsafe { __ctype_get_mb_cur_max() > 1 }
+}
+
+/// `${#V}`: V's length in characters as bash counts them (a byte that starts none is one).
+pub fn char_count(v: &[u8]) -> usize {
+    let (mut i, mut k) = (0, 0);
+    while i < v.len() {
+        i += mb_len(&v[i..], false);
+        k += 1;
+    }
+    k
+}
+
+/// Each character of V as bash's pattern matching reads it, with its bytes: Some(wide character),
+/// or None for a byte that starts none; bytes alone in a single-byte locale.
+fn mb_chars(v: &[u8]) -> Vec<(Option<u32>, &[u8])> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    let multi = multibyte();
+    while i < v.len() {
+        if !multi {
+            out.push((None, &v[i..=i]));
+            i += 1;
+            continue;
+        }
+        // SAFETY: an mbstate_t of zeroes is the initial state; v[i..] is valid for its length.
+        let (r, wc) = unsafe {
+            let mut st: libc::mbstate_t = std::mem::zeroed();
+            let mut wc: libc::wchar_t = 0;
+            let r = mbrtowc(&mut wc, v[i..].as_ptr().cast(), v.len() - i, &mut st);
+            (r, wc)
+        };
+        let n = match r {
+            0 => 1,
+            r if r > v.len() - i => {
+                out.push((None, &v[i..=i]));
+                i += 1;
+                continue;
+            }
+            r => r,
+        };
+        out.push((Some(wc as u32), &v[i..i + n]));
+        i += n;
+    }
+    out
+}
+
+/// A wide character in the locale's bytes (wcrtomb); None when it has none there.
+fn wc_bytes(wc: u32) -> Option<Vec<u8>> {
+    let mut buf = [0u8; 16];
+    // SAFETY: buf holds MB_LEN_MAX (16) bytes; an mbstate_t of zeroes is the initial state.
+    let n = unsafe {
+        let mut st: libc::mbstate_t = std::mem::zeroed();
+        wcrtomb(buf.as_mut_ptr().cast(), wc as libc::wchar_t, &mut st)
+    };
+    (n <= buf.len()).then(|| buf[..n].to_vec())
+}
+
+/// `${V//[[:cntrl:]]/ }`: each control character (the locale's) a space. A V with a byte that starts
+/// no character is matched byte by byte, as bash falls back to then (iscntrl: none past 0x7f).
+pub fn cntrl_to_space(v: &[u8]) -> Vec<u8> {
+    let cs = mb_chars(v);
+    let wide = multibyte() && cs.iter().all(|(c, _)| c.is_some());
+    let mut out = Vec::with_capacity(v.len());
+    if !wide {
+        for &b in v {
+            // SAFETY: iscntrl reads the locale's tables only.
+            let ctl = unsafe { libc::iscntrl(libc::c_int::from(b)) != 0 };
+            out.push(if ctl { b' ' } else { b });
+        }
+        return out;
+    }
+    for (c, b) in cs {
+        // SAFETY: iswcntrl reads the locale's tables only.
+        if c.is_some_and(|wc| unsafe { iswcntrl(wc) != 0 }) {
+            out.push(b' ');
+        } else {
+            out.extend_from_slice(b);
+        }
+    }
+    out
+}
+
+/// `${V,,}`: V in lower case, as the locale's towlower (tolower) has each character.
+pub fn lower(v: &[u8]) -> Vec<u8> {
+    let multi = multibyte();
+    let mut out = Vec::with_capacity(v.len());
+    for (c, b) in mb_chars(v) {
+        match c {
+            Some(wc) => {
+                // SAFETY: towlower reads the locale's tables only.
+                let l = unsafe { towlower(wc) };
+                match (l != wc).then(|| wc_bytes(l)).flatten() {
+                    Some(lb) => out.extend(lb),
+                    None => out.extend_from_slice(b),
+                }
+            }
+            None if multi => out.push(b[0]),
+            None => {
+                // SAFETY: tolower reads the locale's tables only.
+                let l = unsafe { libc::tolower(libc::c_int::from(b[0])) };
+                out.push(u8::try_from(l).unwrap_or(b[0]));
+            }
+        }
+    }
+    out
 }
 
 /// The length of the character V starts with, in the locale init_locale set: 1 in a single-byte
@@ -373,7 +487,19 @@ pub fn glob(dir: &Path, dirs: bool) -> Vec<Vec<u8>> {
 /// `f=$(mktemp)`: a new temporary file, open, and its path (left there for the caller's rm); mktemp's
 /// own words on stderr and its status when it cannot.
 pub fn mktemp() -> Result<(std::fs::File, Vec<u8>), crate::exit::Exit> {
+    mktemp_args(&[])
+}
+
+/// `f=$(mktemp TEMPLATE)` (`mktemp -d` with ["-d"] first: then the dir, opened for reading).
+pub fn mktemp_in(template: &[u8]) -> Result<(std::fs::File, Vec<u8>), crate::exit::Exit> {
+    mktemp_args(&[template])
+}
+
+/// `$(mktemp ARGS...)`: what it made, opened, and its path; its own words on stderr and its status
+/// when it cannot.
+pub fn mktemp_args(args: &[&[u8]]) -> Result<(std::fs::File, Vec<u8>), crate::exit::Exit> {
     let o = std::process::Command::new("mktemp")
+        .args(args.iter().map(|a| OsStr::from_bytes(a)))
         .stderr(std::process::Stdio::inherit())
         .output()
         .map_err(|_| crate::exit::Exit(1))?;
@@ -383,9 +509,10 @@ pub fn mktemp() -> Result<(std::fs::File, Vec<u8>), crate::exit::Exit> {
         ));
     }
     let p = strip_nl(&o.stdout);
+    let dir = args.first().is_some_and(|a| *a == b"-d");
     let f = std::fs::OpenOptions::new()
         .read(true)
-        .write(true)
+        .write(!dir)
         .open(path(&p))
         .map_err(|_| crate::exit::Exit(1))?;
     Ok((f, p))
@@ -606,6 +733,28 @@ mod tests {
                 libc::freelocale(self.0);
             }
         }
+    }
+
+    // What bash 5.3 gave for each, in C.UTF-8 and in C.
+    #[test]
+    fn length_controls_and_case_as_bash() {
+        let t = b"a\x01\xff\xc2\x85b\x7f\xe2\x80\xa8";
+        let x = b"\xc3\x89\xc4\xb0A\xff\xe1\xba\x9e";
+        {
+            let _l = ThreadLocale::new(c"C.UTF-8");
+            assert_eq!(char_count(t), 7);
+            assert_eq!(cntrl_to_space(t), b"a \xff\xc2\x85b \xe2\x80\xa8");
+            assert_eq!(cntrl_to_space(b"\xc2\x85\x01\xe2\x80\xa8"), b"   ");
+            assert_eq!(
+                cntrl_to_space(b"\xe2\x80\x8b\xc2\xad"),
+                b"\xe2\x80\x8b\xc2\xad"
+            );
+            assert_eq!(lower(x), b"\xc3\xa9ia\xff\xc3\x9f");
+        }
+        let _l = ThreadLocale::new(c"C");
+        assert_eq!(char_count(t), 10);
+        assert_eq!(cntrl_to_space(t), b"a \xff\xc2\x85b \xe2\x80\xa8");
+        assert_eq!(lower(x), b"\xc3\x89\xc4\xb0a\xff\xe1\xba\x9e");
     }
 
     #[test]

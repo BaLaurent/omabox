@@ -30,7 +30,7 @@ RELAY=$ROOT/tools/relay/omabox-relay
 # The Rust half (#324, crates/omabox, built into build/bin): the commands it has taken over run there
 # (rust_handoff). OMABOX_BASH=1 keeps every command here, to compare the two.
 RUST=$ROOT/build/bin/omabox
-RUST_CMDS=" _rust path env which hyprctl lua run log logs events wait windows tree pixel "
+RUST_CMDS=" _rust path env which hyprctl lua run log logs events wait windows tree pixel keys keys-to-box click scroll pointer drag shot screenshot calibrate "
 NO_RUST=${OMABOX_BASH:-}; unset OMABOX_BASH   # for this call only, not what it starts
 # aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
 # the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
@@ -8919,9 +8919,11 @@ shot_burst() {
     rc=0; wait "$bpid" 2>/dev/null || rc=$?
     if [ ${#files[@]} != "$n" ]; then
       [ -z "$act" ] || wait "$act" 2>/dev/null || true
+      # (the tool's words read, its temp file gone before any of these ends the command: finding 427)
+      local said; said=$(sed 's/^omabox-burst: \(frame [0-9]*: \)\{0,1\}//' "$err" | tr '\n' ' '); rm -f "$err"
       box_alive || die "shot --burst: box '$NAME' went down at frame $((${#files[@]} + 1))"
       hypr_answers || die "shot --burst: $(hung_text)"
-      die "shot --burst: frame $((${#files[@]} + 1)) failed: $(sed 's/^omabox-burst: \(frame [0-9]*: \)\{0,1\}//' "$err" | tr '\n' ' ')(status $rc)"
+      die "shot --burst: frame $((${#files[@]} + 1)) failed: $said(status $rc)"
     fi
   else
     say "box '$NAME' has no $BOX_BURST (started by an omabox without it): a grim a frame, four Hyprland events each (omabox down $NAME, then up again, for one client a burst)"
@@ -8935,9 +8937,10 @@ shot_burst() {
       if [ $rc != 0 ] || [ ! -s "$f" ]; then
         rm -f -- "$f"
         [ -z "$act" ] || wait "$act" 2>/dev/null || true
+        local said; said=$(tr '\n' ' ' < "$err"); rm -f "$err"
         box_alive || die "shot --burst: box '$NAME' went down at frame $i"
         hypr_answers || die "shot --burst: $(hung_text)"
-        die "shot --burst: frame $i failed: $(tr '\n' ' ' < "$err")"
+        die "shot --burst: frame $i failed: $said"
       fi
       ts+=("$t") files+=("$f")
       # The action, once the first frame is there: beside the rest, its output on stderr.

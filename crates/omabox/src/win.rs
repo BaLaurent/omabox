@@ -3,11 +3,13 @@
 //! their words in messages (win_desc, win_lines). jq runs the programs, so the answers are jq's.
 
 use crate::cat;
+use crate::exec::{ErrTo, Out, on_box};
 use crate::exit::{Ctx, Exit, Res, say};
-use crate::hypr::hypr_json;
+use crate::hypr::{HYPR_LIMIT, hypr_json};
 use crate::jq::{self, Args};
 use crate::jqprog::{WIN_JQ, WIN_SEL_JQ};
-use crate::shell::strip_nl;
+use crate::settle::secs;
+use crate::shell::{self, strip_nl};
 use std::io::Write;
 
 /// win_annotate CLIENTS MONITORS ACTIVEWINDOW [LAYERS]: WIN_JQ's list (its status and output as
@@ -146,6 +148,264 @@ pub fn win_desc(w: &[u8]) -> Vec<u8> {
 /// `jq -r PROGRAM <<<"$X"` as `$(...)`.
 pub fn jq_r(prog: &str, x: &[u8]) -> Vec<u8> {
     jq::jq(&["-r", prog], Some(x), jq::Err::Inherit).text()
+}
+
+/// `out=$(on_box ARGS... 2>&1) || true`.
+fn said(ctx: &Ctx, args: &[&[u8]]) -> Vec<u8> {
+    let a: Vec<Vec<u8>> = args.iter().map(|a| a.to_vec()).collect();
+    let r = on_box(ctx, &a, false, Out::Capture(None), ErrTo::Out, false);
+    shell::subst(&r.out)
+}
+
+/// A window's address, checked as one: it goes into Hyprland's Lua.
+fn address(ctx: &Ctx, w: &[u8]) -> Res<Vec<u8>> {
+    let addr = jq_r(".address", w);
+    if !shell::re_match("^0x[0-9a-f]+$", &addr) {
+        return Err(ctx.die(cat!("bad window address: ", addr)));
+    }
+    Ok(addr)
+}
+
+/// win_raise WINDOW: focused as a user would focus it (its workspace to the screen, a group's tab to
+/// the front, a floating one raised; a tiled one stays under the floats), until it is the active
+/// window, 3 s at most.
+pub fn win_raise(ctx: &Ctx, w: &[u8]) -> Res<()> {
+    let addr = address(ctx, w)?;
+    // (audit E12: which window, and the way round: --no-raise acts on it where it is)
+    let way = "--no-raise acts on it where it is, if uncovered; shot --window takes it covered";
+    let out = said(
+        ctx,
+        &[
+            b"hyprctl",
+            b"dispatch",
+            &cat!("hl.dsp.focus({ window = 'address:", addr, "' })"),
+        ],
+    );
+    if out != b"ok" {
+        return Err(ctx.die(cat!(
+            ctx.label(),
+            "could not focus window ",
+            win_desc(w),
+            ": ",
+            out,
+            " (",
+            way,
+            ")"
+        )));
+    }
+    if jq_r(".floating", w) == b"true" {
+        let out = said(
+            ctx,
+            &[
+                b"hyprctl",
+                b"dispatch",
+                &cat!(
+                    "hl.dsp.window.alter_zorder({ mode = 'top', window = 'address:",
+                    addr,
+                    "' })"
+                ),
+            ],
+        );
+        if out != b"ok" {
+            return Err(ctx.die(cat!(
+                ctx.label(),
+                "could not raise window ",
+                win_desc(w),
+                ": ",
+                out,
+                " (",
+                way,
+                ")"
+            )));
+        }
+    }
+    let deadline = secs() + 3;
+    loop {
+        let a = strip_nl(&hypr_json(ctx, &["activewindow"])?);
+        if jq_r(crate::jqprog::ACTIVE_ADDR_JQ, &a) == addr {
+            return Ok(());
+        }
+        if secs() >= deadline {
+            return Err(ctx.die(cat!(
+                ctx.label(),
+                "window ",
+                win_desc(w),
+                " did not take focus in 3 s: something holds it (a layer, a fullscreen window: omabox windows; ",
+                way,
+                ")"
+            )));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// win_refocus WINDOW: the active window focused again, the pointer left where it is (keys --window,
+/// #201): Hyprland shows a window active while the keyboard is elsewhere; a focus gives it back. Its
+/// warp is held off.
+pub fn win_refocus(ctx: &Ctx, w: &[u8]) -> Res<()> {
+    let addr = address(ctx, w)?;
+    let lua = cat!(
+        "local nw = hl.get_config('cursor.no_warps')\nhl.config({ cursor = { no_warps = true } })\nlocal ok, err = pcall(hl.dispatch, hl.dsp.focus({ window = 'address:",
+        addr,
+        "' }))\nhl.config({ cursor = { no_warps = nw } })\nif not ok then error(err, 0) end"
+    );
+    let out = said(
+        ctx,
+        &[b"timeout", HYPR_LIMIT.as_bytes(), b"hyprctl", b"eval", &lua],
+    );
+    if out != b"ok" {
+        return Err(ctx.die(cat!(
+            ctx.label(),
+            "could not focus window ",
+            win_desc(w),
+            " again: ",
+            out,
+            " (omabox windows; keys without --window types into what has the keyboard)"
+        )));
+    }
+    Ok(())
+}
+
+/// `jq -r --argjson x X --argjson y Y PROGRAM <<<"$W"` as `$(...)`.
+fn jq_xy(prog: &str, w: &[u8], x: &[u8], y: &[u8]) -> jq::Ran {
+    Args::new(&["-r"])
+        .kv("--argjson", "x", x)
+        .kv("--argjson", "y", y)
+        .arg(prog)
+        .run(Some(w), jq::Err::Inherit)
+}
+
+/// How win_point treats what is over the point: click and scroll raise the window (1) or not (0,
+/// --no-raise); pointer never raises it, refuses a window over it and only says a layer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Raise {
+    Yes,
+    No,
+    Pointer,
+}
+
+/// win_point RAISE X Y SEL...: the screen point "SX SY" for window coordinates X,Y of the window
+/// SEL picks, raised first when it is not on screen or something covers the point (unless RAISE
+/// says not); a point still covered is refused, naming what covers it. A layer surface over the
+/// point (#263) is said, and refused under --no-raise; one spanning its output may or may not be
+/// over it: said as such, never refused (findings 398, 421).
+pub fn win_point(ctx: &Ctx, raise: Raise, x: &[u8], y: &[u8], sels: &[Vec<u8>]) -> Res<Vec<u8>> {
+    // The layers read once: raising a window changes none of them.
+    let lys = strip_nl(&hypr_json(ctx, &["layers"])?);
+    let wins = box_windows(ctx, Some(&lys))?;
+    let mut w = win_select(ctx, &wins, sels)?;
+    let desc = win_desc(&w);
+    let inside = Args::new(&["-e"])
+        .kv("--argjson", "x", x)
+        .kv("--argjson", "y", y)
+        .arg(crate::jqprog::WIN_INSIDE_JQ)
+        .run(Some(&w), jq::Err::Inherit);
+    if !inside.ok() {
+        return Err(ctx.die(cat!(
+            x,
+            ",",
+            y,
+            " is outside window ",
+            desc,
+            " (",
+            jq_r(crate::jqprog::WIN_SIZE_JQ, &w),
+            "; coordinates are the window's own)"
+        )));
+    }
+    let mut why = jq_xy(crate::jqprog::WIN_BLOCKED_JQ, &w, x, y).text();
+    if !why.is_empty() {
+        if raise != Raise::Yes {
+            return Err(ctx.die(cat!(
+                "window ",
+                desc,
+                " is ",
+                why,
+                " (click --window raises it; --no-raise and pointer do not)"
+            )));
+        }
+        win_raise(ctx, &w)?;
+        let wins = box_windows(ctx, Some(&lys))?;
+        w = win_select(ctx, &wins, &[jq_r(".address", &w)])?;
+        why = jq_xy(crate::jqprog::WIN_BLOCKED_JQ, &w, x, y).text();
+        if !why.is_empty() {
+            return Err(ctx.die(cat!(
+                "window ",
+                desc,
+                " is still ",
+                why,
+                " after focusing it: move or close that window first"
+            )));
+        }
+    }
+    let lay = jq_xy(crate::jqprog::WIN_LAYER_JQ, &w, x, y).text();
+    if !lay.is_empty() {
+        // certain|possible "NAMESPACE" LAYER WxH at X,Y: only the rectangle is known.
+        let (how, lay) = match lay.iter().position(|&c| c == b' ') {
+            Some(i) => (lay[..i].to_vec(), lay[i + 1..].to_vec()),
+            None => (lay.clone(), lay.clone()),
+        };
+        let (first, rest) = match lay.iter().position(|&c| c == b' ') {
+            Some(i) => (lay[..i].to_vec(), lay[i + 1..].to_vec()),
+            None => (lay.clone(), lay.clone()),
+        };
+        let n = jq::jq(&["-r", "."], Some(&first), jq::Err::Null);
+        let ns = if n.ok() { n.text() } else { Vec::new() };
+        if how == b"possible" {
+            let tail: &[u8] = if ns == b"omarchy-notifications" {
+                b" (omabox run -- omarchy-shell notifications dismissAll clears the toasts)"
+            } else {
+                b""
+            };
+            say(cat!(
+                "a layer spanning the screen, ",
+                first,
+                " (",
+                rest,
+                "), is up over window ",
+                desc,
+                ": input at ",
+                x,
+                ",",
+                y,
+                " may go to it if one of its items (a toast, a dock icon) is there; elsewhere it goes to the window",
+                tail
+            ));
+        } else {
+            let lay = cat!(
+                "a layer surface ",
+                first,
+                " (",
+                rest,
+                ") is over ",
+                x,
+                ",",
+                y,
+                " of window ",
+                desc,
+                ": where it takes input (a notification, a panel), input there goes to it, not to the window"
+            );
+            if raise == Raise::No {
+                let w = if ns.is_empty() {
+                    Vec::new()
+                } else {
+                    cat!("; omabox wait layer ", ns, " --gone waits it out")
+                };
+                return Err(ctx.die(cat!(
+                    lay,
+                    " (refused under --no-raise; without it, this is a warning",
+                    w,
+                    ")"
+                )));
+            }
+            let w = if ns.is_empty() {
+                Vec::new()
+            } else {
+                cat!(" (omabox wait layer ", ns, " --gone waits it out)")
+            };
+            say(cat!(lay, w));
+        }
+    }
+    Ok(jq_xy(crate::jqprog::WIN_AT_JQ, &w, x, y).text())
 }
 
 #[cfg(test)]
