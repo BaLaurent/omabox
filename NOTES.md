@@ -951,6 +951,10 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
     - Two things learned: a reload starts a fresh Lua state (globals do not survive; "asking" is a
       file), and the new window's output is WAYLAND-2, so the monitor rule is now for any output
       and the resize watch follows whichever exists.
+    - Since finding 429, a window `monitor add` makes is no longer a plain `aquamarine` one: it has
+      a class of its own (`aquamarine-omabox-TOKEN`), whose host rule keeps it silent on this
+      workspace and is never turned off. confirm-close's window stays plain `aquamarine` (it removes
+      a token left for its name first), so it still lands on the active workspace with focus.
     Checked in a stand-in host (a box, finding 26): windows on 3 and on the scratchpad, no focus;
     keep, a second close, the menu's "Shut down", `--no-shell`, confirm off, the live change,
     resize after the new window; the widget's section in a box (toggle and dropdown write the
@@ -8871,24 +8875,66 @@ from them.
     is cpu_tame's own, under its `LC_ALL=C`, where a character is a byte; the Rust half cuts bytes.
     Tests: t_unit_rust_parity4 (a stand-in process named so, found by `--app` both ways).
 
-429. **A signal during `monitor add` on an interactive box could open its window on the user's
-    workspace, focused, or leave the host rule on** (2026-10-22, #324 wave 4a's reviews).
-    monitor_add_window turns a host rule on (the box's new window: workspace, silent, no focus) and
-    its EXIT trap turns it off however it ends. A Ctrl-C or TERM once the box had been told to make the
-    output (`output create wayland`) ran the trap at once: the rule went off, and the window the box
-    made anyway opened on the user's active workspace and took focus (finding 70). **Fix**: from the
-    create on (MON_CREATING) the trap first removes that output (`output remove NAME`, HYPR_LIMIT at
-    most): the box handles its IPC in order, so its answer means the create was handled and its window
-    is gone; a box that cannot answer makes none; then the rule goes off. A first fix waited 5 s for
-    the window instead, less than the create's own 10 s, and a second signal during that wait ended the
-    trap with the rule left on (every later aquamarine window, a nested Hyprland's too, silent on the
-    box's workspace): the trap now ignores INT, TERM and HUP (bash still dies of the first one after
-    it). A rule-on call cut short may land after the rule-off: sent again half a second on. An add
-    that saw no window in 5 s now removes its output too. The Rust half alike, and it starts nothing
-    once a trap is on its way (bash starts nothing after its trap). Tests: t_unit_rust_parity4 (TERM
-    and HUP to the group while the stand-in box makes its window late, half a second and six; two
-    signals during the trap; a TERM while the rule goes on: the stand-in host ends with the rule off,
-    the window closed before it, no create after it, both ways).
+429. **A monitor window of an interactive box could open on the user's workspace, focused, or leave
+    the host rule on** (2026-10-22, #324 wave 4a's reviews; the design study after them, #349).
+    monitor_add_window turned one host rule on for the box's new window (class `^aquamarine$`:
+    workspace, silent, no focus, floating at its size and place) and off once the window was there;
+    an EXIT trap turned it off however the add ended. Every way the rule went off before the window
+    mapped put the window on the user's active workspace with focus (finding 70), and every way the
+    trap was cut short left the rule on, catching every later aquamarine window (a nested Hyprland's
+    too). Three rounds of trap fixes (remove the output before the rule-off, as the box handles its
+    IPC in order; signals held in the trap; a rule-on cut short sent off again) each found new holes:
+    - **No signal needed**: hyprctl gives up after 5 s (`SO_RCVTIMEO`: "Hyprland IPC didn't respond in
+      time / Couldn't read (6)", exit 6, never `timeout`'s 124), but the box's Hyprland still reads and
+      handles the request later. A box that made the window after 5 s got the rule off first: the
+      window on the desktop. Released omabox had this too.
+    - Two adds at once (one box or two) shared the one rule: the first rule-off ended it for both, and
+      on one box both could take the same WAYLAND-N. A SIGKILL left the rule on. A Ctrl-C in Rust
+      waited for the step in flight, a TERM did not, so the halves drifted.
+    **Fix (design C, both halves)**: nothing to turn off. omabox's aquamarine build (+appid,
+    `patches/aquamarine/0004`) gives a new Wayland output's window the app_id `aquamarine-TOKEN` when
+    the file `$AQ_WAYLAND_APP_ID_FILES` + NAME holds TOKEN (1-64 of `[A-Za-z0-9_-]`; else, and without
+    the env, `aquamarine` as before). An interactive box's Hyprland gets that env
+    (`$XDG_RUNTIME_DIR/omabox.appid.`, share/start-hyprland.sh; headless and NVIDIA boxes do not). Each
+    `monitor add` makes a random token (16 hex digits), turns on a host rule named
+    `omabox-mon-TOKEN` matching `initial_class` `^aquamarine-omabox-TOKEN$` alone, then writes
+    `omabox.appid.NAME` (`omabox-TOKEN`, renamed into place: a token file only ever names a token
+    whose rule is on), sends the rule again right before the create (a host config reload drops every
+    rule: that narrows the gap to create-to-map), asks for the output, and finds its window by that
+    class (not by counting the box's windows, which a neighbour's add could satisfy). The rule is never
+    turned off: no other window will carry that class, and rules go with the host's next reload. So a
+    signal at any step, a SIGKILL, a slow, dead or wedged box and concurrent adds can leave at worst a
+    monitor and its window on the box's workspace, never one on the user's.
+    - The EXIT trap is tidiness only: once the box was told to make NAME it removes NAME, unless the
+      create's answer said clearly that none was made (`mon_answer`: ok; Hyprland's own words, exit 0
+      or 7; `Couldn't connect`/`Couldn't open a socket`; the box gone). Anything else, hyprctl's 5 s
+      give-up first, is unclear and removed. The trap no longer holds INT, TERM or HUP: a second one
+      ends it at once (the Rust half's signal thread sets them back to default before an undo, as
+      bash's trap dies of a second one; on_exit_fg is gone). The token file stays when the add did not
+      finish (the box may still read it); on success it is removed.
+    - Interactive `monitor add` runs under the box's lock (`.lock-NAME`, as up and down): a second add
+      on that box waits up to 60 s, then says "busy".
+    - Refused without +appid (box.json's aquamarine version: the system's, or a box started before the
+      rebuild): `monitor add` ("omabox setup --aquamarine, then a new box") and `up --interactive
+      --monitor` ("omabox setup --aquamarine"). aq_monitor_note (the +layout/+cursor notes) went with
+      it: a build with +appid has both.
+    - share/passthrough.lua v5 takes `aquamarine-omabox-*` windows for box windows (toggle,
+      keys-to-box, border); confirm-close removes `omabox.appid.NAME` before it opens its window again
+      under NAME (finding 70: that one is meant for the user's workspace, focused).
+    - Contract changes: monitor windows' class is no longer exactly `aquamarine` (a user's rule on
+      `^aquamarine$` no longer touches them; `^aquamarine` matches both), they keep `render_unfocused`
+      (drawn while hidden) while their rule lasts, adds on one box take turns, and an aquamarine
+      without +appid is refused. A host reload between the rule and the window's map still opens it on
+      the user's workspace (no runtime rule survives a reload).
+    Verified: patch 0004 built (`setup --aquamarine`); see the commit for the box tests run. Tests:
+    t_unit_rust_parity4 (its stand-in box hyprctl now gives up at 5 s, exit 6, as the real one does,
+    and names a window by its token file; signals INT, TERM, HUP and KILL during the rule, between
+    the token and the create, during the create and the window wait, twice during the trap; a create
+    handled 6 s and 10 s late, with and without a TERM; two adds at once on one box; the box's lock
+    held; unpatched aquamarine refused: each side checked that every window it made had its own rule on
+    before it and that no rule went off), t_monitors_window (each monitor's window its own class on a
+    stand-in host; two adds on one box and one on another at once: on 9, floating, focus unchanged),
+    t_guard (confirm-close with a token left for the window's name: plain aquamarine).
 
 430. **`cpu --app -n` listed every process** (2026-10-22, #324 wave 4a's review). cpu_tame wrote the
     tamed name with `echo`, which takes a name of `-n`, `-e`, `-E` or their mixes for its options and

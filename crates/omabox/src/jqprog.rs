@@ -491,8 +491,8 @@ pub const LIST_TABLE_JQ: &str = r#"(map(select(.disabled | not))[] | "\(.name) \
 pub const ADD_LINE_JQ: &str = r#"first(.[] | select(.name == $n and
       "\(.width)x\(.height)" == $w)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)""#;
 
-/// monitor_add_window: the box's windows on the host.
-pub const PID_COUNT_JQ: &str = r#"[.[] | select(.pid == $p)] | length"#;
+/// monitor_add_window: its window, by its class (finding 429).
+pub const CLASS_ADDR_JQ: &str = r#"first(.[] | select(.initialClass == $c)) | .address"#;
 
 /// desk_windows: a window of that address is there.
 pub const ANY_ADDR_JQ: &str = r#"any(.[]; .address == $a)"#;
@@ -572,9 +572,6 @@ pub const DESK_PICTURE_AWK: &str = r#"NR == 1 { aw = $1; ah = $2; g = $3; next }
       printf "%.5g %d\n", f, fitted
       for (i = 1; i <= n; i++) print nm[i], X[i] + ox, Y[i] + oy, W[i], H[i]
     }"#;
-
-/// monitor_add_window: the new window.
-pub const NEW_WINDOW_JQ: &str = r#"first(.[] | select(.pid == $p and (.address as $a | $k | index($a) | not))) | .address // empty"#;
 
 /// monitor_add_window: its line.
 pub const MON_LINE_JQ: &str = r#"first(.[] | select(.name == $n)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)""#;
@@ -804,7 +801,7 @@ pub const AUDIO_SAY_JQ: &str = concat!(
 pub const AGENT_MARKS: &str = r#"^(CLAUDECODE|CLAUDE_CODE_SESSION_ID|CLAUDE_PID|CODEX_THREAD_ID|CODEX_SANDBOX|OPENCODE|AI_AGENT|OMABOX_AGENT_PID)=|^OMABOX_SESSION=.|^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE)=omabox-guard$|^PATH=([^:]*:)*[^:]*/share/guard/?(:|$)"#;
 
 /// Every inline program (and the awk ones), for `_rust-jq --inline` (the rest are a path, .kind, .[0], length).
-pub const INLINE: [&str; 106] = [
+pub const INLINE: [&str; 105] = [
     HOST_MODE_JQ,
     MAIN_SCALE_JQ,
     MONITORS_RECORD_JQ,
@@ -822,7 +819,7 @@ pub const INLINE: [&str; 106] = [
     LIST_JSON_JQ,
     LIST_TABLE_JQ,
     ADD_LINE_JQ,
-    PID_COUNT_JQ,
+    CLASS_ADDR_JQ,
     ANY_ADDR_JQ,
     DESK_MAIN_JQ,
     WIN_MONITOR_JQ,
@@ -834,7 +831,6 @@ pub const INLINE: [&str; 106] = [
     WIN_FLOATING_JQ,
     WH_JQ,
     DESK_PICTURE_AWK,
-    NEW_WINDOW_JQ,
     MON_LINE_JQ,
     COST_AQ_JQ,
     RENDER_LINE_JQ,

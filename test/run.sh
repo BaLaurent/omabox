@@ -2989,11 +2989,14 @@ t_unit_rust_handoff() {
 # Since wave 3a: $rp_also, a function, adds to the state what it prints (a stand-in tool's arguments,
 # the job records a call left, normalised); $rp_check, a function, is given each side's raw stdout and
 # stderr files before the sed, to check what the sed then evens out.
-rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1 rp_wrap=() rp_in=/dev/null rp_sed="" rp_also="" rp_check=""
+# Since finding 429: $rp_mask, a sed -E script, is run over each file's contents before its sum (a
+# random token written there).
+rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1 rp_wrap=() rp_in=/dev/null rp_sed="" rp_also="" rp_check="" rp_mask=""
 rp_state() {
   if [ "$rp_snap" = 1 ]; then
     # (run's marks, $D/runs, are named by pid and time: by kind here)
-    (cd "$rp_rt" && command find . -printf '%p %y\n' | LC_ALL=C sort && command find . -type f -exec md5sum {} + | LC_ALL=C sort) |
+    (cd "$rp_rt" && command find . -printf '%p %y\n' | LC_ALL=C sort && if [ -z "$rp_mask" ]; then command find . -type f -exec md5sum {} + | LC_ALL=C sort
+      else command find . -type f -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' f; do echo "$(sed -E "$rp_mask" "$f" | md5sum | cut -d' ' -f1)  $f"; done; fi) |
       sed -E 's#/runs/(o|c)\.[0-9]+\.[0-9]+#/runs/\1.MARK#'
   fi
   [ -z "$rp_also" ] || "$rp_also"
@@ -4329,8 +4332,9 @@ t_unit_rust_parity4() {
 # removed, given a mode and placed as a box's config places them (omabox.monitors of the box dir in
 # ST/boxdir: right of the one before, below it, or at X,Y), its layout as omabox_monitor_layout says
 # it. Knob files in ST change an answer. An interactive box's new output is a window on the stand-in
-# host too (ST/host/clients.json, the window's pid in ST/wpid).
-import json, os, re, sys
+# host too (ST/host/clients.json, the window's pid in ST/wpid), of class aquamarine-TOKEN when the box
+# dir's run/omabox.appid.NAME holds TOKEN (omabox's aquamarine build, +appid: finding 429).
+import json, os, re, select, sys, time
 
 ST = "@ST@"
 a = sys.argv[1:]
@@ -4408,6 +4412,37 @@ def layout(m, extra=None):
 def log(*w):
     with open(os.path.join(ST, "hypr.log"), "a") as h:
         h.write(" ".join(w) + "\n")
+
+
+def handled(work, delay=0.0):
+    # The box's Hyprland handles the request in its own time, whatever happens to this hyprctl (its IPC
+    # in order: create.lock), and hyprctl gives up after 5 s as the real one does (SO_RCVTIMEO): exit 6.
+    r, w = os.pipe()
+    if os.fork() == 0:
+        os.close(r)
+        os.setsid()
+        for fd in (0, 1, 2):
+            os.dup2(os.open(os.devnull, os.O_RDWR), fd)
+        if delay:
+            time.sleep(delay)
+        os.write(w, work().encode())
+        os._exit(0)
+    os.close(w)
+    if not select.select([r], [], [], 5)[0]:
+        print("Hyprland IPC didn't respond in time\n")
+        print("Couldn't read (6)")
+        sys.exit(6)
+    out = os.read(r, 1 << 16).decode()
+    print(out)
+    sys.exit(7 if out.startswith("error:") else 0)
+
+
+def app_id(n):
+    d = (rd("boxdir", "") or "").strip()
+    t = (rd_abs(os.path.join(d, "run/omabox.appid." + n)) or "").split()
+    if t and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", t[0]):
+        return "aquamarine-" + t[0]
+    return "aquamarine"
 
 
 cmd = " ".join(a[:2])
@@ -4499,54 +4534,54 @@ elif cmd in ("output create",):
             h.write("Config Path: /usr/share/omarchy/shell/shell.qml\n")
     open(os.path.join(ST, "creating"), "w").close()
     if has("interactive") and not has("nohostwin"):
-        # (create.later: the window half a second on, as the box's Hyprland makes it, whatever happens to
-        # this hyprctl meanwhile)
+        # (create.later: the create handled, and so its window made, so many seconds on (half a second
+        # by default), as the box's Hyprland makes it, whatever happens to this hyprctl meanwhile, which
+        # gives up after 5 s)
         # (a remove waits for it: the box's IPC in order, create.lock held until the window is made)
+        def make():
+            hc = os.path.join(ST, "host/clients.json")
+            c = json.loads(rd_abs(hc) or "[]")
+            k = app_id(n)
+            c.append({"address": "0xw%d" % len(c), "pid": int(rd("wpid", "0")), "workspace": {"id": 9, "name": "9"},
+                      "floating": True, "monitor": 0, "class": k, "initialClass": k, "title": "aquamarine - " + n})
+            with open(hc, "w") as h:
+                json.dump(c, h)
+            with open(os.path.join(ST, "host.log"), "a") as h:
+                h.write("== window mapped " + n + " " + k + "\n")
+            return "ok"
         if has("create.later"):
             import fcntl
             lk = os.open(os.path.join(ST, "create.lock"), os.O_RDWR | os.O_CREAT)
             fcntl.flock(lk, fcntl.LOCK_EX)
-        if has("create.later") and os.fork() > 0:
-            print("ok")
-            sys.exit(0)
-        if has("create.later"):
-            os.setsid()
-            for fd in (0, 1, 2):
-                os.dup2(os.open(os.devnull, os.O_RDWR), fd)
-            import time
-            time.sleep(float(rd("create.later", "") or "0.5"))
-        hc = os.path.join(ST, "host/clients.json")
-        c = json.loads(rd_abs(hc) or "[]")
-        c.append({"address": "0xw%d" % len(c), "pid": int(rd("wpid", "0")), "workspace": {"id": 9, "name": "9"},
-                  "floating": True, "monitor": 0, "class": "aquamarine", "title": "aquamarine - " + n})
-        with open(hc, "w") as h:
-            json.dump(c, h)
-        with open(os.path.join(ST, "host.log"), "a") as h:
-            h.write("== window mapped " + n + "\n")
-        if has("create.later"):
-            sys.exit(0)
+            handled(make, float(rd("create.later", "") or "0.5"))
+        make()
     print("ok")
 elif cmd == "output remove":
     n = a[2]
     log("output remove", n)
-    import fcntl
-    lk = os.open(os.path.join(ST, "create.lock"), os.O_RDWR | os.O_CREAT)
-    fcntl.flock(lk, fcntl.LOCK_EX)
-    # (its window closed on the host, an interactive box's)
-    hc = os.path.join(ST, "host/clients.json")
-    c = json.loads(rd_abs(hc) or "[]")
-    k = [x for x in c if x.get("title") != "aquamarine - " + n]
-    if len(k) != len(c):
-        with open(hc, "w") as h:
-            json.dump(k, h)
-        with open(os.path.join(ST, "host.log"), "a") as h:
-            h.write("== window closed " + n + "\n")
-    if has("remove.out"):
-        print(rd("remove.out").strip())
-        sys.exit(0)
-    if not has("remove.stay"):
-        save([x for x in mons() if x["name"] != n])
-    print("ok")
+
+    def remove():
+        import fcntl
+        lk = os.open(os.path.join(ST, "create.lock"), os.O_RDWR | os.O_CREAT)
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        # (its window closed on the host, an interactive box's)
+        hc = os.path.join(ST, "host/clients.json")
+        c = json.loads(rd_abs(hc) or "[]")
+        k = [x for x in c if x.get("title") != "aquamarine - " + n]
+        if len(k) != len(c):
+            with open(hc, "w") as h:
+                json.dump(k, h)
+            with open(os.path.join(ST, "host.log"), "a") as h:
+                h.write("== window closed " + n + "\n")
+        if has("remove.out"):
+            return rd("remove.out").strip()
+        if not has("remove.stay"):
+            save([x for x in mons() if x["name"] != n])
+        return "ok"
+    # (behind a create still being handled: answered when the box gets to it, or given up on at 5 s)
+    if has("create.later"):
+        handled(remove)
+    print(remove())
 else:
     print("stand-in hyprctl: " + " ".join(a), file=sys.stderr)
     sys.exit(1)
@@ -4674,10 +4709,17 @@ while True:
         out = rd("host/border.json", '{"option":"general:border_size","int":2,"set":true}')
     elif d.startswith("/eval"):
         out = rd("host/eval.out", "ok").strip()
-        if "window_rule(" in d and rd("host/rule.sleep", None):
-            open(os.path.join(ST, "rule-asked"), "w").close()
-            import time
-            time.sleep(float(rd("host/rule.sleep", "0")))
+        # (rule.sleep: the first window rule answered so late, its mark rule-asked; rule2.sleep and
+        # rule-asked2 the second's, sent again right before the create)
+        if "window_rule(" in d:
+            k = int(rd("rules.n", "0") or 0) + 1
+            with open(os.path.join(ST, "rules.n"), "w") as h:
+                h.write(str(k))
+            f = "rule.sleep" if k == 1 else "rule2.sleep" if k == 2 else None
+            if f and rd("host/" + f, None):
+                open(os.path.join(ST, "rule-asked" if k == 1 else "rule-asked2"), "w").close()
+                import time
+                time.sleep(float(rd("host/" + f, "0")))
         m = re.search(r"window\.resize\(\{ window = 'address:(\w+)', x = (\d+), y = (\d+) \}\)", d)
         if m:
             cl = json.loads(rd("host/clients.json", "[]"))
@@ -4733,7 +4775,7 @@ PYEOF
     rp4_fk fkn ',"wayland_screen":true,"render":{"driver":"nvidia","pci":"0000:01:00.0","node":"/dev/dri/renderD129","fallback":true,"wanted":"intel","why":"no intel GPU on this machine"},"aquamarine":{"kind":"private","version":"0.15.1+layout","fixed":true,"main_checkout":"/x/omabox"}'
     mkdir -p "$r/rt/omabox/fkn/run/labwc"; : > "$r/rt/omabox/fkn/run/labwc/rc.xml"; echo wayland-9 > "$r/rt/omabox/fkn/run/omabox-parent-display"
     python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$r/rt/omabox/fkn/run/wayland-9"
-    rp4_fk fki ',"workspace":"9","aquamarine":{"kind":"private","version":"0.15.1+layout+cursor","fixed":true}'
+    rp4_fk fki ',"workspace":"9","aquamarine":{"kind":"private","version":"0.15.1+layout+cursor+appid","fixed":true}'
     sed -i 's/"mode":"headless"/"mode":"interactive"/' "$r/rt/omabox/fki/box.json"
     rp4_fk fka ',"audio":true,"shell":true'
     echo fk > "$st/boxdir.name"; echo "$r/rt/omabox/fk" > "$st/boxdir"
@@ -4751,12 +4793,14 @@ PYEOF
   # What the cases left beyond the runtime dir: the stand-ins' state and logs, TMPDIR.
   rp4_also() {
     # (host.log's polls counted once where they repeat: how many come is timing)
+    # (a monitor window's class token, random, as T)
     local f; for f in mons.json hypr.log wlr.log rc.xml.seen host.log host/clients.json box.log box.got host.log host.got; do
-      [ ! -f "$st/$f" ] || { echo "== $f"; sed "s#$r#R#g" "$st/$f" | uniq; }
+      [ ! -f "$st/$f" ] || { echo "== $f"; sed -E "s#$r#R#g; s/omabox-(mon-)?[0-9a-f]{16}/omabox-\1T/g" "$st/$f" | uniq; }
     done
     echo "== tmpd"; ls -A "$r/tmpd"
   }
   rp_rt=$r/rt rp_dir=$r/norepo rp_prep=rp4_fixture rp_also=rp4_also rp_snap=1 rp_env=(-u HYPRLAND_INSTANCE_SIGNATURE WAYLAND_DISPLAY=rp-none TMPDIR="$r/tmpd")
+  rp_mask='s/omabox-(mon-)?[0-9a-f]{16}/omabox-\1T/g'
   local rp_env4=("${rp_env[@]}")
   # (no host Hyprland in this runtime dir for a case: moved away, and back for the next)
   rp4_hostless() { mv "$r/rt/hypr" "$r/rt.nohost"; }
@@ -4878,10 +4922,13 @@ PYEOF
   parity "monitor add: interactive, no --name" monitor -b fki add 800x600 --name x
   parity "monitor add: interactive, its window on the host" monitor -b fki add 1280x720
   parity "monitor list: interactive" monitor -b fki list
-  rp4_iold() { rp4_imain; sed -i 's/"version":"0.15.1+layout+cursor"/"version":"0.15.0"/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_iold)
-  parity "monitor add: interactive, a system aquamarine said" monitor -b fki add 800x600,below
-  rp4_inocursor() { rp4_imain; sed -i 's/+layout+cursor/+layout/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_inocursor)
-  parity "monitor add: interactive, an aquamarine without +cursor" monitor -b fki add 800x600
+  # (finding 429: a monitor's window needs a class of its own, from omabox's aquamarine build)
+  rp4_iold() { rp4_imain; sed -i 's/"version":"0.15.1+layout+cursor+appid"/"version":"0.15.0"/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_iold)
+  parity "monitor add: interactive, a system aquamarine refused (finding 429)" monitor -b fki add 800x600,below
+  check_eq "...nothing asked of the host or the box" 0 "$(cat "$st/host.log" "$st/hypr.log" 2>/dev/null | grep -cE 'window_rule|output create')"
+  rp4_inoappid() { rp4_imain; sed -i 's/+layout+cursor+appid/+layout+cursor/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_inoappid)
+  parity "monitor add: interactive, an older build of omabox's (no +appid) refused" monitor -b fki add 800x600
+  parity "monitor remove: interactive, an aquamarine without +appid: not refused" monitor -b fki remove WAYLAND-9
   rp4_iunfixed() { rp4_imain; sed -i 's/"fixed":true/"fixed":false/' "$r/rt/omabox/fki/box.json"; }; rp4_pre=(rp4_iunfixed)
   parity "monitor add: interactive, aquamarine without #415's fix" monitor -b fki add 800x600
   rp4_ihave() {
@@ -5167,45 +5214,138 @@ EOF
     parity "gpu and $sg in its window: its temporary dir gone" gpu -b fk 5s
     parity "cpu and $sg in its window: the same" cpu -b fk 5s
   done
-  rp4_nowin() { rp4_imain; : > "$st/nohostwin"; }; rp4_pre=(rp4_nowin)
-  rp_wrap=("$r/rp-sig" group-INT "$st/creating")
-  parity "monitor add, interactive, and group-INT while the host rule is on: the rule off" monitor -b fki add 800x600
-  check "...the stand-in host was told so" grep -q 'omabox_monitor_rule:set_enabled(false)' "$st/host.log"
-  # A signal once the box was told to make its window (finding 429): the rule off only once the window
-  # is there (the stand-in box makes it half a second late, whatever happens to its hyprctl).
-  rp4_late() { rp4_imain; : > "$st/create.later"; }; rp4_pre=(rp4_late)
-  # (where the stand-in host had it: the window first)
-  # (where the stand-in host had them: the window made, then closed by the trap's remove, then the
-  # rule off, last of the rule's)
-  rp4_order() { local m c o; m=$(grep -n -m1 '^== window mapped' "$st/host.log" | cut -d: -f1); c=$(grep -n -m1 '^== window closed' "$st/host.log" | cut -d: -f1)
-    o=$(grep -n 'omabox_monitor_rule' "$st/host.log" | tail -1); [ "${m:-0}" -gt 0 ] && [ "$m" -lt "${c:-0}" ] && [ "$c" -lt "${o%%:*}" ] && [[ $o == *'set_enabled(false)'* ]]; }
+  # A monitor's window (finding 429): a class of its own, whose rule (workspace 9, silent, no focus) is
+  # on before the box can make that window, and never turned off; so nothing (a signal at any step, a
+  # slow box, a second add) puts it on the user's workspace. rp4_safe checks it on each side, from what
+  # the stand-in host saw; rp4_want says what else: none (no window made), closed (each one made closed
+  # again by the trap's remove), kept (made and left: a monitor on workspace 9), N (that many made).
+  rp4_safe() {
+    local why; why=$(python3 - "$st/host.log" "${rp4_want:-}" <<'PYEOF'
+import re, sys
+rules, bad, made, closed = set(), [], [], []
+try:
+    log = open(sys.argv[1]).read().split("\n")
+except OSError:
+    log = []
+for l in log:
+    m = re.search(r"match = \{ initial_class = '\^(aquamarine-omabox-[0-9a-f]{16})\$' \}, workspace = '9 silent', no_initial_focus = true", l)
+    if m:
+        rules.add(m.group(1))
+    if "set_enabled" in l or "enabled = false" in l or "omabox_monitor_rule" in l:
+        bad.append("a rule turned off: " + l[:160])
+    m = re.match(r"== window mapped (\S+) (\S+)", l)
+    if m:
+        made.append(m.group(1))
+        if m.group(2) not in rules:
+            bad.append("a window with no rule of its own on before it: " + l)
+    m = re.match(r"== window closed (\S+)", l)
+    if m:
+        closed.append(m.group(1))
+want = sys.argv[2]
+if want == "none" and made:
+    bad.append("a window made: %s" % made)
+if want == "closed" and (not made or any(n not in closed for n in made)):
+    bad.append("made %s, closed %s" % (made, closed))
+if want == "kept" and (not made or closed):
+    bad.append("made %s, closed %s" % (made, closed))
+if want.isdigit() and len(made) != int(want):
+    bad.append("made %s" % made)
+print("; ".join(bad))
+PYEOF
+)
+    [ -z "$why" ] || { no "finding 429 on the $1 side (${rp4_want:-safe})" "$why"; return 1; }
+  }
+  # rp4_safe_only LABEL ARGS...: each side run as parity runs it, but only rp4_safe's checks (where the
+  # halves may end differently, both safe).
+  rp4_safe_only() {
+    local label=$1 side bad=0; shift
+    for side in bash rust; do
+      "$rp_prep"
+      local how=OMABOX_BASH=1; [ "$side" = bash ] || how=OMABOX_BASH=
+      (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
+        ${rp_wrap[@]+"${rp_wrap[@]}"} "$CLI" "$@" >/dev/null 2>&1 </dev/null) || true
+      rp4_safe "$side" || bad=1
+    done
+    [ "$bad" = 1 ] || ok "$label"
+  }
+  rp_check=rp4_safe
+  # (a case's command, then RP_LINGER s for what the stand-in box still has to do)
+  printf '#!/bin/sh\n"$@"; rc=$?; sleep "${RP_LINGER:-1}"; exit $rc\n' > "$r/rp-linger"; chmod +x "$r/rp-linger"
+  rp_wrap=("$r/rp-linger") rp4_want=kept rp4_pre=(rp4_imain)
+  parity "monitor add, interactive: its window by its class, whose rule was on before it and stays (finding 429)" monitor -b fki add 800x600
+  check "...its class token gone with it" test ! -e "$r/rt/omabox/fki/run/omabox.appid.WAYLAND-2"
+  check_eq "...the rule sent twice (before its token, again before the create), the box asked once" "rule rule create" \
+    "$(cat "$st/host.log" "$st/hypr.log" | grep -oE 'window_rule|^output create' | sed 's/window_rule/rule/; s/output create/create/' | tr '\n' ' ' | sed 's/ $//')"
+  # Signals at each step.
   # (bash's own line for the child of its subshell the signal ended, `Terminated  sleep 0.05` and
   # the like, out: which child it was is timing, and the Rust half has no such line)
   rp_sed+='; /^(Terminated|Hangup) +[^ ]/d; /bin\/omabox: line [0-9]+: PID (Hangup|Terminated) /d'
   # (and rp-sig's own line for its child, whose line number is where it noticed: its wait, or RP_TWICE's)
   rp_sed+='; s/rp-sig: line [0-9]+: PID /rp-sig: line N: PID /'
-  for sg in group-TERM group-HUP; do
+  rp_sed+='; s/ line ([0-9]+): +[0-9]+ Killed / line \1: PID Killed /'
+  rp4_nowin() { rp4_imain; : > "$st/nohostwin"; }; rp4_pre=(rp4_nowin) rp4_want=none
+  for sg in group-INT group-TERM; do
     rp_wrap=("$r/rp-sig" "$sg" "$st/creating")
-    parity "monitor add, interactive, and $sg once the box makes its window: the rule off after it (finding 429)" monitor -b fki add 800x600
-    check "...the window made, closed, then the rule off" rp4_order
+    parity "monitor add, interactive, and $sg while it waits for the window: the monitor removed, no rule off (finding 429)" monitor -b fki add 800x600
+    check "...the box told to remove it" grep -q '^output remove WAYLAND-2' "$st/hypr.log"
   done
-  # A box that handles the create six seconds late (past the trap's first fix, a 5 s wait), and two
-  # signals during the trap: the rule off all the same, last.
-  rp4_later() { rp4_imain; echo 6 > "$st/create.later"; }; rp4_pre=(rp4_later)
-  rp_wrap=(env RP_LINGER=10 "$r/rp-sig" group-TERM "$st/creating")
-  parity "monitor add, interactive, and group-TERM, the box's create handled 6 s late (finding 429)" monitor -b fki add 800x600
-  check "...the window made, closed, then the rule off" rp4_order
-  rp4_twice() { rp4_imain; echo 1.5 > "$st/create.later"; }; rp4_pre=(rp4_twice)
-  for sg in group-TERM group-INT group-HUP; do
-    rp_wrap=(env RP_LINGER=4 RP_TWICE=0.4 "$r/rp-sig" "$sg" "$st/creating")
-    parity "monitor add, interactive, and $sg twice, the second during the trap: the rule off (finding 429)" monitor -b fki add 800x600
-    check "...the window made, closed, then the rule off" rp4_order
-  done
-  # A TERM while the rule is being turned on (the stand-in host slow to answer it): no create follows.
-  rp4_rslow() { rp4_imain; echo 0.4 > "$st/host/rule.sleep"; }; rp4_pre=(rp4_rslow)
+  rp4_late() { rp4_imain; : > "$st/create.later"; }; rp4_pre=(rp4_late) rp4_want=closed
+  rp_wrap=("$r/rp-sig" group-TERM "$st/creating")
+  parity "monitor add, interactive, and group-TERM during the create: its window on 9 by its rule, then closed (finding 429)" monitor -b fki add 800x600
+  # A group HUP there: a bash with jobs (on_box's capture of the create has some) sends them a HUP of
+  # its own, and they share its group: a second HUP, which can end bash's trap before it starts
+  # (probed: 3 to 5 traps run in 15). At worst a monitor left on 9; the Rust half removes it.
+  rp_wrap=("$r/rp-sig" group-HUP "$st/creating") rp4_want=""
+  rp4_safe_only "monitor add, interactive, and group-HUP during the create: its window on 9 by its rule, both ways (finding 429)" monitor -b fki add 800x600
+  # A group INT there: bash's capture of the create dies of it, so bash ends (130), its trap removing
+  # the monitor; the Rust half's child (timeout, a process group of its own) does not, so it takes it
+  # for an INT to itself alone and finishes the add, then 130. Both safe; not alike (older than 429).
+  rp_wrap=("$r/rp-sig" group-INT "$st/creating") rp4_want=""
+  rp4_safe_only "monitor add, interactive, and group-INT during the create: its window on 9 by its rule, both ways (finding 429)" monitor -b fki add 800x600
+  rp_wrap=("$r/rp-sig" group-KILL "$st/creating") rp4_want=kept
+  parity "monitor add, interactive, and group-KILL during the create: its window on 9 by its rule, left (finding 429)" monitor -b fki add 800x600
+  # The rule turned on slowly (the stand-in host slow to answer it): no create follows.
+  rp4_rslow() { rp4_imain; echo 0.4 > "$st/host/rule.sleep"; }; rp4_pre=(rp4_rslow) rp4_want=none
   rp_wrap=("$r/rp-sig" group-TERM "$st/rule-asked")
   parity "monitor add, interactive, and group-TERM while the rule is turned on: no window asked for" monitor -b fki add 800x600
   check_eq "...the box was told to make none" 0 "$(grep -c 'output create' "$st/hypr.log" 2>/dev/null || true)"
+  # Between the token written and the create (the rule sent again, slowly): no create; the token left
+  # names a rule that is on.
+  rp4_rslow2() { rp4_imain; echo 0.4 > "$st/host/rule2.sleep"; }; rp4_pre=(rp4_rslow2)
+  for sg in group-TERM group-HUP group-KILL; do
+    rp_wrap=("$r/rp-sig" "$sg" "$st/rule-asked2")
+    parity "monitor add, interactive, and $sg between its token and the create: no window asked for" monitor -b fki add 800x600
+    check_eq "...the box was told to make none" 0 "$(grep -c 'output create' "$st/hypr.log" 2>/dev/null || true)"
+    check "...the token left names a rule that is on" grep -qF "initial_class = '^aquamarine-$(cat "$r/rt/omabox/fki/run/omabox.appid.WAYLAND-2" 2>/dev/null)\$'" "$st/host.log"
+  done
+  # A box that handles the create late, past hyprctl's own 5 s (it gives up: "Couldn't read (6)"),
+  # or past `timeout 10`: unclear, so the trap removes the output, after the late create.
+  rp4_later() { rp4_imain; echo "$1" > "$st/create.later"; }
+  rp4_l6() { rp4_later 6; }; rp4_l10() { rp4_later 10; }
+  rp_wrap=(env RP_LINGER=2 "$r/rp-linger") rp4_pre=(rp4_l6) rp4_want=closed
+  parity "monitor add, interactive, the box's create handled 6 s late: given up, removed after it (finding 429)" monitor -b fki add 800x600
+  rp4_pre=(rp4_l10)
+  parity "monitor add, interactive, the box's create handled 10 s late: the same (finding 429)" monitor -b fki add 800x600
+  rp_wrap=(env RP_LINGER=8 "$r/rp-sig" group-TERM "$st/creating") rp4_pre=(rp4_l6)
+  parity "monitor add, interactive, and group-TERM, the box's create handled 6 s late (finding 429)" monitor -b fki add 800x600
+  # A second signal while the trap removes the output: it ends there (signals are not held: the
+  # window is safe by its rule), the remove already asked for.
+  rp4_twice() { rp4_imain; echo 1.5 > "$st/create.later"; }; rp4_pre=(rp4_twice) rp4_want=""
+  for sg in group-TERM group-INT; do
+    rp_wrap=(env RP_LINGER=4 RP_TWICE=0.4 "$r/rp-sig" "$sg" "$st/creating")
+    parity "monitor add, interactive, and $sg twice, the second during the trap: no rule off (finding 429)" monitor -b fki add 800x600
+  done
+  # Two adds on one box at once: one after the other (the box's lock), each its own name and window.
+  printf '#!/bin/sh\n"$@" > %s/two.1 2>&1 & a=$!\n"$@" > %s/two.2 2>&1; b=$?\nwait $a; a=$?\nsort %s/two.1 %s/two.2; echo "rc $a $b"\n' "$st" "$st" "$st" "$st" > "$r/rp-two"
+  chmod +x "$r/rp-two"
+  rp_wrap=("$r/rp-two") rp4_pre=(rp4_imain) rp4_want=2
+  parity "monitor add, interactive, twice at once on one box: one after the other (finding 429)" monitor -b fki add 800x600
+  check_eq "...WAYLAND-2 and WAYLAND-3 recorded" "WAYLAND-2 WAYLAND-3" "$(cut -d' ' -f1 "$r/rt/omabox/fki/run/omabox.monitors" | sort | paste -sd' ')"
+  # The box's lock held by another omabox (an up, a down) for a moment: the add waits for it.
+  rp4_held() { rp4_imain; : > "$r/rt/omabox/.lock-fki"; flock "$r/rt/omabox/.lock-fki" sleep 1.5 & sleep 0.2; }
+  rp_wrap=() rp4_pre=(rp4_held) rp4_want=kept
+  parity "monitor add, interactive, the box's lock held 1.5 s: waits, then adds" monitor -b fki add 800x600
+  rp_check="" rp4_want=""
   # An INT to omabox alone (kill -INT PID) while a child runs that does not die of it: bash goes on,
   # so does the Rust half: the figures, the monitor made.
   rp_wrap=("$r/rp-sig" INT "$st/sleeping") rp4_pre=()
@@ -5255,7 +5395,7 @@ EOF
   rp4_pre=(rp4_cbig) rp_wrap=(env RP4_PATH="$r/hostbin:/usr/local/bin:/usr/bin" "$r/rp-orphan") rp_sed=""
   parity "clip: an item over 64 MiB" clip -b fki
   rp_wrap=() rp4_pre=() rp_env=("${rp_env4[@]}") rp_sed=""
-  rp_prep="" rp_also="" rp_snap=1 rp_env=() rp_dir=/ rp_rt=""
+  rp_prep="" rp_also="" rp_snap=1 rp_env=() rp_dir=/ rp_rt="" rp_mask=""
   check "the stand-in boxes lived through every case (a dead one fails both halves alike)" kill -0 "$lfk" "$l1" "$ln" "$ln2" "$hsrv"
   kill -KILL "$lfk" "$l1" "$ln" "$ln2" "$hsrv" 2>/dev/null
   wait "$ufk" "$u1" "$un" "$un2" "$hsrv" 2>/dev/null
@@ -10910,7 +11050,8 @@ aq_setup_checks() {
   out=$(setup_aq)
   check_match "...over an older build of omabox's: builds" "building aquamarine .*could not clone" "$(tr '\n' ' ' <<<"$out")"
   rm -rf "$data/omabox/aquamarine"
-  # What `setup` says of each (aq_note), and `monitor add` of a box's aquamarine (aq_monitor_note).
+  # What `setup` says of each (aq_note). (`monitor add` refuses a box's aquamarine without +appid:
+  # t_unit_rust_parity4.)
   note_of() { lib eval "AQ_KIND='$1' AQ_LIB='$data/lib' AQ_VER='$2' AQ_FIXED='$3'; aq_note" 2>&1; }
   check_match "setup's note on a system aquamarine with #415: omabox's own fixes, setup --aquamarine" \
     "^note: the system's aquamarine has the fix .*, but not omabox's own fixes \(keys held .*\): omabox setup --aquamarine$" "$(note_of system 0.15.0 1)"
@@ -10918,11 +11059,7 @@ aq_setup_checks() {
     "$(note_of system 0.15.0 0)"
   check_match "...an older build of omabox's: older" "^note: the aquamarine build in $data is older than this omabox's" "$(note_of private 0.15.1@7bb8bdf4+keys 1)"
   check_eq "...this omabox's build: nothing" "" "$(note_of private "0.15.1@$build" 1)"
-  mnote() { lib eval "NAME=b; aq_monitor_note '$1'" 2>&1; }
-  check_match "monitor add on a system aquamarine (#415 or not): the pointer's note, sending to setup --aquamarine" \
-    "aquamarine \(0\.15\.0\) puts your pointer in a monitor's window in the wrong place.*: omabox setup --aquamarine, then a new box$" "$(mnote 0.15.0)"
-  check_match "...on a build without +cursor: the cursor's" "hides your cursor .*: omabox setup --aquamarine, then a new box$" "$(mnote 0.15.1@7bb8bdf4+keys+layout)"
-  check_eq "...on this omabox's build: none" "" "$(mnote "0.15.1@$build")"
+  check_match "...this omabox's build gives each monitor's window a class of its own (finding 429)" "\+appid$" "$build"
 }
 
 # finding 116: up --hyprland PATH refuses what the box could not run, before anything is made.
@@ -14431,6 +14568,10 @@ t_monitors_window() {
   up_ok "$S" --size 3440x1440 --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
   local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
   if aq_unfixed "${in[@]}"; then skip "monitors as windows" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
+  # (finding 429: a monitor's window needs a class of its own, which only omabox's build gives)
+  if ! "${in[@]}" --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+appid'; then
+    skip "monitors as windows" "not omabox's aquamarine build with +appid (omabox setup --aquamarine)"; ob down "$S" >/dev/null; return
+  fi
   ob run -b "$S" -d -- foot >/dev/null 2>&1
   ob wait -b "$S" window foot >/dev/null 2>&1
   local out
@@ -14440,10 +14581,10 @@ t_monitors_window() {
   # shellcheck disable=SC2329 # called through until_ok
   mons() { [ "$("${in[@]}" monitor -b wm list --json | jq -r "$1")" = "$2" ]; }
   # shellcheck disable=SC2329 # called through check
-  boxwins() { ob hyprctl -b "$S" -j clients | jq -c '[.[] | select(.class == "aquamarine") | {ws: .workspace.name, floating, at, size}] | sort_by(.at)'; }
+  boxwins() { ob hyprctl -b "$S" -j clients | jq -c '[.[] | select(.class | startswith("aquamarine")) | {ws: .workspace.name, floating, at, size}] | sort_by(.at)'; }
   # How many pairs of the box's windows on the stand-in overlap.
   # shellcheck disable=SC2329 # called through check
-  overlaps() { ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class == "aquamarine")] as $w | [range(0; $w | length) as $i | range($i + 1; $w | length) as $j
+  overlaps() { ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class | startswith("aquamarine"))] as $w | [range(0; $w | length) as $i | range($i + 1; $w | length) as $j
     | select($w[$i].at[0] < $w[$j].at[0] + $w[$j].size[0] and $w[$j].at[0] < $w[$i].at[0] + $w[$i].size[0]
       and $w[$i].at[1] < $w[$j].at[1] + $w[$j].size[1] and $w[$j].at[1] < $w[$i].at[1] + $w[$i].size[1])] | length'; }
   # Each monitor's mode, scale, its size in the layout (the mode over the scale) and place.
@@ -14459,7 +14600,10 @@ t_monitors_window() {
   check_eq "...the stand-in's focus and workspace unchanged" "foot 1" "$(ob hyprctl -b "$S" -j activewindow | jq -r .class) $(ob hyprctl -b "$S" -j activeworkspace | jq -r .id)"
   check_eq "...each monitor a view: its window's pixels at 0.525, so the size asked for, placed as asked" \
     "WAYLAND-1 1008x567@60 0.525 1920x1080 0,0|WAYLAND-2 567x1008@60 0.525 1080x1920 1920,0|WAYLAND-3 672x378@60 0.525 1280x720 1920,1920" "$(layout)"
-  check_eq "...and the host rule is off again" false "$(ob lua -b "$S" 'omabox_monitor_rule:is_enabled()')"
+  # (finding 429: each monitor's window a class of its own, for a rule of its own; the main one aquamarine)
+  check_eq "...each monitor's window a class of its own, the main one aquamarine (finding 429)" "1 2" \
+    "$(ob hyprctl -b "$S" -j clients | jq -r '"\(map(select(.class == "aquamarine")) | length) \(map(.initialClass | select(test("^aquamarine-omabox-[0-9a-f]{16}$"))) | unique | length)"')"
+  check_eq "...their class tokens gone from the box's runtime dir" "" "$(ob run -b "$S" -- sh -c "ls '$("${in[@]}" path wm)/run' | grep appid" 2>/dev/null)"
   # The layout file the box's Lua writes for its aquamarine (finding 238; #200) against `monitors`:
   # each monitor's place and its size in the layout (its pixels over its scale, the sides swapped by a
   # 90/270 transform), rounded.
@@ -14538,7 +14682,7 @@ t_monitors_window() {
   check_eq "...the stand-in's focus and workspace unchanged" "foot 1" "$(ob hyprctl -b "$S" -j activewindow | jq -r .class) $(ob hyprctl -b "$S" -j activeworkspace | jq -r .id)"
   # A window the user resizes: its view's scale follows, the monitor keeps its size and place; a
   # window of another shape shows the monitor smaller along the side that does not fit.
-  local a; a=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .size == [783, 1392]) | .address')
+  local a; a=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select((.class | startswith("aquamarine")) and .size == [783, 1392]) | .address')
   ob hyprctl -b "$S" dispatch "hl.dsp.window.resize({ window = 'address:$a', x = 810, y = 1440 })" >/dev/null
   check "resizing a monitor's window to 810x1440: its view at 0.75, the monitor still 1080x1920 at 1920,0" until_ok 3 mons \
     '.[] | select(.name == "WAYLAND-2") | "\(.mode) \(.scale) \(.x),\(.y)"' "810x1440@60 0.75 1920,0"
@@ -14561,7 +14705,7 @@ t_monitors_window() {
   rp_mw_one() { local n; for n in $("${in[@]}" monitor -b wm list --json | jq -r '.[] | select(.name != "WAYLAND-1") | .name'); do
       OMABOX_BASH=1 "${in[@]}" monitor -b wm remove "$n" >/dev/null 2>&1; done; until_ok 3 mons 'map(.name) | join(" ")' WAYLAND-1 >/dev/null; }
   rp_mw_two() { rp_mw_one; OMABOX_BASH=1 "${in[@]}" monitor -b wm add 800x600,below >/dev/null 2>&1; }
-  rp_mw_also() { boxwins; "${in[@]}" monitor -b wm list --json; ob lua -b "$S" 'omabox_monitor_rule:is_enabled()'; }
+  rp_mw_also() { boxwins; "${in[@]}" monitor -b wm list --json; ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class | test("^aquamarine-omabox-[0-9a-f]{16}$"))] | length'; }
   rp_also=rp_mw_also rp_prep=rp_mw_one
   parity "monitor add, interactive (both ways): a window on the stand-in, the picture laid out" monitor -b wm add 1280x720
   rp_prep=rp_mw_two
@@ -14575,6 +14719,21 @@ t_monitors_window() {
   ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$main' })" >/dev/null
   check "closing its first window with another open: it stays up on that one" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-2"
   check_match "...up" " up " "$("${in[@]}" ls | grep '^wm ')"
+  # Two adds at once on one box (its lock: one after the other) and one on another box meanwhile
+  # (finding 429): each window by its class, with a rule of its own, on 9, floating; the stand-in's
+  # focus and workspace unchanged.
+  "${in[@]}" down wm >/dev/null 2>&1
+  "${in[@]}" up wa --interactive --no-shell >/dev/null 2>&1; "${in[@]}" up wb --interactive --no-shell >/dev/null 2>&1
+  local f0; f0=$(ob hyprctl -b "$S" -j activewindow | jq -r '"\(.address) \(.workspace.name)"')
+  "${in[@]}" monitor -b wa add 640x480 > "$TMP/monh-two.1" 2>&1 & local j1=$!
+  "${in[@]}" monitor -b wa add 640x480 > "$TMP/monh-two.2" 2>&1 & local j2=$!
+  "${in[@]}" monitor -b wb add 640x480 > "$TMP/monh-two.3" 2>&1; wait "$j1" "$j2"
+  check_eq "two adds at once on one box, one on another: each its own monitor" "WAYLAND-2 WAYLAND-3|WAYLAND-2" \
+    "$(tail -qn1 "$TMP/monh-two.1" "$TMP/monh-two.2" | sort | paste -sd' ')|$(tail -n1 "$TMP/monh-two.3")"
+  check_eq "...three windows, each a class of its own, on 9, floating" "3 3 9 true" \
+    "$(ob hyprctl -b "$S" -j clients | jq -r '[.[] | select(.class | startswith("aquamarine-omabox-"))] | "\(length) \(map(.initialClass) | unique | length) \(map(.workspace.name) | unique | join(",")) \(map(.floating) | unique | map(tostring) | join(","))"')"
+  check_eq "...the stand-in's focus and workspace unchanged" "$f0" "$(ob hyprctl -b "$S" -j activewindow | jq -r '"\(.address) \(.workspace.name)"')"
+  "${in[@]}" down --all >/dev/null 2>&1
   ob down "$S" >/dev/null
 }
 
@@ -15138,9 +15297,14 @@ t_guard() {
     "${cch[@]}" dispatch 'hl.dsp.focus({ workspace = "2" })' >/dev/null
     "${in[@]}" "$CLI" run -b cc -d -- foot >/dev/null 2>&1
     until_ok 10 ccwins 2
+    # (a class token `monitor add` left for that window's name, an add cut short: finding 429)
+    local ccd; ccd=$("${in[@]}" "$CLI" path cc)
+    "${in[@]}" sh -c "echo omabox-0123456789abcdef > '$ccd/run/omabox.appid.WAYLAND-1'"
     "${cl[@]}" >/dev/null
     check "confirm-close: the box stays after a close" holds 2 is cc up
-    check_eq "...with a new window" 1 "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+    check_eq "...with a new window, of class aquamarine even with a class token left for its name (finding 429)" 1 \
+      "$(ob hyprctl -b "$B" -j clients | jq '[.[] | select(.class == "aquamarine")] | length')"
+    check_fails "...the token gone" "${in[@]}" test -e "$ccd/run/omabox.appid.WAYLAND-1"
     check_eq "...showing the workspace it showed (issue #24)" 2 "$("${cch[@]}" -j activeworkspace | jq -r .name)"
     check_eq "...its window focused" "foot 2" "$("${cch[@]}" -j activewindow | jq -r '"\(.class) \(.workspace.name)"')"
     check_eq "...its windows where they were, no empty workspace left" "1:1 2:1" \
@@ -15478,7 +15642,7 @@ t_keys_to_box() {
   # A config reload drops the hooks, the binds and the rule; the box's reaper puts them back.
   ob hyprctl -b "$B" reload >/dev/null
   # shellcheck disable=SC2329
-  reinstalled() { [ "$(ob lua -b "$B" 'return omabox_pass_version')" = 4 ]; }
+  reinstalled() { [ "$(ob lua -b "$B" 'return omabox_pass_version')" = 5 ]; }
   check "after a host reload the hooks come back (the reaper)" until_ok 6 reinstalled
   check "...with the submap, border and file as focus says" until_ok 3 kis "omabox|aquamarine|border|ka"
   check_eq "...one toggle bind in each submap" "omabox:1 :1" "$(ob hyprctl -b "$B" -j binds |
@@ -15487,7 +15651,7 @@ t_keys_to_box() {
   check "...and focus still drives it" until_ok 5 kis "omabox|aquamarine|border|ka"
   # A newer passthrough over an older one with no reload between (#113): the reaper installs it again;
   # its unbind takes the toggle out of both submaps.
-  ob lua -b "$B" 'omabox_pass_version = 3' >/dev/null
+  ob lua -b "$B" 'omabox_pass_version = 4' >/dev/null
   check "a newer passthrough over an older one: installed again" until_ok 6 reinstalled
   check_eq "...still one toggle bind in each submap" "omabox:1 :1" "$(ob hyprctl -b "$B" -j binds |
     jq -r '[.[] | select(.description | startswith("omabox:"))] | group_by(.submap) | map("\(.[0].submap):\(length)") | reverse | join(" ")')"

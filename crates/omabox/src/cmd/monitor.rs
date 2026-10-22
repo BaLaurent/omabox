@@ -124,6 +124,23 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "' opens a window per monitor, which needs aquamarine's fix (hyprwm/aquamarine#415): omabox setup --aquamarine, then a new box"
             )));
         }
+        // Each monitor's window a class of its own, its rule's alone (finding 429): omabox's build
+        // only.
+        if act == b"add" {
+            let aq = Args::new(&["-r", r#".aquamarine.version // "?""#])
+                .arg(cat!(ctx.d, "/box.json"))
+                .run_file(jq::Err::Inherit)
+                .text();
+            if !crate::exit::contains(&aq, b"+appid") {
+                return Err(ctx.die(cat!(
+                    "monitor add: box '",
+                    n,
+                    "''s aquamarine (",
+                    aq,
+                    ") cannot give a monitor's window a class of its own, which keeps that window off your workspace (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
+                )));
+            }
+        }
     } else if act == b"add" && meta(&ctx.d, "wayland_screen").0 == b"true" {
         // A box started before #165 runs labwc with no config of omabox's.
         if !ctx.at("run/labwc/rc.xml").is_file() {
@@ -145,6 +162,23 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 return Err(ctx.die(
                     "monitor add: an interactive box's monitors are named by its windows (WAYLAND-N): no --name",
                 ));
+            }
+            // One add at a time on a box (finding 429): two at once would both take the next free
+            // WAYLAND-N. Under the box's lock, as up and down are: its window made, or the add
+            // given up, first.
+            let Some(_lock) = crate::boxes::lock_file(
+                &ctx.in_boxes(cat!(".lock-", ctx.name)),
+                Duration::from_secs(60),
+            ) else {
+                return Err(ctx.die(cat!(
+                    "monitor add: box '",
+                    n,
+                    "' is busy (another monitor add, an up or a down); try again"
+                )));
+            };
+            // (gone while it waited: says so)
+            if !crate::boxes::box_alive(ctx)? {
+                need_box(ctx)?;
             }
             // (bash's `$(monitor_add_window)`: an INT to omabox alone meanwhile, the step finished,
             // then the end bash's main had, saying nothing more)

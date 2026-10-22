@@ -18,7 +18,10 @@ keep() { rm -f "$XDG_RUNTIME_DIR/omabox.close-asking"; exit 0; }
 # A host that cannot give a new window (the session is ending): nothing to ask on, so end. The new
 # window under the closed one's name ($1, from hyprland.lua), so it keeps that window's workspaces
 # (#292: Omarchy 4.5 numbers them by the output's name); unnamed if that name is refused (hyprctl
-# exits 0 either way: "Name already taken" instead of "ok").
+# exits 0 either way: "Name already taken" instead of "ok"). A class token `monitor add` left for that
+# name (an add cut short) goes first: this window is a plain aquamarine one, for the user's workspace
+# (finding 429).
+case ${1:-} in ""|*/*) ;; *) rm -f "$XDG_RUNTIME_DIR/omabox.appid.$1" ;; esac
 { [ -n "${1:-}" ] && [ "$(hyprctl output create wayland "$1" 2>/dev/null)" = ok ]; } ||
   hyprctl output create wayland >/dev/null 2>&1 || quit
 # The host's exec rule (render_unfocused) went with the old window: this one is not drawn while

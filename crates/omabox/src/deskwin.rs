@@ -1,8 +1,8 @@
 //! An interactive box's monitors (#123, #174): each a window on the user's desktop, made by the box's
 //! Hyprland (`output create wayland NAME`), and the box's windows there laid out as its layout scaled
 //! as a whole, a display-settings picture (desk_relay, desk_picture). What is done on the host is
-//! done on purpose, by address (no focus moves), and a host rule catching the new window is on for
-//! as little as it takes (finding 70).
+//! done on purpose, by address (no focus moves), and a host rule catching the new window, by a class
+//! of its own, keeps it off the user's workspace (findings 70, 429).
 //!
 //! As in mon.rs: what bash runs inside `$(...)` runs with errexit off; ERREXIT says where it is on.
 
@@ -21,7 +21,6 @@ use crate::mon::{
 use crate::screen::main_screen;
 use crate::settle::secs;
 use crate::shell::{self, bash_int, strip_nl};
-use std::time::Duration;
 
 /// ws_check WS: where interactive and peek windows open (a workspace 1-99, `special`, or
 /// special:NAME: #292, finding 423), in its normal form; None for anything else.
@@ -50,45 +49,10 @@ fn box_ws(ctx: &Ctx) -> Option<Vec<u8>> {
     ws_check(if ws.is_empty() { b"9" } else { &ws })
 }
 
-/// aq_monitor_note VERSION: what an interactive box's monitor windows lack on that aquamarine
-/// (findings 238, 239, 247).
-fn aq_monitor_note(ctx: &Ctx, v: &[u8]) {
-    let n = &ctx.name;
-    if !crate::exit::contains(v, b"+layout") {
-        say(cat!(
-            "monitor add: box '",
-            n,
-            "''s aquamarine (",
-            v,
-            ") puts your pointer in a monitor's window in the wrong place, over the whole layout (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
-        ));
-    } else if !crate::exit::contains(v, b"+cursor") {
-        say(cat!(
-            "monitor add: box '",
-            n,
-            "''s aquamarine (",
-            v,
-            ") hides your cursor when it goes from one monitor's window to another (it lacks omabox's patch): omabox setup --aquamarine, then a new box"
-        ));
-    }
-}
-
 /// `jq ARGS <<<"$INPUT"` as `$(...)` keeps it, its words on stderr; its status too.
 fn jqt(a: Args, input: &[u8]) -> (i32, Vec<u8>) {
     let r = a.run(Some(input), jq::Err::Inherit);
     (r.rc, r.text())
-}
-
-/// `[ "$(jq --argjson p PID '[.[] | select(.pid == $p)] | length' <<<"$C")" ]`: how many windows
-/// of the box's pid.
-fn n_of(pid: &[u8], clients: &[u8]) -> Vec<u8> {
-    jqt(
-        Args::new(&[])
-            .kv("--argjson", "p", pid)
-            .arg(crate::jqprog::PID_COUNT_JQ),
-        clients,
-    )
-    .1
 }
 
 /// `$(desk_windows [CLIENTS])`: the box's windows on the host, "NAME ADDRESS" a line, the main one as
@@ -503,31 +467,25 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8], errexit: bool) -> Res<Vec<u8>> {
     Ok(strip_nl(&said))
 }
 
-const RULE_OFF: &[u8] = b"if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end";
-
-/// monitor_add_window's EXIT trap (MON_RULE_ON, mon_rule_off): the host rule off however the
-/// subshell ends (a refusal; INT, TERM or HUP, a second one meanwhile held: finding 429), quietly.
-/// Once the box was told to make the output (MON_CREATING), it is removed first: the box handles its
-/// IPC in order, so its answer means the create was handled and its window is gone (turned off before
-/// that, the window the box makes anyway opens on the user's workspace, focused: finding 70); a box
-/// that cannot answer makes none. A rule-on call cut short (MON_ASKING) may land after the rule-off:
-/// sent again half a second on. The trap waits for main's foreground child (the rule-on call) too.
-struct RuleGuard {
-    ctx: Ctx,
+/// monitor_add_window's EXIT trap once the box was told to make the output (MON_CREATING, mon_undo,
+/// finding 429): it is removed, so an add cut short (a refusal; INT, TERM or HUP) leaves no
+/// monitor. The box handles its IPC in order, so the remove comes after the create, however late.
+/// Nothing here keeps the window off the user's workspace (its own rule does), so signals are not
+/// held: a second one ends the trap, and a remove that fails leaves at worst a monitor on the box's
+/// workspace. Its token file stays, for a box that has yet to read it.
+struct MonUndo {
     trap: Option<crate::trap::Trap>,
     creating: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    asking: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl RuleGuard {
-    fn arm(ctx: &Ctx, name: &[u8]) -> RuleGuard {
+impl MonUndo {
+    fn arm(ctx: &Ctx, name: &[u8]) -> MonUndo {
         let c = ctx.clone();
         let creating = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let asking = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (cr, ask, name) = (creating.clone(), asking.clone(), name.to_vec());
-        let trap = crate::trap::on_exit_fg(move || {
-            crate::exit::muted(|| {
-                if cr.load(std::sync::atomic::Ordering::SeqCst) {
+        let (cr, name) = (creating.clone(), name.to_vec());
+        let trap = crate::trap::on_exit(move || {
+            if cr.load(std::sync::atomic::Ordering::SeqCst) {
+                crate::exit::muted(|| {
                     let _ = on_box(
                         &c,
                         &w(&[
@@ -543,19 +501,12 @@ impl RuleGuard {
                         ErrTo::Null,
                         false,
                     );
-                }
-                host_hyprctl(&c, &[b"eval", RULE_OFF], true);
-                if ask.load(std::sync::atomic::Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(500));
-                    host_hyprctl(&c, &[b"eval", RULE_OFF], true);
-                }
-            });
+                });
+            }
         });
-        RuleGuard {
-            ctx: ctx.clone(),
+        MonUndo {
             trap: Some(trap),
             creating,
-            asking,
         }
     }
 
@@ -564,26 +515,68 @@ impl RuleGuard {
         self.creating.store(on, std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// `MON_ASKING=1` / `MON_ASKING=""`.
-    fn asking(&self, on: bool) {
-        self.asking.store(on, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    /// `host_eval "omabox_monitor_rule:set_enabled(false)"; MON_RULE_ON=""`.
-    fn off(&mut self) -> Res<()> {
-        host_eval(&self.ctx, b"omabox_monitor_rule:set_enabled(false)")?;
+    /// The window is there: nothing left to undo.
+    fn done(&mut self) {
+        self.creating(false);
         if let Some(t) = self.trap.take() {
             t.forget();
         }
-        Ok(())
     }
 }
 
+/// mon_answer RC OUT: what the box's answer to `output create` says (finding 429).
+#[derive(PartialEq, Eq, Debug)]
+enum Answer {
+    /// `ok`.
+    Ok,
+    /// It made none: Hyprland's own words, hyprctl could not reach it, the box gone.
+    No,
+    /// Anything else: hyprctl gave up waiting (5 s: "Couldn't read (6)"), was cut short or said
+    /// nothing, and the box may still handle the create later.
+    Unclear,
+}
+
+fn mon_answer(ctx: &Ctx, rc: i32, out: &[u8]) -> Answer {
+    if out == b"ok" {
+        return Answer::Ok;
+    }
+    match crate::boxes::box_state(&ctx.d) {
+        "dead" => return Answer::No,
+        "unknown" => return Answer::Unclear,
+        _ => {}
+    }
+    if crate::exit::contains(out, b"Couldn't connect")
+        || crate::exit::contains(out, b"Couldn't open a socket")
+        || ((rc == 0 || rc == 7) && !out.is_empty())
+    {
+        Answer::No
+    } else {
+        Answer::Unclear
+    }
+}
+
+/// A class token for a monitor's window: 16 hex digits from /dev/urandom (`od -An -N8 -tx1`).
+fn mon_token() -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut b = [0u8; 8];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut b))
+        .ok()?;
+    Some(
+        b.iter()
+            .map(|x| format!("{x:02x}"))
+            .collect::<String>()
+            .into_bytes(),
+    )
+}
+
 /// `$(monitor_add_window SPEC)`: an interactive box's monitor (#123), a window on the user's
-/// desktop as its first one is: the host rule for aquamarine windows (workspace, silent, no focus,
-/// floating at its size and place) on from just before the window is made until it is there, at
-/// most 5 s. In the box it is placed as a headless box's, kept in omabox.monitors; on the host the
-/// picture is laid out again with it (#174). Its line as Hyprland made it.
+/// desktop as its first one is. It has a class of its own (aquamarine-omabox-TOKEN, from the token
+/// file omabox.appid.NAME in the box's runtime dir: omabox's aquamarine build, +appid), and a host
+/// rule matching that class alone (workspace, silent, no focus, floating at its size and place) is
+/// on before the token is written, and stays on (finding 429). In the box it is placed as a
+/// headless box's, kept in omabox.monitors; on the host the picture is laid out again with it
+/// (#174). Its line as Hyprland made it.
 pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     let Ok([mode, scale, place]) = monitor_spec(spec) else {
         return Err(Exit(1));
@@ -603,11 +596,6 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
             "''s windows on your desktop"
         )));
     }
-    let aq = Args::new(&["-r", r#".aquamarine.version // "?""#])
-        .arg(cat!(ctx.d, "/box.json"))
-        .run_file(jq::Err::Inherit)
-        .text();
-    aq_monitor_note(ctx, &aq);
     desk_prune(ctx, false)?;
     // Named here (the next free WAYLAND-N), so its line, and so its place and scale, are there
     // before it is.
@@ -644,34 +632,54 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
             "''s monitors failed"
         )));
     }
-    let (rc, clients) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
-    if rc != 0 {
-        return Err(ctx.die("monitor add: cannot read your desktop's windows"));
-    }
-    let n0 = n_of(&pid, &strip_nl(&clients));
     let r4 = shell::read_fields(&rect, 4);
-    let mut guard = RuleGuard::arm(ctx, &name);
-    guard.asking(true);
-    // The rule's `move` is relative to its monitor; always given: a rule of the same name keeps an
-    // earlier one's.
-    host_eval(
-        ctx,
-        &cat!(
-            "omabox_monitor_rule = hl.window_rule({ name = 'omabox-monitor', match = { class = '^aquamarine$' }, workspace = '",
-            ws,
-            " silent', no_initial_focus = true, render_unfocused = true, float = true, size = '",
-            r4[0],
-            " ",
-            r4[1],
-            "', move = '",
-            r4[2],
-            " ",
-            r4[3],
-            "' })"
-        ),
-    )?;
-    guard.asking(false);
-    guard.creating(true);
+    let Some(tok) = mon_token() else {
+        monitors_write(ctx, &rest);
+        return Err(ctx.die(cat!(
+            "monitor add: could not make a class for ",
+            name,
+            "'s window"
+        )));
+    };
+    let cls = cat!("aquamarine-omabox-", tok);
+    let appid = ctx.at(&format!(
+        "run/omabox.appid.{}",
+        String::from_utf8_lossy(&name)
+    ));
+    // A half-made monitor removed however this ends (MonUndo).
+    let mut undo = MonUndo::arm(ctx, &name);
+    // The rule's `move` is relative to its monitor.
+    let rule = cat!(
+        "hl.window_rule({ name = 'omabox-mon-",
+        tok,
+        "', match = { initial_class = '^",
+        cls,
+        "$' }, workspace = '",
+        ws,
+        " silent', no_initial_focus = true, render_unfocused = true, float = true, size = '",
+        r4[0],
+        " ",
+        r4[1],
+        "', move = '",
+        r4[2],
+        " ",
+        r4[3],
+        "' })"
+    );
+    host_eval(ctx, &rule)?;
+    // The token once its rule is on: no window of that class is ever without one.
+    if !crate::boxes::box_file(ctx, &appid, &cat!("omabox-", tok)) {
+        monitors_write(ctx, &rest);
+        return Err(ctx.die(cat!(
+            "monitor add: could not give ",
+            name,
+            "'s window a class of its own"
+        )));
+    }
+    // Sent again right before the window is asked for: a config reload of the host's drops every
+    // rule.
+    host_eval(ctx, &rule)?;
+    undo.creating(true);
     let r = on_box(
         ctx,
         &w(&[
@@ -690,24 +698,32 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     );
     let res = shell::subst(&r.out);
     if res != b"ok" {
-        guard.creating(false);
+        // Removed by the trap unless the box clearly made none: one that answered late may make it
+        // yet.
+        if mon_answer(ctx, r.rc, &res) == Answer::No {
+            undo.creating(false);
+            let _ = std::fs::remove_file(&appid);
+        }
         monitors_write(ctx, &rest);
         return Err(ctx.die(cat!(
             "monitor add: the box could not make another window: ",
             res
         )));
     }
+    // Its window, by its class: this add's alone, whatever else opens meanwhile.
     let end = secs() + 5;
-    let mut clients;
+    let addr;
     loop {
         let (rc, c) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
-        clients = strip_nl(&c);
         if rc == 0 {
-            let n = n_of(&pid, &clients);
-            let gt = shell::test_int(&n)
-                .zip(shell::test_int(&n0))
-                .is_some_and(|(a, b)| a > b);
-            if gt {
+            let (jrc, a) = jqt(
+                Args::new(&["-er"])
+                    .kv("--arg", "c", &cls)
+                    .arg(crate::jqprog::CLASS_ADDR_JQ),
+                &strip_nl(&c),
+            );
+            if jrc == 0 {
+                addr = a;
                 break;
             }
         }
@@ -721,32 +737,9 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
         }
         crate::trap::sleep(b"0.05");
     }
-    guard.off()?;
-    // The new window: the box's one that is neither the main one nor a known monitor's.
-    let wins = desk_windows(ctx, Some(&clients)).unwrap_or_default();
-    let addrs: Vec<u8> = records(&wins)
-        .into_iter()
-        .map(|l| {
-            cat!(
-                crate::mon::awk_fields(l)
-                    .get(1)
-                    .copied()
-                    .unwrap_or_default(),
-                "\n"
-            )
-        })
-        .collect::<Vec<_>>()
-        .concat();
-    let known = jq::tool("jq", &["-R", "."], Some(&addrs), jq::Err::Inherit);
-    let known = jq::tool("jq", &["-sc", "."], Some(&known.out), jq::Err::Inherit).text();
-    let addr = jqt(
-        Args::new(&["-r"])
-            .kv("--argjson", "p", &pid)
-            .kv("--argjson", "k", &known)
-            .arg(crate::jqprog::NEW_WINDOW_JQ),
-        &clients,
-    )
-    .1;
+    // (made: the box read its token)
+    undo.done();
+    let _ = std::fs::remove_file(&appid);
     let end = secs() + 5;
     loop {
         if let Ok(m) = hypr_json(ctx, &["monitors"]) {
