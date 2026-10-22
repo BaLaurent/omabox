@@ -5,8 +5,11 @@
 # still` then caught a half-reloaded plugin. In a box nothing reloads by itself: `omabox restart-shell`
 # does. For that one watch, exactly as Omarchy runs it, this waits without watching, and ends with the
 # shell (exiting would only have the registry start it again a second later); anything else goes to the
-# real one. t_unit_omarchy_contract checks the registry still runs it this way.
-if [ $# = 8 ] && [ "${*:1:7}" = "-m -r -q -e close_write,create,delete,move --format %w%f" ] &&
+# real one. t_unit_omarchy_contract checks the registry still runs it this way. Only for the box's own
+# session (OMABOX_OWN_SESSION, set by its Hyprland): a shell a command under `omabox run` starts, such as
+# Omarchy's own shell tests, reloads as on a desktop, which those tests check (finding 424).
+if [ "${OMABOX_OWN_SESSION:-}" = 1 ] && [ $# = 8 ] &&
+   [ "${*:1:7}" = "-m -r -q -e close_write,create,delete,move --format %w%f" ] &&
    [[ ${8%/} == */.config/omarchy/plugins ]]; then
   # It waits without starting a process (#275: Omarchy's idle-spawn test counts each one). Quickshell
   # holds the write end of our stdin and never writes to it, so `read` sleeps until the shell is gone

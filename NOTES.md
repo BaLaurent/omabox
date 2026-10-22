@@ -8795,6 +8795,18 @@ from them.
     time, toggled it; SUPER+ALT+B is bound to nothing else in 4.5's defaults (`hyprctl binds`). The
     floating mode is documented, not changed. Tests: t_special_ws (new), t_unit_config.
 
+424. **A test's own Omarchy shell lost plugin hot-reload in a box** (2026-10-21). Omarchy's
+    `test/shell.d/runtime-smoke-test.sh`, run with `omabox run`, failed "installed plugin changes
+    reload without an explicit rescan": finding 196's stand-in `inotifywait` is first on every box
+    PATH, `run`'s too, so it kept the watch of the temporary shell the test starts (its HOME is a temp
+    dir, whose plugins dir matched `*/.config/omarchy/plugins`) idle as well as the box's own. With
+    the stand-in off PATH all 22 checks passed. **Fix**: the box's Hyprland sets `OMABOX_OWN_SESSION=1`
+    for what its session starts (the shell among it), and the stand-in takes the watch only with it.
+    `run` starts its command with the session's environment from omabox.env, so it leaves that one
+    out. Tests: t_run_options (a `run` command has none, the box shell has it), t_unit_inotifywait
+    (without it, the real inotifywait runs), t_plugin_link and t_plugin_check (the box shell's watch
+    is still the stand-in). Omarchy's runtime-smoke-test.sh: 22 of 22, three runs.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

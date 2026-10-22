@@ -19,6 +19,10 @@ Boxes on Omarchy 4.5.
 
 ### Fixed
 
+- **A shell a test starts itself, under `omabox run`, no longer loses plugin hot-reload.** The box's
+  stand-in that keeps its own shell from reloading a mounted plugin on every save also caught other
+  shells, so Omarchy's own `runtime-smoke-test.sh` failed in a box. Now it applies to the box's
+  session only ([#317](https://github.com/diogochaves/omabox/issues/317)).
 - **The first shot after `up` could be a black screen**: 4.5's shell covers every screen for a new
   login until the theme's intro has played, which in a box (no OWE daemon) took up to 5 s past `up`.
   A box's start is now marked as had, and `up` also waits out the cover

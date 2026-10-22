@@ -2929,7 +2929,7 @@ t_unit_inotifywait() {
   standin() {   # STDIN: pipe | null; prints the parent's pid, then the stand-in's
     python3 -c 'import subprocess, sys, time
 p = subprocess.Popen(sys.argv[2:], stdin=subprocess.PIPE if sys.argv[1] == "pipe" else subprocess.DEVNULL)
-print(p.pid, flush=True); time.sleep(60)' "$1" "$ROOT/share/bin/inotifywait" -m -r -q -e close_write,create,delete,move \
+print(p.pid, flush=True); time.sleep(60)' "$1" env OMABOX_OWN_SESSION="${2-1}" "$ROOT/share/bin/inotifywait" -m -r -q -e close_write,create,delete,move \
       --format %w%f "$d/home/.config/omarchy/plugins" > "$d/$1.pid" 2>&1 &
     echo "$!"
     local i; for i in $(seq 50); do [ ! -s "$d/$1.pid" ] || break; sleep 0.1; done
@@ -2951,6 +2951,11 @@ print(p.pid, flush=True); time.sleep(60)' "$1" "$ROOT/share/bin/inotifywait" -m 
   kill -KILL "$pid" 2>/dev/null || true
   o=$(grep -hv "^[0-9]*$" "$d/pipe.pid" "$d/null.pid" || true)
   check_eq "...said nothing" "" "$o"
+  # Not the box's own session (finding 424): the same watch is the real inotifywait's.
+  { read -r parent; read -r pid; } < <(standin pipe "")
+  local exe="" i; for i in $(seq 50); do exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true); [ "$exe" != /usr/bin/inotifywait ] || break; sleep 0.1; done
+  check_eq "outside the box's session (omabox run): the real inotifywait watches" /usr/bin/inotifywait "$exe"
+  kill -KILL "$parent" "$pid" 2>/dev/null || true
 }
 
 # evidence() puts back a box's idle clock after its reads (#111, finding 180), but not over another
@@ -3181,7 +3186,9 @@ print(a.getsockname()[1], b.getsockname()[1])')
     curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$2/" || true
     curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$3/" || true
     hyprctl -j monitors | jq -r ".[0] | \"\(.width)x\(.height)\""
-    test -f ~/.config/omarchy/plugins/chaves.omabox/manifest.json && echo plugin' sh "$ov" "$port" "$other" 2>/dev/null)
+    test -f ~/.config/omarchy/plugins/chaves.omabox/manifest.json && echo plugin
+    echo "run:${OMABOX_OWN_SESSION:-none}"
+    tr "\0" "\n" < "/proc/$(cat "$XDG_RUNTIME_DIR/omabox-shell.pid")/environ" | grep -x OMABOX_OWN_SESSION=1 || echo "shell:none"' sh "$ov" "$port" "$other" 2>/dev/null)
   kill "$s1" "$s2" 2>/dev/null || true
   check_eq "run --overlay: the box writes over the folder" box "$(sed -n 1p <<<"$out")"
   check_eq "...the folder itself unchanged" host "$(cat "$ov/f")"
@@ -3189,6 +3196,8 @@ print(a.getsockname()[1], b.getsockname()[1])')
   check_eq "...another host port not" 000 "$(sed -n 3p <<<"$out")"
   check_eq "run --size 800x600" 800x600 "$(sed -n 4p <<<"$out")"
   check_eq "run --plugin: mounted in the box HOME" plugin "$(sed -n 5p <<<"$out")"
+  check_eq "run: the command is not the box's session (finding 424)" run:none "$(sed -n 6p <<<"$out")"
+  check_eq "...the box's shell is" OMABOX_OWN_SESSION=1 "$(sed -n 7p <<<"$out")"
 }
 
 # The leak detector, proven (finding 80): the watcher the host gets, on a box standing in for the

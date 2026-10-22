@@ -37,6 +37,10 @@ do
   end
   hl.env("PATH", table.concat(kept, ":"))
 end
+-- What the box's own session starts (`omabox run` leaves it out of the environment it copies):
+-- share/bin/inotifywait keeps only the box shell's plugin watch idle, so a shell a test starts
+-- itself still reloads (finding 424).
+hl.env("OMABOX_OWN_SESSION", "1")
 -- As Omarchy's stock ~/.config/hypr/hyprland.lua ends, after the user modules (above): the toggle
 -- flags and workspace layouts from ~/.local/state, so Omarchy's toggles work in a box.
 require("default.hypr.toggles")
