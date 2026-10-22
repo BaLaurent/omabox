@@ -12195,7 +12195,7 @@ monitor_add_window() (
   local w h x y
   read -r w h x y <<<"$rect"
   MON_RULE_ON=1 MON_MADE=""
-  trap 'mon_cleanup "${MON_RULE_ON:-}" "${MON_MADE:-}" "$name" "$rest"' EXIT
+  trap 'mon_cleanup "${MON_RULE_ON:-}" "${MON_MADE:-}" "$name"' EXIT
   # The rule's `move` is relative to its monitor (the dispatcher's is global: both seen in a stand-in
   # with a second monitor at 1920,0); always given: a rule of the same name keeps an earlier one's.
   host_eval "omabox_monitor_rule = hl.window_rule({ name = 'omabox-monitor', match = { class = '^aquamarine\$' }, workspace = '$ws silent', no_initial_focus = true, render_unfocused = true, float = true, size = '$w $h', move = '$x $y' })"
@@ -12205,7 +12205,7 @@ monitor_add_window() (
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create wayland "$name" 2>&1) && rc=0 || rc=$?
   case $(mon_answer "$rc" "$res") in
     made) ;;
-    no) MON_MADE=""; box_file "$D/run/omabox.monitors" "$rest" || true; die "monitor add: the box could not make another window: $res" ;;
+    no) MON_MADE=""; mon_unrecord "$name"; die "monitor add: the box could not make another window: $res" ;;
     *) die "monitor add: box '$NAME' did not answer whether it made $name (${res:-no answer}): it is removed again" ;;
   esac
   end=$((SECONDS + 5))
@@ -12231,42 +12231,53 @@ monitor_add_window() (
   monitors_record
   hypr_json monitors | jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"'
 )
-# mon_cleanup RULE_ON MADE NAME REST: monitor_add_window's EXIT trap (finding 435). While its host rule
-# is on, an output NAME the box may have made (MADE) is removed first, and its line dropped (REST: the
-# other monitors' lines). The rule goes off only once the box has answered a remove, which it does
-# after the create (it handles its requests in order), and a late output is gone (mon_drain), so a
-# late window maps under the rule, on the box's workspace, and closes. MON_DRAIN s at most: a box still silent then is said, and the rule goes
-# off all the same. Signals are held meanwhile: a second Ctrl-C cutting the trap short would leave
-# the rule on, or let the window open on the user's workspace.
+# mon_cleanup RULE_ON MADE NAME: monitor_add_window's EXIT trap (finding 435). While its host rule is
+# on, an output NAME the box may have made (MADE) is removed first, and its line dropped. The rule goes
+# off only once the box has answered a remove, which it does after the create (it handles its requests
+# in order), and a late output is gone (mon_drain), so a late window maps under the rule, on the box's
+# workspace, and closes. MON_DRAIN s at most: a box still silent then is said, and the rule goes off
+# all the same. Nothing but SIGKILL may end the trap before the rule is off (finding 435): signals are
+# held (a second Ctrl-C, or a pipe or terminal gone: a `say` to a stderr whose reader has left would
+# end it with SIGPIPE), and errexit is off (a `say` to a hung-up terminal fails, EIO).
 MON_DRAIN=20
 # shellcheck disable=SC2329 # called from monitor_add_window's trap
 mon_cleanup() {
   [ -n "$1" ] || return 0
-  trap '' INT TERM HUP
+  trap '' INT TERM HUP PIPE
+  set +e
   if [ -n "$2" ]; then
     mon_drain "$3" || say "monitor add: box '$NAME' did not answer in $MON_DRAIN s: if it makes $3 later, its window may open on your workspace (close it, or: omabox monitor -b $NAME remove $3)"
-    box_file "$D/run/omabox.monitors" "$4" || true
+    mon_unrecord "$3"
   fi
-  host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1 || true
+  host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1
+}
+# mon_unrecord NAME: NAME's line dropped from omabox.monitors as it is now, not as it was before the
+# add: an interactive `monitor add` or `remove` takes no lock, and one may have changed it meanwhile
+# (finding 435: the lines from before a 20 s drain, written back, brought back a monitor removed
+# meanwhile).
+mon_unrecord() {
+  local keep; keep=$(monitors_file | grep -v "^$1 ") || keep=""
+  box_file "$D/run/omabox.monitors" "$keep" || true
 }
 # mon_drain NAME: `output remove NAME` until the box answers it (mon_answer not unclear), or is gone.
 # An answer means the box has handled the create, but a window it made becomes its monitor only once
 # the host has configured it: until then the box says "output not found", so that is asked again for
-# MON_SETTLE s (seen in a stand-in: the late output came right after such an answer).
+# MON_SETTLE s (seen in a stand-in: the late output came right after such an answer). Both timed in
+# microseconds: with $SECONDS, whole seconds, MON_SETTLE 3 was 2 to 3 s (finding 435).
 MON_SETTLE=3
 # shellcheck disable=SC2329 # called through mon_cleanup
 mon_drain() {
-  local end=$((SECONDS + MON_DRAIN)) settle="" res rc said=""
+  local end=$((${EPOCHREALTIME//[!0-9]/} + MON_DRAIN * 1000000)) settle="" res rc said=""
   while :; do
     res=$(on_box timeout "$HYPR_LIMIT" hyprctl output remove "$1" 2>&1) && rc=0 || rc=$?
     case $(mon_answer "$rc" "$res") in
       unclear)
-        [ "$SECONDS" -lt "$end" ] || return 1
-        [ -n "$said" ] || { say "monitor add: waiting for box '$NAME' to answer ($MON_DRAIN s at most)"; said=1; } ;;
+        [ "${EPOCHREALTIME//[!0-9]/}" -lt "$end" ] || return 1
+        [ -n "$said" ] || { say "monitor add: waiting for box '$NAME' to answer ($MON_DRAIN s at most)" || true; said=1; } ;;
       no)
         [ "$res" = "output not found" ] && (box_alive) 2>/dev/null || return 0
-        [ -n "$settle" ] || settle=$((SECONDS + MON_SETTLE))
-        [ "$SECONDS" -lt "$settle" ] || return 0 ;;
+        [ -n "$settle" ] || settle=$((${EPOCHREALTIME//[!0-9]/} + MON_SETTLE * 1000000))
+        [ "${EPOCHREALTIME//[!0-9]/}" -lt "$settle" ] || return 0 ;;
       *) return 0 ;;
     esac
     sleep 0.2

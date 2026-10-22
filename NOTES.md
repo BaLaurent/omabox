@@ -8829,13 +8829,26 @@ from them.
     window (aquamarine announces it from that configure), so a remove handled right after the late
     create says "output not found" and the output comes a moment later. The first version stopped
     there, and the stand-in kept WAYLAND-2 (its window on 9, the rule off). On "output not found"
-    `mon_drain` asks again every 0.2 s for MON_SETTLE (3) s, until one says ok. (Probed in a
+    `mon_drain` asks again every 0.2 s for MON_SETTLE (3) s, until one says ok (both limits timed
+    in microseconds: with bash's whole-second `$SECONDS` a 3 s settle was 2 to 3 s, and the unit
+    case for it failed three runs in six, its 1 s settle over after one try). (Probed in a
     headless box: its Hyprland stopped, a create given up on at 5.2 s, a remove sent then answered
     ok at 6.0 s, just after the CONT: the box handled the request whose client had gone, then the
     next, in order.) A box silent past MON_DRAIN is said ("if it makes WAYLAND-N later, its window
     may open on your workspace"), and the rule goes off all the same: a rule left on would catch
-    every aquamarine window, the user's own nested Hyprland's too. The trap ignores INT, TERM and
-    HUP while it runs, so a second Ctrl-C cannot cut it short (at most about 25 s). An add whose
+    every aquamarine window, the user's own nested Hyprland's too. The output's line is dropped from
+    omabox.monitors as the file is then (`mon_unrecord`), not written back as it was before the add:
+    an interactive add or remove takes no lock, and the first version's write after a drain brought
+    back a monitor removed meanwhile and lost one added. Only SIGKILL ends the trap before the rule
+    goes off: it ignores INT, TERM, HUP and PIPE and turns errexit off. A second Ctrl-C would cut it
+    short, and so would a stderr gone bad: a pipe whose reader has left (`monitor add ... 2>&1 |
+    head -1`, or a `tee` the same Ctrl-C ended) kills it with SIGPIPE at its first `say`, and a
+    hung-up terminal fails that `say` (EIO), errexit ending the trap there. Both left the rule on with
+    the first version (the unit stand-ins: the said-log ended at the first remove); 1.0.1's trap wrote
+    nothing. How long signals are held: the drain asks until MON_DRAIN (20) s have gone by, but a
+    remove sent just before that runs up to 10 s more when it blocks in connect (`timeout 10`;
+    hyprctl's own limit is 5 s once connected), then MON_SETTLE: about 33 s at worst from the start of
+    the trap, after a create of up to 10 s. An add whose
     window did not come in 5 s after an `ok` now removes the output too (it was left in the box, its
     window free to map later with the rule off). A refusal and a dead box are said as before, at
     once, with no remove. In the same stand-in after the fix (two runs): the add fails at about 8.4
@@ -8844,11 +8857,20 @@ from them.
     WAYLAND-2 on 9. A box killed as the rule goes on: refused in about 2.5 s, no remove asked, the
     rule off. Left for the 1.1 line (#349): a signal during the create can still send the trap's
     remove before the create has reached the box, two adds at once share the one rule, a box
-    answering after 20 s, and a host taking more than 3 s to configure the late window. Tests:
+    answering after 20 s, a host taking more than 3 s to configure the late window, or a box slow to
+    handle that configure after its answer, and a SIGKILL during the drain (a harness's KILL after
+    its grace period): the rule stays on, with no time limit, until the next interactive `monitor
+    add` turns it off (`down` does not touch it; a reload of the host's config likely drops it, not
+    checked), where 1.0.1's window was about 5 s. A TERM to the whole group ends omabox's main shell at once while
+    the add's subshell drains (seen in bare bash of the same shape: the parent gone in 50 ms, the
+    trap done after), so a caller sees the command end and may start another add, sharing the rule,
+    during the drain. Tests:
     t_monitors_window_late (new: the box's Hyprland stopped for 6 s, then killed, by the stand-in's
     Lua; it fails on the code before the fix), t_unit_monitors (`mon_answer`'s cases; the order the
-    stand-ins were told things: create, removes until answered and "output not found" settled, the
-    line dropped, then the rule off).
+    stand-ins were told things: create, removes until answered and "output not found" settled for
+    MON_SETTLE timed to the microsecond, the line dropped, then the rule off; the same with the add's
+    stderr on /dev/full and on a pipe whose reader has gone; only its own line dropped from the file
+    another command changed during the drain; the four new checks fail on the first version).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

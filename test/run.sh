@@ -12677,32 +12677,40 @@ t_unit_monitors() {
   # ("Couldn't read (6)", exit 6) while the box may still make the output. The add then removes it,
   # until the box answers a remove, and only then turns the host rule off. Stand-ins for both sides:
   # the box's hyprctl answers the create as CREATE says (`read`: given up on; `gone`: the box died),
-  # each remove as the next of REMOVES, then "output not found"; the box alive while ALIVE is 1. What
-  # each was told is in $d/said.
+  # each remove as the next of REMOVES (`read+changed`: given up on, while another command removed
+  # WAYLAND-3 from omabox.monitors and added WAYLAND-4), then "output not found"; the box alive while
+  # ALIVE is 1. What each was told is in $d/said, when each remove was answered in $d/rtimes (us). With
+  # MC_ERR=full the add's stderr is /dev/full once the rule is on (a write fails, as on a hung-up
+  # terminal), with pipe a pipe whose reader is gone once the create is sent; with MC_WRITE=1
+  # omabox.monitors is written too.
   # shellcheck disable=SC2016 # the inner bash's
   mon_case() {   # ALIVE CREATE REMOVES...
     local alive=$1 create=$2; shift 2
-    printf '%s\n' "$@" > "$d/removes"; : > "$d/said"; rm -f "$d/gone"
-    bash -c 'source "$1"; D=$2 NAME=t MON_DRAIN=$5 MON_SETTLE=1 alive=$3 create=$4
+    printf '%s\n' "$@" > "$d/removes"; : > "$d/said"; : > "$d/rtimes"; rm -f "$d/gone"
+    bash -c 'source "$1"; D=$2 NAME=t MON_DRAIN=$5 MON_SETTLE=1 alive=$3 create=$4 err=$6 write=$7 errpid=""
+      [ "$err" != pipe ] || { exec 2> >(exec cat >/dev/null); errpid=$!; }
       meta() { echo 9; }; ws_check() { echo "$1"; }; box_pid() { echo $$; }; hypr_json() { echo "[]"; }
       box_alive() { [ "$alive" = 1 ] && [ ! -e "$D/gone" ]; }
       host_hyprctl() { case $* in "-j monitors") echo "[{\"id\": 0, \"focused\": true, \"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]" ;;
         -j\ *) echo "[]" ;; eval*) echo "host: ${*:2}" >> "$D/said"; echo ok ;; *) echo ok ;; esac; }
-      host_eval() { echo "host: $1" >> "$D/said"; }
+      host_eval() { echo "host: $1" >> "$D/said"; [ "$err" != full ] || exec 2>/dev/full; }
       on_box() { case $* in
         *omabox_monitor_layout*) echo "error: omabox-layout:main 0 0 1920 1080,WAYLAND-2 1920 0 800 600" ;;
         *"output create"*) echo "box: create" >> "$D/said"
+          [ -z "$errpid" ] || { kill "$errpid"; sleep 0.2; }
           case $create in
             read) printf "%s\n" "Hyprland IPC didn'"'"'t respond in time" "Couldn'"'"'t read (6)"; return 6 ;;
             gone) touch "$D/gone"; echo "omabox: box '"'"'t'"'"' is not up"; return 1 ;;
             *) echo "$create" ;;
           esac ;;
         *"output remove"*) local a; a=$(head -1 "$D/removes"); sed -i 1d "$D/removes"; a=${a:-output not found}; echo "box: remove ($a)" >> "$D/said"
+          echo "${EPOCHREALTIME//[!0-9]/}" >> "$D/rtimes"
+          if [ "$a" = read+changed ]; then sed -i "/^WAYLAND-3 /d" "$D/run/omabox.monitors"; echo "WAYLAND-4 1024x768@60 right 1" >> "$D/run/omabox.monitors"; a=read; fi
           if [ "$a" = read ]; then echo "Couldn'"'"'t read (6)"; return 6; fi; echo "$a" ;;
         *) echo ok ;;
       esac; }
-      box_file() { [[ $1 != */omabox.monitors ]] || echo "monitors: $(paste -sd, <<<"$2")" >> "$D/said"; }
-      monitor_add_window 800x600' _ "$TMP/lib/bin/omabox" "$d" "$alive" "$create" "${MON_DRAIN:-20}" 2>&1
+      box_file() { [[ $1 != */omabox.monitors ]] || { echo "monitors: $(paste -sd, <<<"$2")" >> "$D/said"; [ -z "$write" ] || printf "%s\n" "$2" > "$1"; }; }
+      monitor_add_window 800x600' _ "$TMP/lib/bin/omabox" "$d" "$alive" "$create" "${MON_DRAIN:-20}" "${MC_ERR:-}" "${MC_WRITE:-}" 2>&1
     echo "rc=$?"
   }
   local off="host: if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end"
@@ -12722,9 +12730,24 @@ t_unit_monitors() {
   mon_case 1 read >/dev/null
   check_eq "...or until MON_SETTLE (1 s here) has gone by (three times at least)" "box: create|REMOVES|monitors: |$off" \
     "$(saidl | sed -E 's/(\|box: remove \(output not found\)){3,}/|REMOVES/')"
+  # (timed in microseconds: with whole-second $SECONDS, a 1 s settle could end after 0.2 s)
+  check "...the last answered 0.9 s at least after the first ($(( ($(tail -1 "$d/rtimes") - $(head -1 "$d/rtimes")) / 1000 )) ms)" \
+    test "$(( $(tail -1 "$d/rtimes") - $(head -1 "$d/rtimes") ))" -ge 900000
   out=$(MON_DRAIN=0 mon_case 1 read read read)
   check_match "...a box silent past MON_DRAIN: said, the rule off all the same" "did not answer in 0 s: if it makes WAYLAND-2 later" "$out"
   check_eq "...one remove asked, then the rule off" "box: create|box: remove (read)|monitors: |$off" "$(saidl)"
+  # (a trap that writes to a stderr gone bad must still reach the rule off: errexit would end it at a
+  # failed write, SIGPIPE kill it, the rule left on)
+  MC_ERR=full MON_DRAIN=0 mon_case 1 read read read >/dev/null
+  check_eq "...its stderr failing every write (a hung-up terminal): the rule off all the same" "box: create|box: remove (read)|monitors: |$off" "$(saidl)"
+  MC_ERR=pipe mon_case 1 read read ok >/dev/null
+  check_eq "...its stderr a pipe whose reader has gone (SIGPIPE): removed, then the rule off" \
+    "box: create|box: remove (read)|box: remove (ok)|monitors: |$off" "$(saidl)"
+  # (only its own line dropped, from the file as it is then: another command changed it meanwhile)
+  mkdir -p "$d/run"; echo "WAYLAND-3 800x600@60 right 1" > "$d/run/omabox.monitors"
+  MC_WRITE=1 mon_case 1 read read+changed ok >/dev/null
+  check_eq "...a monitor removed and one added meanwhile: kept so" "WAYLAND-4 1024x768@60 right 1" "$(cat "$d/run/omabox.monitors")"
+  rm -rf "$d/run"
   out=$(mon_case 1 "Name already taken")
   check_match "a create Hyprland refused: said as before" "the box could not make another window: Name already taken" "$out"
   check_eq "...nothing removed, the rule off at once" "box: create|monitors: |$off" "$(saidl)"
