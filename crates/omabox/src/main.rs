@@ -5,18 +5,27 @@
 mod args;
 mod boxes;
 mod cmd;
+mod desk;
 mod exec;
 mod exit;
 mod hypr;
 mod jail;
 mod jobs;
+mod jq;
+mod jqprog;
 mod json;
+mod layer;
 mod logs;
+mod num;
 mod procfs;
 mod repo;
+mod screen;
 mod select;
+mod settle;
 mod shell;
+mod shellnote;
 mod sig;
+mod win;
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
@@ -63,6 +72,10 @@ fn main() -> ExitCode {
         Some("run") => Some(cmd::run::run),
         Some("log" | "logs") => Some(cmd::log::run),
         Some("events") => Some(cmd::events::run),
+        Some("wait") => Some(cmd::wait::run),
+        Some("windows") => Some(cmd::windows::run),
+        Some("tree") => Some(cmd::tree::run),
+        Some("pixel") => Some(cmd::pixel::run),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.
@@ -85,6 +98,17 @@ fn main() -> ExitCode {
             println!("rust {}", words.join(" "));
             ExitCode::SUCCESS
         }
+        // The suite's check that the jq programs here are bash's, byte for byte.
+        Some("_rust-jq") => match rest
+            .first()
+            .and_then(|n| jqprog::by_name(&n.to_string_lossy()))
+        {
+            Some(p) => {
+                print!("{p}");
+                ExitCode::SUCCESS
+            }
+            None => ExitCode::from(2),
+        },
         // A command bash handed here that this build does not have: a binary older than its bash
         // (a pull without ./install.sh). Bash runs it, told not to hand it back.
         _ => back_to_bash(cmd, rest),

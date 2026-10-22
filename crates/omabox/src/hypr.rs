@@ -199,12 +199,17 @@ pub fn hung_text(ctx: &Ctx, within: &str) -> Res<Vec<u8>> {
 /// The box's Hyprland answers over IPC within 2 s. (Never inside `$(...)`: on_box's refusal ends
 /// the command, its words to /dev/null with the rest.)
 pub fn hypr_answers(ctx: &Ctx) -> Res<bool> {
+    hypr_answers_in(ctx, "2")
+}
+
+/// hypr_answers SECS: the same, given SECS.
+pub fn hypr_answers_in(ctx: &Ctx, secs: &str) -> Res<bool> {
     if !box_alive(ctx)? {
         return Ok(false);
     }
     let r = on_box(
         ctx,
-        &words(&["timeout", "2", "hyprctl", "version"]),
+        &words(&["timeout", secs, "hyprctl", "version"]),
         false,
         Out::Null,
         ErrTo::Null,

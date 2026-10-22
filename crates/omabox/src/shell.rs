@@ -251,6 +251,41 @@ pub fn words(v: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// `read -r V1 ... VN <<<"$V"` with the default IFS: V's first line split at blanks, the last of N
+/// taking the rest (its trailing blanks off); missing ones empty.
+pub fn read_fields(v: &[u8], n: usize) -> Vec<Vec<u8>> {
+    read_ifs(v, n, b" \t\n")
+}
+
+/// `IFS=CHARS read -r V1 ... VN <<<"$V"`: V's first line split as read splits it. A run of IFS
+/// whitespace (space, tab, newline) is one separator, so is one other IFS character with the
+/// whitespace around it; whitespace at either end goes; the last of N takes the rest.
+pub fn read_ifs(v: &[u8], n: usize, ifs: &[u8]) -> Vec<Vec<u8>> {
+    let ws = |c: &u8| ifs.contains(c) && matches!(c, b' ' | b'\t' | b'\n');
+    let sep = |c: &u8| ifs.contains(c);
+    let mut line = v.split(|&c| c == b'\n').next().unwrap_or_default();
+    let skip_ws = |l: &[u8]| -> usize { l.iter().position(|c| !ws(c)).unwrap_or(l.len()) };
+    line = &line[skip_ws(line)..];
+    let mut out = Vec::new();
+    for k in 0..n {
+        if k + 1 == n {
+            let end = line.iter().rposition(|c| !ws(c)).map_or(0, |i| i + 1);
+            out.push(line[..end].to_vec());
+            break;
+        }
+        let e = line.iter().position(sep).unwrap_or(line.len());
+        out.push(line[..e].to_vec());
+        line = &line[e..];
+        // The separator: whitespace, at most one other IFS character, whitespace.
+        line = &line[skip_ws(line)..];
+        if line.first().is_some_and(|c| sep(c) && !ws(c)) {
+            line = &line[1..];
+            line = &line[skip_ws(line)..];
+        }
+    }
+    out
+}
+
 /// Sets the locale from the environment, as bash does at its start: glob order and `=~` follow it.
 pub fn init_locale() {
     // SAFETY: called once at the start, before any other thread; the argument is a valid C string.
@@ -284,6 +319,27 @@ pub fn glob(dir: &Path, dirs: bool) -> Vec<Vec<u8>> {
         .collect();
     names.sort_by(|a, b| coll_cmp(a, b));
     names
+}
+
+/// `f=$(mktemp)`: a new temporary file, open, and its path (left there for the caller's rm); mktemp's
+/// own words on stderr and its status when it cannot.
+pub fn mktemp() -> Result<(std::fs::File, Vec<u8>), crate::exit::Exit> {
+    let o = std::process::Command::new("mktemp")
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|_| crate::exit::Exit(1))?;
+    if !o.status.success() {
+        return Err(crate::exit::Exit(
+            u8::try_from(crate::exec::status(o.status).0).unwrap_or(1),
+        ));
+    }
+    let p = strip_nl(&o.stdout);
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path(&p))
+        .map_err(|_| crate::exit::Exit(1))?;
+    Ok((f, p))
 }
 
 /// A path from bytes.
@@ -389,6 +445,36 @@ pub fn arith(v: &[u8]) -> Option<i64> {
     Some(v.iter().fold(0i64, |n, &c| {
         n.wrapping_mul(10).wrapping_add(i64::from(c - b'0'))
     }))
+}
+
+/// Bash arithmetic's reading of a number word (`$((X + 1))` where X holds it): blanks around, a sign,
+/// then decimal, octal after a 0, hex after 0x, wrapping at 64 bits. None where bash refuses it ("08:
+/// value too great for base"), which bash says in its own words and ends the command list with.
+pub fn bash_int(v: &[u8]) -> Option<i64> {
+    let s = std::str::from_utf8(v)
+        .ok()?
+        .trim_matches(|c: char| c == ' ' || c == '\t' || c == '\n');
+    let (neg, s) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let (base, digits) = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        (16, h)
+    } else if s.len() > 1 && s.starts_with('0') {
+        (8, &s[1..])
+    } else {
+        (10, s)
+    };
+    if digits.is_empty() {
+        return (base == 8).then_some(0);
+    }
+    let mut n: i64 = 0;
+    for c in digits.chars() {
+        let d = i64::from(c.to_digit(base)?);
+        n = n.wrapping_mul(i64::from(base)).wrapping_add(d);
+    }
+    Some(if neg { n.wrapping_neg() } else { n })
 }
 
 /// `[ A -le B ]`'s reading of a number: optional blanks and sign, decimal digits; None for what
@@ -543,11 +629,34 @@ mod tests {
     }
 
     #[test]
+    fn read_splits_as_bash() {
+        let f = |v: &[u8], n| read_fields(v, n);
+        assert_eq!(f(b"  a  b c  \nx", 2), vec![b"a".to_vec(), b"b c".to_vec()]);
+        assert_eq!(f(b"a", 3), vec![b"a".to_vec(), b"".to_vec(), b"".to_vec()]);
+        assert_eq!(
+            f(b"1 2 3", 3),
+            vec![b"1".to_vec(), b"2".to_vec(), b"3".to_vec()]
+        );
+    }
+
+    #[test]
     fn words_split_at_blanks() {
         assert_eq!(
             words(b" a\tb\n\nc "),
             vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
         );
+    }
+
+    #[test]
+    fn bash_reads_numbers() {
+        assert_eq!(bash_int(b"12"), Some(12));
+        assert_eq!(bash_int(b"-5"), Some(-5));
+        assert_eq!(bash_int(b"010"), Some(8));
+        assert_eq!(bash_int(b"08"), None);
+        assert_eq!(bash_int(b"0x1f"), Some(31));
+        assert_eq!(bash_int(b"0"), Some(0));
+        assert_eq!(bash_int(b" 3 "), Some(3));
+        assert_eq!(bash_int(b"x"), None);
     }
 
     #[test]
