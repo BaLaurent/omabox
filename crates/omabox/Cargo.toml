@@ -10,3 +10,7 @@ publish = false
 [[bin]]
 name = "omabox"
 path = "src/main.rs"
+
+[dependencies]
+libc = "0.2.191"
+serde_json = { version = "1.0.154", features = ["preserve_order", "arbitrary_precision"] }
