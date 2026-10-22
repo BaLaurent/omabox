@@ -3041,16 +3041,21 @@ t_unit_rust_parity() {
   rp_rt=$r/rt rp_dir=$r/norepo rp_env=() rp_snap=1
   # Live stand-ins: a process in a pid namespace of its own; one behind a script named pasta (its
   # child, bwrap's place, has the box's PID 1 as its pid 1); one no ns of which can be read.
-  unshare -Urpf --mount-proc sleep 600 >/dev/null 2>&1 & local u1=$!
-  cp /usr/bin/sleep "$r/bin/nd"; chmod 111 "$r/bin/nd"; "$r/bin/nd" 600 >/dev/null 2>&1 & local nd=$!
-  printf '#!/bin/sh\nunshare -Urpf --mount-proc sleep 600 & wait\n' > "$r/bin/pasta"; chmod +x "$r/bin/pasta"
+  # (an hour: the stand-ins must outlive every case, killed at the end; a dead one fails the cases on
+  # it in both halves alike, so parity would still hold: said at the end)
+  unshare -Urpf --mount-proc sleep 3600 >/dev/null 2>&1 & local u1=$!
+  cp /usr/bin/sleep "$r/bin/nd"; chmod 111 "$r/bin/nd"; "$r/bin/nd" 3600 >/dev/null 2>&1 & local nd=$!
+  printf '#!/bin/sh\nunshare -Urpf --mount-proc sleep 3600 & wait\n' > "$r/bin/pasta"; chmod +x "$r/bin/pasta"
   "$r/bin/pasta" -P "$r/rt/omabox/pst/pasta.pid" >/dev/null 2>&1 & local pst=$!
   local l1="" lp="" i
-  for i in $(seq 50); do
+  # (30 s at most for the stand-ins to start; one that has not is said: every case on it would fail
+  # in both halves alike, and parity would still hold)
+  for i in $(seq 300); do
     l1=$(pgrep -P "$u1") lp=$(pgrep -P "$(pgrep -P "$pst" | head -1)" 2>/dev/null)
     [ -n "$l1" ] && [ -n "$lp" ] && [ "$(readlink "/proc/$l1/ns/pid")" != "$(readlink /proc/self/ns/pid)" ] && break
     sleep 0.1
   done
+  check "the stand-in boxes started" test -n "$l1" -a -n "$lp"
   local ns1 nsp; ns1=$(readlink "/proc/$l1/ns/pid") nsp=$(readlink "/proc/$lp/ns/pid")
   local now; now=$(date +%s)
   # A box dir: rp_box NAME BOX_JSON [CHILD_PID]
@@ -3561,8 +3566,9 @@ EOF
   unshare -Urpfui --mount-proc sh -c 'mount -t tmpfs none /opt && mkdir -p /opt/omabox/bin && cp "$1/omabox-still" "$1/omabox-tree" /opt/omabox/bin/ &&
     for t in keyboard pointer burst; do ln -s "$1/omabox-$t" "/opt/omabox/bin/omabox-$t"; done &&
     mount -t tmpfs none /home && mkdir /home/sbx && mount -t tmpfs none /run/user &&
-    mount --bind "$1/hyprctl" /usr/bin/hyprctl && { [ ! -e /usr/bin/grim ] || mount --bind "$1/grim" /usr/bin/grim; } && exec sleep 600' sh "$fk/bin" >/dev/null 2>&1 & local ufk=$!
-  local lfk=""; for i in $(seq 50); do lfk=$(pgrep -P "$ufk" -x sleep) && break; sleep 0.1; done
+    mount --bind "$1/hyprctl" /usr/bin/hyprctl && { [ ! -e /usr/bin/grim ] || mount --bind "$1/grim" /usr/bin/grim; } && exec sleep 3600' sh "$fk/bin" >/dev/null 2>&1 & local ufk=$!
+  local lfk=""; for i in $(seq 300); do lfk=$(pgrep -P "$ufk" -x sleep) && break; sleep 0.1; done
+  check "the stand-in desktop started" test -n "$lfk"
   local nsfk; nsfk=$(readlink "/proc/$lfk/ns/pid")
   rp_fk() {
     rp_w3
@@ -3879,6 +3885,11 @@ EOF
   parity "keys --wait: the tool's status, no answer read" keys -b fk --wait a
   # Marks for a peek window (one up: its command line as peek's), and a recording's input lines.
   bash -c 'exec -a "$0" sleep 600' "$ROOT/tools/peek/omabox-peek --box $r/rt/omabox/fk/run/ rp" & local rpeek=$!
+  # (up once its command line is peek's: a TERM before that exec could be lost, and the wait for it
+  # below held the run 600 s, past the stand-in desktop's life then; the cases after met a dead box
+  # in both halves alike: the flicker of "keys with SIGPIPE")
+  for i in $(seq 50); do tr '\0' ' ' < "/proc/$rpeek/cmdline" 2>/dev/null | grep -q "^$ROOT/tools/peek/omabox-peek " && break; sleep 0.1; done
+  check "the stand-in peek window is up" grep -qa "^$ROOT/tools/peek/omabox-peek " "/proc/$rpeek/cmdline"
   rp_rec() { : > "$r/rt/omabox/fk/record"; }; rp3_pre=(rp_rec)
   parity "keys: marks for peek and the recording, a secret as its length" keys -b fk -t $'a\tb\x01c' --pass RPSEC -t '' alt+F4 -s 1s
   rp_glide() { rp_rec; echo 400 > "$r/rt/omabox/fk/record.glide"; }; rp3_pre=(rp_glide)
@@ -3891,7 +3902,7 @@ EOF
   parity "pointer --mod: marks" pointer -b fk --mod alt -- move 10 10 click
   parity "drag --mod --shot: marks" drag -b fk --mod shift --shot "$o3/d.png" 10 10 100 100
   rp3_pre=()
-  kill "$rpeek" 2>/dev/null; wait "$rpeek" 2>/dev/null
+  kill -KILL "$rpeek" 2>/dev/null; wait "$rpeek" 2>/dev/null
   parity "keys: no peek up, marks gone" keys -b fk a
   # click and scroll: where they go (screen, window, shot), how they get there, what holds them.
   parity "click" click -b fk 100 200
@@ -4268,6 +4279,7 @@ EOF
   rp3_pre=() rp_env=()
   rp_prep="" rp_also="" rp_snap=1 rp_sed=""
   rp_prep="" rp_env=() rp_dir=/
+  check "the stand-in boxes lived through every case (a dead one fails both halves alike)" kill -0 "$l1" "$lp" "$nd" "$lfk"
   # The namespaces' PID 1s first: their unshares and the stand-in pasta end with them.
   kill -KILL "$l1" "$lp" "$nd" "$lfk" 2>/dev/null
   wait "$u1" "$nd" "$pst" "$ufk" 2>/dev/null
