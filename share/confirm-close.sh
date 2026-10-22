@@ -17,13 +17,24 @@ keep() { rm -f "$XDG_RUNTIME_DIR/omabox.close-asking"; exit 0; }
 
 # A host that cannot give a new window (the session is ending): nothing to ask on, so end. The new
 # window under the closed one's name ($1, from hyprland.lua), so it keeps that window's workspaces
-# (#292: Omarchy 4.5 numbers them by the output's name); unnamed if that name is refused (hyprctl
-# exits 0 either way: "Name already taken" instead of "ok"). A class token `monitor add` left for that
+# (#292: Omarchy 4.5 numbers them by the output's name). A class token `monitor add` left for that
 # name (an add cut short) goes first: this window is a plain aquamarine one, for the user's workspace
-# (finding 429).
+# (finding 429). If that name is refused (hyprctl exits 0 either way: "Name already taken" instead of
+# "ok"), the first WAYLAND-N the box takes that has no token: never unnamed, which the box could
+# give a name with another add's token left, its rule sending this window to the box's workspace.
+# Other names' tokens stay (an add in flight may need its own).
 case ${1:-} in ""|*/*) ;; *) rm -f "$XDG_RUNTIME_DIR/omabox.appid.$1" ;; esac
-{ [ -n "${1:-}" ] && [ "$(hyprctl output create wayland "$1" 2>/dev/null)" = ok ]; } ||
-  hyprctl output create wayland >/dev/null 2>&1 || quit
+names=(); [ -z "${1:-}" ] || names=("$1")
+for i in $(seq 1 32); do [ "WAYLAND-$i" = "${1:-}" ] || names+=("WAYLAND-$i"); done
+made=0
+for n in "${names[@]}"; do
+  # (a token looked for right before its create, as late as can be: an add may have just written it)
+  [ "$n" = "${1:-}" ] || [ ! -e "$XDG_RUNTIME_DIR/omabox.appid.$n" ] || continue
+  # (hyprctl failing: the box's Hyprland is not answering)
+  res=$(hyprctl output create wayland "$n" 2>/dev/null) || break
+  [ "$res" != ok ] || { made=1; break; }
+done
+[ $made = 1 ] || quit
 # The host's exec rule (render_unfocused) went with the old window: this one is not drawn while
 # hidden. omabox.reopened lets `shot` say so (finding 90).
 echo 1 > "$XDG_RUNTIME_DIR/omabox.reopened"

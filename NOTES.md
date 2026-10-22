@@ -8912,18 +8912,34 @@ from them.
       not at the box half a second after the signal leaves a monitor on the box's workspace, its
       window not in `monitor-windows` and its line still in `omabox.monitors` (the signal path keeps
       both). The token file goes once a remove is answered `ok` (the box made NAME, so it read the
-      token: left, a later window of that name, confirm-close's unnamed fallback say, would take this
-      add's class and rule); it stays when none was (the box may still read it; a remove queued
+      token: left, a later window of that name would take this add's class and rule); it stays when
+      none was (the box may still read it; a remove queued
       behind a create the box handles past 5 s gives up too), and goes on success.
     - Interactive `monitor add` runs under the box's lock (`.lock-NAME`, as up and down): a second add
       on that box waits up to 60 s, then says "busy".
     - Refused without +appid (box.json's aquamarine version: the system's, or a box started before the
       rebuild): `monitor add` ("omabox setup --aquamarine, then a new box") and `up --interactive
       --monitor` ("omabox setup --aquamarine"). aq_monitor_note (the +layout/+cursor notes) went with
-      it: a build with +appid has both.
+      it: a build with +appid has both. box.json's version alone did not show that the box's Hyprland
+      has the env (review of this fix): it is the library's `.omabox-commit`, while the env comes from
+      the share/start-hyprland.sh of the omabox that ran `up`. A linked worktree with no build/ runs
+      the main checkout's build/prefix (aq_main_lib); once that is rebuilt with +appid, a box an older
+      worktree or release started records `+appid` with no env, its windows plain `aquamarine`, and an
+      add there would have turned on a rule matching nothing: the window on the user's workspace,
+      focused, until the 5 s window wait gave up. So start-hyprland.sh, where it sets the env, leaves
+      `omabox.appid-files` in the box's runtime dir, and both halves of `monitor add` refuse a box
+      without it too ("started by an omabox that does not give a monitor's window a class of its own
+      ... start a new box with this omabox"). An add that sees no window in 5 s now also takes its
+      line out of `omabox.monitors` (it was left there; the trap removes the output).
     - share/passthrough.lua v5 takes `aquamarine-omabox-*` windows for box windows (toggle,
       keys-to-box, border); confirm-close removes `omabox.appid.NAME` before it opens its window again
-      under NAME (finding 70: that one is meant for the user's workspace, focused).
+      under NAME (finding 70: that one is meant for the user's workspace, focused). When that name is
+      refused it no longer asks for an unnamed output, which the box could name after a token another
+      add left (one whose create got no clear answer and whose removes failed), its rule then sending
+      the window meant for the user to the box's workspace: it tries WAYLAND-1 to 32 in turn, skipping
+      each that has a token (looked for right before its create), and leaves other names' tokens (an
+      add in flight may need its own). An output an agent makes in the box under such a name can
+      still take a stale token: left as is (both removes must have failed first).
     - Contract changes: monitor windows' class is no longer exactly `aquamarine` (a user's rule on
       `^aquamarine$` no longer touches them; `^aquamarine` matches both), they keep `render_unfocused`
       (drawn while hidden) while their rule lasts, adds on one box take turns, and an aquamarine
@@ -8943,8 +8959,9 @@ from them.
     --interactive --monitor`, `monitor add`, and two adds on one box with one on another at once;
     confirm-close with a token left for its name reopens a plain `aquamarine` window. Read in source,
     not seen: hyprctl's 5 s give-up (the stand-in models it), keys-to-box inside a monitor's window
-    (passthrough v5; the suite's keys-to-box checks use the main window), `up --interactive
-    --monitor` refused without +appid (the `monitor add` refusal is tested both ways). Tests:
+    (passthrough v5; the suite's keys-to-box checks use the main window). `up --interactive
+    --monitor`'s refusal without +appid is checked from `main` with aq_resolve answering for a private
+    build without it (t_unit_refusals), not on a real one. Tests:
     t_unit_rust_parity4 (its stand-in box hyprctl now gives up at 5 s, exit 6, as the real one does,
     and names a window by its token file; it exits 7 for an `error:` answer, as hyprctl does, and
     answers "output not found" to a remove of no output; signals INT, TERM, HUP and KILL during the
@@ -8954,12 +8971,17 @@ from them.
     delivered until `timeout 10` ends hyprctl (124, no answer: unclear, removed twice, token kept); a
     create refused in words (exit 0 and 7), hyprctl unable to connect, the box gone at the create (no
     remove, token gone), an empty answer (unclear); two adds at once on one box; the box's lock held;
-    unpatched aquamarine refused: each side checked that every window it made had its own rule on
+    unpatched aquamarine refused, and +appid on a box with no `omabox.appid-files`; no window in 5 s:
+    removed, its line gone: each side checked that every window it made had its own rule on
     before it, that no rule went off, and where its class token was left), the Rust unit test
     `deskwin::tests::mon_answer_table` (mon_answer's table, the box's state with hyprctl's status and
     words), t_monitors_window (each monitor's window its own class on a
-    stand-in host; two adds on one box and one on another at once: on 9, floating, focus unchanged),
-    t_guard (confirm-close with a token left for the window's name: plain aquamarine).
+    stand-in host; two adds on one box and one on another at once: on 9, floating, focus unchanged; a real `up`
+    leaves `omabox.appid-files`),
+    t_guard (confirm-close with a token left for the window's name: plain aquamarine), t_unit_cli
+    (confirm-close against a stub hyprctl: the closed window's name, then the first WAYLAND-N with no
+    token, never unnamed; one try and the box ended when Hyprland does not answer), t_unit_refusals
+    (`up -i --monitor` on a private build without +appid).
 
 430. **`cpu --app -n` listed every process** (2026-10-22, #324 wave 4a's review). cpu_tame wrote the
     tamed name with `echo`, which takes a name of `-n`, `-e`, `-E` or their mixes for its options and
