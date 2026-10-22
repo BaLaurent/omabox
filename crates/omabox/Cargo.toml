@@ -1,0 +1,12 @@
+[package]
+name = "omabox"
+version = "0.0.0"
+description = "A contained, invisible Hyprland desktop for agents (the Rust half of bin/omabox)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "omabox"
+path = "src/main.rs"

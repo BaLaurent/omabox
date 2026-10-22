@@ -8807,6 +8807,17 @@ from them.
     (without it, the real inotifywait runs), t_plugin_link and t_plugin_check (the box shell's watch
     is still the stand-in). Omarchy's runtime-smoke-test.sh: 22 of 22, three runs.
 
+425. **The CLI's Rust half, and how a command gets there** (2026-10-21, #324). The port is wave by
+    wave, the suite the spec. `bin/omabox` stays the entry point (setup's links, the box's view of the
+    repo, ai-jail's maps all name it): its `main` hands a command in `RUST_CMDS` to
+    `build/bin/omabox` (crates/omabox, built by install.sh and the suite with cargo) right before its
+    own dispatch, so `global_box`, `eq_split`, `CMD --help` and the relay have run and the words come
+    as they would to `cmd_*`. Not under the broker (its policy is bash's until the broker is ported),
+    not with `OMABOX_BASH=1` (to compare the two; this call's only, not what it starts), not when the
+    binary is missing. A command the binary lacks (one built before a pull) goes back to bash with
+    `OMABOX_BASH=1`. The hand-off costs bash's parse of the script (~50 ms, as every call does today)
+    until the end, when `bin/omabox` becomes the binary. Tests: t_unit_rust_handoff.
+
 435. **An interactive `monitor add` whose box answered late opened its window on the user's
     workspace, focused** (2026-10-22, #349; the 1.0.x stopgap). `hyprctl` stops reading after 5 s of
     its own (`SO_RCVTIMEO`, Hyprland 0.56.2's `hyprctl/src/main.cpp`): it prints "Hyprland IPC
