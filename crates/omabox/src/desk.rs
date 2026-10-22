@@ -19,20 +19,33 @@ const SNAP_SH: &str =
 /// desk_snap: the desktop now as one JSON object {events (the events log's size, null when unread),
 /// clients, layers, active, workspace, monitors}, or nothing when the box does not answer in 2 s.
 /// Never dies: a desktop that could not be read leaves the answer as it was. STDIN_NULL: run in the
-/// background, where bash gives it /dev/null.
+/// background, where bash gives it /dev/null and ignores SIGINT and SIGQUIT in it.
 pub fn desk_snap(ctx: &Ctx, stdin_null: bool) -> Vec<u8> {
     let args: Vec<Vec<u8>> = ["/usr/bin/sh", "-c", SNAP_SH, "sh", EVENTS_LOG, DESK_BATCH]
         .iter()
         .map(|w| w.as_bytes().to_vec())
         .collect();
-    let r = on_box(
-        ctx,
-        &args,
-        stdin_null,
-        Out::Capture(Some(67_108_864)),
-        ErrTo::Null,
-        false,
-    );
+    // (In the background: /dev/null its stdin, SIGINT and SIGQUIT ignored, as bash's `&` has it.)
+    let r = if stdin_null {
+        crate::exec::on_box_bg(
+            ctx,
+            &args,
+            crate::exec::In::Null,
+            Out::Capture(Some(67_108_864)),
+            ErrTo::Null,
+            false,
+            None,
+        )
+    } else {
+        on_box(
+            ctx,
+            &args,
+            false,
+            Out::Capture(Some(67_108_864)),
+            ErrTo::Null,
+            false,
+        )
+    };
     if r.rc != 0 {
         return Vec::new();
     }

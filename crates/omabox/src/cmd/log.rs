@@ -397,7 +397,12 @@ fn follow_logs(ctx: &Ctx, rd: &Reading, picked: &[(Kind, Vec<u8>, Vec<u8>)], n: 
         let mut argv = tail.clone();
         argv.push(b"--".to_vec());
         argv.extend(host.iter().map(|(_, p, _)| p.clone()));
-        let mut c = crate::exec::command(&argv, crate::exec::Fds::default());
+        // (follow_start's `<(...)`, log_tails' `&`: SIGINT and SIGQUIT ignored in them)
+        let fds = crate::exec::Fds {
+            bg: true,
+            ..crate::exec::Fds::default()
+        };
+        let mut c = crate::exec::command(&argv, fds);
         let wd = w.try_clone().map_err(|_| ctx.die("log: no pipe"))?;
         c.stdout(Stdio::from(wd)).stderr(Stdio::null());
         if let Ok(ch) = c.spawn() {
@@ -411,7 +416,17 @@ fn follow_logs(ctx: &Ctx, rd: &Reading, picked: &[(Kind, Vec<u8>, Vec<u8>)], n: 
             argv.push(b"--".to_vec());
             argv.extend(inbox.iter().map(|(_, p, _)| p.clone()));
             if let Ok(wd) = w.try_clone() {
-                sc.spawn(move || on_box(ctx, &argv, false, Out::Fd(wd), ErrTo::Null, true));
+                sc.spawn(move || {
+                    crate::exec::on_box_bg(
+                        ctx,
+                        &argv,
+                        crate::exec::In::Inherit,
+                        Out::Fd(wd),
+                        ErrTo::Null,
+                        true,
+                        None,
+                    )
+                });
             }
         }
         drop(w);
@@ -435,6 +450,7 @@ fn show(r: std::os::fd::OwnedFd, re: &[u8], icase: bool, names: &[(Vec<u8>, Vec<
     } else {
         let mut c = grep_cmd(re, icase);
         c.stdin(Stdio::from(r)).stdout(Stdio::piped());
+        crate::exec::background(&mut c);
         let Ok(mut ch) = c.spawn() else { return 1 };
         crate::sig::follower(ch.id());
         let so = ch.stdout.take();

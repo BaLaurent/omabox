@@ -544,7 +544,18 @@ fn follow_events(
         EVENTS_LOG.to_vec(),
     ];
     std::thread::scope(|sc| {
-        sc.spawn(move || on_box(ctx, &argv, false, Out::Fd(w), ErrTo::Inherit, true));
+        // (follow_start's `<(...)`: SIGINT and SIGQUIT ignored in it)
+        sc.spawn(move || {
+            crate::exec::on_box_bg(
+                ctx,
+                &argv,
+                crate::exec::In::Inherit,
+                Out::Fd(w),
+                ErrTo::Inherit,
+                true,
+                None,
+            )
+        });
         let mut lr = LineReader::new(r);
         if off != 0 {
             let _ = lr.read_line(Some(Duration::from_secs(5)));
@@ -568,6 +579,8 @@ fn follow_show(sh: &Show, lr: &mut LineReader) -> i32 {
         let mut c = sh.awk_cmd();
         c.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped());
+        // (events_show's `&`)
+        crate::exec::background(&mut c);
         let Ok(mut ch) = c.spawn() else { return 1 };
         crate::sig::follower(ch.id());
         let (Some(si), Some(so)) = (ch.stdin.take(), ch.stdout.take()) else {

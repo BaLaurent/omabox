@@ -45,26 +45,84 @@ pub fn readlink_e(p: &[u8]) -> Option<Vec<u8>> {
         .map(|r| shell::bytes(&r).to_vec())
 }
 
-/// `readlink -f -- P`: as -e, but its last part may be missing.
+/// `readlink -f -- P`, as GNU's (gnulib's canonicalize, all but the last part there): each link
+/// followed, a dangling last one too (to where it points); a last part that is missing is taken
+/// when it is missing and nothing but slashes follows it, any other failure (a parent that cannot
+/// be looked into, a file with more after it, a link loop) is None.
 pub fn readlink_f(p: &[u8]) -> Option<Vec<u8>> {
-    if let Some(r) = readlink_e(p) {
-        return Some(r);
-    }
-    let t = p.strip_suffix(b"/").unwrap_or(p);
-    let (dir, last) = match t.iter().rposition(|&c| c == b'/') {
-        Some(0) => (b"/".to_vec(), &t[1..]),
-        Some(i) => (t[..i].to_vec(), &t[i + 1..]),
-        None => (b".".to_vec(), t),
-    };
-    if last.is_empty() || last == b"." || last == b".." {
+    use std::os::unix::fs::MetadataExt;
+    if p.is_empty() {
         return None;
     }
-    let d = readlink_e(&dir)?;
-    if d == b"/" {
-        Some(cat!("/", last))
+    let mut r: Vec<u8> = if p[0] == b'/' {
+        b"/".to_vec()
     } else {
-        Some(cat!(d, "/", last))
+        pwd_physical()?
+    };
+    let mut rest = p.to_vec();
+    let mut pos = 0;
+    let mut seen: HashSet<(u64, u64, Vec<u8>)> = HashSet::new();
+    loop {
+        while pos < rest.len() && rest[pos] == b'/' {
+            pos += 1;
+        }
+        if pos >= rest.len() {
+            break;
+        }
+        let start = pos;
+        while pos < rest.len() && rest[pos] != b'/' {
+            pos += 1;
+        }
+        let comp = rest[start..pos].to_vec();
+        let after = &rest[pos..];
+        let more = after.iter().any(|&c| c != b'/');
+        if comp == b"." {
+            continue;
+        }
+        let pop = |r: &mut Vec<u8>| {
+            if r.len() > 1 {
+                let i = r.iter().rposition(|&c| c == b'/').unwrap_or(0);
+                r.truncate(i.max(1));
+            }
+        };
+        if comp == b".." {
+            pop(&mut r);
+            continue;
+        }
+        if r.last() != Some(&b'/') {
+            r.push(b'/');
+        }
+        r.extend_from_slice(&comp);
+        let st = match std::fs::symlink_metadata(shell::path(&r)) {
+            Ok(st) => st,
+            Err(e) => {
+                if more || e.raw_os_error() != Some(libc::ENOENT) {
+                    return None;
+                }
+                continue;
+            }
+        };
+        if st.file_type().is_symlink() {
+            // (a loop: the same link with the same rest, again)
+            if !seen.insert((st.dev(), st.ino(), after.to_vec())) {
+                return None;
+            }
+            let target = std::fs::read_link(shell::path(&r)).ok()?;
+            let target = shell::bytes(&target).to_vec();
+            rest = cat!(target, after);
+            pos = 0;
+            if target.first() == Some(&b'/') {
+                r = b"/".to_vec();
+            } else {
+                pop(&mut r);
+            }
+            continue;
+        }
+        if !st.is_dir() && !after.is_empty() {
+            return None;
+        }
     }
+    Some(r)
 }
 
 /// `pwd -P`.
@@ -553,6 +611,47 @@ mod tests {
         assert_eq!(realpath_ms(b"/a/./b/../c//d/"), Some(b"/a/c/d".to_vec()));
         assert_eq!(realpath_ms(b"/.."), Some(b"/".to_vec()));
         assert_eq!(realpath_ms(b"/"), Some(b"/".to_vec()));
+    }
+
+    // readlink_f against GNU's own on links, dangling ones, loops, files with more after them.
+    #[test]
+    fn readlink_f_as_gnu() {
+        let d = std::env::temp_dir().join(format!("omabox-rl-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("d")).ok();
+        std::fs::write(d.join("f"), b"").ok();
+        for (l, t) in [
+            ("lf", "f"),
+            ("dang", "nope"),
+            ("abs", "/tmp/omabox-rl-new.png"),
+            ("ld", "d"),
+            ("loop1", "loop2"),
+            ("loop2", "loop1"),
+            ("up", "../"),
+        ] {
+            std::os::unix::fs::symlink(t, d.join(l)).ok();
+        }
+        let base = shell::bytes(&d).to_vec();
+        for p in [
+            "f", "f/", "d/", "ld/x", "ld/x/y", "dang", "dang/", "abs", "abs/x", "nope", "nope/x",
+            "lf/x", "loop1", ".", "..", "d/../f", "ld/../f", "lf/", "up/f", "d//./f", "ld/",
+        ] {
+            let full = cat!(base, "/", p);
+            let gnu = Command::new("readlink")
+                .arg("-f")
+                .arg("--")
+                .arg(std::ffi::OsStr::new(
+                    std::str::from_utf8(&full).unwrap_or_default(),
+                ))
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| strip_nl(&o.stdout));
+            assert_eq!(readlink_f(&full), gnu, "{p}");
+        }
+        assert_eq!(readlink_f(b""), None);
+        assert_eq!(readlink_f(b"/root/x"), None);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

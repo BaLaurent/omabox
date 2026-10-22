@@ -3480,7 +3480,8 @@ t_unit_rust_parity() {
 #!/bin/sh
 f=$fk
 case "\$1 \$2" in
-  "-j clients") cat "\$f/clients.json" ;; "-j monitors") cat "\$f/monitors.json" ;;
+  "-j clients") cat "\$f/clients.json" ;;
+  "-j monitors") [ ! -f "\$f/monfail" ] || [ ! -s "\$f/grim.args" ] || exit 1; cat "\$f/monitors.json" ;;
   "-j activewindow") cat "\$f/active.json" ;; "-j layers") cat "\$f/layers.json" ;;
   "-j cursorpos") cat "\$f/cursor.json" ;; "version ") [ ! -f "\$f/noversion" ] || exit 1; echo "Hyprland 0.56.2" ;;
   "--batch "*) for k in clients layers active workspace monitors; do cat "\$f/\$k.json"; done ;;
@@ -3501,9 +3502,9 @@ EOF
   cat > "$fk/bin/grim" <<EOF
 #!/bin/sh
 echo "\$*" >> $fk/grim.args
-[ ! -f $fk/grim.sleep ] || sleep \$(cat $fk/grim.sleep)
-case " \$* " in *" -t ppm "*) i=grim.ppm ;; *" -g "*) i=grim-small.png ;; *) i=grim.png ;; esac
-[ ! -f $fk/grim.alt ] || [ \$(wc -l < $fk/grim.args) -le \$(cat $fk/grim.alt) ] || i=grim2.png
+case " \$* " in *" -t ppm "*) i=grim.ppm ;; *) touch $fk/grabbing; [ ! -f $fk/grim.sleep ] || sleep \$(cat $fk/grim.sleep) ;; esac
+case " \$* " in *" -t ppm "*) ;; *" -g "*) i=grim-small.png ;; *) i=grim.png ;; esac
+[ ! -f $fk/grim.alt ] || [ \$(wc -l < $fk/grim.args) -le \$(cat $fk/grim.alt) ] || i=\$(cat $fk/grim.altimg 2>/dev/null || echo grim2.png)
 cat $fk/\$i 2>/dev/null || { echo "stand-in grim: no frame" >&2; exit 1; }
 exit \$(cat $fk/grim.rc 2>/dev/null || echo 0)
 EOF
@@ -3511,14 +3512,15 @@ EOF
   # what --mod and drag --shot wait on ("paused"); a status of the test's choosing.
   cat > "$fk/bin/omabox-keyboard" <<EOF
 #!/bin/sh
-case " \$* " in *" -m "*) [ -f $fk/kb.nopause ] || echo paused; cat > /dev/null; i="" ;; *) i=\$(od -An -c | tr -s ' \\n' ' ') ;; esac
+case " \$* " in *" -m "*) [ -f $fk/kb.nopause ] || { echo paused; touch $fk/held; }; cat > /dev/null; i="" ;; *) i=\$(od -An -c | tr -s ' \\n' ' ') ;; esac
 echo "kb \$* <\$i>" >> $fk/input.args
 exit \$(cat $fk/kb.rc 2>/dev/null || echo 0)
 EOF
   cat > "$fk/bin/omabox-pointer" <<EOF
 #!/bin/sh
 echo "ptr \$*" >> $fk/input.args
-case " \$* " in *" pause "*) [ -f $fk/nopause ] || { echo paused; read -r l; } ;; esac
+[ ! -f $fk/ptr.sleep ] || { touch $fk/held; sleep \$(cat $fk/ptr.sleep); }
+case " \$* " in *" pause "*) [ -f $fk/nopause ] || { echo paused; touch $fk/held; read -r l; echo "ptr let go" >> $fk/input.args; } ;; esac
 exit \$(cat $fk/ptr.rc 2>/dev/null || echo 0)
 EOF
   cat > "$fk/bin/omabox-burst" <<EOF
@@ -3685,7 +3687,7 @@ EOF
     rp_fk
     local f
     cp "$fk/active.orig" "$fk/active.json"; : > "$fk/input.args"; : > "$fk/hyprctl.args"; echo fk-pop > "$fk/kbl"
-    for f in noversion kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep burst.fail ptr; do rm -f "${fk:?}/$f"; done
+    for f in noversion monfail held grabbing ptr.sleep grim.altimg kb.rc kb.nopause ptr.rc nopause nofocus dispatch.out eval.out grim.rc grim.alt grim.sleep burst.fail ptr; do rm -f "${fk:?}/$f"; done
     chmod +x "$fk/bin/omabox-burst"
     printf '{"option":"input:kb_layout","str":"us,de","set":true}\n' > "$fk/opt-input:kb_layout.json"
     printf '{"option":"input:kb_variant","str":",nodeadkeys","set":true}\n' > "$fk/opt-input:kb_variant.json"
@@ -3702,8 +3704,12 @@ EOF
   rp_fk3_also() {
     local d=$r/rt/omabox/fk f
     printf 'input: '; cat "$fk/input.args"; printf 'hyprctl: '; cat "$fk/hyprctl.args"
-    # (ptr_seen's captures of the pointer's 64x64, as many as fit in its second: one line for a run)
-    printf 'grim: '; awk '!($0 == p && / -t ppm /); { p = $0 }' "$fk/grim.args"; printf 'still: '; cat "$fk/still.args"
+    # (ptr_seen's captures of the pointer's 64x64, as many as fit in its second: one line for a run,
+    # said to be two or more, as each half must have taken)
+    printf 'grim: '; awk 'function out() { if (n) print p (n > 1 ? " (2+)" : "") }
+      { if ($0 == p && /^-g [0-9]+,[0-9]+ [0-9]+x[0-9]+ -t ppm -$/) { n++; next } out(); p = $0; n = 1 }
+      END { out() }' "$fk/grim.args"
+    printf 'still: '; cat "$fk/still.args"
     for f in shots.tsv marks record.input pointer keys-to-box changed/screen.tsv changed/0xa1.tsv changed/pointers.tsv; do
       [ -e "$d/$f" ] || continue
       printf '== %s\n' "$f"
@@ -3714,11 +3720,15 @@ EOF
     [ ! -f "${hreq:-}" ] || { printf 'host: '; cat "$hreq"; }
     (cd "$d" && [ -d changed ] && command find changed -name '*.png' -exec md5sum {} + | LC_ALL=C sort)
     # (an image by its pixels: ImageMagick writes the time it made one into it)
-    (cd "$o3" && command find . -printf '%p %y\n' | LC_ALL=C sort && command find . -type f ! -name '*.png' -exec md5sum {} + | LC_ALL=C sort)
-    (cd "$o3" && command find . -type f -name '*.png' ! -name card.png | LC_ALL=C sort | while read -r f; do echo "$f $(magick identify -format '%w %h %#' "$f" 2>&1)"; done)
+    (cd "$o3" && command find . -printf '%p %y\n' | LC_ALL=C sort)
+    # (one ImageMagick made, by its pixels; any other byte for byte)
     # (a card's marks are random: its size and their letters)
-    [ ! -f "$o3/card.png" ] || magick identify -format '%w %h %c\n' "$o3/card.png" | sed -E 's/ ([A-F]) [0-9]+ [0-9]+/ \1 X Y/g'
-    (cd "$t3" && command find . -printf '%p %y\n' | sed -E 's/omabox-fk-(burst-)?[0-9]{6}-[0-9]{3}/omabox-fk-\1N/' | LC_ALL=C sort)
+    (cd "$o3" && command find . -type f | LC_ALL=C sort | while read -r f; do
+      if grep -qa 'omabox-calibrate 1 ' "$f"; then echo "$f $(magick identify -format '%w %h %c' "$f" 2>&1 | sed -E 's/ ([A-F]) [0-9]+ [0-9]+/ \1 X Y/g')"
+      elif grep -qa 'date:create' "$f"; then echo "$f $(magick identify -format '%w %h %[bit-depth] %[channels] %#' "$f" 2>&1)"
+      else md5sum "$f"; fi
+    done)
+    (cd "$t3" && command find . -printf '%p %y\n' | sed -E 's/omabox-fk-(burst-)?[0-9]{6}-[0-9]{3}/omabox-fk-\1N/; s/tmp\.[A-Za-z0-9]{10}/tmp.X/' | LC_ALL=C sort)
   }
   # Wave 3b's refusals, each before a box is asked (and a few with none up).
   rp_prep=rp_fk3 rp_also="" rp_snap=0 rp_dir=$r/norepo rp_env=() rp_sed=""
@@ -3839,7 +3849,8 @@ EOF
   parity 'keys-to-box refused: a dir of the runtime dir'"'"'s' keys-to-box .
   parity 'keys-to-box refused: no box' keys-to-box -b nobox on
   rp_prep=rp_fk3 rp_also=rp_fk3_also rp_snap=0 rp_dir=$r/norepo rp_env=(TMPDIR="$t3" RPSEC=$'s3cr\xc3\xa9t\n\n')
-  rp_sed='s/omabox-fk-(burst-)?[0-9]{6}-[0-9]{3}/omabox-fk-\1N/g; s/\b[0-9]+\.[0-9]+s\b/Ts/g; s/"elapsed":[0-9.]+/"elapsed":T/'
+  # (the times measured here: how long ago a shot --changed compares with was taken)
+  rp_sed='s/omabox-fk-(burst-)?[0-9]{6}-[0-9]{3}/omabox-fk-\1N/g; s/\([0-9]+\.[0-9]{2}s ago\)/(Ts ago)/g; s/"elapsed":[0-9.]+/"elapsed":T/'
   # keys: the box's keymap (the first layout and variant of each list), text, pauses, --pass's value on
   # the tool's stdin, a held key through the box's own pid namespace, the window it goes to.
   parity "keys: combos, text and a pause, with the box's keymap" keys -b fk ctrl+a -t 'hi there' -s 50ms Return -x
@@ -4045,23 +4056,32 @@ EOF
   parity "shot --burst: a frame failed" shot -b fk --burst 3 -o "$o3/b"
   check_eq "...its temp file not left in TMPDIR (finding 427)" "" "$(ls -A "$t3")"
   rp_noburst() { chmod -x "$fk/bin/omabox-burst"; }; rp3_pre=(rp_noburst)
-  parity "shot --burst: a box without the burst tool, a grim a frame" shot -b fk --burst 2 --every 0 -o "$o3/b" --diff
+  local rp_sed0=$rp_sed; rp_sed+='; s/\b[0-9]+\.[0-9]+s\b/Ts/g'
+  parity "shot --burst: a box without the burst tool, a grim a frame (its times measured)" shot -b fk --burst 2 --every 0 -o "$o3/b" --diff
+  rp_sed=$rp_sed0
   rp3_pre=(rp_noburst rp_grimfail)
   parity "...a frame failed" shot -b fk --burst 2 -o "$o3/b"
   check_eq "...nor its temp file (finding 427)" "" "$(ls -A "$t3")"
   rp3_pre=()
-  # calibrate: the box's full-shot size; keys-to-box: a headless box, an interactive one with no
-  # Hyprland of the host's here.
+  # calibrate: the box's full-shot size; keys-to-box: a headless box, an interactive one. With no
+  # Hyprland session in the environment (nor a display of the desktop's), so that only this runtime
+  # dir's can answer: first none, then one of the test's own.
   parity "calibrate -b: the box's size" calibrate -b fk -o "$o3/card.png"
+  local rp_env3=("${rp_env[@]}")
+  rp_env=(-u HYPRLAND_INSTANCE_SIGNATURE "${rp_env3[@]}" WAYLAND_DISPLAY=rp-none)
   parity "keys-to-box: a headless box" keys-to-box -b fk on
   parity "keys-to-box: off by default" keys-to-box -b fki
+  # (rp_check: the words said for the host are about this runtime dir's)
+  rp_nohost() { grep -q "no Hyprland session in $r/rt/hypr: this needs the user's desktop" "$3" || no "$1: the host looked for in $r/rt" "$(cat "$3")"; }
+  rp_check=rp_nohost
   parity "keys-to-box on: the host's Hyprland not here" keys-to-box -b fki on
   rp_k2b() { echo on > "$r/rt/omabox/fki/keys-to-box"; }; rp3_pre=(rp_k2b)
-  parity "keys-to-box: on" keys-to-box -b fki
   parity "keys-to-box off: the host's Hyprland not here" keys-to-box -b fki off
+  rp_check=""
+  parity "keys-to-box: on" keys-to-box -b fki
   # A host Hyprland of this runtime dir's own: a socket that answers ok to everything and logs what it
   # was sent. keys-to-box installs the passthrough there and tells it: the user's desktop is never
-  # reached (another runtime dir, another instance).
+  # reached (another runtime dir, no session named).
   local hs=a_1_2 hreq=$r/host-req.log
   mkdir -p "$r/rt/hypr/$hs"; printf '%s\nwayland-rp\n' "$lfk" > "$r/rt/hypr/$hs/hyprland.lock"
   python3 -c 'import os, socket, sys
@@ -4074,9 +4094,126 @@ while True:
   for i in $(seq 50); do [ -S "$r/rt/hypr/$hs/.socket.sock" ] && break; sleep 0.1; done
   rp_host() { : > "$hreq"; }; rp3_pre=(rp_host)
   parity "keys-to-box on: the passthrough installed, the host told" keys-to-box -b fki on
+  check "...the stand-in host was the one told (its passthrough, then the change)" grep -q 'omabox_keys_changed()' "$hreq"
   rp3_pre=(rp_host rp_k2b)
   parity "keys-to-box off: the same" keys-to-box -b fki off
+  check "...the stand-in host told again" grep -q 'omabox_keys_changed()' "$hreq"
+  mkdir -p "$r/h'q"; rp_env+=(HOME="$r/h'q"); rp3_pre=(rp_host)
+  parity "keys-to-box on: a theme's path not safe for the host's Lua, said, left out" keys-to-box -b fki on
   kill "$hsrv" 2>/dev/null; wait "$hsrv" 2>/dev/null; rm -rf "${r:?}/rt/hypr" "$r/rt/wayland-rp" "$hreq"
+  rp_env=("${rp_env3[@]}") rp3_pre=()
+  # calibrate --answer: a card made once, its marks read from its comment and given back as a harness
+  # would (1:1, scaled, past the marks, one mark off), and the readings it refuses.
+  OMABOX_BASH=1 XDG_RUNTIME_DIR=$r/rt "$CLI" calibrate --size 1600x900 -o "$r/card.png" >/dev/null 2>&1
+  local cm one="" half="" up="" off="" few="" k=0 l x y
+  local cmw; cm=$(magick identify -format '%c' "$r/card.png"); read -ra cmw <<<"${cm#omabox-calibrate 1 1600 900 }"; set -- "${cmw[@]}"
+  while [ $# -ge 3 ]; do
+    l=$1 x=$2 y=$3; shift 3; k=$((k + 1))
+    one+="$l $x,$y " half+="$l $((x / 2)),$((y / 2)) " up+="$l $((x * 2)),$((y * 2)) "
+    if [ "$k" = 2 ]; then off+="$l $((x / 2 + 300)),$((y / 2)) "; else off+="$l $((x / 2)),$((y / 2)) "; fi
+    [ "$k" -gt 3 ] || few+="$l: ($x, $y); "
+  done
+  local v; for v in one half up off; do
+    parity "calibrate --answer: $v" calibrate "$r/card.png" --answer "${!v}"
+    parity "calibrate --answer --json: $v" calibrate "$r/card.png" --answer "${!v}" --json
+  done
+  parity "calibrate --answer: three marks of six, its own punctuation" calibrate "$r/card.png" --answer "$few"
+  parity "calibrate --answer: an unknown mark" calibrate "$r/card.png" --answer "Z 1,2 $few"
+  parity "calibrate --answer: fewer than 3" calibrate "$r/card.png" --answer 'A 1,2 B 3,4'
+  parity "calibrate --answer: a mark twice" calibrate "$r/card.png" --answer 'A 1,2 A 3,4 B 5,6'
+  parity "calibrate --answer: not a point" calibrate "$r/card.png" --answer 'A 1,2 B x,4 C 5,6'
+  rp_env=("${rp_env3[@]}" OMABOX_SHOT_FIT=800)
+  parity "calibrate --answer: scaled, shot-fit already that" calibrate "$r/card.png" --answer "$half"
+  rp_env=("${rp_env3[@]}")
+  parity "calibrate --size: a card drawn" calibrate --size 640x480 -o "$o3/card.png"
+  parity "calibrate: the default card, in TMPDIR" calibrate --size 640x480
+  parity "calibrate -o a folder: the card into it (mv's rule)" calibrate --size 640x480 -o "$o3"
+  # --changed's other answers: a caret alone, changes far apart, the reference of another mode or
+  # size, and the box not answering once the frame is taken (its temp file not left: finding 427).
+  magick -size 1920x1080 xc:'#204060' -fill '#e0e0e0' -draw 'rectangle 600,600 601,629' "$fk/grim-caret.png"
+  magick -size 1920x1080 xc:'#204060' -fill '#e0e0e0' -draw 'rectangle 100,100 149,149' -draw 'rectangle 1500,800 1549,849' "$fk/grim-places.png"
+  rp_caret() { rp_ref; echo 3 > "$fk/grim.alt"; echo grim-caret.png > "$fk/grim.altimg"; }; rp3_pre=(rp_caret)
+  parity "shot --changed: a caret alone, left out" shot -b fk --changed -o "$o3/c.png" --json
+  rp_places() { rp_ref; echo 3 > "$fk/grim.alt"; echo grim-places.png > "$fk/grim.altimg"; }; rp3_pre=(rp_places)
+  parity "shot --changed: changes far apart, each named" shot -b fk --changed -o "$o3/c.png"
+  rp_refmode() { rp_ref; sed -i 's/^\([^\t]*\t\)1920x1080@60/\11280x720@60/' "$r/rt/omabox/fk/changed/screen.tsv"; }; rp3_pre=(rp_refmode)
+  parity "shot --changed: the last shot in another mode, a whole one" shot -b fk --changed -o "$o3/c.png"
+  rp_refgeo() { rp_ref; sed -i 's/2720x1080 1920x1080/100x100 100x100/' "$r/rt/omabox/fk/changed/screen.tsv"; }; rp3_pre=(rp_refgeo)
+  parity "shot --changed: the last shot of another size, a whole one" shot -b fk --changed -o "$o3/c.png"
+  rp_sincemode() { rp_ref; sed -i 's#^\('"$o3"'/ref.png\t[^\t]*\t\)1920x1080@60#\11280x720@60#' "$r/rt/omabox/fk/shots.tsv"; }; rp3_pre=(rp_sincemode)
+  parity "shot --since: taken in another mode" shot -b fk --since "$o3/ref.png" -o "$o3/c.png"
+  rp_sincegeo() { rp_ref; sed -i 's#^\('"$o3"'/ref.png\t.*\t\)2720x1080 1920x1080$#\1100x100 100x100#' "$r/rt/omabox/fk/shots.tsv"; }; rp3_pre=(rp_sincegeo)
+  parity "shot --since: of another size" shot -b fk --since "$o3/ref.png" -o "$o3/c.png"
+  rp_monfail() { rp_ref; : > "$fk/grim.args"; touch "$fk/monfail"; }; rp3_pre=(rp_monfail)
+  parity "shot --changed: the box stops answering once the frame is taken" shot -b fk --changed -o "$o3/c.png"
+  check_eq "...the frame taken not left in its changed/ (finding 427)" "" "$(command find "$r/rt/omabox/fk/changed" -maxdepth 1 -name '.new-*')"
+  # --burst: the action failing; a tool burst whose box stops answering at a frame.
+  rp3_pre=()
+  parity "shot --burst --after: the action failed" shot -b fk --burst 2 -o "$o3/b" --after -- click 99999 1
+  rp_bhung() { echo 2 > "$fk/burst.fail"; touch "$fk/noversion"; }; rp3_pre=(rp_bhung)
+  parity "shot --burst: the box hung at a frame" shot -b fk --burst 3 -o "$o3/b"
+  rp3_pre=()
+  # --burst into folders that cannot be one or cannot be cleared; -o past a parent that cannot be
+  # looked into; -o a link that points nowhere yet (readlink -f follows it).
+  parity "shot --burst -o a folder that cannot be listed" shot -b fk --burst 2 -o /root
+  parity "shot -o in a folder that cannot be looked into" shot -b fk -o /root/rp.png
+  rp_dangle() { ln -s "$o3/new.png" "$o3/dangle.png"; }; rp3_pre=(rp_dangle)
+  parity "shot -o a link to a file not there yet" shot -b fk -o "$o3/dangle.png"
+  rp3_pre=()
+  parity "shot -o a folder: the image into it (mv's rule)" shot -b fk -o "$o3"
+  # A record that cannot be written ends the command there, 1, nothing said on stdout after it.
+  rp_tsvdir() { rm -f "$r/rt/omabox/fk/shots.tsv"; mkdir -p "$r/rt/omabox/fk/shots.tsv"; }; rp3_pre=(rp_tsvdir)
+  rp_sed+='; s#^omabox: [^ ]*/shots.tsv: Is a directory$#SHOTS.TSV: Is a directory#; s#^.*bin/omabox: line [0-9]+: ([^ ]*/shots.tsv: Is a directory)$#SHOTS.TSV: Is a directory#'
+  parity "shot: its record cannot be written" shot -b fk -o "$o3/s.png"
+  rp3_pre=()
+  # --pass with a held key; scroll and drag --wait with --mod.
+  parity "keys --pass with down:" keys -b fk --pass RPSEC down:a
+  parity "scroll --wait --mod" scroll -b fk --wait --mod ctrl 10 10 15
+  parity "drag --wait --mod" drag -b fk --wait --mod shift 10 10 100 100
+  # Signals (wave 3b's review): the tools bash starts in the background (`&`, coproc, `<(...)`)
+  # ignore SIGINT and SIGQUIT, so a Ctrl-C or Ctrl-\ at the terminal (to the whole process group)
+  # leaves the keyboard tool holding --mod's keys, and the pointer tool holding drag's button, to let
+  # go once omabox is gone; shot --no-pointer's traps give the pointer back on INT, TERM and HUP.
+  # rp_sig SIG CMD...: CMD in a process group of its own, SIG (group-SIG: to the whole group) once a
+  # stand-in says it holds (or grabs); CMD's status, once what it left running had its moment.
+  cat > "$r/rp-sig" <<'EOF'
+#!/bin/bash
+# (a core limit of 1 byte: a QUIT's core dump skips the core helper, so the desktop says nothing of
+# it: finding 67)
+ulimit -S -c 1 2>/dev/null || ulimit -c 0
+sig=$1 mark=$2; shift 2
+set -m
+"$@" & p=$!
+for i in $(seq 200); do [ -e "$mark" ] && break; sleep 0.05; done
+sleep 0.2
+case $sig in group-*) kill -"${sig#group-}" -- -"$p" ;; *) kill -"$sig" "$p" ;; esac
+wait "$p"; rc=$?
+sleep 1
+# (what is left of it then goes: bash's capture subshell ignores INT, lives on and would write the
+# next case's files; listed)
+kill -KILL -- -"$p" 2>/dev/null
+exit "$rc"
+EOF
+  chmod +x "$r/rp-sig"
+  rp_held() { echo 3 > "$fk/ptr.sleep"; }; rp3_pre=(rp_held)
+  rp_sed0=$rp_sed; rp_sed+='; s/ line ([0-9]+): [0-9]+ Quit / line \1: PID Quit /'
+  local sg; for sg in group-INT group-QUIT TERM; do
+    rp_wrap=("$r/rp-sig" "$sg" "$fk/held")
+    parity "click --mod and $sg while the keys are held: the keyboard tool lets go" click -b fk --mod ctrl 10 10
+    check "...it did (its stdin closed, not killed)" grep -q ' -m ctrl -p 180000 <>$' "$fk/input.args"
+  done
+  rp3_pre=(rp_grimslow)
+  # (Ctrl-C's: a TERM to omabox alone leaves bash's subshell of the shot running on past it, and one
+  # to the whole group kills bash's capture subshell where it is, both listed differences)
+  rp_wrap=("$r/rp-sig" group-INT "$fk/held")
+  parity "drag --shot and group-INT with the button down: the pointer tool lets go" drag -b fk --shot "$o3/d.png" 10 10 100 100
+  check "...it did" grep -qx 'ptr let go' "$fk/input.args"
+  for sg in group-INT TERM HUP group-QUIT; do
+    rp_wrap=("$r/rp-sig" "$sg" "$fk/grabbing")
+    parity "shot --no-pointer and $sg during the capture: the pointer given back (QUIT ignored)" shot -b fk --no-pointer -o "$o3/n.png"
+    check "...shown again, its record gone" test ! -e "$r/rt/omabox/fk/pointer" -a "$(tail -n 1 "$fk/hyprctl.args")" = "eval invisible false"
+  done
+  rp_wrap=() rp3_pre=() rp_sed=$rp_sed0
   rp3_pre=() rp_env=()
   rp_prep="" rp_also="" rp_snap=1 rp_sed=""
   rp_prep="" rp_env=() rp_dir=/

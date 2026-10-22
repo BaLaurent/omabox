@@ -51,6 +51,16 @@ fn main() -> ExitCode {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
+    // Bash ignores SIGQUIT for itself (a Ctrl-\ does not end the script), and what it runs in the
+    // foreground gets the default back: a handler that does nothing is that (reset at exec).
+    // SAFETY: a zeroed sigaction with a handler of no work and SA_RESTART, set before any thread.
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = quit_ignored as *const () as libc::sighandler_t;
+        sa.sa_flags = libc::SA_RESTART;
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(libc::SIGQUIT, &sa, std::ptr::null_mut());
+    }
     shell::init_locale();
     // What bash's hand-off adds to the environment is this call's, not its children's (bin/omabox up
     // and down, nsenter, git): kept here and taken out, before any thread.
@@ -114,6 +124,11 @@ fn main() -> ExitCode {
             println!("rust {}", words.join(" "));
             ExitCode::SUCCESS
         }
+        // A signal's release of shot --no-pointer's hold (ptr::hold_until_exit), in this process.
+        Some("_ptr-release") => {
+            let words: Vec<Vec<u8>> = rest.into_iter().map(OsString::into_vec).collect();
+            ExitCode::from(ptr::release_main(&words))
+        }
         // The suite's check that the jq programs here are bash's, byte for byte.
         Some("_rust-jq") if rest.first().is_some_and(|a| a == "--inline") => {
             for p in jqprog::INLINE {
@@ -136,6 +151,8 @@ fn main() -> ExitCode {
         _ => back_to_bash(cmd, rest),
     }
 }
+
+extern "C" fn quit_ignored(_: libc::c_int) {}
 
 /// The checkout this binary belongs to: OMABOX_ROOT from bash, else two levels up from build/bin.
 pub fn root() -> PathBuf {

@@ -366,12 +366,30 @@ fn release_quiet(ctx: &Ctx, tag: &[u8]) {
     }
 }
 
-/// At this process's end (main's, after the command): the hold given back, once.
+/// At this process's end (main's, after the command): the hold given back, once (bash's EXIT trap).
 pub fn release_at_exit() {
     let h = HOLD.lock().ok().and_then(|mut g| g.take());
     if let Some((ctx, tag)) = h {
         release_quiet(&ctx, &tag);
     }
+}
+
+/// `omabox _ptr-release BOXES NAME DIR TAG CODE`: what a signal leaves for this binary to do in a
+/// process of its own once it has replaced this one (hold_until_exit): the hold given back, then
+/// the exit bash's trap gives (`trap 'exit 143' TERM`, its EXIT trap after).
+pub fn release_main(args: &[Vec<u8>]) -> u8 {
+    let [boxes, name, d, tag, code] = args else {
+        return 2;
+    };
+    let mut ctx = Ctx::new(b"shot", boxes.clone());
+    ctx.parsed();
+    ctx.name = name.clone();
+    ctx.d = d.clone();
+    release_quiet(&ctx, tag);
+    std::str::from_utf8(code)
+        .ok()
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(1)
 }
 
 extern "C" fn on_signal(sig: libc::c_int) {
@@ -387,13 +405,49 @@ extern "C" fn on_signal(sig: libc::c_int) {
 
 static SIG_W: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 
+/// The argv of `_ptr-release` for each of INT, TERM and HUP, made before any signal comes.
+struct Argvs {
+    _words: Vec<Vec<std::ffi::CString>>,
+    ptrs: Vec<Vec<usize>>,
+}
+
 /// ptr_hold_until_exit TAG: a one-off hold (shot --no-pointer) given back when this omabox ends
-/// however it ends: its end (release_at_exit), or INT, TERM or HUP (then exit 130, 143, 129, as
-/// bash's traps).
+/// however it ends: at its end (release_at_exit), or on INT, TERM or HUP, then exit 130, 143 or 129
+/// as bash's traps do. On a signal this process is replaced (execv) by `_ptr-release`, so the
+/// command stops where it is, as bash's trap stops it: nothing more is said or written, its own
+/// lock on the pointer's record goes with it (bash's ptr_unlock first), and the release runs
+/// single-threaded.
 pub fn hold_until_exit(ctx: &Ctx, tag: &[u8]) -> Res<()> {
     if let Ok(mut g) = HOLD.lock() {
         *g = Some((ctx.clone(), tag.to_vec()));
     }
+    let exe = std::fs::read_link("/proc/self/exe")
+        .map(|p| shell::bytes(&p).to_vec())
+        .unwrap_or_default();
+    let mut words = Vec::new();
+    let mut ptrs = Vec::new();
+    for code in ["130", "143", "129"] {
+        let w: Vec<std::ffi::CString> = [
+            exe.as_slice(),
+            b"_ptr-release",
+            &ctx.boxes,
+            &ctx.name,
+            &ctx.d,
+            tag,
+            code.as_bytes(),
+        ]
+        .iter()
+        .filter_map(|a| std::ffi::CString::new(a.to_vec()).ok())
+        .collect();
+        let mut p: Vec<usize> = w.iter().map(|c| c.as_ptr() as usize).collect();
+        p.push(0);
+        words.push(w);
+        ptrs.push(p);
+    }
+    let argvs = Argvs {
+        _words: words,
+        ptrs,
+    };
     if let Ok((r, w)) = crate::exec::pipe() {
         use std::os::fd::IntoRawFd;
         SIG_W.store(w.into_raw_fd(), std::sync::atomic::Ordering::Relaxed);
@@ -407,13 +461,22 @@ pub fn hold_until_exit(ctx: &Ctx, tag: &[u8]) -> Res<()> {
             let mut f = std::fs::File::from(r);
             let mut b = [0u8; 1];
             if std::io::Read::read_exact(&mut f, &mut b).is_ok() {
-                release_at_exit();
-                let code = match libc::c_int::from(b[0]) {
-                    libc::SIGINT => 130,
-                    libc::SIGTERM => 143,
-                    _ => 129,
+                let k = match libc::c_int::from(b[0]) {
+                    libc::SIGINT => 0,
+                    libc::SIGTERM => 1,
+                    _ => 2,
                 };
-                std::process::exit(code);
+                let a = &argvs.ptrs[k];
+                if a.len() == 8 {
+                    // SAFETY: a is a NUL-ended array of pointers to the NUL-ended strings argvs
+                    // owns, alive for the call; execv only returns on failure.
+                    unsafe {
+                        libc::execv(a[0] as *const libc::c_char, a.as_ptr().cast());
+                    }
+                }
+                // (no way to replace it: the release from here, then the exit)
+                release_at_exit();
+                std::process::exit([130, 143, 129][k]);
             }
         });
     }

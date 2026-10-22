@@ -184,6 +184,22 @@ pub struct Fds {
     /// Where held_run says the child's pid once started, and 0 once it is reaped (`$!`, for a
     /// caller that may have to kill it: settle_end's kill_tree).
     pub pid: Option<Arc<AtomicI32>>,
+    /// Started as bash starts what it backgrounds (`&`, coproc, a process substitution): SIGINT and
+    /// SIGQUIT ignored, so a Ctrl-C or Ctrl-\ at the terminal leaves it running; a tool holding a
+    /// key or a button lets go once its stdin closes (finding 112).
+    pub bg: bool,
+}
+
+/// What bash's `&` does to a child's signals (no job control): SIGINT and SIGQUIT ignored.
+pub fn background(c: &mut Command) {
+    // SAFETY: signal is async-signal-safe; between fork and exec it changes only the child.
+    unsafe {
+        c.pre_exec(|| {
+            libc::signal(libc::SIGINT, libc::SIG_IGN);
+            libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+            Ok(())
+        });
+    }
 }
 
 pub fn command(argv: &[Vec<u8>], fds: Fds) -> Command {
@@ -191,8 +207,8 @@ pub fn command(argv: &[Vec<u8>], fds: Fds) -> Command {
     c.args(argv.iter().skip(1).map(|a| OsStr::from_bytes(a)));
     let open = if fds.only { open_fds() } else { Vec::new() };
     let nocore = fds.nocore && !core_hard_zero();
-    // SAFETY: the closure only makes async-signal-safe calls (dup2, close, fcntl, getrlimit,
-    // setrlimit) on memory it owns, between fork and exec.
+    // SAFETY: the closure only makes async-signal-safe calls (dup2, close, fcntl, signal,
+    // getrlimit, setrlimit) on memory it owns, between fork and exec.
     unsafe {
         c.pre_exec(move || {
             if let Some(src) = fds.fd3 {
@@ -207,6 +223,10 @@ pub fn command(argv: &[Vec<u8>], fds: Fds) -> Command {
             }
             for &fd in &fds.keep {
                 libc::fcntl(fd, libc::F_SETFD, 0);
+            }
+            if fds.bg {
+                libc::signal(libc::SIGINT, libc::SIG_IGN);
+                libc::signal(libc::SIGQUIT, libc::SIG_IGN);
             }
             if nocore {
                 let mut r: libc::rlimit = std::mem::zeroed();
@@ -550,6 +570,34 @@ pub fn on_box_io(
     report: bool,
     pid_to: Option<Arc<AtomicI32>>,
 ) -> Ran {
+    on_box_with(ctx, args, stdin, out, err, report, pid_to, false)
+}
+
+/// on_box_io for what bash starts in the background (`&`, coproc, `<(...)`): SIGINT and SIGQUIT
+/// ignored in it (Fds::bg).
+pub fn on_box_bg(
+    ctx: &Ctx,
+    args: &[Vec<u8>],
+    stdin: In,
+    out: Out,
+    err: ErrTo,
+    report: bool,
+    pid_to: Option<Arc<AtomicI32>>,
+) -> Ran {
+    on_box_with(ctx, args, stdin, out, err, report, pid_to, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn on_box_with(
+    ctx: &Ctx,
+    args: &[Vec<u8>],
+    stdin: In,
+    out: Out,
+    err: ErrTo,
+    report: bool,
+    pid_to: Option<Arc<AtomicI32>>,
+    bg: bool,
+) -> Ran {
     let mut buf = Vec::new();
     let refuse = |buf: &mut Vec<u8>, m: Vec<u8>| {
         say_to(err, buf, &cat!("omabox: ", m, "\n"));
@@ -623,6 +671,7 @@ pub fn on_box_io(
     argv.extend(args.iter().cloned());
     let fds = Fds {
         pid: pid_to,
+        bg,
         ..Fds::default()
     };
     let r = match held_run(&argv, stdin, out, err, fds) {
@@ -988,6 +1037,7 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
             only: true,
             nocore: true,
             pid: None,
+            bg: false,
         };
         let r = relays.run(&nsline, fds);
         match r {
@@ -1221,6 +1271,7 @@ fn box_pty(nsline: &[Vec<u8>], mut keep: Vec<RawFd>, fd3: Option<RawFd>) -> std:
             only: true,
             nocore: true,
             pid: None,
+            bg: false,
         },
     );
     let mut child = c.spawn()?;
@@ -1264,12 +1315,11 @@ impl Relays {
             dev_null(false)?
         } else if fd_exposed(src[0]) {
             let (r, w) = pipe()?;
-            input = Some(
-                Command::new("cat")
-                    .stdin(Stdio::from(dup_hi(src[0])?))
-                    .stdout(Stdio::from(w))
-                    .spawn()?,
-            );
+            // (`<(cat)`: a process substitution, SIGINT and SIGQUIT ignored in it)
+            let mut c = Command::new("cat");
+            c.stdin(Stdio::from(dup_hi(src[0])?)).stdout(Stdio::from(w));
+            background(&mut c);
+            input = Some(c.spawn()?);
             r
         } else {
             dup_hi(src[0])?
@@ -1335,6 +1385,8 @@ fn relay_copy_cmd(r: OwnedFd, out: OwnedFd) -> Command {
         Command::new("cat")
     };
     c.stdin(Stdio::from(r)).stdout(Stdio::from(out));
+    // (`>(relay_copy)`: a process substitution, SIGINT and SIGQUIT ignored in it)
+    background(&mut c);
     c
 }
 

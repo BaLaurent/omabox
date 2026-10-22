@@ -3,7 +3,7 @@
 //! keys -s and pointer sleep's durations (#273), and the keyboard tool with the box's own keymap.
 
 use crate::cat;
-use crate::exec::{ErrTo, In, Out, on_box, on_box_io, pipe};
+use crate::exec::{ErrTo, In, Out, on_box, pipe};
 use crate::exit::{Ctx, Exit, Res, say};
 use crate::hypr::hypr_json;
 use crate::jq;
@@ -427,6 +427,10 @@ pub fn with_mods(ctx: &mut Ctx, mods: &[u8], act: impl FnOnce(&mut Ctx) -> Res<i
         return act(ctx);
     }
     let kb = kb_tool(ctx)?;
+    // (bash's fifos were in a `mktemp -d` dir, removed at once: one that cannot be made ends the
+    // command there, mktemp's words said; pipes here, the dir made and removed all the same)
+    let (_, dir) = shell::mktemp_args(&[b"-d"])?;
+    let _ = std::fs::remove_dir(shell::path(&dir));
     let ((in_r, in_w), (out_r, out_w)) = match (pipe(), pipe()) {
         (Ok(a), Ok(b)) => (a, b),
         _ => return Err(ctx.die("could not make the pipes for the keyboard tool")),
@@ -435,8 +439,9 @@ pub fn with_mods(ctx: &mut Ctx, mods: &[u8], act: impl FnOnce(&mut Ctx) -> Res<i
     argv.extend([b"-m".to_vec(), mods.to_vec(), b"-p".to_vec()]);
     argv.push(MODS_MAX_MS.as_bytes().to_vec());
     let c = ctx.clone();
+    // (bash's `&`: SIGINT and SIGQUIT ignored in it, so a Ctrl-C or Ctrl-\ leaves it to let go)
     let tool = std::thread::spawn(move || {
-        on_box_io(
+        crate::exec::on_box_bg(
             &c,
             &argv,
             In::Fd(in_r),
