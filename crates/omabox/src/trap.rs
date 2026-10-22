@@ -1,8 +1,9 @@
-//! bash's EXIT trap for what a command made on its way (gpu's and cpu's temporary dir, a host rule
-//! monitor add turned on): undone when the command ends, however it ends, and on INT, TERM or HUP,
+//! bash's EXIT trap for what a command made on its way (gpu's and cpu's temporary dir, the monitor
+//! an interactive `monitor add` was making): undone when the command ends, however it ends, and on INT, TERM or HUP,
 //! the signal then raised again: bash runs its EXIT trap and dies of the signal (probed: at once for
 //! TERM and HUP, its foreground child left running; for INT once that child is over, and not at all
-//! when that child did not die of it: an INT to omabox alone). Nothing new starts meanwhile
+//! when that child did not die of it: an INT to omabox alone). A second INT, TERM or HUP while the
+//! trap runs ends it there, as it ends bash's (probed). Nothing new starts meanwhile
 //! (sig::foreground). A signal ignored when omabox started stays ignored (sig::catch).
 
 use std::sync::Mutex;
@@ -11,8 +12,6 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 type Undo = Box<dyn FnOnce() + Send>;
 
 static TRAPS: Mutex<Vec<(u64, Undo)>> = Mutex::new(Vec::new());
-/// Traps that wait for main's foreground child whatever the signal (on_exit_fg).
-static FG_TRAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static NEXT: AtomicU64 = AtomicU64::new(1);
 static SIG_W: AtomicI32 = AtomicI32::new(-1);
 
@@ -27,26 +26,6 @@ pub fn on_exit(f: impl FnOnce() + Send + 'static) -> Trap {
         t.push((id, Box::new(f)));
     }
     Trap(id)
-}
-
-/// on_exit, the undo once main's foreground child is over on TERM and HUP too: one whose step in
-/// flight must land first (monitor add's rule-on call, finding 429).
-pub fn on_exit_fg(f: impl FnOnce() + Send + 'static) -> Trap {
-    FG_TRAPS.fetch_add(1, Ordering::SeqCst);
-    let fg = FgCount;
-    on_exit(move || {
-        drop(fg);
-        f();
-    })
-}
-
-/// FG_TRAPS' share of one on_exit_fg trap, given back when it is done with or dropped.
-struct FgCount;
-
-impl Drop for FgCount {
-    fn drop(&mut self) {
-        FG_TRAPS.fetch_sub(1, Ordering::SeqCst);
-    }
 }
 
 impl Trap {
@@ -106,8 +85,7 @@ fn arm() {
             let sig = libc::c_int::from(b[0]);
             let busy = crate::sig::FG_ACTIVE.load(Ordering::SeqCst);
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
-            let wait_fg = sig == libc::SIGINT || FG_TRAPS.load(Ordering::SeqCst) > 0;
-            let fg = wait_fg.then(|| {
+            let fg = (sig == libc::SIGINT).then(|| {
                 crate::sig::FOREGROUND
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -121,6 +99,15 @@ fn arm() {
                 crate::sig::STOPPING.store(false, Ordering::SeqCst);
                 drop(fg);
                 continue;
+            }
+            // A second one while the undo runs ends this process at once, as it ends bash's trap.
+            for s in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+                if !crate::sig::ignored(s) {
+                    // SAFETY: the default disposition for a signal this process caught.
+                    unsafe {
+                        libc::signal(s, libc::SIG_DFL);
+                    }
+                }
             }
             let all: Vec<(u64, Undo)> = TRAPS
                 .lock()

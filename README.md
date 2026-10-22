@@ -41,10 +41,12 @@ real desktop saw no window at all.
   patched with it counts: omabox looks for the fix, not the version). Everything else
   runs on your system's aquamarine. `install.sh` builds it privately into `build/prefix`
   (`omabox setup --aquamarine`); your system's copy is not touched. That build also carries fixes
-  of omabox's for interactive boxes: a key held when the box's window loses focus is released, and
-  in a monitor's window your pointer lands on that monitor and your cursor stays shown (next
-  release). No system aquamarine has those, so `omabox setup --aquamarine` builds them even when
-  yours has PR #415 (enough on its own for headless NVIDIA boxes and confirm-close, not for those).
+  of omabox's for interactive boxes: a key held when the box's window loses focus is released, in a
+  monitor's window your pointer lands on that monitor and your cursor stays shown, and each
+  monitor's window has a class of its own, which keeps it off your workspace (next release; monitors
+  on an interactive box need it). No system aquamarine has those, so `omabox setup --aquamarine`
+  builds them even when yours has PR #415 (enough on its own for headless NVIDIA boxes and
+  confirm-close, not for those).
 
 ## Install
 
@@ -586,10 +588,12 @@ a view of its monitor: the bar and apps see the size asked for (the main screen'
 by default, and each SPEC), drawn at the window's scale (0.525 here), so text is small. `monitor add`
 and `remove` lay the picture out again. Resizing a window changes its view's scale, not the
 monitor; closing it unplugs it. For an exact large resolution at full size use a headless box and
-`peek --monitor`. This needs aquamarine's fix, and the pointer lands on the monitor whose window it
-is in, and your cursor stays shown from one window to the next, only with omabox's build of it
-(`omabox setup --aquamarine` makes both, whatever your system's aquamarine has; `monitor add` says
-when a box lacks them).
+`peek --monitor`. This needs omabox's build of aquamarine (`omabox setup --aquamarine`, whatever
+your system's aquamarine has; `monitor add` refuses a box without it): it gives each monitor's
+window a class of its own, `aquamarine-omabox-<token>`, with a rule of your Hyprland's for that class
+alone, so the window opens on the box's workspace however the add ends (the rule stays until your
+Hyprland reloads its config); the pointer lands on the monitor whose window it is in, and your cursor
+stays shown from one window to the next. Two adds on one box take turns.
 
 </details>
 
@@ -717,8 +721,8 @@ logs); and internal or undocumented forms, such as a box's name given to `peek`,
 - Headless boxes on NVIDIA and confirm-close need aquamarine's fix (PR #415, built into
   `build/prefix` by `install.sh`, `omabox setup --aquamarine`) until a release ships it (or your
   system's package is patched with it); without it `up` refuses them, saying what to run. omabox's
-  own fixes for interactive boxes (held keys, the pointer and cursor in monitor windows) are in that
-  build only: no system aquamarine has them. What omabox carries until upstream releases land, and
+  own fixes for interactive boxes (held keys, the pointer and cursor in monitor windows, a class for
+  each monitor's window) are in that build only: no system aquamarine has them. What omabox carries until upstream releases land, and
   what to drop then: `UPSTREAM.md`.
 - A hidden interactive box draws at the host's `misc.render_unfocused_fps` (15 by default), so
   `omabox shot` works with its window off screen, just at that rate. Not after you closed its window

@@ -3,6 +3,32 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Changed
+
+- **An interactive box's monitor windows have a class of their own**: `aquamarine-omabox-<token>`
+  where it was `aquamarine` (the box's first window keeps `aquamarine`), each with a host rule of its
+  own that keeps it on the box's workspace, silent, and stays until your Hyprland next reloads its
+  config, so those windows stay drawn while hidden. A rule of yours matching `^aquamarine$` no longer
+  applies to them; `^aquamarine` matches both. `monitor add` on an interactive box and `up
+  --interactive --monitor` need omabox's own aquamarine build for this: on the system's aquamarine,
+  or in a box started before you rebuilt it, they are refused, saying so (`omabox setup
+  --aquamarine`, then a new box). Two `monitor add`s on one interactive box now take turns (the
+  box's lock: the second waits up to 60 s, then says the box is busy)
+  ([#349](https://github.com/diogochaves/omabox/issues/349)).
+
+### Fixed
+
+- **A monitor window of an interactive box could open on your workspace and take focus**: when the
+  box's Hyprland took more than 5 s to make it, when `monitor add` was interrupted (Ctrl-C, TERM,
+  HUP) while the box made it, or when two adds ran at once; and an add cut short could leave its host
+  rule on, sending every later aquamarine window (a nested Hyprland's too) to the box's workspace.
+  The window now has its own class and rule from the start, so it always opens on the box's
+  workspace without focus, whatever happens to the add. An add cut short removes its half-made
+  monitor, and a second Ctrl-C ends that at once
+  ([#349](https://github.com/diogochaves/omabox/issues/349)).
+
 ## 1.0.1 — unreleased
 
 Boxes on Omarchy 4.5.

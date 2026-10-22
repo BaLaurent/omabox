@@ -24,7 +24,7 @@
 -- colour (its red, the bar's "active" modules' colour) and <boxes>/.keys names the box (the bar
 -- widget lights its icon); both go back when the submap ends.
 local boxes, key, colors = ...
-local VERSION = 4
+local VERSION = 5
 if (omabox_pass_version or 0) >= VERSION then return end
 for _, sub in ipairs(omabox_pass_subs or {}) do sub:remove() end
 if omabox_pass_timer then omabox_pass_timer:set_enabled(false) end
@@ -35,7 +35,13 @@ omabox_pass_version = VERSION
 
 local TAG = "omabox-keys"
 
--- The box a window is, by name. Every interactive box's window has class aquamarine (and that title);
+-- An interactive box's window: class aquamarine, or aquamarine-omabox-TOKEN for one `monitor add` made
+-- (finding 429: each its own, for its own host rule).
+local function aq(w)
+  return w ~= nil and (w.class == "aquamarine" or (w.class or ""):sub(1, 18) == "aquamarine-omabox-")
+end
+
+-- The box a window is, by name. Every interactive box's window is one of those (and titled so);
 -- its client's pid is the box's outer bwrap (omabox-wlfd connects to this Hyprland, then execs it),
 -- whose command line binds <boxes>/NAME/run into the box. The pid stays when the box's output is
 -- recreated (a confirm-close keep, issue #24): the connection is the same. "" for a nested Hyprland
@@ -43,7 +49,7 @@ local TAG = "omabox-keys"
 local NUL = string.char(0)
 local run_pat = NUL .. boxes:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0") .. "/([%w][%w_.%-]*)/run" .. NUL
 local function box_of(w)
-  if not (w and w.class == "aquamarine") then return nil end
+  if not aq(w) then return nil end
   local f = io.open("/proc/" .. tostring(w.pid) .. "/cmdline", "rb")
   if not f then return "" end
   local s = f:read("a") or ""
@@ -64,9 +70,9 @@ end
 local function over_box()
   local c = hl.get_cursor_pos()
   if not c then return false end
-  for _, w in ipairs(hl.get_windows({ class = "aquamarine" })) do
+  for _, w in ipairs(hl.get_windows()) do
     local a, s = w.at, w.size
-    if w.mapped and not w.hidden and w.workspace and w.workspace.visible
+    if aq(w) and w.mapped and not w.hidden and w.workspace and w.workspace.visible
       and c.x >= a.x and c.x < a.x + s.x and c.y >= a.y and c.y < a.y + s.y then return true end
   end
   return false
@@ -102,7 +108,7 @@ end
 -- as Hyprland says) while the submap is on.
 local function mark(w)
   if w == nil then w = hl.get_active_window() end
-  if hl.get_current_submap() ~= "omabox" or not (w and w.class == "aquamarine") then w = nil end
+  if hl.get_current_submap() ~= "omabox" or not aq(w) then w = nil end
   local addr = w and w.address or nil
   if omabox_keys_marked ~= addr then
     if omabox_keys_marked then tag(omabox_keys_marked, "-" .. TAG) end
@@ -163,7 +169,7 @@ local function check(w)
   if w == nil then w = hl.get_active_window() end
   w = w or nil
   if not (w and w.address == omabox_keys_paused) then omabox_keys_paused = nil end
-  if not (w and w.class == "aquamarine") then
+  if not aq(w) then
     leave()
     track(nil)
   elseif sticky(w) then
@@ -217,7 +223,7 @@ omabox_pass_subs = {
 
 -- A reload keeps the submap it was in and the tags on windows, but not what they meant: start over
 -- from what focus (and the pointer) says now.
-for _, w in ipairs(hl.get_windows({ class = "aquamarine" })) do tag(w.address, "-" .. TAG) end
+for _, w in ipairs(hl.get_windows()) do if aq(w) then tag(w.address, "-" .. TAG) end end
 omabox_keys_marked, omabox_keys_said, omabox_keys_how, omabox_keys_track = nil, nil, nil, nil
 if hl.get_current_submap() == "omabox" then
   local w = hl.get_active_window()

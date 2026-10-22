@@ -425,7 +425,9 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   `OMABOX_RENDER_NODE=/dev/dri/renderDN omabox up --new` (`omabox config gpu` lists them); with no
   other GPU it cannot be tested here. In an interactive box (the user's) each monitor is a window on their
   desktop, the box's layout scaled as a whole (each a view: the size asked for, at a scale below 1):
-  only when they ask for it.
+  only when they ask for it. Those windows have class `aquamarine-omabox-<token>` (the main one
+  `aquamarine`), and need omabox's aquamarine build: a refusal says `omabox setup --aquamarine`, then a
+  new box, which is the user's call.
 - **Measuring rendering cost** (GPU time of an animation, a repaint loop): `omabox up --size host`,
   put the UI in the state to measure, then `omabox gpu 10` (% of wall time per process, this box
   only; `--json`). Never read host-wide tools (nvtop, radeontop, scripts summing `/proc/*/fdinfo` by
