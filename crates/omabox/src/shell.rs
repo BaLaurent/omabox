@@ -126,6 +126,77 @@ fn utf8_len(v: &[u8]) -> usize {
     }
 }
 
+/// `${V@Q}`: the word quoted for bash to read back, '...' (or $'...' for a control character).
+pub fn quote_at(v: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8_lossy(v);
+    if std::str::from_utf8(v).is_err() || text.chars().any(char::is_control) {
+        return quote_q(v);
+    }
+    let mut out = b"'".to_vec();
+    for &c in v {
+        if c == b'\'' {
+            out.extend_from_slice(b"'\\''");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push(b'\'');
+    out
+}
+
+/// `${V:0:N}` in a UTF-8 locale: the first N characters, a byte that starts none counted as one.
+pub fn head_chars(v: &[u8], n: usize) -> &[u8] {
+    let (mut i, mut k) = (0, 0);
+    while i < v.len() && k < n {
+        let l = if v[i] < 0x80 {
+            1
+        } else {
+            utf8_len(&v[i..]).max(1)
+        };
+        i += l;
+        k += 1;
+    }
+    &v[..i]
+}
+
+/// `$(...)` of output that may hold NUL bytes: bash drops them (warning about it; that line is not
+/// reproduced), then the trailing newlines.
+pub fn subst(v: &[u8]) -> Vec<u8> {
+    let kept: Vec<u8> = v.iter().copied().filter(|&c| c != 0).collect();
+    strip_nl(&kept)
+}
+
+unsafe extern "C" {
+    fn iswspace(c: u32) -> libc::c_int;
+}
+
+/// `[ -z "${V//[[:space:]]/}" ]` in the user's locale: V holds nothing but spaces (iswspace).
+pub fn all_space(v: &[u8]) -> bool {
+    match std::str::from_utf8(v) {
+        // SAFETY: iswspace only classifies the value.
+        Ok(s) => s.chars().all(|c| unsafe { iswspace(c as u32) } != 0),
+        Err(_) => false,
+    }
+}
+
+/// `$PWD` as bash has it: the inherited one while it names this directory, else getcwd's.
+pub fn pwd() -> Vec<u8> {
+    use std::os::unix::fs::MetadataExt;
+    if let Some(p) = env("PWD").filter(|p| p.first() == Some(&b'/')) {
+        let same =
+            |a: &std::fs::Metadata, b: &std::fs::Metadata| a.dev() == b.dev() && a.ino() == b.ino();
+        let dots = p.split(|&c| c == b'/').any(|s| s == b"." || s == b"..");
+        if let (Ok(a), Ok(b)) = (std::fs::metadata(path(&p)), std::fs::metadata(".")) {
+            if same(&a, &b) && !dots {
+                return p;
+            }
+        }
+    }
+    std::env::current_dir()
+        .map(|d| bytes(&d).to_vec())
+        .unwrap_or_default()
+}
+
 /// Unquoted `$(...)` in a for list: split at blanks and newlines (no glob: no name a box can have
 /// holds a glob character).
 pub fn words(v: &[u8]) -> Vec<Vec<u8>> {
@@ -195,11 +266,18 @@ pub struct Re(Box<libc::regex_t>);
 
 impl Re {
     pub fn new(pattern: &str) -> Option<Re> {
+        Re::from_bytes(pattern.as_bytes(), false)
+    }
+
+    /// A pattern from bytes (a caller's `[[ x =~ $re ]]`); ICASE as under `shopt -s nocasematch`.
+    /// None where regcomp refuses it (bash's status 2).
+    pub fn from_bytes(pattern: &[u8], icase: bool) -> Option<Re> {
         let pat = CString::new(pattern).ok()?;
         // SAFETY: regex_t is plain data that regcomp fills in; zeroed is a valid starting value.
         let mut re: Box<libc::regex_t> = Box::new(unsafe { std::mem::zeroed() });
+        let flags = libc::REG_EXTENDED | if icase { libc::REG_ICASE } else { 0 };
         // SAFETY: re points to a regex_t we own; pat is a valid C string.
-        let rc = unsafe { libc::regcomp(&mut *re, pat.as_ptr(), libc::REG_EXTENDED) };
+        let rc = unsafe { libc::regcomp(&mut *re, pat.as_ptr(), flags) };
         (rc == 0).then_some(Re(re))
     }
 
@@ -348,6 +426,24 @@ mod tests {
                 String::from_utf8_lossy(o)
             );
         }
+    }
+
+    #[test]
+    fn quoted_for_bash() {
+        assert_eq!(quote_at(b"a b"), b"'a b'");
+        assert_eq!(quote_at(b"it's"), b"'it'\\''s'");
+        assert_eq!(quote_at(b""), b"''");
+        assert_eq!(quote_at(b"a\nb"), b"$'a\\nb'");
+    }
+
+    #[test]
+    fn characters_and_spaces() {
+        assert_eq!(head_chars("ééé".as_bytes(), 2), "éé".as_bytes());
+        assert_eq!(head_chars(b"\xff\xfeab", 3), b"\xff\xfea");
+        assert!(all_space(b" \t\n\x0b"));
+        assert!(!all_space(b" x"));
+        assert!(!all_space(b"\xff"));
+        assert_eq!(subst(b"a\0b\n\n"), b"ab");
     }
 
     #[test]

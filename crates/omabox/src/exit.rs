@@ -43,6 +43,12 @@ pub struct Ctx {
     pub d: Vec<u8>,
     /// NAME_DERIVED: the name came from default_name, not from the caller.
     pub name_derived: bool,
+    /// PASS (run --pass): the caller's variables for the command, by name.
+    pub pass: Vec<Vec<u8>>,
+    /// ENVKV (run --env-file, then --env): KEY=VAL entries for the command, before --pass's.
+    pub envkv: Vec<Vec<u8>>,
+    /// BOX_GONE_SAID: a box that went down while a command entered it was said so (ns_said).
+    pub box_gone_said: bool,
 }
 
 impl Ctx {
@@ -55,6 +61,9 @@ impl Ctx {
             name: Vec::new(),
             d: Vec::new(),
             name_derived: false,
+            pass: Vec::new(),
+            envkv: Vec::new(),
+            box_gone_said: false,
         }
     }
 

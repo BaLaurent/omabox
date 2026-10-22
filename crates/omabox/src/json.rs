@@ -120,6 +120,13 @@ fn write(out: &mut String, v: &Value, indent: Option<usize>) {
     }
 }
 
+/// A string as jq writes it, quoted and escaped.
+pub fn quote(s: &str) -> String {
+    let mut out = String::new();
+    string(&mut out, s);
+    out
+}
+
 fn string(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {

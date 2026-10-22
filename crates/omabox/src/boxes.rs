@@ -201,7 +201,7 @@ pub fn box_env(d: &[u8], key: &str) -> Option<Vec<u8>> {
 /// File PATH of the box's HOME, for the host to read: resolved when it is a regular file, not a
 /// link, and inside the HOME once its dirs are resolved. The box writes its HOME freely: a FIFO
 /// there hangs the host's read, a link reads a host file (finding 159).
-fn box_home_file(d: &[u8], file: &str) -> Option<PathBuf> {
+pub fn box_home_file(d: &[u8], file: &str) -> Option<PathBuf> {
     let f = at(d, &format!("home/{file}"));
     if !f.is_file() || f.is_symlink() {
         return None;
@@ -214,7 +214,7 @@ fn box_home_file(d: &[u8], file: &str) -> Option<PathBuf> {
 }
 
 /// The last N bytes of a file.
-fn tail(p: &Path, n: u64) -> Vec<u8> {
+pub fn tail(p: &Path, n: u64) -> Vec<u8> {
     use std::io::{Seek, SeekFrom};
     let Ok(mut f) = File::open(p) else {
         return Vec::new();
@@ -304,7 +304,7 @@ pub fn hypr_end(d: &[u8]) -> Option<String> {
 /// A box whose covers (#210) jail_verify has not passed: its PID 1 is held, and nothing may enter it
 /// (a command's nsenter would see its mounts before they are checked). The file is made before the
 /// box is launched and only ever goes once the check has passed.
-fn covers_held(ctx: &Ctx) -> Res<()> {
+pub fn covers_held(ctx: &Ctx) -> Res<()> {
     if !ctx.d.is_empty() && ctx.at("covers-pending").exists() {
         return Err(ctx.die(cat!(
             "box '",

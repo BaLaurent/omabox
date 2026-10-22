@@ -30,7 +30,7 @@ RELAY=$ROOT/tools/relay/omabox-relay
 # The Rust half (#324, crates/omabox, built into build/bin): the commands it has taken over run there
 # (rust_handoff). OMABOX_BASH=1 keeps every command here, to compare the two.
 RUST=$ROOT/build/bin/omabox
-RUST_CMDS=" _rust path env which "
+RUST_CMDS=" _rust path env which hyprctl lua run log logs events "
 NO_RUST=${OMABOX_BASH:-}; unset OMABOX_BASH   # for this call only, not what it starts
 # aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
 # the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
@@ -15975,10 +15975,18 @@ global_box() {
 # after the command, --opt=value split, --help and the relay done. Not for a broker's caller: its
 # policy (broker_check) is bash's until the broker is ported. A missing binary (a checkout not built
 # yet) runs it here.
+# The caller's environment as it came (run --pass, finding 74) on OMABOX_ENVIRON_FD: this script's
+# own globals (ROOT, BOXES, ...) overwrite what the caller exported under those names.
 rust_handoff() {
   [[ $RUST_CMDS == *" $1 "* ]] && [ -z "$NO_RUST" ] && [ -z "${OMABOX_BROKER_PEER:-}" ] &&
     [ -x "$RUST" ] || return 0
-  OMABOX_ROOT=$ROOT OMABOX_CALL_US=$CALL_US exec "$RUST" "$@"
+  # (Read here, before the exec: that file then shows the binary's own environment.)
+  local efd="" env=()
+  if [ -r "/proc/$$/environ" ]; then
+    mapfile -d '' env < "/proc/$$/environ"
+    exec {efd}< <(printf '%s\0' ${env[@]+"${env[@]}"})
+  fi
+  OMABOX_ENVIRON_FD=$efd OMABOX_ROOT=$ROOT OMABOX_CALL_US=$CALL_US exec "$RUST" "$@"
 }
 # A command that is not about one box, given -b before it or (ls, #236) after it: one line, exit 2.
 not_one_box() { say "$1 takes no -b: it is not about one box"; exit 2; }

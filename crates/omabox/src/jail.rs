@@ -24,3 +24,19 @@ pub fn jail_id() -> Vec<u8> {
     }
     shell::strip_nl(&out)
 }
+
+/// `jail_get '.KEY // empty'`: the jail's KEY as `jq -r` prints it, nothing for none.
+pub fn get_raw(key: &str) -> Vec<u8> {
+    let (vals, _) = json::values(&shell::env_or_empty("OMABOX_JAIL"));
+    let mut out = Vec::new();
+    for v in &vals {
+        match v.get(key) {
+            None | Some(Value::Null | Value::Bool(false)) => {}
+            Some(x) => {
+                out.extend_from_slice(json::raw(x).as_bytes());
+                out.push(b'\n');
+            }
+        }
+    }
+    shell::strip_nl(&out)
+}
