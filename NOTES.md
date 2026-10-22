@@ -8950,8 +8950,9 @@ from them.
       focus: the box keeps a window, out of the user's sight) and refuses the add's create ("Name
       already taken"). A stale token (an add SIGKILLed after writing it, or one whose removes all
       failed) needs no other cleanup: a name's token is read only by a create of that name, the next
-      add of that name writes its own over it, `monitor remove`, an add's success and its trap's
-      answered remove delete it, and it goes with the box's runtime dir. Until then confirm-close
+      add of that name writes its own over it, and that add's success or its trap's answered remove
+      deletes it (`monitor remove` leaves tokens alone: it takes no box lock, so it could race an
+      add in flight); it also goes with the box's runtime dir. Until then confirm-close
       passes that name over: its window then keeps none of the closed one's workspaces (finding 416:
       a new block of ten). Adds name WAYLAND-2 and up, so the main window's WAYLAND-1 has a token only
       if an agent wrote one. An output an agent makes in the box under a name with a stale token
