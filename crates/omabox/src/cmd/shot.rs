@@ -207,7 +207,7 @@ impl Grab {
             return 1;
         };
         let Ok(ef2) = ef.try_clone() else { return 1 };
-        let mut mc = std::process::Command::new("magick");
+        let mut mc = crate::sig::command("magick");
         mc.arg("png:-")
             .arg("-scale")
             .arg(format!("{}00%", String::from_utf8_lossy(&self.zoom)))
@@ -1426,7 +1426,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
         Ok((_, c)) => c,
         Err(e) => return Err(e),
     };
-    let ok = std::process::Command::new("magick")
+    let ok = crate::sig::command("magick")
         .arg(std::ffi::OsStr::from_bytes(&s.file))
         .arg("-crop")
         .arg(format!("{ciw}x{cih}+{ix}+{iy}"))
@@ -1903,7 +1903,7 @@ fn burst_run(
     }
     if sheet {
         // Tiles at most 320 px wide, 5 a row, each frame's number and time under it.
-        let mut c = std::process::Command::new("magick");
+        let mut c = crate::sig::command("magick");
         c.arg("montage");
         for (k, f) in files.iter().enumerate() {
             c.arg("-label")

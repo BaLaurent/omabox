@@ -334,8 +334,25 @@ pub fn pointer_shown(ctx: &Ctx, hide: bool) -> Res<()> {
 /// box-side watch that hides the pointer) is over: never a release that reads the pointer shown
 /// while that watch is still about to hide it.
 static GATE: Mutex<()> = Mutex::new(());
-/// A terminating signal came: the release is on its way.
-static SIGNALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// F with GATE held, said so (sig::GATED: a foreground child's end does not park main there, where
+/// the signal's thread waits for the gate).
+fn gated<T>(f: impl FnOnce() -> T) -> T {
+    let _g = GATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    crate::sig::GATED.store(true, std::sync::atomic::Ordering::SeqCst);
+    let r = f();
+    crate::sig::GATED.store(false, std::sync::atomic::Ordering::SeqCst);
+    r
+}
+
+/// A terminating signal came (sig::STOPPING): main stays where it is until the trap's work ends
+/// this process.
+fn park_if_stopping() {
+    while crate::sig::STOPPING.load(std::sync::atomic::Ordering::SeqCst) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
 
 /// The one-off hold of this process (shot --no-pointer), given back when it ends however it ends.
 static HOLD: Mutex<Option<(Ctx, Vec<u8>)>> = Mutex::new(None);
@@ -366,13 +383,15 @@ fn release_quiet(ctx: &Ctx, tag: &[u8]) {
 
 /// At this process's end (main's, after the command): the hold given back, once (bash's EXIT trap).
 pub fn release_at_exit() {
-    let _g = GATE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let h = HOLD.lock().ok().and_then(|mut g| g.take());
-    if let Some((ctx, tag)) = h {
-        release_quiet(&ctx, &tag);
-    }
+    gated(|| {
+        let h = HOLD.lock().ok().and_then(|mut g| g.take());
+        if let Some((ctx, tag)) = h {
+            release_quiet(&ctx, &tag);
+        }
+    });
+    // (a signal during it: bash's trap runs once the release's subshell is over, then exits with
+    // the signal's code, `exit 143` in its EXIT trap: probed)
+    park_if_stopping();
 }
 
 /// `omabox _ptr-release BOXES NAME DIR TAG CODE`: what a signal leaves for this binary to do in a
@@ -394,6 +413,7 @@ pub fn release_main(args: &[Vec<u8>]) -> u8 {
 }
 
 extern "C" fn on_signal(sig: libc::c_int) {
+    let _e = crate::sig::Errno::save();
     let fd = SIG_W.load(std::sync::atomic::Ordering::Relaxed);
     if fd >= 0 {
         let b = [u8::try_from(sig).unwrap_or(0)];
@@ -471,10 +491,19 @@ pub fn hold_until_exit(ctx: &Ctx, tag: &[u8]) -> Res<()> {
                     _ => 2,
                 };
                 // Not while the hold is being set (or released): once that is over.
-                SIGNALLED.store(true, std::sync::atomic::Ordering::SeqCst);
+                crate::sig::STOPPING.store(true, std::sync::atomic::Ordering::SeqCst);
                 let _g = GATE
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // Nor while a child runs in the foreground: bash's trap waits for it.
+                let _f = crate::sig::FOREGROUND
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // The hold given back already (release_at_exit, at the command's end): nothing left
+                // to release; the signal's exit, as bash's trap gives it there.
+                if HOLD.lock().map(|h| h.is_none()).unwrap_or(true) {
+                    std::process::exit([130, 143, 129][k]);
+                }
                 let a = &argvs.ptrs[k];
                 if a.len() == 8 {
                     // SAFETY: a is a NUL-ended array of pointers to the NUL-ended strings argvs
@@ -494,17 +523,10 @@ pub fn hold_until_exit(ctx: &Ctx, tag: &[u8]) -> Res<()> {
         });
     }
     let mut p = Ptr::default();
-    let held = {
-        let _g = GATE
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        ptr_change(ctx, &mut p, Op::Hold, tag, true)?
-    };
+    let held = gated(|| ptr_change(ctx, &mut p, Op::Hold, tag, true))?;
     // A signal that came meanwhile: bash's trap runs now, before anything more of the command; here
     // the release replaces this process as soon as the gate is free, and nothing more is done.
-    while SIGNALLED.load(std::sync::atomic::Ordering::SeqCst) {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
+    park_if_stopping();
     if held.is_err() {
         return Err(ptr_fail(ctx, &p, b"--no-pointer"));
     }

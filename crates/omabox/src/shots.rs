@@ -11,7 +11,7 @@ use crate::screen::stamp;
 use crate::shell::{self, strip_nl};
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// `$(dirname -- "$V")`, as coreutils has it.
 pub fn dirname(p: &[u8]) -> Vec<u8> {
@@ -40,7 +40,7 @@ pub fn dirname(p: &[u8]) -> Vec<u8> {
 
 /// `mkdir -p -- DIR`: its own words on stderr when it cannot.
 pub fn mkdir_p(dir: &[u8]) -> bool {
-    Command::new("mkdir")
+    crate::sig::command("mkdir")
         .arg("-p")
         .arg("--")
         .arg(std::ffi::OsStr::from_bytes(dir))
@@ -72,7 +72,7 @@ pub fn mv_f(src: &[u8], dst: &[u8]) -> bool {
     if std::fs::rename(shell::path(src), shell::path(&to)).is_ok() {
         return true;
     }
-    Command::new("mv")
+    crate::sig::command("mv")
         .args(["-f", "--"])
         .arg(std::ffi::OsStr::from_bytes(src))
         .arg(std::ffi::OsStr::from_bytes(dst))
@@ -146,7 +146,7 @@ pub fn fd_file(ctx: &Ctx, n: &[u8], write: bool, what: &str) -> Res<()> {
         (false, _) => return Err(ctx.die(cat!(what, ": fd ", n, " is not open for reading"))),
         (true, _) => return Err(ctx.die(cat!(what, ": fd ", n, " is not open for writing"))),
     }
-    let t = Command::new("stat")
+    let t = crate::sig::command("stat")
         .args(["-f", "-c", "%T"])
         .arg(std::ffi::OsStr::from_bytes(&dev))
         .stderr(Stdio::null())
@@ -474,7 +474,7 @@ fn mask_draws(masks: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
 /// `magick A B -fill black MASKS... REST... 2>/dev/null`'s output; None when it failed.
 fn magick_diff(a: &[u8], b: &[u8], masks: &[Vec<u8>], rest: &[&str]) -> Option<Vec<u8>> {
     let draws = mask_draws(masks)?;
-    let mut c = Command::new("magick");
+    let mut c = crate::sig::command("magick");
     c.arg(std::ffi::OsStr::from_bytes(a))
         .arg(std::ffi::OsStr::from_bytes(b))
         .args(["-fill", "black"])

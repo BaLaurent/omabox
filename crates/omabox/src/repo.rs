@@ -11,7 +11,7 @@ use crate::json;
 use crate::shell::{self, strip_nl};
 use serde_json::Value;
 use std::collections::HashSet;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// `realpath -ms -- P`: absolute (from the physical cwd), `.` and `..` and repeated slashes taken out
 /// as text, no link followed.
@@ -136,7 +136,7 @@ fn pwd_physical() -> Option<Vec<u8>> {
 /// box may mount, with what the jail hides in it covered (#210).
 pub fn repo_top() -> Option<Vec<u8>> {
     if !in_jail() {
-        let o = Command::new("git")
+        let o = crate::sig::command("git")
             .args(["rev-parse", "--show-toplevel"])
             .stderr(Stdio::null())
             .output()
@@ -637,7 +637,7 @@ mod tests {
             "lf/x", "loop1", ".", "..", "d/../f", "ld/../f", "lf/", "up/f", "d//./f", "ld/",
         ] {
             let full = cat!(base, "/", p);
-            let gnu = Command::new("readlink")
+            let gnu = crate::sig::command("readlink")
                 .arg("-f")
                 .arg("--")
                 .arg(std::ffi::OsStr::new(

@@ -203,7 +203,7 @@ pub fn background(c: &mut Command) {
 }
 
 pub fn command(argv: &[Vec<u8>], fds: Fds) -> Command {
-    let mut c = Command::new(OsStr::from_bytes(argv.first().map_or(&b""[..], |a| a)));
+    let mut c = crate::sig::command(OsStr::from_bytes(argv.first().map_or(&b""[..], |a| a)));
     c.args(argv.iter().skip(1).map(|a| OsStr::from_bytes(a)));
     let open = if fds.only { open_fds() } else { Vec::new() };
     let nocore = fds.nocore && !core_hard_zero();
@@ -801,15 +801,17 @@ fn held_run(
     if let Some(p) = &pid_to {
         p.store(i32::try_from(child.id()).unwrap_or(0), Ordering::SeqCst);
     }
-    let held = hold(hr);
-    let out = match cap {
-        Some((r, w)) => {
-            drop(w);
-            read_all(r, limit)
-        }
-        None => Vec::new(),
-    };
-    let (rc, sig) = wait(&mut child);
+    let (held, out, (rc, sig)) = crate::sig::foreground(|| {
+        let held = hold(hr);
+        let out = match cap {
+            Some((r, w)) => {
+                drop(w);
+                read_all(r, limit)
+            }
+            None => Vec::new(),
+        };
+        (held, out, wait(&mut child))
+    });
     if let Some(p) = &pid_to {
         p.store(0, Ordering::SeqCst);
     }
@@ -1159,7 +1161,7 @@ pub fn box_cwd(d: &[u8], pid: &[u8], wd: &[u8]) -> Vec<u8> {
     let here = std::fs::metadata(shell::path(wd))
         .map(|m| format!("{}:{}", m.dev(), m.ino()).into_bytes())
         .unwrap_or_default();
-    let there = Command::new("nsenter")
+    let there = crate::sig::command("nsenter")
         .args([
             OsStr::new("-t"),
             OsStr::from_bytes(pid),
@@ -1316,7 +1318,7 @@ impl Relays {
         } else if fd_exposed(src[0]) {
             let (r, w) = pipe()?;
             // (`<(cat)`: a process substitution, SIGINT and SIGQUIT ignored in it)
-            let mut c = Command::new("cat");
+            let mut c = crate::sig::command("cat");
             c.stdin(Stdio::from(dup_hi(src[0])?)).stdout(Stdio::from(w));
             background(&mut c);
             input = Some(c.spawn()?);
@@ -1378,11 +1380,11 @@ impl Relays {
 fn relay_copy_cmd(r: OwnedFd, out: OwnedFd) -> Command {
     let bin = relay_bin();
     let mut c = if executable(&bin) {
-        let mut c = Command::new(OsStr::from_bytes(&bin));
+        let mut c = crate::sig::command(OsStr::from_bytes(&bin));
         c.arg("copy");
         c
     } else {
-        Command::new("cat")
+        crate::sig::command("cat")
     };
     c.stdin(Stdio::from(r)).stdout(Stdio::from(out));
     // (`>(relay_copy)`: a process substitution, SIGINT and SIGQUIT ignored in it)
@@ -1422,8 +1424,10 @@ fn held_run_err(
     drop(c);
     drop(efd);
     let mut child = spawned?;
-    let held = hold(hr);
-    let (rc, sig) = wait(&mut child);
+    let (held, (rc, sig)) = crate::sig::foreground(|| {
+        let held = hold(hr);
+        (held, wait(&mut child))
+    });
     Ok(HeldRun {
         rc,
         sig,

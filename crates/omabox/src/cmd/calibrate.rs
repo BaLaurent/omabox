@@ -16,7 +16,7 @@ use crate::shell::{self, bash_int, strip_nl, test_int};
 use crate::shots::{dirname, mkdir_p, real, shot_fit_default, two_files};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 const CALIB_MARKS: &str = "6";
 
@@ -36,7 +36,7 @@ fn seed() -> String {
 
 /// awk -v NAME=VALUE... PROGRAM: its stdout, and whether it ended 0.
 fn awk(vars: &[(&str, &[u8])], prog: &str) -> (Vec<u8>, bool) {
-    let mut c = Command::new("awk");
+    let mut c = crate::sig::command("awk");
     for (k, v) in vars {
         c.arg("-v").arg(OsStr::from_bytes(&cat!(k, "=", v)));
     }
@@ -104,7 +104,7 @@ fn calib_card(file: &[u8], w: &[u8], h: &[u8], marks: &[u8]) -> Option<bool> {
         comment = cat!(comment, " ", l, " ", xs, " ", ys);
     }
     // A bold sans the system has (a path: magick's own font names vary); magick's default without one.
-    let font = Command::new("fc-match")
+    let font = crate::sig::command("fc-match")
         .args(["-f", "%{file}", "sans:bold"])
         .stderr(Stdio::null())
         .output()
@@ -113,7 +113,7 @@ fn calib_card(file: &[u8], w: &[u8], h: &[u8], marks: &[u8]) -> Option<bool> {
         .map(|o| strip_nl(&o.stdout))
         .filter(|f| shell::path(f).is_file())
         .unwrap_or_default();
-    let mut c = Command::new("magick");
+    let mut c = crate::sig::command("magick");
     c.arg("-size")
         .arg(OsStr::from_bytes(&cat!(w, "x", h)))
         .arg("xc:#f2f2f2")
@@ -138,7 +138,7 @@ fn calib_card(file: &[u8], w: &[u8], h: &[u8], marks: &[u8]) -> Option<bool> {
 /// calib_read FILE: the card's size ("W H") and its marks ("L X Y" lines); None for a file that is
 /// not a card.
 fn calib_read(file: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
-    let o = Command::new("magick")
+    let o = crate::sig::command("magick")
         .args(["identify", "-format", "%c", "--"])
         .arg(OsStr::from_bytes(file))
         .stderr(Stdio::null())
