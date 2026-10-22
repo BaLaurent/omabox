@@ -146,7 +146,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                     "monitor add: an interactive box's monitors are named by its windows (WAYLAND-N): no --name",
                 ));
             }
-            monitor_add_window(ctx, &rest[0])?
+            // (bash's `$(monitor_add_window)`: an INT to omabox alone meanwhile, the step finished,
+            // then the end bash's main had, saying nothing more)
+            crate::sig::DEFER_INT.store(true, std::sync::atomic::Ordering::SeqCst);
+            let r = monitor_add_window(ctx, &rest[0]);
+            crate::sig::DEFER_INT.store(false, std::sync::atomic::Ordering::SeqCst);
+            crate::sig::int_deferred_end();
+            r?
         } else {
             monitor_add(ctx, &rest[0], &mname)?
         };

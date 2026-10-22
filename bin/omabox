@@ -12208,16 +12208,21 @@ monitor_add_window() (
   n0=$(jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length' <<<"$clients")
   local w h x y
   read -r w h x y <<<"$rect"
-  MON_RULE_ON=1
-  trap '[ -z "${MON_RULE_ON:-}" ] || host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1 || true' EXIT
+  # The rule off however this ends; once the window is there when the box was told to make it
+  # (MON_CREATING, finding 429): turned off first, the window the box makes anyway opens on the user's
+  # active workspace, focused (finding 70).
+  MON_RULE_ON=1 MON_CREATING=""
+  trap '[ -z "${MON_RULE_ON:-}" ] || { [ -z "${MON_CREATING:-}" ] || mon_window_wait "$pid" "$n0"
+    host_hyprctl eval "if omabox_monitor_rule then omabox_monitor_rule:set_enabled(false) end" >/dev/null 2>&1 || true; }' EXIT
   # The rule's `move` is relative to its monitor (the dispatcher's is global: both seen in a stand-in
   # with a second monitor at 1920,0); always given: a rule of the same name keeps an earlier one's.
   host_eval "omabox_monitor_rule = hl.window_rule({ name = 'omabox-monitor', match = { class = '^aquamarine\$' }, workspace = '$ws silent', no_initial_focus = true, render_unfocused = true, float = true, size = '$w $h', move = '$x $y' })"
+  MON_CREATING=1
   res=$(on_box timeout "$HYPR_LIMIT" hyprctl output create wayland "$name" 2>&1) || true
-  [ "$res" = ok ] || { box_file "$D/run/omabox.monitors" "$rest" || true; die "monitor add: the box could not make another window: $res"; }
+  [ "$res" = ok ] || { MON_CREATING=""; box_file "$D/run/omabox.monitors" "$rest" || true; die "monitor add: the box could not make another window: $res"; }
   end=$((SECONDS + 5))
   until clients=$(host_hyprctl -j clients) && [ "$(jq --argjson p "$pid" '[.[] | select(.pid == $p)] | length' <<<"$clients")" -gt "$n0" ]; do
-    [ $SECONDS -lt $end ] || die "monitor add: no new window of box '$NAME' on your desktop in 5 s"
+    [ $SECONDS -lt $end ] || { MON_CREATING=""; die "monitor add: no new window of box '$NAME' on your desktop in 5 s"; }
     sleep 0.05
   done
   host_eval "omabox_monitor_rule:set_enabled(false)"; MON_RULE_ON=""
@@ -12236,6 +12241,17 @@ monitor_add_window() (
   monitors_record
   hypr_json monitors | jq -r --arg n "$name" 'first(.[] | select(.name == $n)) | "\(.name) \(.width)x\(.height)@\(.refreshRate * 100 | round / 100) \(.x)x\(.y) \(.scale)"'
 )
+# mon_window_wait PID N0: monitor_add_window's trap, until the host has more than N0 windows of PID
+# (the box's new one), 5 s at most.
+# shellcheck disable=SC2329 # called from monitor_add_window's EXIT trap
+mon_window_wait() {
+  local i
+  for ((i = 0; i < 50; i++)); do
+    [ "$(host_hyprctl -j clients 2>/dev/null | jq --argjson p "$1" '[.[] | select(.pid == $p)] | length' 2>/dev/null)" -gt "$2" ] 2>/dev/null && return 0
+    sleep 0.1
+  done
+  return 0
+}
 # The box's windows on the host: "NAME ADDRESS" a line, the main one as `main` first (none when it is
 # closed), then its monitors' ($D/monitor-windows, in the order made) that are still open. From
 # CLIENTS (host clients JSON) when given. The main window is the box's other one on its workspace.
@@ -13101,7 +13117,7 @@ cpu_tame() {
   local LC_ALL=C tamed=$1
   tamed=${tamed:0:15}
   tamed=${tamed//[[:space:]]/_}; tamed=${tamed//[^A-Za-z0-9_.:+@-]/?}
-  echo "$tamed"
+  printf '%s\n' "$tamed"   # (not echo: a name -n, -e or -E was taken for its option, finding 430)
 }
 
 # One sample of processes PID... under PROC (/proc, or a test's tree), a line each: host pid, start

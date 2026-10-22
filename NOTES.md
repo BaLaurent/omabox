@@ -8860,6 +8860,24 @@ from them.
     is cpu_tame's own, under its `LC_ALL=C`, where a character is a byte; the Rust half cuts bytes.
     Tests: t_unit_rust_parity4 (a stand-in process named so, found by `--app` both ways).
 
+429. **A signal during `monitor add` on an interactive box could open its window on the user's
+    workspace, focused** (2026-10-22, #324 wave 4a's review). monitor_add_window turns a host rule on
+    (the box's new window: workspace, silent, no focus) and its EXIT trap turns it off however it
+    ends. A Ctrl-C or TERM to it once the box had been told to make the output (`output create
+    wayland`) ran the trap at once: the rule went off, and the window the box made anyway a moment
+    later opened on the user's active workspace and took focus (finding 70). **Fix**: from the create
+    on (MON_CREATING) the trap first waits for that window, 5 s at most, then turns the rule off; in
+    the Rust half too, which also starts no foreground step once a trap is on its way (bash starts
+    nothing after its trap). Tests: t_unit_rust_parity4 (a TERM to the group while the stand-in box
+    makes its window late: the stand-in host has the window before the rule goes off, both ways; a
+    TERM while the rule is being turned on: no create follows).
+
+430. **`cpu --app -n` listed every process** (2026-10-22, #324 wave 4a's review). cpu_tame wrote the
+    tamed name with `echo`, which takes a name of `-n`, `-e`, `-E` or their mixes for its options and
+    prints nothing: the empty name kept every process, and with `--threads` none of their threads. A
+    process can be named so (prctl). **Fix**: printf '%s\n' (the Rust half never used echo). Tests:
+    t_unit_rust_parity4 (a stand-in process named `-n`, `--app -n`: that one alone, both ways).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
