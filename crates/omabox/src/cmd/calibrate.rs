@@ -601,11 +601,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !mkdir_p(&dir) {
         return Err(ctx.die(cat!("calibrate: cannot make the directory ", dir)));
     }
-    let card = real(&card);
+    let card = crate::shots::real_or_end(&card)?;
     let part = cat!(card, ".part");
     let marks = calib_marks(&w, &h);
     let drawn = calib_card(&part, &w, &h, &marks).ok_or(Exit(1))?;
-    if !drawn || std::fs::rename(shell::path(&part), shell::path(&card)).is_err() {
+    if !drawn || !crate::shots::mv_f(&part, &card) {
         let _ = std::fs::remove_file(shell::path(&part));
         return Err(ctx.die(cat!("calibrate: could not draw the card at ", card)));
     }

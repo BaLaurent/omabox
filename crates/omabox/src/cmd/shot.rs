@@ -7,7 +7,7 @@
 use crate::args::{optarg, unknown_opt};
 use crate::boxes::{box_alive, meta, need_box};
 use crate::cat;
-use crate::exec::{ErrTo, Out, dev_null, on_box, on_box_io};
+use crate::exec::{ErrTo, Out, dev_null, on_box};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::{hung_text, hypr_answers, hypr_json};
 use crate::jail::in_jail;
@@ -20,7 +20,7 @@ use crate::settle::{Settle, cursor_now, cursor_rect, geom_parse, kill_tree, now_
 use crate::shell::{self, bash_int, strip_nl};
 use crate::shellnote::shell_note;
 use crate::shots::{
-    diff_box, diff_parts, fd_file, geom_clip, png_size, ratio, real, shot_fit_default, shot_path,
+    diff_box, diff_parts, fd_file, geom_clip, png_size, ratio, shot_fit_default, shot_path,
     shot_record, shot_ref_save, two_files, zero_note,
 };
 use crate::win::{box_windows, jq_r, win_desc, win_select};
@@ -192,7 +192,7 @@ impl Grab {
         a.extend(self.grim.iter().cloned());
         a.push(b"-".to_vec());
         if self.zoom.is_empty() {
-            let r = on_box_io(
+            let r = crate::exec::on_box_bg(
                 &self.ctx,
                 &a,
                 crate::exec::In::Inherit,
@@ -207,22 +207,23 @@ impl Grab {
             return 1;
         };
         let Ok(ef2) = ef.try_clone() else { return 1 };
-        let m = std::process::Command::new("magick")
-            .arg("png:-")
+        let mut mc = std::process::Command::new("magick");
+        mc.arg("png:-")
             .arg("-scale")
             .arg(format!("{}00%", String::from_utf8_lossy(&self.zoom)))
             .args(["-define", "png:compression-level=1", "png:-"])
             .stdin(std::process::Stdio::from(pr))
             .stdout(std::process::Stdio::from(to))
-            .stderr(std::process::Stdio::from(ef2))
-            .spawn();
+            .stderr(std::process::Stdio::from(ef2));
+        crate::exec::background(&mut mc);
+        let m = mc.spawn();
         let mut m = match m {
             Ok(m) => m,
             Err(_) => return 127,
         };
         self.mpid
             .store(i32::try_from(m.id()).unwrap_or(0), Ordering::SeqCst);
-        let r = on_box_io(
+        let r = crate::exec::on_box_bg(
             &self.ctx,
             &a,
             crate::exec::In::Inherit,
@@ -865,6 +866,10 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         let g = grab.clone();
         let (tofd, file) = (tofd.clone(), file.clone());
         move || -> i32 {
+            // (once the command gave up on the capture, nothing more is made)
+            if g.stop.load(Ordering::SeqCst) {
+                return 1;
+            }
             let target: Option<OwnedFd> = if to_fd {
                 let fd: i32 = String::from_utf8_lossy(&tofd).parse().unwrap_or(-1);
                 // SAFETY: fd_file checked it is open; dup gives a descriptor of our own.
@@ -883,12 +888,13 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         }
     };
     let (tx, rx) = std::sync::mpsc::channel::<i32>();
+    let th: Option<std::thread::JoinHandle<()>>;
     {
         let g = grab.clone();
         let file = file.clone();
         let changed = s.changed;
         let tofd_empty = tofd.is_empty();
-        std::thread::spawn(move || {
+        th = Some(std::thread::spawn(move || {
             // A window's first capture can be a frame from long ago (finding 81): captured twice.
             let mut rc = 0;
             if has_win {
@@ -914,7 +920,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
                 rc = put();
             }
             let _ = tx.send(rc);
-        });
+        }));
     }
     let unput = |s: &Shot| {
         if s.tofd.is_empty() || s.changed {
@@ -927,12 +933,23 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         Ok(r) => r,
         Err(_) => {
             if !hypr_answers(ctx)? {
+                // (bash's kill_tree of the capture's subshell: here its children killed until the
+                // thread that runs them is over, so it makes no file once these are removed)
                 grab.stop.store(true, Ordering::SeqCst);
-                for p in [&grab.pid, &grab.mpid] {
-                    let p = p.load(Ordering::SeqCst);
-                    if p > 0 {
-                        kill_tree(n(i64::from(p)).as_slice());
+                let end = std::time::Instant::now() + Duration::from_secs(3);
+                loop {
+                    for p in [&grab.pid, &grab.mpid] {
+                        let p = p.load(Ordering::SeqCst);
+                        if p > 0 {
+                            kill_tree(n(i64::from(p)).as_slice());
+                        }
                     }
+                    if th.as_ref().is_none_or(|t| t.is_finished())
+                        || std::time::Instant::now() >= end
+                    {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
                 }
                 let _ = std::fs::remove_file(shell::path(&gerr));
                 unput(s);
@@ -1026,15 +1043,9 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
         return changed(ctx, s, lw, lh);
     }
     if s.tofd.is_empty() {
-        if std::fs::rename(shell::path(&s.file), shell::path(&s.out)).is_err() {
-            // (mv's own words)
-            let st = std::process::Command::new("mv")
-                .arg(std::ffi::OsStr::from_bytes(&s.file))
-                .arg(std::ffi::OsStr::from_bytes(&s.out))
-                .status();
-            if !st.is_ok_and(|s| s.success()) {
-                return Err(Exit(1));
-            }
+        // (`mv "$file" "$out"`: into a folder of that name, as mv does)
+        if !crate::shots::mv_f(&s.file, &s.out) {
+            return Err(Exit(1));
         }
         s.file = s.out.clone();
     }
@@ -1044,7 +1055,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     let screen = box_screen(ctx)?;
     let mode = split_at(&screen, b' ').1;
     let geo = cat!(s.lw, "x", s.lh, " ", n(iw), "x", n(ih));
-    shot_record(ctx, &s.out, &mode, &s.where_, &geo, &s.file);
+    shot_record(ctx, &s.out, &mode, &s.where_, &geo, &s.file)?;
     // A whole shot is what a later --changed compares with (finding 243); not one taken with
     // OMABOX_SHOT_NO_BASELINE=1 (the suite's evidence shots, #195, finding 266).
     if s.g.is_none()
@@ -1067,7 +1078,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
             };
             (b"screen".to_vec(), p.unwrap_or(b"-".to_vec()))
         };
-        shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr]);
+        shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr])?;
     }
     // One line on stderr when image pixels are not screen pixels (cropped or scaled).
     let mut k = Vec::new();
@@ -1153,7 +1164,14 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
         rmf(&s.file);
         return Err(ctx.die("shot: grim's image is not a PNG"));
     };
-    let screen = box_screen(ctx)?;
+    // (the frame just taken not left in $D/changed when the box stops answering here: finding 427)
+    let screen = match box_screen(ctx) {
+        Ok(v) => v,
+        Err(e) => {
+            rmf(&s.file);
+            return Err(e);
+        }
+    };
     let mode = split_at(&screen, b' ').1;
     let (key, what, ptr) = if !s.win.is_empty() {
         (
@@ -1278,7 +1296,7 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
         } else {
             let part = cat!(s.out, ".part");
             std::fs::copy(shell::path(src), shell::path(&part)).is_ok()
-                && std::fs::rename(shell::path(&part), shell::path(&s.out)).is_ok()
+                && crate::shots::mv_f(&part, &s.out)
         };
         if !ok {
             let _ = std::fs::remove_file(shell::path(&s.file));
@@ -1294,8 +1312,8 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
     };
     if !why.is_empty() {
         put_image(ctx, s, &s.file)?;
-        shot_record(ctx, &s.out, &mode, &s.where_, &geo, &rec);
-        shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr]);
+        shot_record(ctx, &s.out, &mode, &s.where_, &geo, &rec)?;
+        shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr])?;
         rmf(&s.file);
         say(cat!(
             "--changed: ",
@@ -1446,8 +1464,8 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
         &rwhere,
         &cat!(n(cw), "x", n(ch), " ", n(ciw), "x", n(cih)),
         &rec,
-    );
-    shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr]);
+    )?;
+    shot_ref_save(ctx, &s.file, &key, [&s.out, &mode, &geo, &ptr])?;
     // Changes far apart make one big box: each named when they would be much smaller.
     let (mut places, mut cnt, mut area) = (Vec::new(), 0i64, 0i64);
     if cw * ch > 40_000 {
@@ -1574,22 +1592,31 @@ fn burst_run(
             return Err(ctx.die(cat!("shot --burst: cannot make ", s.out)));
         }
         // A folder used before (#167): the frames and sheet a burst wrote there go; only those.
+        // (`rm -f -- "$out"/frame-[0-9][0-9][0-9].png "$out"/sheet.png`: a glob that matches
+        // nothing, or a folder that cannot be listed, is the pattern itself, which rm -f takes as a
+        // name: only a name that is not there is no failure.)
         let mut ok = true;
+        let mut names: Vec<Vec<u8>> = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&p) {
             for e in rd.flatten() {
-                let nm = e.file_name();
-                let nm = nm.as_encoded_bytes();
-                if nm == b"sheet.png"
-                    || (nm.len() == 13
-                        && nm.starts_with(b"frame-")
-                        && nm.ends_with(b".png")
-                        && nm[6..9].iter().all(u8::is_ascii_digit))
+                let nm = e.file_name().as_encoded_bytes().to_vec();
+                if nm.len() == 13
+                    && nm.starts_with(b"frame-")
+                    && nm.ends_with(b".png")
+                    && nm[6..9].iter().all(u8::is_ascii_digit)
                 {
-                    if let Err(e) = std::fs::remove_file(e.path()) {
-                        if e.kind() != std::io::ErrorKind::NotFound {
-                            ok = false;
-                        }
-                    }
+                    names.push(nm);
+                }
+            }
+        }
+        if names.is_empty() {
+            names.push(b"frame-[0-9][0-9][0-9].png".to_vec());
+        }
+        names.push(b"sheet.png".to_vec());
+        for nm in names {
+            if let Err(e) = std::fs::remove_file(shell::path(&cat!(s.out, "/", nm))) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    ok = false;
                 }
             }
         }
@@ -1601,7 +1628,7 @@ fn burst_run(
             )));
         }
     }
-    s.out = real(&s.out);
+    s.out = crate::shots::real_or_end(&s.out)?;
     let (_, err) = shell::mktemp()?;
     let probe: Vec<Vec<u8>> = vec![
         b"test".to_vec(),
@@ -1611,8 +1638,15 @@ fn burst_run(
     let one = on_box(ctx, &probe, false, Out::Inherit, ErrTo::Null, true).rc == 0;
     let (mut ts, mut files): (Vec<Vec<u8>>, Vec<Vec<u8>>) = (Vec::new(), Vec::new());
     let mut act: Option<std::process::Child> = None;
-    let frame = |out: &[u8], i: &[u8]| -> Vec<u8> {
-        cat!(out, "/frame-", format!("{:03}", bash_int(i).unwrap_or(0)))
+    // (`f=$(printf '%s/frame-%03d.png' ...)`: printf reads the number as bash's arithmetic does,
+    // octal after a 0; one it refuses (08) fails it, and set -e ends the command, 1. The tool writes
+    // its frame numbers with %ld: never so.)
+    let frame = |out: &[u8], i: &[u8]| -> Res<Vec<u8>> {
+        Ok(cat!(
+            out,
+            "/frame-",
+            format!("{:03}", bash_int(i).ok_or(Exit(1))?)
+        ))
     };
     let spawn_act = |ctx: &Ctx| -> Option<std::process::Child> {
         if act_args.is_empty() {
@@ -1628,6 +1662,7 @@ fn burst_run(
         let e = crate::exec::dup_hi(2).ok()?;
         c.stdout(std::process::Stdio::from(e))
             .stdin(std::process::Stdio::null());
+        crate::exec::background(&mut c);
         c.spawn().ok()
     };
     let fail =
@@ -1680,13 +1715,15 @@ fn burst_run(
         }
         a.extend(s.grim[1..].iter().cloned());
         let Ok((pr, pw)) = crate::exec::pipe() else {
-            return Err(ctx.die("could not make a pipe for the burst"));
+            let _ = std::fs::remove_file(shell::path(&err));
+            return Err(Exit(1));
         };
         let ef = std::fs::File::create(shell::path(&err)).ok();
         let efd = ef.as_ref().map_or(-1, AsRawFd::as_raw_fd);
         let c = ctx.clone();
+        // (bash's `<(...)`: SIGINT and SIGQUIT ignored in it)
         let tool = std::thread::spawn(move || {
-            let r = on_box_io(
+            let r = crate::exec::on_box_bg(
                 &c,
                 &a,
                 crate::exec::In::Inherit,
@@ -1715,7 +1752,7 @@ fn burst_run(
             if w != b"frame" || !shell::re_match("^[0-9]+$", &cat!(fno, ft, fl)) {
                 break;
             }
-            let fpath = cat!(frame(&s.out, fno), ".png");
+            let fpath = cat!(frame(&s.out, fno)?, ".png");
             let len = fl.iter().fold(0u64, |a, &c| {
                 a.wrapping_mul(10).wrapping_add(u64::from(c - b'0'))
             });
@@ -1778,7 +1815,7 @@ fn burst_run(
         }
         let t0 = now_ms();
         for k in 1..=nf {
-            let fpath = cat!(frame(&s.out, &n(k)), ".png");
+            let fpath = cat!(frame(&s.out, &n(k))?, ".png");
             let t = now_ms() - t0;
             let ef = std::fs::File::create(shell::path(&err)).ok();
             let rc = match (std::fs::File::create(shell::path(&fpath)), ef.as_ref()) {
@@ -1835,7 +1872,7 @@ fn burst_run(
     };
     let geo = cat!(s.lw, "x", s.lh, " ", n(iw), "x", n(ih));
     for f in &files {
-        shot_record(ctx, f, &mode, &s.where_, &geo, b"");
+        shot_record(ctx, f, &mode, &s.where_, &geo, b"")?;
     }
     // --diff's box in the coordinates a click takes for this capture (#167): the screen's, or with
     // --window the window's own; the image's pixels scaled back outwards, from where it starts.

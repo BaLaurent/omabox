@@ -10,7 +10,7 @@ use crate::boxes::need_box;
 use crate::cat;
 use crate::cmd::click::{pointer_tool, sh_e};
 use crate::cmd::hyprctl::code;
-use crate::exec::{ErrTo, In, Out, on_box_io, pipe};
+use crate::exec::{ErrTo, In, Out, pipe};
 use crate::exit::{Ctx, Exit, Res, say};
 use crate::input::{
     BOX_POINTER, glide_arg, glide_to, mods_add, num, on_screen, path_rects, pointer_at, read_line,
@@ -49,8 +49,9 @@ fn drag_shot(ctx: &mut Ctx, ext: &[u8], seq: &[Vec<u8>], shot: &[Vec<u8>]) -> Re
     ];
     argv.extend(seq.iter().cloned());
     let c = ctx.clone();
+    // (bash's coproc: SIGINT and SIGQUIT ignored in it, so a Ctrl-C leaves it to release the button)
     let tool = std::thread::spawn(move || {
-        let r = on_box_io(
+        let r = crate::exec::on_box_bg(
             &c,
             &argv,
             In::Fd(in_r),
@@ -72,7 +73,9 @@ fn drag_shot(ctx: &mut Ctx, ext: &[u8], seq: &[Vec<u8>], shot: &[Vec<u8>]) -> Re
         rc = 1;
         say("drag: the pointer did not get to the end of the drag");
     }
-    // (a tool already gone: the write's SIGPIPE ends this omabox, as bash's echo did)
+    // (A tool already gone: bash's `echo >&"$din"` dies of SIGPIPE (141), or, once bash has reaped
+    // the coproc and closed its fds, says `"$din": Bad file descriptor` and the tool's status stands.
+    // Which one is the reaping's race; this write is racy the same way.)
     // SAFETY: one byte of ours to an fd we own.
     unsafe {
         libc::write(in_w.as_raw_fd(), b"\n".as_ptr().cast(), 1);

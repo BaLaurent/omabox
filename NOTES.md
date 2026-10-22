@@ -8839,13 +8839,17 @@ from them.
     after them. Tests: t_unit_rust_parity (wait still and run -d --wait on a stand-in desktop, both
     ways, with TMPDIR a dir of the test's own: empty after).
 
-427. **A failed `shot --burst` left a temporary file behind** (2026-10-22, #324 wave 3b). shot_burst
-    keeps the burst tool's (or a grim's) words in a `mktemp` file, and a frame that failed ended the
-    command (the box gone, a Hyprland that stopped answering, the frame not taken) with those words
-    in its message before the file was removed: one file left in $TMPDIR each time. **Fix**: the words
-    are read and the file removed first, then the command ends as before, in bash and in the Rust half
-    alike. Tests: t_unit_rust_parity (a burst whose third frame fails on the stand-in desktop, from the
-    burst tool and a grim a frame, TMPDIR a dir of the test's own: compared both ways, and empty after).
+427. **A failed `shot --burst` left a temporary file behind, and `shot --changed` its frame**
+    (2026-10-22, #324 wave 3b and its review). shot_burst keeps the burst tool's (or a grim's) words in
+    a `mktemp` file, and a frame that failed ended the command (the box gone, a Hyprland that stopped
+    answering, the frame not taken) with those words in its message before the file was removed: one
+    file left in $TMPDIR each time. shot_changed reads the box's mode after the capture: a box that
+    stopped answering there ended the command with the frame just taken left in $D/changed as
+    `.new-XXXXXX`. **Fix**: the words are read and the file removed first, and the frame removed
+    before that end, then the command ends as before, in bash and in the Rust half alike. Tests:
+    t_unit_rust_parity (a burst whose frame fails on the stand-in desktop, from the burst tool and a
+    grim a frame, TMPDIR a dir of the test's own; a --changed whose box stops answering once the frame
+    is taken: compared both ways, nothing left after).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

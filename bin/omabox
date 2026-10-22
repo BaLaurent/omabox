@@ -8496,7 +8496,9 @@ shot_changed() {
   local dir=$D/changed key iw ih screen mode ptr=- what why=""
   local rfile="" rshot="" rmode="" rkind="" rgeo="" rptr=- rt=0
   read -r iw ih < <(png_size "$file") || { rm -f -- "$file"; die "shot: grim's image is not a PNG"; }
-  screen=$(box_screen) mode=${screen#* }
+  # (the frame just taken not left in $D/changed when the box stops answering here: finding 427)
+  screen=$(box_screen) || { local rc=$?; rm -f -- "$file"; exit "$rc"; }
+  mode=${screen#* }
   if [ -n "$win" ]; then
     key=${where#window } what="window $(win_desc "$win")"
   else

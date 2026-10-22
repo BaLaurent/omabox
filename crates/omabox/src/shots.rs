@@ -49,9 +49,36 @@ pub fn mkdir_p(dir: &[u8]) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// `readlink -f -- V`, empty when it fails.
+/// `readlink -f -- V`, empty when it fails (`[ "$X" = "$(readlink -f -- "$V")" ]`).
 pub fn real(v: &[u8]) -> Vec<u8> {
     crate::repo::readlink_f(v).unwrap_or_default()
+}
+
+/// `X=$(readlink -f -- "$V")` under set -e: readlink saying nothing when it fails, the command
+/// ends there, 1.
+pub fn real_or_end(v: &[u8]) -> Res<Vec<u8>> {
+    crate::repo::readlink_f(v).ok_or(crate::exit::Exit(1))
+}
+
+/// `mv -f -- SRC DST` as coreutils' mv: into DST when it is a directory (a link to one too), else
+/// over it; mv's own words on stderr when it cannot (it is run for that).
+pub fn mv_f(src: &[u8], dst: &[u8]) -> bool {
+    let d = shell::path(dst);
+    let to = if d.is_dir() {
+        cat!(dst, "/", shell::basename(src))
+    } else {
+        dst.to_vec()
+    };
+    if std::fs::rename(shell::path(src), shell::path(&to)).is_ok() {
+        return true;
+    }
+    Command::new("mv")
+        .args(["-f", "--"])
+        .arg(std::ffi::OsStr::from_bytes(src))
+        .arg(std::ffi::OsStr::from_bytes(dst))
+        .stdin(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// strerror's words for an error, as bash says them after a redirection that failed.
@@ -72,7 +99,7 @@ pub fn shot_path(ctx: &Ctx, out: &[u8]) -> Res<(Vec<u8>, Vec<u8>)> {
     if !mkdir_p(&dir) {
         return Err(ctx.die(cat!("shot: cannot make the directory ", dir)));
     }
-    let out = real(out);
+    let out = real_or_end(out)?;
     let file = cat!(out, ".part");
     if let Err(e) = std::fs::File::create(shell::path(&file)) {
         return Err(ctx.die(cat!("shot: cannot write ", out, ": ", why(&e))));
@@ -257,9 +284,20 @@ pub fn geom_clip(r: [i64; 4], lw: i64, lh: i64) -> Option<([i64; 4], Vec<u8>)> {
     ))
 }
 
-/// png_size FILE: its width and height, from its header.
+/// png_size FILE: its width and height, from its header (`od -An -tu1 -j16 -N8`: od's own words
+/// when it cannot read the file, or the file ends before its 16th byte).
 pub fn png_size(f: &[u8]) -> Option<(i64, i64)> {
-    let data = std::fs::read(shell::path(f)).ok()?;
+    let data = match std::fs::read(shell::path(f)) {
+        Ok(d) => d,
+        Err(e) => {
+            say_raw(&cat!("od: ", f, ": ", why(&e), "\n"));
+            return None;
+        }
+    };
+    if data.len() < 16 {
+        say_raw(b"od: cannot skip past end of combined input\n");
+        return None;
+    }
     let b = data.get(16..24)?;
     let n = |o: usize| {
         (i64::from(b[o]) << 24)
@@ -292,65 +330,72 @@ fn keep_last(p: &std::path::Path, new: &std::path::Path, n: usize) {
         starts[starts.len().saturating_sub(n)]
     };
     if std::fs::write(new, &d[from..]).is_ok() {
-        let _ = std::fs::rename(new, p);
+        let _ = mv_f(shell::bytes(new), shell::bytes(p));
     }
 }
 
-/// `printf ... >> FILE`, its failure bash's own words on stderr.
-fn append(p: &std::path::Path, data: &[u8]) {
-    match std::fs::OpenOptions::new()
-        .append(true)
+/// `printf ... >> FILE` (or `>`): a write that fails ends the command, 1, as under set -e, its words
+/// on stderr (bash's own line names its script and line: the words are the same after them).
+fn write_rec(p: &std::path::Path, data: &[u8], append: bool) -> Res<()> {
+    let r = std::fs::OpenOptions::new()
+        .append(append)
+        .write(true)
+        .truncate(!append)
         .create(true)
         .open(p)
-    {
-        Ok(mut f) => {
-            let _ = f.write_all(data);
-        }
-        Err(e) => {
-            let _ = std::io::stderr().write_all(&cat!(
-                "omabox: ",
-                shell::bytes(p),
-                ": ",
-                why(&e),
-                "\n"
-            ));
-        }
+        .and_then(|mut f| f.write_all(data));
+    if let Err(e) = r {
+        let _ =
+            std::io::stderr().write_all(&cat!("omabox: ", shell::bytes(p), ": ", why(&e), "\n"));
+        return Err(crate::exit::Exit(1));
     }
+    Ok(())
 }
 
 /// shot_record PATH MODE WHERE GEOMETRY [FILE]: what a shot is of, for `--in`: path, its size and
 /// mtime, the box's mode, `window ADDRESS` or `screen X,Y`, what it covers and the image's size.
 /// FILE: another name for it (a jailed caller's /dev/fd/N). The last 200 kept past 500.
-pub fn shot_record(ctx: &Ctx, path: &[u8], mode: &[u8], where_: &[u8], geo: &[u8], file: &[u8]) {
+pub fn shot_record(
+    ctx: &Ctx,
+    path: &[u8],
+    mode: &[u8],
+    where_: &[u8],
+    geo: &[u8],
+    file: &[u8],
+) -> Res<()> {
     if path.iter().any(|&c| c == b'\t' || c == b'\n') {
         say("shot: a path with a tab or newline: no --in for this one");
-        return;
+        return Ok(());
     }
     let f = ctx.at("shots.tsv");
     let st = stamp(if file.is_empty() { path } else { file });
-    append(
+    write_rec(
         &f,
         &cat!(path, "\t", st, "\t", mode, "\t", where_, "\t", geo, "\n"),
-    );
+        true,
+    )?;
     if lines_in(&f) > 500 {
         keep_last(&f, &ctx.at("shots.tsv.new"), 200);
     }
+    Ok(())
 }
 
 /// shot_ref_save FILE KEY SHOT MODE GEOMETRY POINTER: the last whole frame of each thing shot
 /// ($D/changed/KEY.png, KEY.tsv: the shot, the mode, "LWxLH IWxIH", the pointer then, when in ms), for
 /// a later --changed; the 8 latest kept.
-pub fn shot_ref_save(ctx: &Ctx, file: &[u8], key: &[u8], v: [&[u8]; 4]) {
+pub fn shot_ref_save(ctx: &Ctx, file: &[u8], key: &[u8], v: [&[u8]; 4]) -> Res<()> {
     let [shot, mode, geo, ptr] = v;
     let dir = cat!(ctx.d, "/changed");
     if !mkdir_p(&dir) {
-        return;
+        return Ok(());
     }
     let tmp = shell::path(&cat!(dir, "/.", key, ".png"));
     let png = shell::path(&cat!(dir, "/", key, ".png"));
-    if std::fs::copy(shell::path(file), &tmp).is_err() || std::fs::rename(&tmp, &png).is_err() {
+    if std::fs::copy(shell::path(file), &tmp).is_err()
+        || !mv_f(shell::bytes(&tmp), shell::bytes(&png))
+    {
         let _ = std::fs::remove_file(&tmp);
-        return;
+        return Ok(());
     }
     let tsv = shell::path(&cat!(dir, "/", key, ".tsv"));
     let line = cat!(
@@ -365,14 +410,11 @@ pub fn shot_ref_save(ctx: &Ctx, file: &[u8], key: &[u8], v: [&[u8]; 4]) {
         crate::settle::now_ms().to_string(),
         "\n"
     );
-    if let Err(e) = std::fs::write(&tsv, &line) {
-        let _ =
-            std::io::stderr().write_all(&cat!("omabox: ", shell::bytes(&tsv), ": ", why(&e), "\n"));
-    }
+    write_rec(&tsv, &line, false)?;
     // The pointer of a screen shot by its path too, for a later --since it.
     if ptr != b"-" {
         let p = shell::path(&cat!(dir, "/pointers.tsv"));
-        append(&p, &cat!(shot, "\t", ptr, "\n"));
+        write_rec(&p, &cat!(shot, "\t", ptr, "\n"), true)?;
         if lines_in(&p) > 200 {
             keep_last(&p, &shell::path(&cat!(dir, "/pointers.new")), 100);
         }
@@ -402,6 +444,7 @@ pub fn shot_ref_save(ctx: &Ctx, file: &[u8], key: &[u8], v: [&[u8]; 4]) {
         let _ = std::fs::remove_file(shell::path(&cat!(dir, "/", n)));
         let _ = std::fs::remove_file(shell::path(&cat!(dir, "/", base, ".tsv")));
     }
+    Ok(())
 }
 
 /// `-draw "rectangle X0,Y0 X1,Y1"` for each MASK (X,Y,W,H in image pixels: `IFS=, read`).

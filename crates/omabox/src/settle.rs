@@ -8,7 +8,7 @@
 use crate::boxes::{box_alive, meta, touch};
 use crate::cat;
 use crate::desk::{Target, desk_facts, desk_snap, desk_target};
-use crate::exec::{ErrTo, In, Out, on_box, on_box_io, pipe};
+use crate::exec::{ErrTo, In, Out, on_box, pipe};
 use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::{hung_text, hypr_answers, hypr_json};
 use crate::jobs::job_failed;
@@ -381,13 +381,18 @@ impl Settle {
     }
 
     /// The before snapshot (an action's), read in the background while the tool starts.
-    fn snap_start(&mut self, ctx: &Ctx) {
+    fn snap_start(&mut self, ctx: &Ctx) -> Res<()> {
         if self.facts.is_empty() {
-            return;
+            return Ok(());
         }
+        // (bash's snapshot went to a `mktemp` file, removed once read: one that cannot be made
+        // ends the command, mktemp's words said; made and removed here all the same)
+        let (_, f) = shell::mktemp()?;
+        let _ = std::fs::remove_file(shell::path(&f));
         self.before.clear();
         let c = ctx.clone();
         self.snap = Some(std::thread::spawn(move || desk_snap(&c, true)));
+        Ok(())
     }
 
     /// desk_snap_take: the before snapshot, once its read is over.
@@ -439,7 +444,10 @@ impl Settle {
                 ", then up again"
             )));
         }
-        self.snap_start(ctx);
+        self.snap_start(ctx)?;
+        // (the tool's fifos were in a `mktemp -d` dir: the same rule)
+        let (_, dir) = shell::mktemp_args(&[b"-d"])?;
+        let _ = std::fs::remove_dir(shell::path(&dir));
         argv.push(b"--tied".to_vec());
         let ((in_r, in_w), (out_r, out_w)) = match (pipe(), pipe()) {
             (Ok(a), Ok(b)) => (a, b),
@@ -452,7 +460,8 @@ impl Settle {
             let err: RawFd = out_w.as_raw_fd();
             let o = out_w.try_clone().ok();
             if let Some(o) = o {
-                let _ = on_box_io(
+                // (bash's `&`: SIGINT and SIGQUIT ignored in it)
+                let _ = crate::exec::on_box_bg(
                     &c,
                     &argv,
                     In::Fd(in_r),
