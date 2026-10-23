@@ -33,7 +33,6 @@ pub fn desk_snap(ctx: &Ctx, stdin_null: bool) -> Vec<u8> {
             crate::exec::In::Null,
             Out::Capture(Some(67_108_864)),
             ErrTo::Null,
-            false,
             None,
         )
     } else {
@@ -43,7 +42,6 @@ pub fn desk_snap(ctx: &Ctx, stdin_null: bool) -> Vec<u8> {
             false,
             Out::Capture(Some(67_108_864)),
             ErrTo::Null,
-            false,
         )
     };
     if r.rc != 0 {
@@ -141,7 +139,7 @@ pub fn kb_layers(ctx: &Ctx) -> Vec<u8> {
         .iter()
         .map(|w| w.as_bytes().to_vec())
         .collect();
-    let r = on_box(ctx, &args, false, Out::Capture(None), ErrTo::Out, false);
+    let r = on_box(ctx, &args, false, Out::Capture(None), ErrTo::Out);
     let out = shell::subst(&r.out);
     out.strip_prefix(b"error: omabox-kbl:".as_slice())
         .map(<[u8]>::to_vec)

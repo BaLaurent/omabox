@@ -96,7 +96,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         b"eval".to_vec(),
         eval,
     ];
-    let r = on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Out, false);
+    let r = on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Out);
     let got = shell::subst(&r.out);
     let vals = if let Some(v) = got.strip_prefix(b"error: omabox-lua-ok:") {
         v.to_vec()

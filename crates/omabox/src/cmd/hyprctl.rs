@@ -33,7 +33,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut argv = vec![b"hyprctl".to_vec()];
     if follow {
         argv.extend(rest.iter().cloned());
-        let r = on_box(ctx, &argv, false, Out::Inherit, ErrTo::Inherit, true).or_exit()?;
+        let r = on_box(ctx, &argv, false, Out::Inherit, ErrTo::Inherit).or_exit()?;
         return code(r.rc);
     }
     // Held in an unlinked file, byte for byte, printed once it is not hyprctl's own error.
@@ -50,7 +50,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         b"hyprctl".to_vec(),
     ];
     argv.extend(rest.iter().cloned());
-    let r = on_box(ctx, &argv, false, Out::Fd(w), ErrTo::Inherit, true).or_exit()?;
+    let r = on_box(ctx, &argv, false, Out::Fd(w), ErrTo::Inherit).or_exit()?;
     ctx.box_gone_said |= r.gone_said;
     let mut rc = r.rc;
     if rc != 0 {

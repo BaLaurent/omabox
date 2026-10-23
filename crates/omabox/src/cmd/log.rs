@@ -35,7 +35,7 @@ impl Reading {
             (Kind::Host, _) => shell::path(p).is_file(),
             (Kind::Box, true) => {
                 let argv = vec![b"test".to_vec(), b"-f".to_vec(), p.to_vec()];
-                on_box(ctx, &argv, false, Out::Inherit, ErrTo::Inherit, true)
+                on_box(ctx, &argv, false, Out::Inherit, ErrTo::Inherit)
                     .or_exit()?
                     .rc
                     == 0
@@ -59,7 +59,7 @@ impl Reading {
             (Kind::Host, _) => host(p),
             (Kind::Box, true) => {
                 let argv = vec![b"cat".to_vec(), b"--".to_vec(), p.to_vec()];
-                on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Inherit, false).out
+                on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Inherit).out
             }
             (Kind::Box, false) => host(&log_dead_path(ctx, p).unwrap_or_default()),
         }
@@ -423,7 +423,6 @@ fn follow_logs(ctx: &Ctx, rd: &Reading, picked: &[(Kind, Vec<u8>, Vec<u8>)], n: 
                         crate::exec::In::Inherit,
                         Out::Fd(wd),
                         ErrTo::Null,
-                        true,
                         None,
                     )
                 });

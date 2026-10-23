@@ -9227,6 +9227,23 @@ from them.
     (shell::date, date_iso, epoch_ns: strftime in the local zone, as date prints it), and such a
     process skipped. t_replace names the log by `OMABOX_TEST_RUN_NS`, read only under the suite's
     OMABOX_SUITE. Tests: shell.rs's dates_as_coreutils_prints_them, t_replace.
+440. **A box command ended by TERM was said as bytes dropped, after a 2 s wait** (2026-10-23, #324
+    wave 4c). Bash's own job line for a command killed by a signal lands in the nsenter stderr that
+    ns_held keeps, so ns_said took it for nsenter's: `omabox run -- sh -c 'kill -TERM $$'` said
+    "omabox: dropped 50 bytes of other output on nsenter's stderr" (bash's padded "Terminated" line
+    counted) and, the held text not empty, polled the box for 2 s before it answered. The Rust half
+    appended those same bytes to get the same count and wait (exec.rs's kill_line), said "the command
+    was killed by" only for a signal whose bash line was its own (KILL, SEGV: not TERM), and passed
+    each box call a flag saying whether bash's call sat inside a `$(...)`, where bash prints no such
+    line. **Change** (Rust over bash): only what nsenter's stderr really held is counted; run's own
+    command killed by any signal but INT and PIPE (which shells leave unsaid) is said "omabox: the
+    command was killed by SIGTERM (143)"; the box is polled only when the command failed with words
+    held, or died of SIGKILL (what a box's end does to what runs in it). The flag went from on_box's
+    55 callers. Exit codes are unchanged (CHANGELOG). A test leaned on the old wait: t_rust_parity's
+    prep for run -d --wait ran `sh -c 'pkill -f rp-w3'`, whose -f kills that sh too, and the 2 s it
+    cost let the closed window's last frames pass before the next case; the prep now waits for the
+    screen to be still. Tests: t_rust_parity ("run: by SIGTERM", an expected difference), exec.rs's
+    said_text_counts_what_was_held.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

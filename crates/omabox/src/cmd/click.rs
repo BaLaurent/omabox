@@ -41,7 +41,7 @@ pub fn pointer_tool(ctx: &Ctx, ext: &[u8], seq: &[Vec<u8>]) -> Res<i32> {
         ext.to_vec(),
     ];
     a.extend(seq.iter().cloned());
-    Ok(on_box(ctx, &a, false, Out::Inherit, ErrTo::Inherit, true)
+    Ok(on_box(ctx, &a, false, Out::Inherit, ErrTo::Inherit)
         .or_exit()?
         .rc)
 }

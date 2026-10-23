@@ -47,6 +47,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`--mod` takes its words as written** (click, drag, pointer, scroll): `*`, `?` or `[` are refused
   as modifiers. The bash omabox matched them against the current folder's file names, so `--mod '*'`
   in a folder holding a file named `ctrl` held Ctrl. Name the modifiers instead.
+- **`run`'s command killed by a signal is said, at once**: "omabox: the command was killed by
+  SIGTERM (143)" (any signal but INT and PIPE). The bash omabox counted its own "Terminated" line as
+  nsenter's, said "dropped 50 bytes of other output on nsenter's stderr" for a TERM, and waited 2 s
+  before answering. Exit codes unchanged. A script that matched "dropped N bytes" after a TERM:
+  match "was killed by", or the exit code.
 
 ## 1.0.1 — unreleased
 

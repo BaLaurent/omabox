@@ -30,7 +30,7 @@ pub struct Ptr {
 /// `out=$(on_box ARGS 2>&1) || true`, as `$(...)` has it.
 fn said(ctx: &Ctx, args: &[&[u8]]) -> (i32, Vec<u8>) {
     let a: Vec<Vec<u8>> = args.iter().map(|a| a.to_vec()).collect();
-    let r = on_box(ctx, &a, false, Out::Capture(None), ErrTo::Out, false);
+    let r = on_box(ctx, &a, false, Out::Capture(None), ErrTo::Out);
     (r.rc, shell::subst(&r.out))
 }
 

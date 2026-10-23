@@ -411,7 +411,6 @@ pub fn output_drop(ctx: &Ctx, given: &[u8]) -> Res<Vec<u8>> {
         false,
         Out::Capture(None),
         ErrTo::Out,
-        false,
     );
     let res = shell::subst(&r.out);
     if res != b"ok" {
@@ -555,7 +554,6 @@ fn output_back_one(ctx: &Ctx, rec: &[u8]) -> Res<Vec<u8>> {
         false,
         Out::Capture(None),
         ErrTo::Out,
-        false,
     );
     let mut res = shell::subst(&r.out);
     if res != b"ok" {
@@ -651,7 +649,6 @@ fn output_place_one(
         false,
         Out::Capture(None),
         ErrTo::Out,
-        false,
     );
     *res = shell::subst(&r.out);
     res == b"ok"

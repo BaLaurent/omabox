@@ -57,7 +57,6 @@ fn drag_shot(ctx: &mut Ctx, ext: &[u8], seq: &[Vec<u8>], shot: &[Vec<u8>]) -> Re
             In::Fd(in_r),
             Out::Fd(out_w),
             ErrTo::Inherit,
-            true,
             None,
         );
         r.rc

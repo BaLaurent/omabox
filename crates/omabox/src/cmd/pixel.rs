@@ -208,7 +208,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut ef, ep) = shell::mktemp()?;
     // (A window's first frame off screen can be old: captured twice, as shot does.)
     if !id.is_empty() {
-        on_box(ctx, &grim, false, Out::Null, ErrTo::Null, true).or_exit()?;
+        on_box(ctx, &grim, false, Out::Null, ErrTo::Null).or_exit()?;
     }
     let fd = f.try_clone().map_err(|_| Exit(1))?;
     let r = on_box(
@@ -217,7 +217,6 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         false,
         Out::Fd(fd.into()),
         ErrTo::Fd(ef.as_raw_fd()),
-        true,
     )
     .or_exit()?;
     // `why=$(tr '\n' ' ' < "$err" | sed 's/ *$//')`

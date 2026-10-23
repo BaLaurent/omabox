@@ -409,7 +409,6 @@ pub fn with_mods(ctx: &mut Ctx, mods: &[u8], act: impl FnOnce(&mut Ctx) -> Res<i
             In::Fd(in_r),
             Out::Fd(out_w),
             ErrTo::Inherit,
-            true,
             None,
         )
         .rc
@@ -429,7 +428,7 @@ pub fn with_mods(ctx: &mut Ctx, mods: &[u8], act: impl FnOnce(&mut Ctx) -> Res<i
     if krc != 0 {
         let mut a = kb;
         a.extend([b"-s".to_vec(), b"0".to_vec()]);
-        let _ = on_box(ctx, &a, false, Out::Null, ErrTo::Null, true);
+        let _ = on_box(ctx, &a, false, Out::Null, ErrTo::Null);
         if rc == 0 {
             rc = 1;
             say(cat!(

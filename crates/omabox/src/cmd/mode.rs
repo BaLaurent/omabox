@@ -128,7 +128,6 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             false,
             Out::Inherit,
             ErrTo::Inherit,
-            true,
         )
         .or_exit()?;
         if r.rc != 0 {
@@ -154,7 +153,6 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         false,
         Out::Capture(None),
         ErrTo::Out,
-        false,
     );
     let res = shell::subst(&r.out);
     // (audit E13: whether the box answers at all, as hyprctl says)

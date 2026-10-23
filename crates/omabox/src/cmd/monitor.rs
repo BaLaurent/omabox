@@ -324,7 +324,6 @@ fn remove(ctx: &mut Ctx, o: &[u8], interactive: bool) -> Res<()> {
         false,
         Out::Capture(None),
         ErrTo::Out,
-        false,
     );
     let res = shell::subst(&r.out);
     if res != b"ok" {
@@ -481,7 +480,6 @@ fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u8>> {
         false,
         Out::Capture(None),
         ErrTo::Out,
-        false,
     );
     let res = shell::subst(&r.out);
     if res != b"ok" {
@@ -495,7 +493,6 @@ fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u8>> {
             false,
             Out::Null,
             ErrTo::Null,
-            true,
         )
         .or_exit()?;
         monitors_write(ctx, &rest);

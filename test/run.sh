@@ -13008,6 +13008,8 @@ t_rust_parity() {
   parity "run: the box HOME from /, the session's marker left out (finding 424)" run -b "$B" -- sh -c 'pwd; echo "${OMABOX_OWN_SESSION:-none} $OMABOX $OMABOX_NAME"'
   parity "run: a command not there" run -b "$B" -- rp-no-such-command
   parity "run: killed by SIGKILL" run -b "$B" -- sh -c 'kill -KILL $$'
+  # (bash's own "Terminated" job line was counted as nsenter's, after a 2 s wait for the box: finding 440)
+  rp_why=440 rp_bash=("err=omabox: dropped 50 bytes of other output on nsenter's stderr") rp_rust=("err=omabox: the command was killed by SIGTERM (143)")
   parity "run: by SIGTERM" run -b "$B" -- sh -c 'kill -TERM $$'
   parity "run: by SIGSEGV" run -b "$B" -- sh -c 'kill -SEGV $$'
   parity "run: by SIGINT" run -b "$B" -- sh -c 'kill -INT $$'
@@ -13107,7 +13109,9 @@ t_rust_parity() {
   rp_check=rp_late_window; parity "...with --window: in the window's own coordinates (--json)" wait -b "$B" still --window rp-tick --timeout 1500ms --json
   rp_check=""
   ob run -b "$B" -- sh -c 'pkill -f rp-tick; true' >/dev/null 2>&1
-  rp_w3_kill() { ob run -b "$B" -- sh -c 'pkill -f rp-w3; true' >/dev/null 2>&1; ob wait -b "$B" window rp-w3 --gone >/dev/null 2>&1; }
+  # (then the screen still: the window's close drawn, not left to the case. pkill's sh, which its -f
+  # also kills, cost 2 s more before finding 440, which covered that)
+  rp_w3_kill() { ob run -b "$B" -- sh -c 'pkill -f rp-w3; true' >/dev/null 2>&1; ob wait -b "$B" window rp-w3 --gone >/dev/null 2>&1; ob wait -b "$B" still --timeout 5s >/dev/null 2>&1; }
   # What each side's run -d left in the box dir: its job records, the ends it noted, run's marks (their
   # pids, times and log names aside).
   local jd=$XDG_RUNTIME_DIR/omabox/$B rp_noted=0

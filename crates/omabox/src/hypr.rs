@@ -213,7 +213,6 @@ pub fn hypr_answers_in(ctx: &Ctx, secs: &str) -> Res<bool> {
         false,
         Out::Null,
         ErrTo::Null,
-        true,
     );
     Ok(r.or_exit()?.rc == 0)
 }
@@ -229,7 +228,6 @@ pub fn hypr_json(ctx: &Ctx, args: &[&str]) -> Res<Vec<u8>> {
         false,
         Out::Capture(Some(67_108_864)),
         ErrTo::Null,
-        false,
     );
     let out = if r.rc == 0 {
         shell::subst(&r.out)
@@ -257,7 +255,6 @@ pub fn hypr_errors_note(ctx: &Ctx) -> Res<bool> {
         false,
         Out::Capture(Some(65536)),
         ErrTo::Null,
-        false,
     );
     let rc = r.rc;
     let t: Vec<u8> = r

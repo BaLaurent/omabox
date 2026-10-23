@@ -199,7 +199,7 @@ fn events_size(ctx: &Ctx) -> Option<Vec<u8>> {
         b"--".to_vec(),
         EVENTS_LOG.to_vec(),
     ];
-    let r = on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Null, false);
+    let r = on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Null);
     (r.rc == 0).then(|| shell::subst(&r.out))
 }
 
@@ -488,7 +488,7 @@ fn events_from(ctx: &Ctx, rd: &Reading, from: i64) -> Vec<u8> {
             b"--".to_vec(),
             EVENTS_LOG.to_vec(),
         ];
-        on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Inherit, false).out
+        on_box(ctx, &argv, false, Out::Capture(None), ErrTo::Inherit).out
     } else {
         let p = log_dead_path(ctx, EVENTS_LOG).unwrap_or_default();
         crate::sig::command("tail")
@@ -552,7 +552,6 @@ fn follow_events(
                 crate::exec::In::Inherit,
                 Out::Fd(w),
                 ErrTo::Inherit,
-                true,
                 None,
             )
         });

@@ -198,7 +198,6 @@ impl Grab {
                 crate::exec::In::Inherit,
                 Out::Fd(to),
                 ErrTo::Fd(ef.as_raw_fd()),
-                false,
                 Some(self.pid.clone()),
             );
             return r.rc;
@@ -229,7 +228,6 @@ impl Grab {
             crate::exec::In::Inherit,
             Out::Fd(pw),
             ErrTo::Fd(ef.as_raw_fd()),
-            false,
             Some(self.pid.clone()),
         );
         let mrc = m.wait().map(|s| crate::exec::status(s).0).unwrap_or(1);
@@ -1021,7 +1019,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
                 .iter()
                 .map(|w| w.as_bytes().to_vec())
                 .collect();
-            let r = on_box(ctx, &a, false, Out::Capture(None), ErrTo::Null, false);
+            let r = on_box(ctx, &a, false, Out::Capture(None), ErrTo::Null);
             zn = zero_note(&shell::subst(&r.out), b"true", None);
         }
         // grim saying nothing (#217): how it ended, so a rare failure under load can be told apart.
@@ -1626,7 +1624,7 @@ fn burst_run(
         b"-x".to_vec(),
         BOX_BURST.as_bytes().to_vec(),
     ];
-    let one = on_box(ctx, &probe, false, Out::Inherit, ErrTo::Null, true).rc == 0;
+    let one = on_box(ctx, &probe, false, Out::Inherit, ErrTo::Null).rc == 0;
     let (mut ts, mut files): (Vec<Vec<u8>>, Vec<Vec<u8>>) = (Vec::new(), Vec::new());
     let mut act: Option<std::process::Child> = None;
     // (`f=$(printf '%s/frame-%03d.png' ...)`: printf reads the number as bash's arithmetic does,
@@ -1724,7 +1722,6 @@ fn burst_run(
                 } else {
                     ErrTo::Null
                 },
-                true,
                 None,
             );
             drop(ef);
@@ -1802,7 +1799,7 @@ fn burst_run(
         g.push(b"-".to_vec());
         // A window off screen draws on its first capture (finding 81): primed once.
         if !s.win.is_empty() {
-            let _ = on_box(ctx, &g, false, Out::Null, ErrTo::Null, true);
+            let _ = on_box(ctx, &g, false, Out::Null, ErrTo::Null);
         }
         let t0 = now_ms();
         for k in 1..=nf {
@@ -1811,15 +1808,7 @@ fn burst_run(
             let ef = std::fs::File::create(shell::path(&err)).ok();
             let rc = match (std::fs::File::create(shell::path(&fpath)), ef.as_ref()) {
                 (Ok(f), Some(e)) => {
-                    on_box(
-                        ctx,
-                        &g,
-                        false,
-                        Out::Fd(f.into()),
-                        ErrTo::Fd(e.as_raw_fd()),
-                        true,
-                    )
-                    .rc
+                    on_box(ctx, &g, false, Out::Fd(f.into()), ErrTo::Fd(e.as_raw_fd())).rc
                 }
                 _ => 1,
             };

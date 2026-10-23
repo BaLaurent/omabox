@@ -82,7 +82,6 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         false,
         Out::Inherit,
         ErrTo::Null,
-        true,
     )
     .or_exit()?;
     if t.rc != 0 {

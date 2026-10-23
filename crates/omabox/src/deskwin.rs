@@ -507,7 +507,6 @@ impl MonUndo {
                         false,
                         Out::Capture(None),
                         ErrTo::Null,
-                        false,
                     );
                     shell::subst(&r.out) == b"ok"
                 };
@@ -720,7 +719,6 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
         false,
         Out::Capture(None),
         ErrTo::Out,
-        false,
     );
     let res = shell::subst(&r.out);
     if res != b"ok" {

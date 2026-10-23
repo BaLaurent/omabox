@@ -153,7 +153,7 @@ pub fn jq_r(prog: &str, x: &[u8]) -> Vec<u8> {
 /// `out=$(on_box ARGS... 2>&1) || true`.
 fn said(ctx: &Ctx, args: &[&[u8]]) -> Vec<u8> {
     let a: Vec<Vec<u8>> = args.iter().map(|a| a.to_vec()).collect();
-    let r = on_box(ctx, &a, false, Out::Capture(None), ErrTo::Out, false);
+    let r = on_box(ctx, &a, false, Out::Capture(None), ErrTo::Out);
     shell::subst(&r.out)
 }
 

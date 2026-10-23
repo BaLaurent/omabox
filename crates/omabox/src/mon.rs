@@ -400,7 +400,6 @@ pub fn labwc_apply(ctx: &mut Ctx) -> Res<bool> {
         In::Fd(r),
         Out::Inherit,
         ErrTo::Inherit,
-        true,
         None,
     );
     let _ = feeder.join();
@@ -429,7 +428,6 @@ pub fn labwc_apply(ctx: &mut Ctx) -> Res<bool> {
         false,
         Out::Null,
         ErrTo::Null,
-        true,
     )
     .or_exit()?;
     Ok(r.rc == 0)
@@ -523,7 +521,6 @@ pub fn box_layout(ctx: &Ctx, line: Option<&[u8]>) -> Option<Vec<u8>> {
         false,
         Out::Capture(None),
         ErrTo::Out,
-        false,
     );
     let out = shell::subst(&r.out);
     let rest = out.strip_prefix(b"error: omabox-layout:")?;
@@ -582,7 +579,6 @@ pub fn monitors_place(ctx: &Ctx) -> Result<Vec<u8>, ()> {
         false,
         Out::Capture(None),
         ErrTo::Out,
-        false,
     );
     let res = shell::subst(&r.out);
     if res != b"ok" {

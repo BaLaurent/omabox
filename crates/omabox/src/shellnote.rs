@@ -41,7 +41,6 @@ pub fn shell_running(ctx: &Ctx, pid: &[u8]) -> bool {
         false,
         Out::Capture(None),
         ErrTo::Null,
-        false,
     );
     r.rc == 0 && !crate::exit::contains(&shell::subst(&r.out), b") Z ")
 }
@@ -55,7 +54,6 @@ pub fn shell_hung(ctx: &Ctx, pid: &[u8]) -> bool {
         false,
         Out::Null,
         ErrTo::Null,
-        true,
     );
     if r.rc != 124 {
         return false;
@@ -74,7 +72,6 @@ pub fn shell_hung(ctx: &Ctx, pid: &[u8]) -> bool {
         false,
         Out::Capture(None),
         ErrTo::Null,
-        false,
     );
     if age.rc != 0 {
         return false;
@@ -102,7 +99,6 @@ pub fn shell_state(ctx: &Ctx) -> &'static str {
         false,
         Out::Capture(None),
         ErrTo::Null,
-        false,
     );
     // (`[ "$(...)" -gt 0 ] 2>/dev/null`: what is no number is not more than 0)
     if shell::test_int(&shell::subst(&r.out)).is_some_and(|n| n > 0) {

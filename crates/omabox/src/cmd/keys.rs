@@ -39,7 +39,7 @@ fn keys_send(ctx: &mut Ctx, kb: &[Vec<u8>], pass: &[Vec<u8>], held: bool) -> Res
         return Err(ctx.die("could not make a pipe for the keyboard tool"));
     };
     let f = feed(w, data);
-    let ran = on_box_io(ctx, kb, In::Fd(r), Out::Inherit, ErrTo::Inherit, true, None);
+    let ran = on_box_io(ctx, kb, In::Fd(r), Out::Inherit, ErrTo::Inherit, None);
     let _ = f.join();
     Ok(ran.or_exit()?.rc)
 }

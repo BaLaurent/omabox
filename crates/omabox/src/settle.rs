@@ -430,7 +430,6 @@ impl Settle {
             false,
             Out::Inherit,
             ErrTo::Inherit,
-            true,
         )
         .or_exit()?;
         if t.rc != 0 {
@@ -467,7 +466,6 @@ impl Settle {
                     In::Fd(in_r),
                     Out::Fd(o),
                     ErrTo::Fd(err),
-                    true,
                     Some(p),
                 );
             }

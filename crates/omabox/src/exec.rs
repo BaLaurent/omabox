@@ -369,16 +369,17 @@ pub enum ErrTo {
     Fd(RawFd),
 }
 
-/// The words ns_said says, given what nsenter's stderr held, the command's end RC, and a line bash
-/// itself put there for a command killed by a signal (KILLED: one of ns_own_line's, said in its
-/// words under KILL_SAY: run's own command, #303). Its own lines whole (at most 3, printable ASCII,
-/// 400 at most), then how many bytes of anything else were dropped.
-pub fn said_text(held: &[u8], rc: i32, killed_line: bool, kill_say: bool) -> Vec<u8> {
+/// The words ns_said says, given what nsenter's stderr held and the command's end RC: its own lines
+/// whole (at most 3, printable ASCII, 400 at most), then, with KILLED (run's own command, #303), how
+/// the command was killed, then how many bytes of anything else were dropped. Only what nsenter's
+/// stderr held is counted (bash's own job line for a killed command was counted too, and its
+/// "killed by" said only when that line was its own: finding 440).
+pub fn said_text(held: &[u8], rc: i32, killed: bool) -> Vec<u8> {
     let mut lines: Vec<&[u8]> = Vec::new();
     if let Some(last) = held.iter().rposition(|&c| c == b'\n') {
         lines = held[..last].split(|&c| c == b'\n').collect();
     }
-    let (mut out, mut n, mut kept, mut killed) = (Vec::new(), 0, 0usize, false);
+    let (mut out, mut n, mut kept) = (Vec::new(), 0, 0usize);
     for l in lines {
         let l: Vec<u8> = l
             .iter()
@@ -391,10 +392,6 @@ pub fn said_text(held: &[u8], rc: i32, killed_line: bool, kill_say: bool) -> Vec
             n += 1;
             kept += l.len() + 1;
         }
-    }
-    // Bash's line for nsenter killed by a signal comes last ("SCRIPT: line N: PID Killed CMD").
-    if killed_line && n < 3 && kill_say && rc > 128 {
-        killed = true;
     }
     if killed {
         out.extend_from_slice(&cat!(
@@ -420,24 +417,6 @@ fn own_line(l: &[u8]) -> bool {
         .any(|p| l.starts_with(p.as_bytes()) && l.len() > p.len())
 }
 
-/// The line bash prints for a command of a group or subshell killed by signal SIG, as ns_held holds
-/// it: none for SIGINT and SIGPIPE; SIGTERM's is "Terminated" alone, padded, then CMD (not one of
-/// ns_own_line's: dropped and counted); the rest start with the script's name and line, which
-/// ns_kill_line takes as bash's own (KillLine::Own).
-pub enum KillLine {
-    None,
-    Bytes(Vec<u8>),
-    Own,
-}
-
-pub fn kill_line(sig: Option<i32>, cmd: &str) -> KillLine {
-    match sig {
-        None | Some(libc::SIGINT) | Some(libc::SIGPIPE) => KillLine::None,
-        Some(libc::SIGTERM) => KillLine::Bytes(format!("{:<27}{cmd}\n", "Terminated").into_bytes()),
-        Some(_) => KillLine::Own,
-    }
-}
-
 /// What a sink gets: this process's stderr, nothing, or the capture (BUF).
 fn say_to(err: ErrTo, buf: &mut Vec<u8>, m: &[u8]) {
     match err {
@@ -454,29 +433,28 @@ fn say_to(err: ErrTo, buf: &mut Vec<u8>, m: &[u8]) {
 }
 
 /// ns_said RC [WORDS]: on a box that went down meanwhile (its PID 1 can outlive the command by up to
-/// 2 s), WORDS instead (BOX_GONE_SAID), or nothing; else said_text. A box this namespace cannot read
-/// (box_alive's refusal) ends it, said where the rest would go.
+/// 2 s), WORDS instead (BOX_GONE_SAID), or nothing; else said_text. Asked only when the command
+/// failed with words held, or was killed by SIGKILL (what the box's end does to what runs in it). A
+/// command killed by SIG (but INT and PIPE, which a shell says nothing of either) is said under
+/// KILL_SAY. A box this namespace cannot read (box_alive's refusal) ends it, said where the rest
+/// would go.
 #[allow(clippy::too_many_arguments)]
 fn ns_said(
     ctx: &Ctx,
     held: &[u8],
-    killed: &KillLine,
+    sig: Option<i32>,
     rc: i32,
     words: Option<&[u8]>,
     kill_say: bool,
     err: ErrTo,
     buf: &mut Vec<u8>,
 ) -> Result<bool, u8> {
-    let mut held = held.to_vec();
-    if let KillLine::Bytes(b) = killed {
-        let room = NS_HELD_MAX.saturating_sub(held.len());
-        held.extend_from_slice(&b[..b.len().min(room)]);
-    }
-    let own = matches!(killed, KillLine::Own) && held.len() < NS_HELD_MAX;
-    if held.is_empty() && !own {
+    let killed = kill_say && sig.is_some_and(|s| s != libc::SIGINT && s != libc::SIGPIPE);
+    let box_end = sig == Some(libc::SIGKILL);
+    if held.is_empty() && !killed && !box_end {
         return Ok(false);
     }
-    if rc != 0 {
+    if rc != 0 && (!held.is_empty() || box_end) {
         for _ in 0..10 {
             match alive_quiet(ctx) {
                 Ok(true) => {}
@@ -495,7 +473,7 @@ fn ns_said(
             std::thread::sleep(Duration::from_millis(200));
         }
     }
-    say_to(err, buf, &said_text(&held, rc, own, kill_say));
+    say_to(err, buf, &said_text(held, rc, killed));
     Ok(false)
 }
 
@@ -550,19 +528,9 @@ impl Ran {
 /// user and mount namespaces with a clean environment, where every path resolves as the box sees it
 /// (finding 63). Not its pid namespace (finding 307). stdin as the caller's (or /dev/null with
 /// STDIN_NULL); stdout and stderr where OUT and ERR say.
-///
-/// REPORT: the call is not inside `$(...)`, where bash says (into nsenter's held stderr) a command
-/// killed by a signal; inside one it does not, and ns_said then has nothing to wait on.
-pub fn on_box(
-    ctx: &Ctx,
-    args: &[Vec<u8>],
-    stdin_null: bool,
-    out: Out,
-    err: ErrTo,
-    report: bool,
-) -> Ran {
+pub fn on_box(ctx: &Ctx, args: &[Vec<u8>], stdin_null: bool, out: Out, err: ErrTo) -> Ran {
     let stdin = if stdin_null { In::Null } else { In::Inherit };
-    on_box_io(ctx, args, stdin, out, err, report, None)
+    on_box_io(ctx, args, stdin, out, err, None)
 }
 
 /// on_box with its stdin any fd (settle_begin's pipe), and its nsenter's pid said in PID (`$!` of a
@@ -573,10 +541,9 @@ pub fn on_box_io(
     stdin: In,
     out: Out,
     err: ErrTo,
-    report: bool,
     pid_to: Option<Arc<AtomicI32>>,
 ) -> Ran {
-    on_box_with(ctx, args, stdin, out, err, report, pid_to, false)
+    on_box_with(ctx, args, stdin, out, err, pid_to, false)
 }
 
 /// on_box_io for what bash starts in the background (`&`, coproc, `<(...)`): SIGINT and SIGQUIT
@@ -587,10 +554,9 @@ pub fn on_box_bg(
     stdin: In,
     out: Out,
     err: ErrTo,
-    report: bool,
     pid_to: Option<Arc<AtomicI32>>,
 ) -> Ran {
-    on_box_with(ctx, args, stdin, out, err, report, pid_to, true)
+    on_box_with(ctx, args, stdin, out, err, pid_to, true)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -600,7 +566,6 @@ fn on_box_with(
     stdin: In,
     out: Out,
     err: ErrTo,
-    report: bool,
     pid_to: Option<Arc<AtomicI32>>,
     bg: bool,
 ) -> Ran {
@@ -696,11 +661,6 @@ fn on_box_with(
             };
         }
     };
-    let killed = if report {
-        kill_line(r.sig, ON_BOX_KILL_CMD)
-    } else {
-        KillLine::None
-    };
     buf = r.out;
     let words = cat!(
         "box '",
@@ -714,7 +674,7 @@ fn on_box_with(
     match ns_said(
         ctx,
         &r.held,
-        &killed,
+        r.sig,
         r.rc,
         Some(&words),
         false,
@@ -738,8 +698,6 @@ fn on_box_with(
 
 /// The inner sh of on_box: the caller's stderr (OMABOX_EFD) made the command's first thing.
 const ON_BOX_SH: &[u8] = b"case $OMABOX_EFD in *[!0-9]*) ;; *) eval \"exec 2>&$OMABOX_EFD $OMABOX_EFD>&-\" ;; esac\n      unset OMABOX_EFD; exec \"$@\"";
-/// What bash's line names for on_box's nsenter killed by a signal (ns_held's group).
-const ON_BOX_KILL_CMD: &str = "\"${args[@]}\" {w}>&- {dr}<&-";
 /// The word ns_held puts the caller's stderr's number in (the first one only).
 const EFD_WORD: &[u8] = b"OMABOX_EFD=@EFD";
 
@@ -851,16 +809,6 @@ const BOX_EXEC_SH: &str = r#"
         case ":$p:" in *":$d:"*) ;; *) [ -d "$d" ] && p=$p:$d ;; esac
       done
       unset IFS OMABOX_CALLER_PATH; set +f; PATH=$p exec -- "$@""#;
-
-/// What bash's line names for box_exec's nsenter killed by a signal (nocore's prlimit, in fds_only's
-/// subshell).
-fn box_exec_kill_cmd() -> &'static str {
-    if core_hard_zero() {
-        "\"$@\""
-    } else {
-        "prlimit --core=1: \"$@\""
-    }
-}
 
 /// box_exec's options: its stdin /dev/null, its stdout the caller's stderr (run -d's
 /// `</dev/null >&2`), an fd given it as 3 (BOX_KEEP=3, `3>&1`), and whether a command killed by a signal is said
@@ -1038,7 +986,7 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
     let fd3 = o.fd3.as_ref().map(AsRawFd::as_raw_fd);
     let rc;
     let mut held = Vec::new();
-    let mut killed = KillLine::None;
+    let mut sig = None;
     if !o.sys && isatty(src[0]) && isatty(src[1]) && fg_tty() && executable(b"/usr/bin/script") {
         rc = box_pty(&nsline, keep, fd3).map_err(|_| Exit(1))?;
     } else {
@@ -1056,7 +1004,7 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
             Ok(r) => {
                 rc = r.rc;
                 held = r.held;
-                killed = kill_line(r.sig, box_exec_kill_cmd());
+                sig = r.sig;
             }
             Err(_) => return Err(Exit(1)),
         }
@@ -1067,7 +1015,7 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
     match ns_said(
         ctx,
         &held,
-        &killed,
+        sig,
         rc,
         None,
         o.kill_say,
@@ -1545,46 +1493,38 @@ fn drain(outs: Vec<Child>) {
 mod tests {
     use super::*;
 
-    // As t_unit_box_gone checks bash's ns_said.
+    // As t_unit_box_gone checks bash's ns_said, but for what bash added (finding 440).
     #[test]
-    fn said_as_bash() {
+    fn said_text_counts_what_was_held() {
         let held =
             b"omabox: note: forged\n\x1b[31mnsenter: red\x1b[0m\nnsenter: real \x1b]0;t\x07\nhalf";
         let mut h = held.to_vec();
         h.resize(NS_HELD_MAX, b'A');
         assert_eq!(
-            String::from_utf8_lossy(&said_text(&h, 1, false, false)),
+            String::from_utf8_lossy(&said_text(&h, 1, false)),
             "nsenter: real ]0;t\nomabox: dropped 4077 bytes of other output on nsenter's stderr\n"
         );
         assert_eq!(
-            String::from_utf8_lossy(&said_text(b"nsenter: x\n", 137, true, true)),
+            String::from_utf8_lossy(&said_text(b"nsenter: x\n", 137, true)),
             "nsenter: x\nomabox: the command was killed by SIGKILL (137)\n"
         );
-        assert_eq!(said_text(b"", 137, true, false), b"");
         assert_eq!(
-            said_text(b"nsenter: a\nnsenter: b\nnsenter: c\n", 137, true, true),
-            b"nsenter: a\nnsenter: b\nnsenter: c\n"
+            String::from_utf8_lossy(&said_text(b"", 143, true)),
+            "omabox: the command was killed by SIGTERM (143)\n"
+        );
+        assert_eq!(said_text(b"", 137, false), b"");
+        assert_eq!(
+            String::from_utf8_lossy(&said_text(
+                b"nsenter: a\nnsenter: b\nnsenter: c\n",
+                137,
+                true
+            )),
+            "nsenter: a\nnsenter: b\nnsenter: c\nomabox: the command was killed by SIGKILL (137)\n"
         );
         assert_eq!(
-            said_text(b"env: x", 1, false, false),
+            said_text(b"env: x", 1, false),
             b"omabox: dropped 6 bytes of other output on nsenter's stderr\n"
         );
-    }
-
-    #[test]
-    fn kill_lines() {
-        assert!(matches!(kill_line(None, "x"), KillLine::None));
-        assert!(matches!(kill_line(Some(libc::SIGINT), "x"), KillLine::None));
-        assert!(matches!(
-            kill_line(Some(libc::SIGPIPE), "x"),
-            KillLine::None
-        ));
-        assert!(matches!(kill_line(Some(libc::SIGKILL), "x"), KillLine::Own));
-        // bash 5.3's, 50 bytes for prlimit's line (what run -- sh -c 'kill -TERM $$' says it dropped)
-        let KillLine::Bytes(b) = kill_line(Some(libc::SIGTERM), "prlimit --core=1: \"$@\"") else {
-            panic!("no line")
-        };
-        assert_eq!(b.len(), 50);
     }
 
     #[test]

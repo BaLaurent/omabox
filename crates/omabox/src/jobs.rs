@@ -812,14 +812,7 @@ pub fn job_ended(
             b"--".to_vec(),
             ex.to_vec(),
         ];
-        let r = on_box(
-            ctx,
-            &argv,
-            false,
-            Out::Capture(Some(64)),
-            ErrTo::Null,
-            false,
-        );
+        let r = on_box(ctx, &argv, false, Out::Capture(Some(64)), ErrTo::Null);
         st = shell::subst(&r.out);
         if shell::re_match("^[0-9]+$", &st) {
             break;
@@ -847,7 +840,7 @@ pub fn job_ended(
     for a in argv {
         if a.starts_with(b"/") && shell::path(a).exists() {
             let t = vec![b"test".to_vec(), b"-e".to_vec(), a.clone()];
-            if on_box(ctx, &t, false, Out::Inherit, ErrTo::Inherit, true)
+            if on_box(ctx, &t, false, Out::Inherit, ErrTo::Inherit)
                 .or_exit()?
                 .rc
                 != 0
@@ -865,14 +858,7 @@ pub fn job_ended(
         b"--".to_vec(),
         cat!("/home/sbx/", log),
     ];
-    let r = on_box(
-        ctx,
-        &t,
-        false,
-        Out::Capture(Some(65536)),
-        ErrTo::Null,
-        false,
-    );
+    let r = on_box(ctx, &t, false, Out::Capture(Some(65536)), ErrTo::Null);
     let mut tail = Vec::new();
     if !r.out.is_empty() {
         let body = r.out.strip_suffix(b"\n").unwrap_or(&r.out);
