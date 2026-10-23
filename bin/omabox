@@ -72,7 +72,9 @@ usage() {
   set -- ${args[@]+"${args[@]}"}
   if [ $# = 0 ]; then
     if [ $long = 1 ]; then usage_text | awk '/^@/ { skip = $1 == "@short"; next } !skip'; return; fi
-    usage_text | awk 'NR > 2 && $0 == "" { exit } 1'
+    # (awk reads to the end: one that left early would have usage_text's writer die of SIGPIPE once
+    # the text outgrows a pipe's 64 KiB, failing the pipeline under pipefail, 141)
+    usage_text | awk 'NR > 2 && $0 == "" { done = 1 } !done'
     printf '\n%s\n' "more: omabox help CMD (one command's options), omabox help --long (every command's notes too)"
     return
   fi
