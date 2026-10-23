@@ -8896,8 +8896,11 @@ from them.
     taking 1.5 s, three runs each: the parent ended after 1.85 s on INT, after 0.35 s, at once, on
     HUP and TERM.) Now the subshell runs in the foreground, its line to a file, and the main shell's
     INT, TERM and HUP traps only note the first one's status (130, 143, 129), which bash runs once
-    the child has returned; the command exits with it after the rule-off. `up -i --monitor` calls it
-    bare in up's shell, which waits already. Tests:
+    the child has returned; the command exits with it after the rule-off. `up -i --monitor` calls
+    `monitor_add_held` too: it called the subshell bare in up's shell, which a TERM or HUP ended at once
+    in the same way, up's EXIT trap seeing 0, so kill_box did not run, the half-started box stayed up
+    and the add drained on, detached, for a retry to share the rule with. Now up exits with the
+    signal's status after the rule-off, and its EXIT trap ends the box. Tests:
     t_monitors_window_late (new: the box's Hyprland stopped for 6 s, then killed, by the stand-in's
     Lua; it fails on the code before the fix), t_unit_monitors (`mon_answer`'s cases; the order the
     stand-ins were told things: create, removes until answered and "output not found" settled for
@@ -8906,11 +8909,13 @@ from them.
     another command changed during the drain; the four new checks fail on the first version; the
     rule off MON_FLUSH after the box's ok; a remove blocked until its limit given up on at MON_DRAIN,
     2 s there, not after HYPR_LIMIT; a HUP to the add's own group from outside while the create is
-    in flight, as `monitor add` calls it and as `up` does: removed, then the rule off. On the version
-    before, the HUP cases failed 5 times in 6 over three runs, the other two every run; an INT, a TERM
-    and a HUP to the group of `monitor add`'s call during the drain: the command returns, with 130,
-    143 or 129, only after the rule-off (TERM and HUP fail with the `$(...)` call; INT passes there
-    too); an `ok` with no window in MON_WAIT: removed, then the rule off; another add's line of the
+    in flight, as `monitor add` calls it, as `up` does and the subshell alone: removed, then the rule
+    off. On the version before, the HUP cases failed 5 times in 6 over three runs, the other two every
+    run; an INT, a TERM and a HUP to the group of `monitor add`'s call during the drain: the command
+    returns, with 130, 143 or 129, only after the rule-off (TERM and HUP fail with the `$(...)` call;
+    INT passes there too); a TERM and a HUP to the group of `up`'s call during the drain: the same,
+    and up's EXIT trap sees 143 or 129 (all four fail with the bare call: up returned before the
+    rule-off, its trap seeing 0); an `ok` with no window in MON_WAIT: removed, then the rule off; another add's line of the
     same name kept; a rule-off to a host that never answers given up on at HYPR_LIMIT, and said).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)

@@ -12661,6 +12661,8 @@ t_unit_monitors() {
     "$(pic '500 300 12' 'main 0 0 1920 1080' 'WAYLAND-2 1920 0 1920 1080' 'WAYLAND-3 3840 0 1920 1080')"
   # An interactive monitor that fails in `up` (a second --monitor): up's EXIT trap, which takes the box
   # down, still runs; monitor_add_window's own trap (the host rule off) took its place in up's shell.
+  # Called as up calls it (monitor_add_held, finding 435), with no `>/dev/null`: its exit, made under
+  # one, would have sent up's EXIT trap's output there too (this check failed so).
   mkdir -p "$d"; echo '{}' > "$d/box.json"
   out=$(bash -c 'source "$1"; D=$2 NAME=t
     meta() { echo 9; }; ws_check() { echo "$1"; }; box_pid() { echo $$; }; hypr_json() { echo "[]"; }
@@ -12670,7 +12672,7 @@ t_unit_monitors() {
     on_box() { case $* in *omabox_monitor_layout*) echo "error: omabox-layout:main 0 0 1920 1080,WAYLAND-2 1920 0 800 600" ;; *) echo ok ;; esac; }
     box_file() { :; }
     trap "echo up-trap" EXIT
-    monitor_add_window 800x600; echo "went on"' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
+    UP_LOCKED=1 monitor_add_held 800x600; echo "went on"' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
   check_match "a monitor add failing in up: up's own EXIT trap runs (it takes the box down)" "a stub.*up-trap" "$(tr '\n' ' ' <<<"$out")"
   check_fails "...and up stops there" grep -q "went on" <<<"$out"
   # An interactive add's create left unclear (finding 435): hyprctl gives up after 5 s of its own
@@ -12686,14 +12688,16 @@ t_unit_monitors() {
   # stderr is /dev/full once the rule is on (a write fails, as on a hung-up terminal), with pipe a pipe
   # whose reader is gone once the create is sent; with MC_WRITE=1 omabox.monitors is written too;
   # MC_WAIT is MON_WAIT (5). With MC_GROUP the add runs in a group of its own, called as `monitor add`
-  # calls it (cmd: monitor_add_held), as `up` does (bare), or as `monitor add` did before (sub:
-  # `line=$(monitor_add_window ...)`), and that group gets MC_SIG (HUP) from outside it, while the
+  # calls it (cmd: monitor_add_held), as `up` does (up: `UP_LOCKED=1 monitor_add_held ...`
+  # under an EXIT trap that, as up's, ends the box on a non-zero $?: the $? it saw in $d/upexit), the
+  # subshell alone (bare), or as `monitor add` did before (sub: `line=$(monitor_add_window ...)`), and
+  # that group gets MC_SIG (HUP) from outside it, while the
   # create (CREATE `hup`, 3 s) is in flight, or with MC_AT=drain once the first remove is answered;
   # INT, TERM and HUP at their defaults there (a test run in the background ignores INT).
   # shellcheck disable=SC2016 # the inner bash's
   mon_case() {   # ALIVE CREATE REMOVES...
     local alive=$1 create=$2; shift 2
-    printf '%s\n' "$@" > "$d/removes"; : > "$d/said"; : > "$d/rtimes"; : > "$d/rlims"; rm -f "$d/gone" "$d/offtime" "$d/endtime" "$d/creating" "$d/pgid"
+    printf '%s\n' "$@" > "$d/removes"; : > "$d/said"; : > "$d/rtimes"; : > "$d/rlims"; rm -f "$d/gone" "$d/offtime" "$d/endtime" "$d/creating" "$d/pgid" "$d/upexit"
     # shellcheck disable=SC2015 # the kill may fail: the case then fails on what was said
     [ -z "${MC_GROUP:-}" ] || ( for _ in $(seq 100); do
         if [ "${MC_AT:-create}" = drain ]; then [ -s "$d/rtimes" ]; else [ -e "$d/creating" ]; fi && [ -s "$d/pgid" ] && break; sleep 0.05; done
@@ -12728,6 +12732,7 @@ t_unit_monitors() {
       case $hup in
         cmd) monitor_add_held 800x600; echo "line: $MON_LINE" ;;
         sub) line=$(monitor_add_window 800x600) ;;
+        up) trap "echo \$? > \"\$D/upexit\"" EXIT; UP_LOCKED=1 monitor_add_held 800x600 ;;
         *) monitor_add_window 800x600 ;;
       esac' \
       _ "$TMP/lib/bin/omabox" "$d" "$alive" "$create" "${MON_DRAIN:-20}" "${MC_ERR:-}" "${MC_WRITE:-}" "${MC_GROUP:-}" "${MC_WAIT:-5}" 2>&1
@@ -12770,7 +12775,7 @@ t_unit_monitors() {
   # sending the group a second HUP, which killed the add outright with HUP at its default, the trap
   # never run, the rule left on: on the code before, these cases failed 5 times in 6)
   local shape
-  for shape in cmd bare; do
+  for shape in cmd up bare; do
     # (its output read to the end: the add's subshell outlives the shell the HUP ended)
     out=$(MC_GROUP=$shape mon_case 1 hup ok)
     check_eq "...a HUP to the group during the create ($shape): removed, then the rule off" \
@@ -12786,14 +12791,20 @@ t_unit_monitors() {
   check_match "...the add's message said, the command ended 130" "did not answer whether it made WAYLAND-2 .*rc=130" "$(tr '\n' ' ' <<<"$out")"
   check "...the command returned only after the rule-off ($(( ($(cat "$d/endtime") - $(cat "$d/offtime" 2>/dev/null || echo 0)) / 1000 )) ms after it)" \
     test -s "$d/offtime" -a "$(cat "$d/endtime")" -ge "$(cat "$d/offtime" 2>/dev/null || echo 0)"
+  # (and in `up -i --monitor` (up): called bare there, a TERM or HUP ended up at once, its EXIT trap
+  # seeing 0, so the half-started box stayed up while the add drained on, detached. Now up returns with
+  # the signal's status once the rule is off, and its EXIT trap, seeing that status, ends the box)
   local sig want
-  for sig in TERM HUP; do
-    want=$([ "$sig" = TERM ] && echo 143 || echo 129)
-    MC_GROUP=cmd MC_SIG=$sig MC_AT=drain mon_case 1 read read read ok > "$d/out"
-    check "...a $sig there: the same, $want ($(tail -1 "$d/out"))" test "$(tail -1 "$d/out")" = "rc=$want" -a -s "$d/offtime" -a \
-      "$(cat "$d/endtime")" -ge "$(cat "$d/offtime" 2>/dev/null || echo 0)"
-    # (a stray drain, had there been one, done before the next case)
-    for _ in $(seq 100); do [ -s "$d/offtime" ] && break; sleep 0.05; done; sleep 0.2
+  for shape in cmd up; do
+    for sig in TERM HUP; do
+      want=$([ "$sig" = TERM ] && echo 143 || echo 129)
+      MC_GROUP=$shape MC_SIG=$sig MC_AT=drain mon_case 1 read read read ok > "$d/out"
+      check "...a $sig there ($shape): the same, $want ($(tail -1 "$d/out"))" test "$(tail -1 "$d/out")" = "rc=$want" -a -s "$d/offtime" -a \
+        "$(cat "$d/endtime")" -ge "$(cat "$d/offtime" 2>/dev/null || echo 0)"
+      [ "$shape" != up ] || check_eq "...up's EXIT trap saw $want, not 0 (it ends the box on a non-zero \$?)" "$want" "$(cat "$d/upexit" 2>/dev/null)"
+      # (a stray drain, had there been one, done before the next case)
+      for _ in $(seq 100); do [ -s "$d/offtime" ] && break; sleep 0.05; done; sleep 0.2
+    done
   done
   # (an `ok` whose window never came in MON_WAIT: the output is in the box, its window free to map
   # later with the rule off; removed before the rule goes off)

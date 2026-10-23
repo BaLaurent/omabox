@@ -4681,9 +4681,12 @@ cmd_up() {
   wait_hyprland; hypr_version; qs_version
   wait_ready "$shell"
   # More monitors (#122), as `monitor add` makes them: one at a time, each placed by what the last one
-  # really became (Hyprland may round a scale), the shell giving each its bar as it comes.
+  # really became (Hyprland may round a scale), the shell giving each its bar as it comes. An
+  # interactive one held as `monitor add`'s (finding 435): a TERM or HUP waits for its rule-off, then
+  # ends up with the signal's status, so the EXIT trap ends the box. (It writes nothing on stdout: an
+  # exit under a `>/dev/null` here would send the EXIT trap's output there too.)
   for spec in "${monitors[@]}"; do
-    if [ $interactive = 1 ]; then UP_LOCKED=1 monitor_add_window "$spec" >/dev/null
+    if [ $interactive = 1 ]; then UP_LOCKED=1 monitor_add_held "$spec"
     else UP_LOCKED=1 monitor_add "$spec" "" >/dev/null; fi
   done
   # The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
@@ -12164,8 +12167,10 @@ aq_monitor_note() {
 # a retry then redefined and turned off the one host rule, and the first add's late window mapped on
 # the user's workspace, focused. Here INT, TERM and HUP are only noted (the first one's status) while
 # the subshell runs, in the foreground (bash runs a trap once the child it waits for has returned), its
-# line through a file; this shell exits with that status once the subshell is done. `up` calls
-# monitor_add_window bare in its own shell, which waits for it already.
+# line through a file; this shell exits with that status once the subshell is done. `up -i --monitor`
+# calls it too: called bare there, a TERM or HUP ended up at once as well, its EXIT trap seeing 0, so the
+# half-started box stayed up while the add drained on; this exit is up's, its EXIT trap seeing the
+# signal's status and ending the box. (up sets no INT, TERM or HUP trap of its own to put back.)
 MON_LINE="" MON_SIG=""
 monitor_add_held() {
   local out rc
