@@ -9334,6 +9334,26 @@ from them.
     under en_US.UTF-8); its fixture's box Zed is zed now, whose capital put the "up: ..." list of
     some 30 refusals in an order that hung on the suite's locale.
 
+447. **Text was read in the caller's locale** (2026-10-23, #324 wave 4c). Bash and coreutils count
+    characters as LANG and LC_* say, so under C (agents often run with LANG unset) a repo's default
+    box name was cut at 31 bytes, `keys` noted `secret N` in bytes and record's `--as` and mark text
+    were capped in bytes; `${V,,}` lowered option words with the locale's towlower (a Turkish locale
+    made `--mod SHIFT` `shıft` and a gpu of `NVIDIA` `nvıdıa`, refused); `[[:cntrl:]]`, `[[:space:]]`
+    and `grep .` followed it too (a word with one invalid byte had its C1 controls kept). The Rust
+    half copied all of it: init_locale's setlocale in bash's fallback order, mbrtowc, towlower,
+    iswcntrl, iswspace. **Change** (Rust over bash): text is UTF-8 in every locale. A character is a
+    valid UTF-8 sequence and each byte of anything else is one (cut, `${V:0:N}`, `${#V}`); controls
+    are Unicode's Cc and U+2028/U+2029 (glibc's UTF-8 class); spaces are Unicode's White_Space; a
+    line with any byte in it is not empty; option words are lowered in ASCII. omabox no longer calls
+    setlocale, so the process stays in C: its `%g` (a monitor's scale and rate) writes a dot whatever
+    LC_NUMERIC says (the Rust half's had written a comma under a pt_BR one, where bash's awk wrote a
+    dot), and system errors are said in English. A caller's own patterns (`events --grep`,
+    `--until`) still read the caller's LC_CTYPE and LC_COLLATE, chosen as bash chose them
+    (shell::caller_locale, uselocale around them), and what omabox runs inherits the caller's
+    environment as before (CHANGELOG). Tests: t_unit_rust_parity ("...by characters in C too",
+    "...in characters under LC_ALL=C too": expected differences), shell.rs's
+    cut_counts_characters_in_any_locale, length_controls_and_case_in_any_locale.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

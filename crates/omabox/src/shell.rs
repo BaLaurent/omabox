@@ -1,6 +1,6 @@
 //! What bash and coreutils do to the words bin/omabox handles, done the same way here: `$(...)`'s
-//! trailing newlines, cut, basename, printf %q, globs (in byte order), word splitting, and `=~` (glibc's regex;
-//! omabox's own patterns in the C locale, ASCII).
+//! trailing newlines, cut, basename, printf %q, globs, word splitting, and `=~`; text read as UTF-8,
+//! lists in byte order and omabox's own patterns in ASCII, whatever the locale (findings 445-447).
 
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -49,226 +49,105 @@ pub fn epoch_ns() -> Vec<u8> {
     format!("{}{:09}", t.as_secs(), t.subsec_nanos()).into_bytes()
 }
 
-/// `$(printf '%s' "$V" | cut -c1-N)`: each line's first N characters. coreutils 9.12's cut counts
-/// characters in a multibyte locale (#324: 9.x stopped counting bytes there), as mbrtowc reads them
-/// in the caller's locale, a byte that starts none (invalid, cut short) counted as one; in a
-/// single-byte one (C, POSIX) bytes.
+// Text is read as UTF-8 whatever the locale (finding 447): a character is a valid UTF-8 sequence
+// (no overlong form, no surrogate, nothing past U+10FFFF), and each byte of anything else is one.
+// Bash and coreutils read text in the caller's locale: bytes under C, and glibc's own rules under a
+// UTF-8 one.
+
+/// `$(printf '%s' "$V" | cut -c1-N)`: each line's first N characters.
 pub fn cut_c(v: &[u8], n: usize) -> Vec<u8> {
-    let out: Vec<&[u8]> = v
-        .split(|&c| c == b'\n')
-        .map(|l| chars(l, n, true))
-        .collect();
+    let out: Vec<&[u8]> = v.split(|&c| c == b'\n').map(|l| chars(l, n)).collect();
     strip_nl(&out.join(&b'\n'))
 }
 
-/// `${V:0:N}`: the first N characters, as bash reads them (glibc's mbrtowc in the locale), a byte
-/// that starts none counted as one.
+/// `${V:0:N}`: the first N characters.
 pub fn head_chars(v: &[u8], n: usize) -> &[u8] {
-    chars(v, n, false)
+    chars(v, n)
 }
 
 /// `cut -c1-N` of one line (no newline in it).
 pub fn cut_line(l: &[u8], n: usize) -> &[u8] {
-    chars(l, n, true)
+    chars(l, n)
 }
 
-/// The first N characters of V. CUT: as coreutils' mcel reads one, which takes none past U+10FFFF
-/// (glibc's mbrtowc takes up to 0x7FFFFFFF: bash's substring counts those as one).
-fn chars(v: &[u8], n: usize, cut: bool) -> &[u8] {
+/// The first N characters of V.
+fn chars(v: &[u8], n: usize) -> &[u8] {
     let (mut i, mut k) = (0, 0);
     while i < v.len() && k < n {
-        i += mb_len(&v[i..], cut);
+        i += char_len(&v[i..]);
         k += 1;
     }
     &v[..i]
 }
 
-unsafe extern "C" {
-    fn mbrtowc(
-        pwc: *mut libc::wchar_t,
-        s: *const libc::c_char,
-        n: libc::size_t,
-        ps: *mut libc::mbstate_t,
-    ) -> libc::size_t;
-    fn __ctype_get_mb_cur_max() -> libc::size_t;
-    fn wcrtomb(s: *mut libc::c_char, wc: libc::wchar_t, ps: *mut libc::mbstate_t) -> libc::size_t;
-    fn iswcntrl(wc: u32) -> libc::c_int;
-    fn towlower(wc: u32) -> u32;
+/// The length of the character V starts with: its UTF-8 sequence's, or 1 for a byte that starts
+/// none (and for an empty V).
+fn char_len(v: &[u8]) -> usize {
+    match v.first() {
+        Some(0x80..) => match utf8_len(v) {
+            0 => 1,
+            n => n,
+        },
+        _ => 1,
+    }
 }
 
-/// Whether the locale's characters may take more than a byte.
-fn multibyte() -> bool {
-    // SAFETY: reads the current locale's constant.
-    unsafe { __ctype_get_mb_cur_max() > 1 }
+/// V's characters, each as its bytes and the char it is (None for a byte that starts none).
+fn u8_chars(v: &[u8]) -> impl Iterator<Item = (&[u8], Option<char>)> {
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        if i >= v.len() {
+            return None;
+        }
+        let n = char_len(&v[i..]);
+        let b = &v[i..i + n];
+        i += n;
+        let c = std::str::from_utf8(b).ok().and_then(|s| s.chars().next());
+        Some((b, c))
+    })
 }
 
-/// A line `grep .` matches: one character at least, as the locale reads them (a line of bytes that
-/// start none matches nothing in a multibyte locale).
+/// A line `grep .` matches: one character at least (a byte that starts none is one).
 pub fn grep_dot(l: &[u8]) -> bool {
-    if l.is_empty() {
-        return false;
-    }
-    if !multibyte() {
-        return true;
-    }
-    mb_chars(l).iter().any(|(c, _)| c.is_some())
+    !l.is_empty()
 }
 
-/// `printf '%s\n' "$V" | grep .`'s lines, as `$(...)` keeps them: V's lines grep . matches, joined.
+/// `printf '%s\n' "$V" | grep .`'s lines, as `$(...)` keeps them: V's lines that are not empty.
 pub fn grep_lines(v: &[u8]) -> Vec<u8> {
     let kept: Vec<&[u8]> = v.split(|&c| c == b'\n').filter(|l| grep_dot(l)).collect();
     kept.join(&b'\n')
 }
 
-/// `${#V}`: V's length in characters as bash counts them (a byte that starts none is one).
+/// `${#V}`: V's length in characters.
 pub fn char_count(v: &[u8]) -> usize {
-    let (mut i, mut k) = (0, 0);
-    while i < v.len() {
-        i += mb_len(&v[i..], false);
-        k += 1;
-    }
-    k
+    u8_chars(v).count()
 }
 
-/// Each character of V as bash's pattern matching reads it, with its bytes: Some(wide character),
-/// or None for a byte that starts none; bytes alone in a single-byte locale.
-fn mb_chars(v: &[u8]) -> Vec<(Option<u32>, &[u8])> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    let multi = multibyte();
-    while i < v.len() {
-        if !multi {
-            out.push((None, &v[i..=i]));
-            i += 1;
-            continue;
-        }
-        // SAFETY: an mbstate_t of zeroes is the initial state; v[i..] is valid for its length.
-        let (r, wc) = unsafe {
-            let mut st: libc::mbstate_t = std::mem::zeroed();
-            let mut wc: libc::wchar_t = 0;
-            let r = mbrtowc(&mut wc, v[i..].as_ptr().cast(), v.len() - i, &mut st);
-            (r, wc)
-        };
-        let n = match r {
-            0 => 1,
-            r if r > v.len() - i => {
-                out.push((None, &v[i..=i]));
-                i += 1;
-                continue;
-            }
-            r => r,
-        };
-        out.push((Some(wc as u32), &v[i..i + n]));
-        i += n;
-    }
-    out
-}
-
-/// A wide character in the locale's bytes (wcrtomb); None when it has none there.
-fn wc_bytes(wc: u32) -> Option<Vec<u8>> {
-    let mut buf = [0u8; 16];
-    // SAFETY: buf holds MB_LEN_MAX (16) bytes; an mbstate_t of zeroes is the initial state.
-    let n = unsafe {
-        let mut st: libc::mbstate_t = std::mem::zeroed();
-        wcrtomb(buf.as_mut_ptr().cast(), wc as libc::wchar_t, &mut st)
-    };
-    (n <= buf.len()).then(|| buf[..n].to_vec())
-}
-
-/// `${V//[[:cntrl:]]/ }`: each control character (the locale's) a space. A V with a byte that starts
-/// no character is matched byte by byte, as bash falls back to then (iscntrl: none past 0x7f).
+/// `${V//[[:cntrl:]]/ }`: each control character a space: C0, DEL and C1 (Unicode's Cc), and the
+/// line and paragraph separators U+2028 and U+2029, as glibc's UTF-8 locales class them.
 pub fn cntrl_to_space(v: &[u8]) -> Vec<u8> {
-    let cs = mb_chars(v);
-    let wide = multibyte() && cs.iter().all(|(c, _)| c.is_some());
-    let mut out = Vec::with_capacity(v.len());
-    if !wide {
-        for &b in v {
-            // SAFETY: iscntrl reads the locale's tables only.
-            let ctl = unsafe { libc::iscntrl(libc::c_int::from(b)) != 0 };
-            out.push(if ctl { b' ' } else { b });
-        }
-        return out;
-    }
-    for (c, b) in cs {
-        // SAFETY: iswcntrl reads the locale's tables only.
-        if c.is_some_and(|wc| unsafe { iswcntrl(wc) != 0 }) {
-            out.push(b' ');
-        } else {
-            out.extend_from_slice(b);
-        }
-    }
-    out
+    chars_map(v, |b| {
+        let ctl = match std::str::from_utf8(b).ok().and_then(|s| s.chars().next()) {
+            Some(c) => c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'),
+            None => false,
+        };
+        if ctl { b" ".to_vec() } else { b.to_vec() }
+    })
 }
 
-/// `${V//PATTERN/...}` with a one-character PATTERN: each character of V (as bash's pattern
-/// matching reads it in the locale) through F, its bytes given; a V with a byte that starts no
-/// character is taken byte by byte, as bash falls back to then.
+/// `${V//PATTERN/...}` with a one-character PATTERN: each character of V through F, its bytes given.
 pub fn chars_map(v: &[u8], f: impl Fn(&[u8]) -> Vec<u8>) -> Vec<u8> {
-    let cs = mb_chars(v);
-    let wide = multibyte() && cs.iter().all(|(c, _)| c.is_some());
     let mut out = Vec::with_capacity(v.len());
-    if !wide {
-        for b in v.chunks(1) {
-            out.extend(f(b));
-        }
-        return out;
-    }
-    for (_, b) in cs {
+    for (b, _) in u8_chars(v) {
         out.extend(f(b));
     }
     out
 }
 
-/// `${V,,}`: V in lower case, as the locale's towlower (tolower) has each character.
+/// `${V,,}` of an option's word: its ASCII letters in lower case, the rest as it is (bash's followed
+/// the locale: a Turkish one made `SHIFT` `shıft`).
 pub fn lower(v: &[u8]) -> Vec<u8> {
-    let multi = multibyte();
-    let mut out = Vec::with_capacity(v.len());
-    for (c, b) in mb_chars(v) {
-        match c {
-            Some(wc) => {
-                // SAFETY: towlower reads the locale's tables only.
-                let l = unsafe { towlower(wc) };
-                match (l != wc).then(|| wc_bytes(l)).flatten() {
-                    Some(lb) => out.extend(lb),
-                    None => out.extend_from_slice(b),
-                }
-            }
-            None if multi => out.push(b[0]),
-            None => {
-                // SAFETY: tolower reads the locale's tables only.
-                let l = unsafe { libc::tolower(libc::c_int::from(b[0])) };
-                out.push(u8::try_from(l).unwrap_or(b[0]));
-            }
-        }
-    }
-    out
-}
-
-/// The length of the character V starts with, in the locale init_locale set: 1 in a single-byte
-/// locale, for a NUL, and for a byte that starts no character there.
-fn mb_len(v: &[u8], cut: bool) -> usize {
-    // (cut's own setlocale(LC_ALL, "") failing leaves it in C: bytes, whatever bash set)
-    let c_locale = cut && !LOCALE_WHOLE.load(std::sync::atomic::Ordering::Relaxed);
-    // SAFETY: reads the current locale's constant.
-    if v.is_empty() || c_locale || unsafe { __ctype_get_mb_cur_max() } <= 1 {
-        return 1;
-    }
-    // SAFETY: an mbstate_t of zeroes is the initial state; v is valid for v.len() bytes; wc is ours.
-    let r = unsafe {
-        let mut st: libc::mbstate_t = std::mem::zeroed();
-        let mut wc: libc::wchar_t = 0;
-        let r = mbrtowc(&mut wc, v.as_ptr().cast(), v.len(), &mut st);
-        if cut && wc as u32 > 0x10ffff {
-            usize::MAX
-        } else {
-            r
-        }
-    };
-    match r {
-        0 => 1,
-        r if r > v.len() => 1, // (size_t)-1, -2, or past U+10FFFF for cut: no character there
-        r => r,
-    }
+    v.to_ascii_lowercase()
 }
 
 /// `$(basename "$V")`.
@@ -390,17 +269,9 @@ pub fn subst(v: &[u8]) -> Vec<u8> {
     strip_nl(&kept)
 }
 
-unsafe extern "C" {
-    fn iswspace(c: u32) -> libc::c_int;
-}
-
-/// `[ -z "${V//[[:space:]]/}" ]` in the user's locale: V holds nothing but spaces (iswspace).
+/// `[ -z "${V//[[:space:]]/}" ]`: V holds nothing but white space (Unicode's White_Space), as UTF-8.
 pub fn all_space(v: &[u8]) -> bool {
-    match std::str::from_utf8(v) {
-        // SAFETY: iswspace only classifies the value.
-        Ok(s) => s.chars().all(|c| unsafe { iswspace(c as u32) } != 0),
-        Err(_) => false,
-    }
+    std::str::from_utf8(v).is_ok_and(|s| s.chars().all(char::is_whitespace))
 }
 
 /// `$PWD` as bash has it: the inherited one while it names this directory, else getcwd's.
@@ -465,24 +336,18 @@ pub fn read_ifs(v: &[u8], n: usize, ifs: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-/// Whether the whole of setlocale(LC_ALL, "") took (coreutils' own start: cut counts bytes where it
-/// did not).
-static LOCALE_WHOLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
-
-/// The categories bash sets one by one (locale.c's reset_locale_vars).
-const CATEGORIES: [(libc::c_int, &str); 5] = [
+/// The categories a caller's pattern reads (bash sets these and LC_MESSAGES, LC_NUMERIC, LC_TIME one
+/// by one: locale.c's reset_locale_vars).
+const CATEGORIES: [(libc::c_int, &str); 2] = [
     (libc::LC_CTYPE, "LC_CTYPE"),
     (libc::LC_COLLATE, "LC_COLLATE"),
-    (libc::LC_MESSAGES, "LC_MESSAGES"),
-    (libc::LC_NUMERIC, "LC_NUMERIC"),
-    (libc::LC_TIME, "LC_TIME"),
 ];
 
-/// The locale as bash sets it at its start (glob order, `=~`, `${V:0:N}` follow it): setlocale(LC_ALL,
-/// "") first; where that fails as a whole (one category's name no locale), LC_ALL's value for every
-/// category when it is set; else LANG's for every one, then each category's own LC_* over it, one
-/// by one (one that fails keeps LANG's). LANG no locale either: C. GET reads the environment, SET is
-/// setlocale's; true when the first call took.
+/// The locale as bash sets it at its start: setlocale(LC_ALL, "") first; where that fails as a whole
+/// (one category's name no locale), LC_ALL's value for every category when it is set; else LANG's
+/// for every one, then each category's own LC_* over it, one by one (one that fails keeps LANG's).
+/// LANG no locale either: C. GET reads the environment, SET makes the locale; true when the first
+/// call took.
 pub fn bash_locale(
     get: &dyn Fn(&str) -> Option<Vec<u8>>,
     set: &mut dyn FnMut(libc::c_int, &[u8]) -> bool,
@@ -506,18 +371,36 @@ pub fn bash_locale(
     false
 }
 
-/// Sets the locale from the environment, as bash does at its start (bash_locale).
-pub fn init_locale() {
-    let get = |k: &str| env(k);
-    let mut set = |c: libc::c_int, v: &[u8]| -> bool {
-        let Ok(v) = CString::new(v.to_vec()) else {
-            return false;
+/// The caller's locale, for a caller's own pattern only (`events --grep`, `--until`: its syntax the
+/// contract), its character classes and ranges as bash's `=~` read them (bash_locale, for LC_CTYPE
+/// and LC_COLLATE). Nothing else in omabox reads a locale: the process stays in C (finding 447).
+fn caller_locale() -> libc::locale_t {
+    static L: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *L.get_or_init(|| {
+        let mut cur: libc::locale_t = std::ptr::null_mut();
+        let get = |k: &str| env(k);
+        let mut set = |c: libc::c_int, v: &[u8]| -> bool {
+            let mask = match c {
+                libc::LC_ALL => libc::LC_CTYPE_MASK | libc::LC_COLLATE_MASK,
+                libc::LC_CTYPE => libc::LC_CTYPE_MASK,
+                libc::LC_COLLATE => libc::LC_COLLATE_MASK,
+                _ => return true,
+            };
+            let Ok(v) = CString::new(v.to_vec()) else {
+                return false;
+            };
+            // SAFETY: v is a valid C string; cur is null or a locale newlocale made, which a call
+            // that fails leaves as it was and one that succeeds takes over.
+            let n = unsafe { libc::newlocale(mask, v.as_ptr(), cur) };
+            if n.is_null() {
+                return false;
+            }
+            cur = n;
+            true
         };
-        // SAFETY: called at the start, before any other thread; v is a valid C string.
-        unsafe { !libc::setlocale(c, v.as_ptr()).is_null() }
-    };
-    let whole = bash_locale(&get, &mut set);
-    LOCALE_WHOLE.store(whole, std::sync::atomic::Ordering::Relaxed);
+        bash_locale(&get, &mut set);
+        (if cur.is_null() { c_locale() } else { cur }) as usize
+    }) as libc::locale_t
 }
 
 /// `"$DIR"/*` (or `*/` with `dirs`): the names of DIR's entries but hidden ones, in byte order (bash's
@@ -619,10 +502,11 @@ pub fn env_or_empty(name: &str) -> Vec<u8> {
 /// A POSIX extended regular expression (glibc's, as bash's `=~`). omabox's own patterns (Re::new)
 /// are compiled and matched in the C locale, so `[0-9]` is the ten ASCII digits and `[A-Za-z]` the
 /// ASCII letters whatever the caller's locale (finding 445: in en_US.UTF-8 bash's took `²` and
-/// `é`), and `.` takes any byte; a caller's own (Re::from_bytes: `events --grep`) in the process's.
+/// `é`), and `.` takes any byte; a caller's own (Re::from_bytes: `events --grep`) in the caller's
+/// (caller_locale).
 pub struct Re {
     re: Box<libc::regex_t>,
-    c: bool,
+    loc: libc::locale_t,
 }
 
 /// The C locale, for omabox's own patterns.
@@ -634,18 +518,17 @@ fn c_locale() -> libc::locale_t {
     }) as libc::locale_t
 }
 
-/// This thread in the C locale while it lives (uselocale), when ON; its own given back on drop.
-struct InC(Option<libc::locale_t>);
+/// This thread in a locale while it lives (uselocale), its own given back on drop.
+struct InLocale(Option<libc::locale_t>);
 
-impl InC {
-    fn new(on: bool) -> InC {
-        let c = c_locale();
-        // SAFETY: c is a valid locale (or null: then nothing is switched).
-        InC((on && !c.is_null()).then(|| unsafe { libc::uselocale(c) }))
+impl InLocale {
+    fn new(loc: libc::locale_t) -> InLocale {
+        // SAFETY: loc is a valid locale (or null: then nothing is switched).
+        InLocale((!loc.is_null()).then(|| unsafe { libc::uselocale(loc) }))
     }
 }
 
-impl Drop for InC {
+impl Drop for InLocale {
     fn drop(&mut self) {
         if let Some(old) = self.0 {
             // SAFETY: the locale this thread had before new.
@@ -657,24 +540,24 @@ impl Drop for InC {
 impl Re {
     /// One of omabox's own patterns, ASCII in every locale.
     pub fn new(pattern: &str) -> Option<Re> {
-        Re::compile(pattern.as_bytes(), false, true)
+        Re::compile(pattern.as_bytes(), false, c_locale())
     }
 
     /// A pattern from bytes (a caller's `[[ x =~ $re ]]`), in the caller's locale; ICASE as under
     /// `shopt -s nocasematch`. None where regcomp refuses it (bash's status 2).
     pub fn from_bytes(pattern: &[u8], icase: bool) -> Option<Re> {
-        Re::compile(pattern, icase, false)
+        Re::compile(pattern, icase, caller_locale())
     }
 
-    fn compile(pattern: &[u8], icase: bool, c: bool) -> Option<Re> {
+    fn compile(pattern: &[u8], icase: bool, loc: libc::locale_t) -> Option<Re> {
         let pat = CString::new(pattern).ok()?;
         // SAFETY: regex_t is plain data that regcomp fills in; zeroed is a valid starting value.
         let mut re: Box<libc::regex_t> = Box::new(unsafe { std::mem::zeroed() });
         let flags = libc::REG_EXTENDED | if icase { libc::REG_ICASE } else { 0 };
-        let _in = InC::new(c);
+        let _in = InLocale::new(loc);
         // SAFETY: re points to a regex_t we own; pat is a valid C string.
         let rc = unsafe { libc::regcomp(&mut *re, pat.as_ptr(), flags) };
-        (rc == 0).then_some(Re { re, c })
+        (rc == 0).then_some(Re { re, loc })
     }
 
     /// The whole match and each group's, as byte ranges of `s` (None for a group that took no
@@ -687,7 +570,7 @@ impl Re {
         let flags = libc::REG_STARTEND | if notbol { libc::REG_NOTBOL } else { 0 };
         // A non-null pointer for an empty subject: REG_STARTEND reads nothing past rm_eo.
         let base: &[u8] = if s.is_empty() { b"\0" } else { s };
-        let _in = InC::new(self.c);
+        let _in = InLocale::new(self.loc);
         // SAFETY: the regex is compiled; base is valid for rm_eo bytes; m has N entries.
         let rc =
             unsafe { libc::regexec(&*self.re, base.as_ptr().cast(), N, m.as_mut_ptr(), flags) };
@@ -812,35 +695,33 @@ mod tests {
         assert!(ns.len() >= 19 && ns.iter().all(u8::is_ascii_digit));
     }
 
-    // What coreutils 9.12's `cut -c` gave for each, in en_US.UTF-8 and in C.
+    // What coreutils 9.12's `cut -c` gave for each in a UTF-8 locale, now in every locale (finding
+    // 447: under C it cut bytes).
     #[test]
-    fn cut_counts_characters_in_utf8() {
-        let _l = ThreadLocale::new(c"C.UTF-8");
-        assert_eq!(cut_c(b"abcdef", 3), b"abc");
-        assert_eq!(cut_c(b"abcdef\nxyzw", 2), b"ab\nxy");
-        assert_eq!(cut_c("é".as_bytes(), 1), "é".as_bytes());
-        assert_eq!(cut_c("aéb\nbéc".as_bytes(), 2), "aé\nbé".as_bytes());
-        // A byte that starts no character is one; a sequence cut short, a byte each.
-        assert_eq!(cut_c(b"a\xffb", 2), b"a\xff");
-        assert_eq!(cut_c(b"x\xe2\x82y", 2), b"x\xe2");
-        assert_eq!(cut_c(b"x\xe2\x82y", 3), b"x\xe2\x82");
-        // Overlong, a surrogate, past U+10FFFF: no character; a 4-byte one is one.
-        assert_eq!(cut_c(b"\xc0\x80z", 1), b"\xc0");
-        assert_eq!(cut_c(b"\xed\xa0\x80z", 1), b"\xed");
-        assert_eq!(cut_c(b"\xf4\x90\x80\x80z", 1), b"\xf4");
-        assert_eq!(cut_c(b"\xf8\x88\x80\x80\x80z", 1), b"\xf8");
-        // (bash's substring takes glibc's word for it)
-        assert_eq!(head_chars(b"\xf4\x90\x80\x80z", 1), b"\xf4\x90\x80\x80");
-        assert_eq!(head_chars(b"x\xe2\x82y", 2), b"x\xe2");
-        assert_eq!(cut_c("\u{1f600}z".as_bytes(), 1), "\u{1f600}".as_bytes());
-        // A combining mark is a character of its own; a NUL is one.
-        assert_eq!(cut_c("e\u{301}z".as_bytes(), 2), "e\u{301}".as_bytes());
-        assert_eq!(cut_c(b"ab\0cd", 3), b"ab\0");
-        drop(_l);
-        let _c = ThreadLocale::new(c"C");
-        assert_eq!(cut_c("é".as_bytes(), 1), b"\xc3");
-        assert_eq!(cut_c("aéb".as_bytes(), 2), b"a\xc3");
-        assert_eq!(head_chars("é".as_bytes(), 1), b"\xc3");
+    fn cut_counts_characters_in_any_locale() {
+        for loc in [c"C.UTF-8", c"C"] {
+            let _l = ThreadLocale::new(loc);
+            assert_eq!(cut_c(b"abcdef", 3), b"abc");
+            assert_eq!(cut_c(b"abcdef\nxyzw", 2), b"ab\nxy");
+            assert_eq!(cut_c("é".as_bytes(), 1), "é".as_bytes());
+            assert_eq!(cut_c("aéb\nbéc".as_bytes(), 2), "aé\nbé".as_bytes());
+            // A byte that starts no character is one; a sequence cut short, a byte each.
+            assert_eq!(cut_c(b"a\xffb", 2), b"a\xff");
+            assert_eq!(cut_c(b"x\xe2\x82y", 2), b"x\xe2");
+            assert_eq!(cut_c(b"x\xe2\x82y", 3), b"x\xe2\x82");
+            // Overlong, a surrogate, past U+10FFFF: no character; a 4-byte one is one.
+            assert_eq!(cut_c(b"\xc0\x80z", 1), b"\xc0");
+            assert_eq!(cut_c(b"\xed\xa0\x80z", 1), b"\xed");
+            assert_eq!(cut_c(b"\xf4\x90\x80\x80z", 1), b"\xf4");
+            assert_eq!(cut_c(b"\xf8\x88\x80\x80\x80z", 1), b"\xf8");
+            assert_eq!(head_chars(b"\xf4\x90\x80\x80z", 1), b"\xf4");
+            assert_eq!(head_chars(b"x\xe2\x82y", 2), b"x\xe2");
+            assert_eq!(cut_c("\u{1f600}z".as_bytes(), 1), "\u{1f600}".as_bytes());
+            // A combining mark is a character of its own; a NUL is one.
+            assert_eq!(cut_c("e\u{301}z".as_bytes(), 2), "e\u{301}".as_bytes());
+            assert_eq!(cut_c(b"ab\0cd", 3), b"ab\0");
+            assert_eq!(head_chars("é".as_bytes(), 1), "é".as_bytes());
+        }
     }
 
     /// A locale for this test's thread alone (uselocale), the thread's own given back on drop: the
@@ -868,26 +749,25 @@ mod tests {
         }
     }
 
-    // What bash 5.3 gave for each, in C.UTF-8 and in C.
+    // What bash 5.3 gave for each in C.UTF-8, now in every locale (finding 447); case only for ASCII
+    // letters (a Turkish locale's towlower made `I` `ı`).
     #[test]
-    fn length_controls_and_case_as_bash() {
+    fn length_controls_and_case_in_any_locale() {
         let t = b"a\x01\xff\xc2\x85b\x7f\xe2\x80\xa8";
-        let x = b"\xc3\x89\xc4\xb0A\xff\xe1\xba\x9e";
-        {
-            let _l = ThreadLocale::new(c"C.UTF-8");
+        let x = b"\xc3\x89\xc4\xb0A\xff\xe1\xba\x9eSHIFT";
+        for loc in [c"C.UTF-8", c"C"] {
+            let _l = ThreadLocale::new(loc);
             assert_eq!(char_count(t), 7);
-            assert_eq!(cntrl_to_space(t), b"a \xff\xc2\x85b \xe2\x80\xa8");
+            // (bash, a byte that starts none in it, matched byte by byte and kept U+0085)
+            assert_eq!(cntrl_to_space(t), b"a \xff b  ");
             assert_eq!(cntrl_to_space(b"\xc2\x85\x01\xe2\x80\xa8"), b"   ");
             assert_eq!(
                 cntrl_to_space(b"\xe2\x80\x8b\xc2\xad"),
                 b"\xe2\x80\x8b\xc2\xad"
             );
-            assert_eq!(lower(x), b"\xc3\xa9ia\xff\xc3\x9f");
+            assert_eq!(lower(x), b"\xc3\x89\xc4\xb0a\xff\xe1\xba\x9eshift");
+            assert_eq!(grep_lines(b"a\n\n\xff\nb"), b"a\n\xff\nb");
         }
-        let _l = ThreadLocale::new(c"C");
-        assert_eq!(char_count(t), 10);
-        assert_eq!(cntrl_to_space(t), b"a \xff\xc2\x85b \xe2\x80\xa8");
-        assert_eq!(lower(x), b"\xc3\x89\xc4\xb0a\xff\xe1\xba\x9e");
     }
 
     #[test]
@@ -953,11 +833,10 @@ mod tests {
 
     #[test]
     fn characters_and_spaces() {
-        let _l = ThreadLocale::new(c"C.UTF-8");
         assert_eq!(head_chars("ééé".as_bytes(), 2), "éé".as_bytes());
         assert_eq!(head_chars(b"\xff\xfeab", 3), b"\xff\xfea");
-        drop(_l);
         assert!(all_space(b" \t\n\x0b"));
+        assert!(all_space("\u{a0}\u{3000}\u{2028}".as_bytes()));
         assert!(!all_space(b" x"));
         assert!(!all_space(b"\xff"));
         assert_eq!(subst(b"a\0b\n\n"), b"ab");

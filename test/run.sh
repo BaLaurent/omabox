@@ -3341,9 +3341,12 @@ t_unit_rust_parity() {
   rp_dir=$long; parity "a long repo name cut to fit the suffix" path
   rp_env=(); parity "...and to 40 without one" env
   # coreutils 9.12's cut -c counts characters in a multibyte locale, bytes in C; a byte that starts
-  # none (invalid UTF-8) is one, as is each byte of a sequence cut short.
+  # none (invalid UTF-8) is one, as is each byte of a sequence cut short. The Rust half reads UTF-8
+  # in every locale (finding 447): under C bash's cut 31 bytes (ten é, 9 x), the Rust half 31
+  # characters (19 x, its suffix past the 40 bytes tr's dashes leave).
   rp_dir=$mb rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=C.UTF-8); parity "a repo name not ASCII: cut by characters (UTF-8)" path
-  rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=C); parity "...by bytes in C" path
+  rp_why=447 rp_bash=("out~/ab-{20}x{9}-$s8\$") rp_rust=("out~/ab-{20}x{18}\$")
+  rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=C); parity "...by characters in C too" path
   rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=); parity "...in the caller's own locale" path
   rp_dir=$bad rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=C.UTF-8); parity "...invalid UTF-8: a byte each" path
   rp_env=()
@@ -4072,6 +4075,9 @@ EOF
   check "the stand-in peek window is up" grep -qa "^$ROOT/tools/peek/omabox-peek " "/proc/$rpeek/cmdline"
   rp_rec() { : > "$r/rt/omabox/fk/record"; }; rp3_pre=(rp_rec)
   parity "keys: marks for peek and the recording, a secret as its length" keys -b fk -t $'a\tb\x01c' --pass RPSEC -t '' alt+F4 -s 1s
+  # (bash counted the secret's bytes under LC_ALL=C, é two; the Rust half reads UTF-8: finding 447)
+  rp_why=447 rp_bash=('state~secret 7$') rp_rust=('state~secret 6$')
+  rp_env+=(LC_ALL=C); parity "...in characters under LC_ALL=C too" keys -b fk --pass RPSEC alt+F4; unset 'rp_env[-1]'
   rp_glide() { rp_rec; echo 400 > "$r/rt/omabox/fk/record.glide"; }; rp3_pre=(rp_glide)
   parity "click: a recording's glide, its moves recorded" click -b fk 100 200
   parity "pointer: the recording's glide too" pointer -b fk -- move 100 200 click

@@ -85,6 +85,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `check run`'s checkpoints, `ports` and `gpu`'s rows. The bash omabox followed the locale's
   collation, so under en_US.UTF-8 `a` came before `B`, under C after it. Scripts that sorted the
   output themselves: nothing to change.
+- **Text is read as UTF-8 whatever the locale**: the default box name of a repo with non-ASCII
+  letters, `keys`' notes (`secret N`) and `record`'s `--as` and mark lengths come out the same under
+  LANG=C as under a UTF-8 locale (the bash omabox counted bytes under C), and option words are
+  lowered the same way in every locale (a Turkish locale refused `--mod SHIFT`). A monitor's scale
+  and rate are written with a dot whatever LC_NUMERIC says, and a system error in omabox's message
+  in English. `events --grep` and `--until` still read your pattern in your locale. Scripts:
+  nothing to change.
 
 ## 1.0.1 — unreleased
 

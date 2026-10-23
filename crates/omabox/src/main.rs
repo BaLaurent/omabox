@@ -53,7 +53,8 @@ type Run = fn(&mut exit::Ctx, &[Vec<u8>]) -> exit::Res<()>;
 fn main() -> ExitCode {
     // As bash: a write to a closed pipe ends the command (Rust ignores SIGPIPE), unless SIGPIPE came
     // ignored: bash keeps it so, for itself and what it runs (sig::command gives the children it
-    // back: std's spawn resets it); glob order and `=~` follow the locale.
+    // back: std's spawn resets it). No setlocale: text is UTF-8 and lists byte order in every locale
+    // (findings 445-447).
     if !sig::pipe_ignored() {
         // SAFETY: at the start, before any other thread; SIG_DFL is a valid disposition.
         unsafe {
@@ -65,7 +66,6 @@ fn main() -> ExitCode {
     // that came ignored stays ignored, for it and its children (sig::catch leaves it).
     sig::catch(libc::SIGQUIT, quit_ignored);
     sig::set_main();
-    shell::init_locale();
     // What bash's hand-off adds to the environment is this call's, not its children's (bin/omabox up
     // and down, nsenter, git): kept here and taken out, before any thread.
     let _ = HANDOFF.set((
