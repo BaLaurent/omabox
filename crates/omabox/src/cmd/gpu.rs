@@ -228,13 +228,14 @@ fn snap(ctx: &Ctx) -> Vec<u8> {
     let mut o = Vec::new();
     for p in box_pids(ctx) {
         let dir = shell::path(&cat!("/proc/", p, "/fdinfo"));
-        let mut files: Vec<Vec<u8>> = shell::glob(&dir, false)
+        let files: Vec<Vec<u8>> = shell::glob(&dir, false)
             .into_iter()
             .map(|f| cat!("/proc/", p, "/fdinfo/", f))
             .collect();
-        // (a glob that matches nothing stays as it is: awk fails on it, unsaid)
+        // (none, the process gone or holding no file: nothing to read. Bash handed awk its glob
+        // unmatched, which awk failed on, unsaid)
         if files.is_empty() {
-            files.push(cat!("/proc/", p, "/fdinfo/*"));
+            continue;
         }
         let mut a: Vec<Vec<u8>> = vec![
             b"-v".to_vec(),
