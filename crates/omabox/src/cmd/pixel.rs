@@ -296,10 +296,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             // of it fails under set -e, 1, unsaid, the image left. Part of a pixel: "short".
             if at >= img.len() as i64 {
                 if at > img.len() as i64 {
-                    let _ = std::io::Write::write_all(
-                        &mut std::io::stderr(),
-                        b"od: cannot skip past end of combined input\n",
-                    );
+                    // (omabox's words: bash's were od's, though no od runs, finding 441)
+                    crate::exit::say("pixel: the point is past the end of grim's image");
                 }
                 return Err(Exit(1));
             }

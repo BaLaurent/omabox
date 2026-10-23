@@ -9244,6 +9244,22 @@ from them.
     cost let the closed window's last frames pass before the next case; the prep now waits for the
     screen to be still. Tests: t_rust_parity ("run: by SIGTERM", an expected difference), exec.rs's
     said_text_counts_what_was_held.
+441. **Errors were said in bash's or another tool's words** (2026-10-23, #324 wave 4c). What omabox
+    met on its way came out as bash or a tool would have said it, which the Rust half copied word for
+    word: `check run`'s scenario that could not run ("bash: X: /bin/sh^M: bad interpreter: No such file
+    or directory", from bash 5.3's 128-byte sample less its last byte, so a long interpreter was cut;
+    "bash: X: command not found"), pixel past its image's end and a shot's size unread ("od: cannot
+    skip past end of combined input", "od: FILE: Is a directory", though no od runs), a file it could
+    not write (a bare "PATH: Permission denied": bash's redirection line), a jq, hyprctl or gdb not on
+    PATH ("jq: command not found"), and clip's refusal naming the omabox process "bash". **Change**
+    (Rust over bash): omabox's words, the same exit codes: "omabox: check: cannot run scenario X: its
+    #! interpreter '/bin/sh^M' is not there (CRLF line ends?)" (127 none such, 126 one that cannot
+    run; the interpreter read whole from the first line, each CR shown ^M; a scenario with no #! is
+    still run by bash, which callers rely on), "omabox: pixel: the point is past the end of grim's
+    image", "omabox: cannot read FILE: why", "omabox: CMD: cannot write PATH: why", "omabox: cannot
+    run jq: not found in PATH", "set for omabox, pid N" (CHANGELOG). Tests: t_rust_parity (the twelve
+    scenario kinds and the one not there), t_unit_rust_parity (pixel's, shot's, clip's), t_clip:
+    expected differences; check.rs's interpreters_as_the_kernel_reads_them, jq.rs's not_run_said.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

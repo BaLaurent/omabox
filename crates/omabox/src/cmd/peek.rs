@@ -200,15 +200,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .mode(0o600)
             .open(&marks)
         {
-            // (`(umask 077; : > FILE)`: bash's own line, the subshell's failure ends it)
-            // (bash's redirection line, less its "SCRIPT: line N: ")
-            crate::shots::say_raw(&cat!(
-                shell::bytes(&marks),
-                ": ",
-                crate::shots::why(&e),
-                "\n"
-            ));
-            return Err(crate::exit::Exit(1));
+            // (said in omabox's words, 1: finding 441)
+            return Err(ctx.die(cat!(
+                "peek: ",
+                crate::shots::cant_write(shell::bytes(&marks), &e)
+            )));
         }
     }
     let marker = peek_marker(ctx);

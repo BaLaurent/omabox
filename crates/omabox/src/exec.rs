@@ -1290,12 +1290,13 @@ pub fn stdio_relay(argv: &[Vec<u8>], capture: bool, err_null: bool) -> std::io::
     let rc = match spawned {
         Ok(rc) => rc,
         Err(e) => {
+            // (omabox's words: bash's were its own, "gdb: command not found", finding 441)
             let _ = writeln!(
                 std::io::stderr(),
-                "{}: {}",
+                "omabox: cannot run {}: {}",
                 String::from_utf8_lossy(argv.first().map_or(&b""[..], |a| a)),
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    "command not found".to_string()
+                    "not found in PATH".to_string()
                 } else {
                     e.to_string()
                 }

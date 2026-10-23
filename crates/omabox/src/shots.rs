@@ -79,6 +79,12 @@ pub fn mv_f(src: &[u8], dst: &[u8]) -> bool {
     crate::sig::run_status(c).is_ok_and(|rc| rc == 0)
 }
 
+/// "cannot write PATH: WHY": a file omabox could not write, in its words (bash's were its redirection
+/// line's, "PATH: WHY" after its script and line: finding 441).
+pub fn cant_write(p: &[u8], e: &std::io::Error) -> Vec<u8> {
+    cat!("cannot write ", p, ": ", why(e))
+}
+
 /// strerror's words for an error, as bash says them after a redirection that failed.
 pub fn why(e: &std::io::Error) -> String {
     let code = e.raw_os_error().unwrap_or(libc::EIO);
@@ -261,18 +267,18 @@ pub fn geom_clip(r: [i64; 4], lw: i64, lh: i64) -> Option<([i64; 4], Vec<u8>)> {
     ))
 }
 
-/// png_size FILE: its width and height, from its header (`od -An -tu1 -j16 -N8`: od's own words
-/// when it cannot read the file, or the file ends before its 16th byte).
+/// png_size FILE: its width and height, from its header; why not said when it cannot read the file,
+/// or the file ends before its 16th byte (in omabox's words: bash's were od's, finding 441).
 pub fn png_size(f: &[u8]) -> Option<(i64, i64)> {
     let data = match std::fs::read(shell::path(f)) {
         Ok(d) => d,
         Err(e) => {
-            say_raw(&cat!("od: ", f, ": ", why(&e), "\n"));
+            say_raw(&cat!("omabox: cannot read ", f, ": ", why(&e), "\n"));
             return None;
         }
     };
     if data.len() < 16 {
-        say_raw(b"od: cannot skip past end of combined input\n");
+        say_raw(&cat!("omabox: ", f, " is too short for a PNG\n"));
         return None;
     }
     let b = data.get(16..24)?;
@@ -311,8 +317,7 @@ fn keep_last(p: &std::path::Path, new: &std::path::Path, n: usize) {
     }
 }
 
-/// `printf ... >> FILE` (or `>`): a write that fails ends the command, 1, as under set -e, its words
-/// on stderr (bash's own line names its script and line: the words are the same after them).
+/// `printf ... >> FILE` (or `>`): a write that fails ends the command, 1, as under set -e, said.
 fn write_rec(p: &std::path::Path, data: &[u8], append: bool) -> Res<()> {
     let r = std::fs::OpenOptions::new()
         .append(append)
@@ -323,7 +328,7 @@ fn write_rec(p: &std::path::Path, data: &[u8], append: bool) -> Res<()> {
         .and_then(|mut f| f.write_all(data));
     if let Err(e) = r {
         let _ =
-            std::io::stderr().write_all(&cat!("omabox: ", shell::bytes(p), ": ", why(&e), "\n"));
+            std::io::stderr().write_all(&cat!("omabox: ", cant_write(shell::bytes(p), &e), "\n"));
         return Err(crate::exit::Exit(1));
     }
     Ok(())

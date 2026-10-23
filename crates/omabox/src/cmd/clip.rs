@@ -58,9 +58,9 @@ fn agent_caller() -> Option<Vec<u8>> {
             .find(|r| marks.is_match(r))
             .map(<[u8]>::to_vec)
             .unwrap_or_default();
-        // (bin/omabox's own comm was bash's until it handed over: `env bash` ran it)
+        // (this process named omabox: bash named it bash, its comm until it handed over, finding 441)
         let comm = if p == me {
-            b"bash".to_vec()
+            b"omabox".to_vec()
         } else {
             crate::procfs::read(&p, "comm").unwrap_or_default()
         };

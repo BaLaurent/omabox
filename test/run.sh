@@ -3777,7 +3777,8 @@ EOF
   rp_prep=rp_p2; parity "pixel: an image short of its pixels" pixel -b fk 1 1 2 2
   rp_p3() { rp_ppm 'P6\n2 2\n255\n'; }
   rp_prep=rp_p3; parity "pixel: an image of its header alone: nothing read, 1" pixel -b fk 1 1 900 900
-  rp_prep=rp_p3; parity "...a point past its end (od's own words)" pixel -b fk 1 900 1 1
+  rp_why=441 rp_bash=("err=od: cannot skip past end of combined input") rp_rust=("err=omabox: pixel: the point is past the end of grim's image")
+  rp_prep=rp_p3; parity "...a point past its end (od's own words in bash)" pixel -b fk 1 900 1 1
   rp_p4() { rp_ppm 'P6\n08 2\n255\n\001\002\003'; }
   rp_prep=rp_p4; parity "pixel: a width bash's arithmetic refuses (08), 1" pixel -b fk 1 1
   rp_p5() { rp_ppm 'P5\n2 2\n255\n\001\002\003'; }
@@ -4305,10 +4306,12 @@ while True:
   rp_dangle() { ln -s "$o3/new.png" "$o3/dangle.png"; }; rp3_pre=(rp_dangle)
   parity "shot -o a link to a file not there yet" shot -b fk -o "$o3/dangle.png"
   rp3_pre=()
-  parity "shot -o a folder: the image into it (mv's rule)" shot -b fk -o "$o3"
+  rp_why=441 rp_bash=("err~^od: [^ ]*/out3: Is a directory$") rp_rust=("err~^omabox: cannot read [^ ]*/out3: Is a directory$" "err!~^od: ")
+  parity "shot -o a folder: the image into it (mv's rule), its size unread (od's words in bash)" shot -b fk -o "$o3"
   # A record that cannot be written ends the command there, 1, nothing said on stdout after it.
   rp_tsvdir() { rm -f "$r/rt/omabox/fk/shots.tsv"; mkdir -p "$r/rt/omabox/fk/shots.tsv"; }; rp3_pre=(rp_tsvdir)
   rp_sed+='; s#^omabox: [^ ]*/shots.tsv: Is a directory$#SHOTS.TSV: Is a directory#; s#^.*bin/omabox: line [0-9]+: ([^ ]*/shots.tsv: Is a directory)$#SHOTS.TSV: Is a directory#'
+  rp_why=441 rp_bash=("err=SHOTS.TSV: Is a directory") rp_rust=("err~^omabox: cannot write [^ ]*/shots.tsv: Is a directory$")
   parity "shot: its record cannot be written" shot -b fk -o "$o3/s.png"
   rp3_pre=()
   # --pass with a held key; scroll and drag --wait with --mod.
@@ -5256,6 +5259,7 @@ EOF
   rp4_cin() { echo 'text/plain;charset=utf-8' > "$st/host.types"; printf 'p4ss w\303\266rd\n' > "$st/host.data"; }
   rp_env=("${rp_env4[@]}" RP4_EXTRA=CLAUDECODE=1)
   rp4_pre=(rp4_cin)
+  rp_why=441 rp_bash=("err~\\(CLAUDECODE set for bash, pid P\\)") rp_rust=("err~\\(CLAUDECODE set for omabox, pid P\\)")
   parity "clip: refused to an agent, before its words" clip --bogus
   rp_env=("${rp_env4[@]}")
   parity "clip: an unknown option" clip --bogus
@@ -13338,8 +13342,10 @@ EOF
   parity "check run --json: against its baseline (both ways)" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/scen"
   parity "check run: the scenario failed, exit 3 (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/bad"
   parity "check run --json: no checkpoint taken (both ways)" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/none"
-  # (bash's own line for a command not found names its script and line: the rest compared)
+  # (bash's own line for a command not found names its script and line: the rest compared; the
+  # Rust half says it in omabox's words, finding 441)
   rp_sed='s#[^ ]*/bin/omabox: (line [0-9]+: )?#bash: #; s/box up in [0-9]+ s/box up in N s/'
+  rp_why=441 rp_bash=("err~\\(exit 127\\): bash: rp-no-such-scenario: command not found \\(") rp_rust=("err~\\(exit 127\\): omabox: check: cannot run scenario rp-no-such-scenario: not found in PATH \\(")
   parity "check run: a scenario not there, 127 (both ways)" check run --base "$ck/base" -o "$ck/o" -- rp-no-such-scenario
   parity "check run --json: checkpoints with 010 and 08 in them (both ways)" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/lz"
   # Scenarios bash cannot run as they are: not executable, a dir, binary; one with no #! is a
@@ -13353,7 +13359,33 @@ EOF
   python3 -c 'import sys; d = open("/usr/bin/true", "rb").read(); i = d.index(b"/lib64/ld-linux"); open(sys.argv[1], "wb").write(d[:i] + b"/nonexistent/ld.so\0".ljust(len(b"/lib64/ld-linux-x86-64.so.2"), b"\0") + d[i + len(b"/lib64/ld-linux-x86-64.so.2"):])' "$ck/noload"
   printf '#!/etc/passwd\n' > "$ck/eacces"; printf '#!/nonexistent/interp' > "$ck/nonl"; printf '#!/bin/s\rh x\n' > "$ck/midcr"
   chmod +x "$ck/noload" "$ck/eacces" "$ck/nonl" "$ck/midcr"
+  # (bash's words for each, then the Rust half's, after "the scenario failed in run 1 (exit N): ":
+  # finding 441; nosb and xonly run alike)
+  local -A rp_scb=(
+    [noexec]="126): bash: $ck/noexec: Permission denied"
+    [adir]="126): bash: $ck/adir: Is a directory"
+    [binary]="126): bash: $ck/binary: cannot execute binary file: Exec format error"
+    [nowhere]="127): bash: $ck/nowhere: No such file or directory"
+    [crlf]="126): bash: $ck/crlf: /bin/sh^M: bad interpreter: No such file or directory"
+    [badint]="126): bash: $ck/badint: /nonexistent/interp: bad interpreter: No such file or directory"
+    [noload]="127): bash: $ck/noload: cannot execute: required file not found"
+    [eacces]="126): bash: $ck/eacces: /etc/passwd: bad interpreter: Permission denied"
+    [nonl]="126): bash: $ck/nonl: /nonexistent/inter: bad interpreter: No such file or directory"
+    [midcr]="126): bash: $ck/midcr: /bin/s"$'\r'"h: bad interpreter: No such file or directory")
+  local -A rp_scr=(
+    [noexec]="126): omabox: check: cannot run scenario $ck/noexec: it is not executable (chmod +x)"
+    [adir]="126): omabox: check: cannot run scenario $ck/adir: it is a directory"
+    [binary]="126): omabox: check: cannot run scenario $ck/binary: it is a binary this system cannot run (Exec format error)"
+    [nowhere]="127): omabox: check: cannot run scenario $ck/nowhere: no such file"
+    [crlf]="126): omabox: check: cannot run scenario $ck/crlf: its #! interpreter '/bin/sh^M' is not there (CRLF line ends?)"
+    [badint]="126): omabox: check: cannot run scenario $ck/badint: its #! interpreter '/nonexistent/interp' is not there"
+    [noload]="127): omabox: check: cannot run scenario $ck/noload: a file it needs to start (its ELF loader) is not there"
+    [eacces]="126): omabox: check: cannot run scenario $ck/eacces: its #! interpreter '/etc/passwd' cannot run: Permission denied"
+    [nonl]="126): omabox: check: cannot run scenario $ck/nonl: its #! interpreter '/nonexistent/interp' is not there"
+    [midcr]="126): omabox: check: cannot run scenario $ck/midcr: its #! interpreter '/bin/s^Mh' is not there (CRLF line ends?)")
+  rp_q() { printf '%s' "$1" | sed -E 's/[][\\.*^$()+?{}|]/\\&/g'; }
   for i in noexec adir binary nosb nowhere crlf badint xonly noload eacces nonl midcr; do
+    [ -z "${rp_scb[$i]:-}" ] || rp_why=441 rp_bash=("err~\\(exit $(rp_q "${rp_scb[$i]}") \\(") rp_rust=("err~\\(exit $(rp_q "${rp_scr[$i]}") \\(")
     parity "check run: a scenario that is $i (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/$i"
   done
   # Signals during its box's up and during its scenario: the exit, and no check box left.
@@ -15653,6 +15685,7 @@ t_clip() {
   parity "clip --from-box (both ways): the box's empty" clip --from-box -b ib
   rp_prep=rp_cl_other; parity "clip (both ways): a type it does not take" clip -b ib
   rp_prep=rp_cl_text rp_sed='s/pid [0-9]+/pid P/g' rp_wrap=("$CLI" run -b "$B" --pass OMABOX_BASH -- env CLAUDECODE=1)
+  rp_why=441 rp_bash=("err~\\(CLAUDECODE set for bash, pid P\\)") rp_rust=("err~\\(CLAUDECODE set for omabox, pid P\\)")
   parity "clip (both ways): refused to an agent" clip -b ib
   rp_prep="" rp_also="" rp_sed="" rp_wrap=() rp_rt="" rp_snap=1
   # An image, by its type; a PNG of the stand-in's screen

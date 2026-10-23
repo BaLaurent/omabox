@@ -1558,16 +1558,12 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         return Err(ctx.die(cat!("record: cannot write in ", ctx.d)));
     }
     let put = |f: &str, v: Vec<u8>| -> Res<()> {
-        // (`echo ... > FILE` under set -e: its failure ends the command, 1)
+        // (its failure said, and the command ended, 1: finding 441)
         std::fs::write(ctx.at(f), v).map_err(|e| {
-            // (bash's redirection line, less its "SCRIPT: line N: ")
-            crate::shots::say_raw(&cat!(
-                shell::bytes(&ctx.at(f)),
-                ": ",
-                crate::shots::why(&e),
-                "\n"
-            ));
-            Exit(1)
+            ctx.die(cat!(
+                "record: ",
+                crate::shots::cant_write(shell::bytes(&ctx.at(f)), &e)
+            ))
         })
     };
     put(

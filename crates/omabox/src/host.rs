@@ -131,7 +131,7 @@ pub fn host_hyprctl(ctx: &Ctx, args: &[&[u8]], quiet: bool) -> (i32, Vec<u8>) {
             if !quiet {
                 let _ = std::io::Write::write_all(
                     &mut std::io::stderr(),
-                    b"hyprctl: command not found\n",
+                    b"omabox: cannot run hyprctl: not found in PATH\n",
                 );
             }
             (127, Vec::new())
@@ -161,7 +161,7 @@ pub fn host_eval(ctx: &Ctx, lua: &[u8]) -> Res<()> {
                     // (a foreground child, sig::run_child)
                     match crate::sig::run_child(c, false, |_| crate::exec::read_all(r, None)) {
                         Ok((got, _)) => shell::subst(&got),
-                        Err(_) => b"hyprctl: command not found".to_vec(),
+                        Err(_) => b"cannot run hyprctl: not found in PATH".to_vec(),
                     }
                 }
                 Err(_) => Vec::new(),

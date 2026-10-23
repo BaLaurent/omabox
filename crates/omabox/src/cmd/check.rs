@@ -272,17 +272,13 @@ fn must(rc: i32) -> Res<()> {
     }
 }
 
-/// `: > FILE` / `CMD > FILE` under set -e: the file written, or its failure said (bash's line, less
-/// its "SCRIPT: line N: ") and the command ended, 1.
+/// `: > FILE` / `CMD > FILE` under set -e: the file written, or its failure said and the command
+/// ended, 1 (in omabox's words: bash's were its redirection line's, finding 441).
 fn put(p: &[u8], data: &[u8]) -> Res<()> {
     std::fs::write(shell::path(p), data).map_err(|e| {
-        say_raw(&cat!(p, ": ", crate::shots::why(&e), "\n"));
+        say(cat!("check: ", crate::shots::cant_write(p, &e)));
         Exit(1)
     })
-}
-
-fn say_raw(v: &[u8]) {
-    let _ = std::io::stderr().write_all(v);
 }
 
 fn run_tool(name: &str, args: &[Vec<u8>]) -> i32 {
@@ -1986,13 +1982,13 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
 }
 
-/// cd's words for a dir it cannot enter (bash's own, less its "SCRIPT: line N: ").
+/// A dir it cannot enter, in omabox's words (bash's were cd's: finding 441).
 fn say_cd(d: &[u8]) {
     let why = match std::fs::metadata(shell::path(d)) {
         Ok(_) => "Not a directory".to_string(),
         Err(e) => crate::shots::why(&e),
     };
-    let _ = std::io::stderr().write_all(&cat!("cd: ", d, ": ", why, "\n"));
+    say(cat!("check: cannot enter ", d, ": ", why));
 }
 
 /// The scenario, as bash's `PATH=... OMABOX=BOX OMABOX_SESSION="" OMABOX_CHECK_OUT=DIR SCEN... >
@@ -2006,13 +2002,21 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
         }
     };
     let Ok(f2) = f.try_clone() else { return 1 };
-    // (bash's own words for a command it cannot run go where its stderr goes: the run's log)
+    // (Why it cannot run, in omabox's words, where its stderr goes: the run's log. Bash's were its
+    // own, "bash: X: bad interpreter: ...": finding 441. The codes are bash's: 127 none such, 126
+    // one that cannot run.)
+    let prog = &scen[0];
     let said = |m: Vec<u8>, rc: i32| -> i32 {
         let mut e = &f2;
-        let _ = e.write_all(&cat!("bash: ", m, "\n"));
+        let _ = e.write_all(&cat!(
+            "omabox: check: cannot run scenario ",
+            prog,
+            ": ",
+            m,
+            "\n"
+        ));
         rc
     };
-    let prog = &scen[0];
     // (bash looks the scenario up in the PATH it is given: the first executable file, else the
     // first file there, which it then cannot run)
     let exe: Vec<u8> = if prog.contains(&b'/') {
@@ -2029,15 +2033,15 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
             .or(cands.first())
         {
             Some(p) => p.clone(),
-            None => return said(cat!(prog, ": command not found"), 127),
+            None => return said(b"not found in PATH".to_vec(), 127),
         }
     };
     let pth = shell::path(&exe);
     match std::fs::metadata(&pth) {
-        Err(_) => return said(cat!(exe, ": No such file or directory"), 127),
-        Ok(m) if m.is_dir() => return said(cat!(exe, ": Is a directory"), 126),
+        Err(_) => return said(b"no such file".to_vec(), 127),
+        Ok(m) if m.is_dir() => return said(b"it is a directory".to_vec(), 126),
         Ok(_) if !crate::exec::executable(&exe) => {
-            return said(cat!(exe, ": Permission denied"), 126);
+            return said(b"it is not executable (chmod +x)".to_vec(), 126);
         }
         Ok(_) => {}
     }
@@ -2068,63 +2072,64 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
         Ok(rc) => rc,
         Err(e) => match e.raw_os_error() {
             Some(libc::ENOEXEC) => {
-                // (bash 5.3's sample: 128 bytes)
-                let mut head = [0u8; 128];
+                let mut head = [0u8; 256];
                 let n = std::fs::File::open(&pth)
                     .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
                     .unwrap_or(0);
                 let line = head[..n].split(|&b| b == b'\n').next().unwrap_or_default();
                 if line.contains(&0) {
                     return said(
-                        cat!(exe, ": cannot execute binary file: Exec format error"),
+                        b"it is a binary this system cannot run (Exec format error)".to_vec(),
                         126,
                     );
                 }
-                // (bash reads it as a script of its own, $0 its path)
+                // (No #!: a script run by bash, $0 its path, as bash ran it: callers rely on it.)
                 let mut av = vec![b"bash".to_vec(), exe.clone()];
                 av.extend(scen[1..].iter().cloned());
                 match exec_in_child(b"/usr/bin/bash", &av, &envp, &f2) {
                     Ok(rc) => rc,
-                    Err(e) => said(cat!(exe, ": ", crate::shots::why(&e)), 126),
+                    Err(e) => said(cat!("bash: ", crate::shots::why(&e)), 126),
                 }
             }
             Some(errno) => {
-                // (a #! file the kernel refused: its interpreter named, as bash reads it from its
-                // 128-byte sample less the last byte; `#!/bin/sh\r` from a CRLF file, mostly)
-                // (E2BIG, ENOMEM: bash says the words alone, #! or not)
+                // (E2BIG, ENOMEM: the words alone, #! or not)
                 let plain = matches!(errno, libc::E2BIG | libc::ENOMEM);
                 match interp_of(&pth).filter(|_| !plain) {
-                    Some(name) => said(
-                        cat!(
-                            exe,
-                            ": ",
-                            name,
-                            ": bad interpreter: ",
-                            crate::shots::why(&e)
-                        ),
-                        126,
-                    ),
-                    // (an ELF whose loader is not there)
-                    None if errno == libc::ENOENT => {
-                        said(cat!(exe, ": cannot execute: required file not found"), 127)
+                    Some(name) => {
+                        let what = if errno == libc::ENOENT {
+                            "is not there".to_string()
+                        } else {
+                            format!("cannot run: {}", crate::shots::why(&e))
+                        };
+                        let crlf = if crate::exit::contains(&name, b"^M") {
+                            " (CRLF line ends?)"
+                        } else {
+                            ""
+                        };
+                        said(cat!("its #! interpreter '", name, "' ", what, crlf), 126)
                     }
-                    None => said(cat!(exe, ": ", crate::shots::why(&e)), 126),
+                    // (an ELF whose loader is not there)
+                    None if errno == libc::ENOENT => said(
+                        b"a file it needs to start (its ELF loader) is not there".to_vec(),
+                        127,
+                    ),
+                    None => said(crate::shots::why(&e).into_bytes(), 126),
                 }
             }
-            None => said(cat!(exe, ": ", crate::shots::why(&e)), 126),
+            None => said(crate::shots::why(&e).into_bytes(), 126),
         },
     }
 }
 
-/// A `#!` file's interpreter as bash names it in "bad interpreter": from its first 128 bytes less
-/// the last one read, blanks after the #! skipped, up to a blank or newline; a CR that ends it
-/// shown ^M (any other byte as it is). None for a file with no #!.
+/// A `#!` file's interpreter as the kernel reads it: its first line (256 bytes at most), blanks
+/// after the #! skipped, up to a blank or newline; each CR in it shown ^M (any other byte as it is).
+/// None for a file with no #!.
 fn interp_of(p: &std::path::Path) -> Option<Vec<u8>> {
-    let mut head = [0u8; 128];
+    let mut head = [0u8; 256];
     let n = std::fs::File::open(p)
         .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
         .unwrap_or(0);
-    let rest = head[..n.saturating_sub(1)].strip_prefix(b"#!")?;
+    let rest = head[..n].strip_prefix(b"#!")?;
     let st = rest
         .iter()
         .position(|&c| c != b' ' && c != b'\t')
@@ -2134,10 +2139,13 @@ fn interp_of(p: &std::path::Path) -> Option<Vec<u8>> {
         .iter()
         .position(|&c| matches!(c, b' ' | b'\t' | b'\n'))
         .unwrap_or(rest.len());
-    let mut name = rest[..end].to_vec();
-    if name.last() == Some(&b'\r') {
-        name.pop();
-        name.extend_from_slice(b"^M");
+    let mut name = Vec::new();
+    for &c in &rest[..end] {
+        if c == b'\r' {
+            name.extend_from_slice(b"^M");
+        } else {
+            name.push(c);
+        }
     }
     Some(name)
 }
@@ -3153,7 +3161,7 @@ mod tests {
     }
 
     #[test]
-    fn interpreters_as_bash_names_them() {
+    fn interpreters_as_the_kernel_reads_them() {
         let d = std::env::temp_dir().join(format!("omabox-interp-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&d);
         let t = |body: &[u8]| {
@@ -3162,18 +3170,16 @@ mod tests {
             interp_of(&f)
         };
         assert_eq!(t(b"#!/bin/sh\r\nx\n"), Some(b"/bin/sh^M".to_vec()));
+        // (whole: bash's 128-byte sample less its last byte cut it: finding 441)
         assert_eq!(
             t(b"#!/nonexistent/interp"),
-            Some(b"/nonexistent/inter".to_vec())
+            Some(b"/nonexistent/interp".to_vec())
         );
         assert_eq!(t(b"#! /x -e\n"), Some(b"/x".to_vec()));
-        assert_eq!(t(b"#!/bin/s\rh x\n"), Some(b"/bin/s\rh".to_vec()));
+        assert_eq!(t(b"#!/bin/s\rh x\n"), Some(b"/bin/s^Mh".to_vec()));
         assert_eq!(t(b"\x7fELF"), None);
-        // (bash 5.3.20, probed: 100 a's named whole, 130 cut to 124)
-        let long = cat!("#!/", [b'a'; 100].as_slice(), "\n");
-        assert_eq!(t(&long).map(|v| v.len()), Some(101));
         let longer = cat!("#!/", [b'a'; 130].as_slice(), "\n");
-        assert_eq!(t(&longer).map(|v| v.len()), Some(125));
+        assert_eq!(t(&longer).map(|v| v.len()), Some(131));
         let _ = std::fs::remove_dir_all(&d);
     }
 

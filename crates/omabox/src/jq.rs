@@ -105,15 +105,19 @@ pub fn tool<A: AsRef<[u8]>>(name: &str, args: &[A], input: Option<&[u8]>, err: E
     }
 }
 
-/// Bash's status and words for a tool not run: 127 "jq: command not found" when none is on PATH, else
-/// 126 "PATH_OF_JQ: REASON" (an argument past 128 KiB: "Argument list too long").
+/// A tool not run: 127 when none is on PATH, else 126 (an argument past 128 KiB: "Argument list too
+/// long"), bash's statuses, said in omabox's words (bash's were its own, "jq: command not found":
+/// finding 441).
 fn not_run(name: &str, e: &std::io::Error) -> (i32, Vec<u8>) {
     let found = crate::shell::env_or_empty("PATH")
         .split(|&c| c == b':')
         .map(|d| crate::cat!(if d.is_empty() { b".".as_slice() } else { d }, "/", name))
         .find(|p| crate::exec::executable(p) && crate::shell::path(p).is_file());
     match (found, e.raw_os_error()) {
-        (None, _) | (_, Some(libc::ENOENT)) => (127, crate::cat!(name, ": command not found\n")),
+        (None, _) | (_, Some(libc::ENOENT)) => (
+            127,
+            crate::cat!("omabox: cannot run ", name, ": not found in PATH\n"),
+        ),
         (Some(p), code) => {
             // SAFETY: strerror's string for a valid errno, read at once.
             let why = unsafe {
@@ -121,7 +125,7 @@ fn not_run(name: &str, e: &std::io::Error) -> (i32, Vec<u8>) {
                     .to_string_lossy()
                     .into_owned()
             };
-            (126, crate::cat!(p, ": ", why, "\n"))
+            (126, crate::cat!("omabox: cannot run ", p, ": ", why, "\n"))
         }
     }
 }
@@ -168,21 +172,21 @@ impl Args {
 mod tests {
     use super::*;
 
-    // What bash said for each: `jq -n --argjson c "$BIG"` (one argument past 128 KiB), a jq not on
-    // PATH (both less "SCRIPT: line N: ").
+    // `jq -n --argjson c "$BIG"` (one argument past 128 KiB), a jq not on PATH: bash's codes.
     #[test]
-    fn not_run_as_bash_says() {
+    fn not_run_said() {
         let big = vec![b'1'; 200_000];
         let r = Args::new(&["-n"])
             .kv("--argjson", "c", &big)
             .arg("1")
             .run(None, Err::Out);
         assert_eq!(r.rc, 126);
+        assert!(r.out.starts_with(b"omabox: cannot run /"));
         assert!(r.out.ends_with(b"/jq: Argument list too long\n"));
         let e = std::io::Error::from_raw_os_error(libc::ENOENT);
         assert_eq!(
             not_run("jq", &e),
-            (127, b"jq: command not found\n".to_vec())
+            (127, b"omabox: cannot run jq: not found in PATH\n".to_vec())
         );
     }
 }

@@ -52,6 +52,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   nsenter's, said "dropped 50 bytes of other output on nsenter's stderr" for a TERM, and waited 2 s
   before answering. Exit codes unchanged. A script that matched "dropped N bytes" after a TERM:
   match "was killed by", or the exit code.
+- **Errors omabox meets on its way are said in its own words**, no longer in bash's or a tool's: a
+  `check run` scenario that cannot run says so in its run's log as "omabox: check: cannot run
+  scenario X: its #! interpreter '/bin/sh^M' is not there (CRLF line ends?)" (was "bash: X:
+  /bin/sh^M: bad interpreter: ..."), a file omabox could not write as "omabox: CMD: cannot write
+  PATH: why" (was a bare "PATH: why"), a missing tool as "omabox: cannot run jq: not found in PATH"
+  (was "jq: command not found"), `pixel` past its image as "omabox: pixel: the point is past the end
+  of grim's image" (was od's words), and `clip`'s refusal names the process "omabox", not "bash". Exit
+  codes unchanged (127 for a scenario not found, 126 for one that cannot run). Scripts that matched
+  those texts: match the exit code, or the new words.
 
 ## 1.0.1 — unreleased
 
