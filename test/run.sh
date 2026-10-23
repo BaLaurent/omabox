@@ -5599,7 +5599,8 @@ PYEOF
   magick "$im/a.png" -fill '#fefefe' -draw 'point 50,5' "$im/d.png"
   magick -size 90x80 xc:white "$im/c.png"
   echo no > "$im/t.png"; cp "$im/a.png" "$im/tab"$'\t'"a.png"
-  printf '#!/bin/sh\nfor a; do case $a in -composite) [ -f %s/magick.fail.compose ] && exit 1 ;; -stroke) [ -f %s/magick.fail.draw ] && exit 1 ;; *rep-fail.png*) exit 1 ;; esac; done\nexec /usr/bin/magick "$@"\n' "$st" "$st" > "$r/mbin/magick"
+  # (a montage's words logged too, the numbers in them out: a contact sheet's labels carry a time)
+  printf '#!/bin/sh\nfor a; do case $a in -composite) [ -f %s/magick.fail.compose ] && exit 1 ;; -stroke) [ -f %s/magick.fail.draw ] && exit 1 ;; *rep-fail.png*) exit 1 ;; esac; done\n[ "$1" != montage ] || echo "magick $*" | sed -E "s#%s#R#g; s/[0-9]+/N/g" >> %s/magick.log\nexec /usr/bin/magick "$@"\n' "$st" "$st" "$r" "$st" > "$r/mbin/magick"
   chmod +x "$r/mbin/magick"
   rp_env=("${rp_env4b[@]}" PATH="$r/mbin:$PATH")
   local rp_env4c=("${rp_env[@]}")
@@ -5829,7 +5830,8 @@ while time.time() < end:
     mkdir -p "/run/user/$2" && for t in hyprctl wf-recorder ffmpeg ffprobe; do mount --bind "$1/$t" "/usr/bin/$t"; done || exit 1
     exec python3 -c "$3"' sh "$rb" "$(id -u)" "$reaper" >/dev/null 2>&1 & local urc=$!
   cp "$r/bin/hyprctl" "$rb/hyprctl"
-  local lrc=""; for i in $(seq 300); do lrc=$(pgrep -P "$urc") && break; sleep 0.1; done
+  # (its init, python3, only once every bind mount took: a failed one fails the check below)
+  local lrc=""; for i in $(seq 300); do lrc=$(pgrep -P "$urc" -x python3) && break; sleep 0.1; done
   check "the stand-in recording desktop started" test -n "$lrc"
   local nsrc; nsrc=$(readlink "/proc/$lrc/ns/pid")
   rp4b_rc() {
@@ -5846,10 +5848,10 @@ while time.time() < end:
     rp4b_also_c
     echo "== rt"; (cd "$r/rt/omabox" && for f in rc/* rca/*; do [ -f "$f" ] || continue; case $f in */box.json|*/info.json) continue ;; esac; echo "-- $f"; case $f in */record|*/record.audio) sed -E 's/^[0-9]+(,[0-9]+)*( |$)/P\2/; s/[0-9]{3,}/N/g' "$f" ;; *) sed -E 's/[0-9]{3,}/N/g' "$f" ;; esac; done)
     # (the layout's wf-recorders start together: their lines in either order)
-    for f in wf.log ff.log; do [ ! -f "$st/$f" ] || { echo "== $f"; sed -E "s#$r#R#g; s/sheet-[0-9]+/sheet-PID/g; s/[0-9]{6,}/N/g" "$st/$f" | if [ "$f" = wf.log ]; then LC_ALL=C sort; else cat; fi; }; done
+    for f in wf.log ff.log magick.log; do [ ! -f "$st/$f" ] || { echo "== $f"; sed -E "s#$r#R#g; s/sheet-[0-9]+/sheet-PID/g; s/\.record-[A-Za-z0-9]+/.record-X/g; s/[0-9]{6,}/N/g" "$st/$f" | if [ "$f" = wf.log ]; then LC_ALL=C sort; else cat; fi; }; done
   }
   rp_snap=0 rp_also=rp4b_recst rp4b_pre=(rp4b_recfix)
-  rp_env=("${rp_env4c[@]}" PATH="$PATH")
+  rp_env=("${rp_env4c[@]}" PATH="$r/mbin:$PATH")
   local rp_env4r=("${rp_env[@]}")
   # Refusals, as they are read.
   parity "record: nothing" record -b rc
@@ -6002,6 +6004,29 @@ while time.time() < end:
   for i in TERM INT; do
     rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/tiles-made")
     parity "record stop --sheet and $i to omabox alone while it takes the frames" record -b rc stop --sheet --frames 3
+  done
+  rp_wrap=()
+  # Group INT and TERM there: bash's subshell dies of it, bash ends at once (no sheet).
+  for i in group-INT group-TERM; do
+    rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/tiles-made")
+    parity "record stop --sheet and $i while it takes the frames" record -b rc stop --sheet --frames 3
+  done
+  rp4b_tilesonly() { rp4b_recfix; : > "$st/tiles.sleep"; }; rp4b_pre=(rp4b_tilesonly)
+  # (A TERM to omabox alone there is not compared: bash's main dies of it at once and its
+  # subshell finishes the sheet, where Rust stops: a listed difference.)
+  for i in group-INT group-TERM; do
+    rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/tiles-made")
+    parity "record sheet and $i while it takes the frames" record -b rc sheet "$im/a.png" -o "$r/co/s.png" --frames 3
+  done
+  # An INT during `first=$(record_first_us)` (its first-frame a FIFO the box writes 2 s after it is
+  # opened), the input's temp file made: its EXIT trap runs, then 130, the file gone (finding 432).
+  rp4b_fifo() { rp4b_marked
+    nsenter -t "$lrc" -U -m -p --preserve-credentials sh -c 'd=/home/sbx/.cache/omabox-record; mv "$d/first-frame" "$d/ff.real" && mkfifo "$d/first-frame" &&
+      { exec 3>"$d/first-frame"; : > "$1/fifo-opened"; sleep 2; cat "$d/ff.real" >&3; } &' sh "$st" >/dev/null 2>&1; }
+  rp4b_pre=(rp4b_fifo)
+  for i in INT group-INT; do
+    rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/fifo-opened")
+    parity "record stop --show-input and $i while it reads the first frame's time" record -b rc stop --show-input
   done
   rp_wrap=()
   rp4b_ffail() { rp4b_marked; : > "$st/ffmpeg.fail"; }; rp4b_pre=(rp4b_ffail)
@@ -12769,8 +12794,29 @@ t_rust_parity() {
   rp_prep=rp_lay
   # (the figures are the window's: their numbers left out, the rows and what they are kept)
   rp_sed='s/[0-9]+\.[0-9]+(%|M|G)/N\1/g; s/: [0-9]+(\.[0-9]+)?(,?)$/: N\2/'
-  # (2 s: NVIDIA's pmon samples once a second, and a shorter window caught labwc on one side only)
-  parity "gpu --json (both ways)" gpu -b "$B" 2s --json
+  # (labwc's engines left out: it draws now and then, and NVIDIA's pmon samples once a second, so
+  # one side's window caught it and the other's not, at 500 ms and at 2 s alike; every other
+  # process's engines, and the keys, still compared)
+  rp_gpu_nolabwc() { python3 -c 'import json, sys
+p = sys.argv[1]
+try:
+    d = json.load(open(p))
+except ValueError:
+    sys.exit(0)
+def drop(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k == "engines" and isinstance(v, dict):
+                v.pop("omabox-labwc", None)
+            drop(v)
+    elif isinstance(o, list):
+        for v in o:
+            drop(v)
+drop(d)
+json.dump(d, open(p, "w"), indent=2)' "$2"; }
+  rp_check=rp_gpu_nolabwc
+  parity "gpu --json (both ways)" gpu -b "$B" 500ms --json
+  rp_check=""
   parity "cpu --pid 1 (both ways)" cpu -b "$B" 300ms --pid 1
   # (--threads of a one-thread process of its own: PID 1's threads come in CPU order, which flakes)
   ob run -b "$B" -d -q -- sleep 600 >/dev/null 2>&1
@@ -12837,7 +12883,12 @@ t_rust_parity() {
   printf 'omabox check point whole\n' > "$ck/nosb"; chmod +x "$ck/nosb"
   printf '#!/bin/sh\r\nomabox check point whole\r\n' > "$ck/crlf"; printf '#!/nonexistent/interp -x\n' > "$ck/badint"; chmod +x "$ck/crlf" "$ck/badint"
   cp /usr/bin/true "$ck/xonly"; chmod 0711 "$ck/xonly"
-  for i in noexec adir binary nosb nowhere crlf badint xonly; do
+  # (an ELF whose loader is not there; a #! whose interpreter cannot be run; one with no newline,
+  # bash's 80-byte sample less its last byte; a CR inside the name)
+  python3 -c 'import sys; d = open("/usr/bin/true", "rb").read(); i = d.index(b"/lib64/ld-linux"); open(sys.argv[1], "wb").write(d[:i] + b"/nonexistent/ld.so\0".ljust(len(b"/lib64/ld-linux-x86-64.so.2"), b"\0") + d[i + len(b"/lib64/ld-linux-x86-64.so.2"):])' "$ck/noload"
+  printf '#!/etc/passwd\n' > "$ck/eacces"; printf '#!/nonexistent/interp' > "$ck/nonl"; printf '#!/bin/s\rh x\n' > "$ck/midcr"
+  chmod +x "$ck/noload" "$ck/eacces" "$ck/nonl" "$ck/midcr"
+  for i in noexec adir binary nosb nowhere crlf badint xonly noload eacces nonl midcr; do
     parity "check run: a scenario that is $i (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/$i"
   done
   # Signals during its box's up and during its scenario: the exit, and no check box left.

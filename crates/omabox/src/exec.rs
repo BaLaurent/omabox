@@ -246,6 +246,9 @@ pub fn status(s: std::process::ExitStatus) -> (i32, Option<i32>) {
     if s.signal() == Some(libc::SIGINT) {
         crate::sig::FG_INT.store(true, std::sync::atomic::Ordering::SeqCst);
     }
+    if let Some(sig) = s.signal() {
+        crate::sig::FG_SIG.store(sig, std::sync::atomic::Ordering::SeqCst);
+    }
     match (s.code(), s.signal()) {
         (Some(c), _) => (c, None),
         (None, Some(sig)) => (128 + sig, Some(sig)),
@@ -796,15 +799,17 @@ fn held_run(
     });
     c.stdout(stdout);
     c.stderr(Stdio::from(hw));
-    let spawned = c.spawn();
-    drop(c);
-    drop(efd);
-    let mut child = spawned?;
-    crate::sig::spawned(child.id());
-    if let Some(p) = &pid_to {
-        p.store(i32::try_from(child.id()).unwrap_or(0), Ordering::SeqCst);
-    }
+    // (spawned inside the foreground step: a signal's trap never runs between the spawn and
+    // FOREGROUND, while the child is on its way)
     let (held, out, (rc, sig)) = crate::sig::foreground(|| {
+        let spawned = c.spawn();
+        drop(c);
+        drop(efd);
+        let mut child = spawned?;
+        crate::sig::spawned(child.id());
+        if let Some(p) = &pid_to {
+            p.store(i32::try_from(child.id()).unwrap_or(0), Ordering::SeqCst);
+        }
         let held = hold(hr);
         let out = match cap {
             Some((r, w)) => {
@@ -813,8 +818,8 @@ fn held_run(
             }
             None => Vec::new(),
         };
-        (held, out, wait(&mut child))
-    });
+        std::io::Result::Ok((held, out, wait(&mut child)))
+    })?;
     if let Some(p) = &pid_to {
         p.store(0, Ordering::SeqCst);
     }
@@ -1335,10 +1340,14 @@ pub fn stdio_relay(argv: &[Vec<u8>], capture: bool, err_null: bool) -> std::io::
     c.stdin(Stdio::from(i))
         .stdout(Stdio::from(o))
         .stderr(Stdio::from(e));
-    let spawned = c.spawn();
-    drop(c);
+    // (spawned inside the foreground step, as held_run's)
+    let spawned = crate::sig::foreground(|| {
+        let spawned = c.spawn();
+        drop(c);
+        spawned.map(|mut child| wait(&mut child).0)
+    });
     let rc = match spawned {
-        Ok(mut child) => crate::sig::foreground(|| wait(&mut child).0),
+        Ok(rc) => rc,
         Err(e) => {
             let _ = writeln!(
                 std::io::stderr(),
@@ -1504,14 +1513,15 @@ fn held_run_err(
         _ => Stdio::inherit(),
     });
     c.stderr(Stdio::from(hw));
-    let spawned = c.spawn();
-    drop(c);
-    drop(efd);
-    let mut child = spawned?;
+    // (spawned inside the foreground step, as held_run's)
     let (held, (rc, sig)) = crate::sig::foreground(|| {
+        let spawned = c.spawn();
+        drop(c);
+        drop(efd);
+        let mut child = spawned?;
         let held = hold(hr);
-        (held, wait(&mut child))
-    });
+        std::io::Result::Ok((held, wait(&mut child)))
+    })?;
     Ok(HeldRun {
         rc,
         sig,

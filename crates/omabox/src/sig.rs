@@ -77,16 +77,24 @@ pub fn foreground<T>(f: impl FnOnce() -> T) -> T {
     }
     // Nothing new starts once a trap is on its way, as bash starts nothing after its trap: a TERM
     // between two steps of monitor add must not see the host rule turned off and the window made.
-    park_while_stopping();
-    let r = {
-        let _g = FOREGROUND
+    let r = loop {
+        park_while_stopping();
+        let g = FOREGROUND
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         FG_INT.store(false, Ordering::SeqCst);
+        FG_SIG.store(0, Ordering::SeqCst);
         FG_ACTIVE.store(true, Ordering::SeqCst);
+        // (a signal between the park and here: its trap goes first, nothing is started)
+        if STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
+            FG_ACTIVE.store(false, Ordering::SeqCst);
+            drop(g);
+            continue;
+        }
         let r = f();
         FG_ACTIVE.store(false, Ordering::SeqCst);
-        r
+        drop(g);
+        break r;
     };
     park_while_stopping();
     r
@@ -108,6 +116,9 @@ fn park_while_stopping() {
 /// it waited for did not die of it.
 pub static FG_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static FG_INT: AtomicBool = AtomicBool::new(false);
+/// The signal the last foreground child died of (0: none; exec::status), for a code trap's
+/// judgement during a `$(...)` (trap.rs).
+pub static FG_SIG: AtomicI32 = AtomicI32::new(0);
 
 /// DEFER_INT: main runs what bash runs in a `$(...)` subshell (monitor_add_window): an INT to omabox
 /// alone ends bash's main at once (its read of the substitution is cut short, 130) while the subshell,
@@ -120,7 +131,18 @@ pub static INT_DEFERRED: AtomicBool = AtomicBool::new(false);
 /// alone meanwhile lets the step finish, then ends this process of it (int_deferred_end).
 pub fn subst<T>(f: impl FnOnce() -> T) -> T {
     let outer = DEFER_INT.swap(true, Ordering::SeqCst);
-    SUBST_DEPTH.fetch_add(1, Ordering::SeqCst);
+    // (entered with a trap already on its way: out again and parked first, or the trap's thread
+    // would wait for a substitution that never ends)
+    loop {
+        SUBST_DEPTH.fetch_add(1, Ordering::SeqCst);
+        let main = MAIN.get() == Some(&std::thread::current().id());
+        if main && STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
+            SUBST_DEPTH.fetch_sub(1, Ordering::SeqCst);
+            park_while_stopping();
+            continue;
+        }
+        break;
+    }
     let r = f();
     let depth = SUBST_DEPTH.fetch_sub(1, Ordering::SeqCst) - 1;
     // A code trap waited for the substitution (trap.rs): it ends this process now; nothing after
@@ -147,6 +169,8 @@ pub static SUBST_STOP: AtomicBool = AtomicBool::new(false);
 /// An INT deferred (INT_DEFERRED) ends this process now, of SIGINT, as bash's main did.
 pub fn int_deferred_end() {
     if INT_DEFERRED.load(Ordering::SeqCst) {
+        // (bash's EXIT trap runs on the way, its undos: a temp file of record stop's, finding 432)
+        crate::trap::run_undos();
         // SAFETY: the default disposition back, then the signal to this process: it ends of it.
         unsafe {
             libc::signal(libc::SIGINT, libc::SIG_DFL);

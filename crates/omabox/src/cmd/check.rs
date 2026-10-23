@@ -2062,49 +2062,56 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
                     Err(e) => said(cat!(exe, ": ", crate::shots::why(&e)), 126),
                 }
             }
-            Some(libc::ENOENT) => {
-                // (a #! whose interpreter is not there: `#!/bin/sh\r` from a CRLF file, mostly)
-                let mut head = [0u8; 256];
-                let n = std::fs::File::open(&pth)
-                    .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
-                    .unwrap_or(0);
-                match head[..n].strip_prefix(b"#!") {
-                    Some(rest) => {
-                        let st = rest
-                            .iter()
-                            .position(|&c| c != b' ' && c != b'\t')
-                            .unwrap_or(rest.len());
-                        let rest = &rest[st..];
-                        let end = rest
-                            .iter()
-                            .position(|&c| matches!(c, b' ' | b'\t' | b'\n'))
-                            .unwrap_or(rest.len());
-                        // (its control characters shown as bash shows them: ^M for the CR)
-                        let mut name = Vec::new();
-                        for &c in &rest[..end] {
-                            if c < 0x20 || c == 0x7f {
-                                name.push(b'^');
-                                name.push(if c == 0x7f { b'?' } else { c + 64 });
-                            } else {
-                                name.push(c);
-                            }
-                        }
-                        said(
-                            cat!(
-                                exe,
-                                ": ",
-                                name,
-                                ": bad interpreter: No such file or directory"
-                            ),
-                            126,
-                        )
+            Some(errno) => {
+                // (a #! file the kernel refused: its interpreter named, as bash reads it from its
+                // 80-byte sample less the last byte; `#!/bin/sh\r` from a CRLF file, mostly)
+                match interp_of(&pth) {
+                    Some(name) => said(
+                        cat!(
+                            exe,
+                            ": ",
+                            name,
+                            ": bad interpreter: ",
+                            crate::shots::why(&e)
+                        ),
+                        126,
+                    ),
+                    // (an ELF whose loader is not there)
+                    None if errno == libc::ENOENT => {
+                        said(cat!(exe, ": cannot execute: required file not found"), 127)
                     }
-                    None => said(cat!(exe, ": No such file or directory"), 127),
+                    None => said(cat!(exe, ": ", crate::shots::why(&e)), 126),
                 }
             }
-            _ => said(cat!(exe, ": ", crate::shots::why(&e)), 126),
+            None => said(cat!(exe, ": ", crate::shots::why(&e)), 126),
         },
     }
+}
+
+/// A `#!` file's interpreter as bash names it in "bad interpreter": from its first 80 bytes less
+/// the last one read, blanks after the #! skipped, up to a blank or newline; a CR that ends it
+/// shown ^M (any other byte as it is). None for a file with no #!.
+fn interp_of(p: &std::path::Path) -> Option<Vec<u8>> {
+    let mut head = [0u8; 80];
+    let n = std::fs::File::open(p)
+        .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
+        .unwrap_or(0);
+    let rest = head[..n.saturating_sub(1)].strip_prefix(b"#!")?;
+    let st = rest
+        .iter()
+        .position(|&c| c != b' ' && c != b'\t')
+        .unwrap_or(rest.len());
+    let rest = &rest[st..];
+    let end = rest
+        .iter()
+        .position(|&c| matches!(c, b' ' | b'\t' | b'\n'))
+        .unwrap_or(rest.len());
+    let mut name = rest[..end].to_vec();
+    if name.last() == Some(&b'\r') {
+        name.pop();
+        name.extend_from_slice(b"^M");
+    }
+    Some(name)
 }
 
 /// PROGRAM run with ARGV and ENVP, its stdout and stderr OUT, by execve in the child: its status,
@@ -3111,6 +3118,28 @@ mod tests {
             vec![b"1,2 3x4".to_vec(), b"x".to_vec()]
         );
         assert_eq!(mask_of(b"-1,2 3x4 5"), Some(b"-1 2 3 4".to_vec()));
+    }
+
+    #[test]
+    fn interpreters_as_bash_names_them() {
+        let d = std::env::temp_dir().join(format!("omabox-interp-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&d);
+        let t = |body: &[u8]| {
+            let f = d.join("s");
+            let _ = std::fs::write(&f, body);
+            interp_of(&f)
+        };
+        assert_eq!(t(b"#!/bin/sh\r\nx\n"), Some(b"/bin/sh^M".to_vec()));
+        assert_eq!(
+            t(b"#!/nonexistent/interp"),
+            Some(b"/nonexistent/inter".to_vec())
+        );
+        assert_eq!(t(b"#! /x -e\n"), Some(b"/x".to_vec()));
+        assert_eq!(t(b"#!/bin/s\rh x\n"), Some(b"/bin/s\rh".to_vec()));
+        assert_eq!(t(b"\x7fELF"), None);
+        let long = cat!("#!/", [b'a'; 100].as_slice(), "\n");
+        assert_eq!(t(&long).map(|v| v.len()), Some(77));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

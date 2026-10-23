@@ -56,6 +56,17 @@ pub fn on_exit_code(f: impl FnOnce() + Send + 'static) -> Trap {
     })
 }
 
+/// Every undo still pending, the last made first (bash's EXIT trap on the way out).
+pub fn run_undos() {
+    let all: Vec<(u64, Undo)> = TRAPS
+        .lock()
+        .map(|mut t| std::mem::take(&mut *t))
+        .unwrap_or_default();
+    for (_, u) in all.into_iter().rev() {
+        u();
+    }
+}
+
 /// Whether an on_exit_code trap is on (a `trap 'exit 143' TERM` of bash's is set).
 pub fn code_active() -> bool {
     CODE_TRAPS.load(Ordering::SeqCst) > 0
@@ -101,19 +112,18 @@ fn take(id: u64) -> Option<Undo> {
     Some(t.remove(i).1)
 }
 
-/// Whether a foreground child ran when the INT came, read in the handler: the thread wakes later,
+/// Whether a foreground child ran when the signal came, read in the handler: the thread wakes later,
 /// when that step may be over and an in-process one begun (where bash, had it been there, would end
 /// at once: the safe side).
-static INT_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SIG_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 extern "C" fn on_signal(sig: libc::c_int) {
     let _e = crate::sig::Errno::save();
-    if sig == libc::SIGINT {
-        INT_BUSY.store(
-            crate::sig::FG_ACTIVE.load(Ordering::SeqCst),
-            Ordering::SeqCst,
-        );
-    }
+    let _ = sig;
+    SIG_BUSY.store(
+        crate::sig::FG_ACTIVE.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
     // Nothing new starts from here (a code trap inside a `$(...)` lets the substitution finish
     // first, sig::subst).
     if !(CODE_TRAPS.load(Ordering::SeqCst) > 0
@@ -152,24 +162,40 @@ fn arm() {
                 return;
             }
             let sig = libc::c_int::from(b[0]);
-            // (an INT is judged by what ran when it came alone)
-            let busy = sig == libc::SIGINT && INT_BUSY.swap(false, Ordering::SeqCst);
+            // (judged by what ran when it came: a foreground child, or main in-process)
+            let busy_at = SIG_BUSY.swap(false, Ordering::SeqCst);
+            let busy = sig == libc::SIGINT && busy_at;
             let code = CODE_TRAPS.load(Ordering::SeqCst) > 0;
-            // A code trap during a `$(...)`: bash runs it once the whole substitution is over (probed:
-            // `trap 'exit 143' TERM` during `x=$(a; b)` exits after b). Main finishes it, then parks.
+            let lock_fg = || {
+                crate::sig::FOREGROUND
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            };
+            let mut held = None;
+            // A code trap during a `$(...)`: when the child running then did not die of the signal
+            // (one to omabox alone), bash runs the trap once the whole substitution is over (probed:
+            // `trap 'exit 143' TERM` during `x=$(a; b)` exits after b): main finishes it, then
+            // parks. A group signal kills bash's subshell and bash ends at once (probed); so does one
+            // that came with no child running.
             if code && crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
-                crate::sig::SUBST_STOP.store(true, Ordering::SeqCst);
-                while crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
+                let g = busy_at.then(lock_fg);
+                if g.is_some() && crate::sig::FG_SIG.load(Ordering::SeqCst) != sig {
+                    drop(g);
+                    crate::sig::SUBST_STOP.store(true, Ordering::SeqCst);
+                    while crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                } else {
+                    crate::sig::STOPPING.store(true, Ordering::SeqCst);
+                    held = g;
                 }
             }
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
             let wait_fg = sig == libc::SIGINT || FG_TRAPS.load(Ordering::SeqCst) > 0;
-            let fg = wait_fg.then(|| {
-                crate::sig::FOREGROUND
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-            });
+            let fg = match held {
+                Some(g) => Some(g),
+                None => wait_fg.then(lock_fg),
+            };
             // An INT to omabox alone while a child ran that did not die of it: bash goes on (probed:
             // `kill -INT` of the script during a sleep, the rest of it ran, its EXIT trap at its end).
             if !code && sig == libc::SIGINT && busy && !crate::sig::FG_INT.load(Ordering::SeqCst) {
@@ -180,13 +206,7 @@ fn arm() {
                 drop(fg);
                 continue;
             }
-            let all: Vec<(u64, Undo)> = TRAPS
-                .lock()
-                .map(|mut t| std::mem::take(&mut *t))
-                .unwrap_or_default();
-            for (_, u) in all.into_iter().rev() {
-                u();
-            }
+            run_undos();
             if code {
                 // (bash's `exit 130|143|129` in its trap, its EXIT trap run on the way)
                 let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -223,11 +243,8 @@ pub fn int_as_bash() {
 /// `sleep SECS` as bash runs it: a child in the foreground (a signal's trap waits for it).
 pub fn sleep(secs: &[u8]) -> i32 {
     use std::os::unix::ffi::OsStrExt;
-    crate::sig::foreground(|| {
-        crate::sig::command("sleep")
-            .arg(std::ffi::OsStr::from_bytes(secs))
-            .status()
-            .map(|s| crate::exec::status(s).0)
-            .unwrap_or(127)
-    })
+    // (made before the foreground step: sig::command parks, which must not hold FOREGROUND)
+    let mut c = crate::sig::command("sleep");
+    c.arg(std::ffi::OsStr::from_bytes(secs));
+    crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0).unwrap_or(127))
 }
