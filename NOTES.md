@@ -9401,6 +9401,16 @@ from them.
     time. The sleeps between the polls are unchanged (CHANGELOG). Tests: none pins a sub-N wait;
     the box tests of those commands run as before.
 
+451. **`check run SCENARIO` could run a shell builtin or one of omabox's functions** (2026-10-23, #324
+    wave 4c; decided by Diogo 2026-10-22). Bash's check_run starts the scenario as `"${scen[@]}"`
+    inside bin/omabox, so a SCENARIO named like a builtin (`test`, `true`, `echo`) or a function of
+    bin/omabox's own (`say`, `die`, `cmd_up`) ran in omabox's own shell, not as a program. The Rust
+    half never did (check.rs looks the name up in PATH and execs it): a name in PATH is that
+    program, one that is not is "cannot run scenario NAME: not found in PATH", 127. **Change**
+    (Rust over bash): documented, no code (CHANGELOG; skill/reference.md says SCENARIO is a
+    program). Tests: t_rust_parity ("check run: a scenario named like omabox's say", an expected
+    difference: bash ran its function, the Rust half finds no such program).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

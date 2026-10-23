@@ -13450,6 +13450,9 @@ EOF
   rp_sed='s#[^ ]*/bin/omabox: (line [0-9]+: )?#bash: #; s/box up in [0-9]+ s/box up in N s/'
   rp_why=441 rp_bash=("err~\\(exit 127\\): bash: rp-no-such-scenario: command not found \\(") rp_rust=("err~\\(exit 127\\): omabox: check: cannot run scenario rp-no-such-scenario: not found in PATH \\(")
   parity "check run: a scenario not there, 127 (both ways)" check run --base "$ck/base" -o "$ck/o" -- rp-no-such-scenario
+  # (bash ran its own function say as the scenario; the Rust half runs programs only: finding 451)
+  rp_why=451 rp_bash=("err~: the scenario took no checkpoint \\(") rp_rust=("err~\\(exit 127\\): omabox: check: cannot run scenario say: not found in PATH \\(")
+  parity "check run: a scenario named like omabox's say" check run --base "$ck/base" -o "$ck/o" -- say
   parity "check run --json: checkpoints with 010 and 08 in them (both ways)" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/lz"
   # Scenarios bash cannot run as they are: not executable, a dir, binary; one with no #! is a
   # script bash runs itself; a path to nothing.

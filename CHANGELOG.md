@@ -103,6 +103,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   gdb's attach, `wait`'s 30 s notes), on a clock that a time change does not move. The bash omabox
   counted whole seconds of the wall clock, so they could end up to a second early. Scripts: nothing
   to change.
+- **`check run SCENARIO` always runs the program found in PATH**: a scenario named like a shell
+  builtin or one of omabox's functions (`test`, `true`, `say`) is no longer run inside omabox.
+  Scripts: nothing to change (give a path, as before, for a scenario of your own).
 
 ## 1.0.1 — unreleased
 

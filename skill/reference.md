@@ -232,7 +232,8 @@ omabox check point settings --window myapp --ignore "10,400 120x20"   # its own 
 ```
 
 The scenario runs on the host with `OMABOX` naming its box, so a bare `omabox` command goes there
-(and is the omabox running the check: its bin comes first on PATH). Files go in from the host under `$(omabox
+(and is the omabox running the check: its bin comes first on PATH). SCENARIO is a program: a path,
+or a name looked up in PATH (`test` or `true` is `/usr/bin/test`, never a shell builtin). Files go in from the host under `$(omabox
 path)/home`, or through stdin: `omabox run -- bash -s < setup.sh` runs a script of yours in the box.
 Seed data before the app starts: a redraw it does on its own can finish before a `wait change` after
 it starts, and that wait then times out; else `omabox wait still`. `check point` waits until the
