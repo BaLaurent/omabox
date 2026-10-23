@@ -751,7 +751,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 got.is_some_and(|s| size_of(&shell::path(&part)) == Some(s))
             }
             Err(e) => {
-                say(cat!(part, ": ", crate::shots::why(&e)));
+                say(cat!("record: ", crate::shots::cant_write(&part, &e)));
                 false
             }
         };
@@ -1177,7 +1177,7 @@ fn record_marks(
     let wrote = std::fs::write(shell::path(&tpart), cat!("ms\ttime\ttext\n", r.out));
     if wrote.is_err() || !r.ok() {
         if let Err(e) = wrote {
-            say(cat!(tpart, ": ", crate::shots::why(&e)));
+            say(cat!("record: ", crate::shots::cant_write(&tpart, &e)));
         }
         rm(&shell::path(&tpart));
         return Err(ctx.die(cat!("record: cannot write ", tsv)));
@@ -1202,7 +1202,7 @@ fn record_marks(
     let wrote = std::fs::write(shell::path(&vpart), &v.out);
     if wrote.is_err() || !v.ok() {
         if let Err(e) = wrote {
-            say(cat!(vpart, ": ", crate::shots::why(&e)));
+            say(cat!("record: ", crate::shots::cant_write(&vpart, &e)));
         }
         rm(&shell::path(&vpart));
         return Err(ctx.die(cat!("record: cannot write ", vtt)));
@@ -1803,7 +1803,12 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
         let ok = match f {
             Ok(f) => copy_in(ctx, &bv, InFrom::File(f))? == 0,
             Err(e) => {
-                say(cat!(so.video, ": ", crate::shots::why(&e)));
+                say(cat!(
+                    "record: cannot read ",
+                    so.video,
+                    ": ",
+                    crate::shots::why(&e)
+                ));
                 false
             }
         };

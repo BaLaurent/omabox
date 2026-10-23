@@ -1135,7 +1135,7 @@ fn self_cmd(ctx: &Ctx, args: &[Vec<u8>], err: Option<&[u8]>, env: &[(&str, &str)
         Some(p) => match std::fs::File::create(shell::path(p)) {
             Ok(f) => c.stderr(Stdio::from(f)),
             Err(e) => {
-                say(cat!(p, ": ", crate::shots::why(&e)));
+                say(cat!("check: ", crate::shots::cant_write(p, &e)));
                 return 1;
             }
         },
@@ -1534,8 +1534,7 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     let pf = f(".point");
     if let Err(e) = std::fs::write(shell::path(&pf), &point) {
-        say(cat!(pf, ": ", crate::shots::why(&e)));
-        return Err(Exit(1));
+        return Err(failed(ctx, crate::shots::cant_write(&pf, &e)));
     }
     if hoff.is_empty() && !holes.is_empty() {
         let what = hole_what(&pf);
@@ -1567,7 +1566,7 @@ fn self_out(ctx: &Ctx, args: &[Vec<u8>], file: &[u8]) -> i32 {
     let f = match std::fs::File::create(shell::path(file)) {
         Ok(f) => f,
         Err(e) => {
-            say(cat!(file, ": ", crate::shots::why(&e)));
+            say(cat!("check: ", crate::shots::cant_write(file, &e)));
             return 1;
         }
     };
@@ -1837,11 +1836,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         );
     }
     mkdirs(ctx, &outd)?;
-    if !shell::path(&outd).is_dir() {
-        // (`$(cd "$out" && pwd)`: cd's own words, the assignment's failure ends it)
-        say_cd(&outd);
-        return Err(Exit(1));
-    }
+    enter(ctx, &outd)?;
     let outd = logical(&outd);
     let nruns: usize = if approve {
         if runs.is_empty() {
@@ -1902,7 +1897,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 crate::sig::run_status(c).unwrap_or(127)
             }
             Err(e) => {
-                say(cat!(uplog, ": ", crate::shots::why(&e)));
+                say(cat!("check: ", crate::shots::cant_write(&uplog, &e)));
                 1
             }
         };
@@ -1995,13 +1990,17 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
 }
 
-/// A dir it cannot enter, in omabox's words (bash's were cd's: finding 441).
-fn say_cd(d: &[u8]) {
+/// The out folder entered (`$(cd "$out" && pwd)`), or why not said and the command ended (failed:
+/// bash's were cd's words and 1, check's "changed": findings 441, 442).
+fn enter(ctx: &Ctx, d: &[u8]) -> Res<()> {
+    if shell::path(d).is_dir() {
+        return Ok(());
+    }
     let why = match std::fs::metadata(shell::path(d)) {
         Ok(_) => "Not a directory".to_string(),
         Err(e) => crate::shots::why(&e),
     };
-    say(cat!("check: cannot enter ", d, ": ", why));
+    Err(failed(ctx, cat!("cannot enter ", d, ": ", why)))
 }
 
 /// The scenario, as bash's `PATH=... OMABOX=BOX OMABOX_SESSION="" OMABOX_CHECK_OUT=DIR SCEN... >
@@ -2010,7 +2009,7 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
     let f = match std::fs::File::create(shell::path(log)) {
         Ok(f) => f,
         Err(e) => {
-            say(cat!(log, ": ", crate::shots::why(&e)));
+            say(cat!("check: ", crate::shots::cant_write(log, &e)));
             return 1;
         }
     };
@@ -3158,6 +3157,20 @@ mod tests {
             vec![b"1,2 3x4".to_vec(), b"x".to_vec()]
         );
         assert_eq!(mask_of(b"-1,2 3x4 5"), Some(b"-1 2 3 4".to_vec()));
+    }
+
+    // A folder that is a file, or not there: said, 2 (check's own failure), not 1 ("changed").
+    #[test]
+    fn out_folder_not_entered() {
+        let mut ctx = Ctx::new(b"check", b"/x".to_vec());
+        ctx.die_rc = Some(2);
+        ctx.parsed();
+        let f = std::env::temp_dir().join(format!("omabox-enter-{}", std::process::id()));
+        let _ = std::fs::write(&f, b"");
+        assert_eq!(enter(&ctx, shell::bytes(&f)), Err(Exit(2)));
+        let _ = std::fs::remove_file(&f);
+        assert_eq!(enter(&ctx, shell::bytes(&f)), Err(Exit(2)));
+        assert_eq!(enter(&ctx, b"/"), Ok(()));
     }
 
     #[test]

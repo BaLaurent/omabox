@@ -13354,6 +13354,11 @@ EOF
   parity "check point: the screen (both ways)" check point -b "$B" rp1 -o "$ck/p"
   parity "check point -g, --ignore (both ways)" check point -b "$B" rp2 -o "$ck/p" -g "0,0 300x200" --ignore "10,10 20x20" --ignore "900,900 5x5"
   parity "check point --ignore 08: left out, as bash's arithmetic ends it (both ways)" check point -b "$B" rp3 -o "$ck/p" --ignore "08,0 10x10" --ignore "010,0 010x10"
+  # (its .point that cannot be written: bash's redirection line and 1, check's "changed"; Rust's words
+  # and 2, check's own failure: finding 442)
+  rp_ckpd() { rp_ckp; mkdir -p "$ck/p/rpx.point"; }
+  rp_why=442 rp_bash=(rc=1 'err~/rpx\.point: Is a directory$') rp_rust=(rc=2 "err~^omabox: check: cannot write [^ ]*/rpx\\.point: Is a directory$")
+  rp_prep=rp_ckpd; parity "check point: its .point cannot be written (2 in Rust)" check point -b "$B" rpx -o "$ck/p"; rp_prep=rp_ckp
   rp_ckp; ob check point -b "$B" s1 -o "$ck/p" >/dev/null 2>&1; ob check point -b "$B" s2 -o "$ck/p" -g "0,0 300x200" >/dev/null 2>&1
   rp_prep="" rp_sed='s/\(specks: [0-9]+, [0-9]+ px\)/(specks)/; s/^specks: [0-9]+, [0-9]+ px$/specks/'
   parity "check diff: two shots of the box (both ways)" check diff "$ck/p/s1.png" "$ck/p/s1.png"
