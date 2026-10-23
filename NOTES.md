@@ -9159,6 +9159,10 @@ from them.
     and up's EXIT trap sees 143 or 129 (all four fail with the bare call: up returned before the
     rule-off, its trap seeing 0); an `ok` with no window in MON_WAIT: removed, then the rule off; another add's line of the
     same name kept; a rule-off to a host that never answers given up on at HYPR_LIMIT, and said).
+    **On the port-rust branch finding 429's design C replaces this** (each monitor window a class
+    and a rule of its own, no rule turned off): mon_cleanup, mon_drain, mon_unrecord,
+    monitor_add_held, the global `omabox_monitor_rule` and their tests went with the merge, 429's
+    `mon_answer` replaced this one's; host_hyprctl's HOST_LIMIT stays (t_unit_monitors).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
