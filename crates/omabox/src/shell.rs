@@ -554,17 +554,15 @@ pub fn mktemp_in(template: &[u8]) -> Result<(std::fs::File, Vec<u8>), crate::exi
 /// `$(mktemp ARGS...)`: what it made, opened, and its path; its own words on stderr and its status
 /// when it cannot.
 pub fn mktemp_args(args: &[&[u8]]) -> Result<(std::fs::File, Vec<u8>), crate::exit::Exit> {
-    let o = crate::sig::command("mktemp")
-        .args(args.iter().map(|a| OsStr::from_bytes(a)))
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .map_err(|_| crate::exit::Exit(1))?;
-    if !o.status.success() {
-        return Err(crate::exit::Exit(
-            u8::try_from(crate::exec::status(o.status).0).unwrap_or(1),
-        ));
+    let mut c = crate::sig::command("mktemp");
+    c.args(args.iter().map(|a| OsStr::from_bytes(a)))
+        .stdin(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+    let (rc, out) = crate::sig::run_output(c).map_err(|_| crate::exit::Exit(1))?;
+    if rc != 0 {
+        return Err(crate::exit::Exit(u8::try_from(rc).unwrap_or(1)));
     }
-    let p = strip_nl(&o.stdout);
+    let p = strip_nl(&out);
     let dir = args.first().is_some_and(|a| *a == b"-d");
     let f = std::fs::OpenOptions::new()
         .read(true)

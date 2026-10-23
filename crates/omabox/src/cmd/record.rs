@@ -938,7 +938,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if let Ok(e) = dup_hi(2) {
         c.stdout(Stdio::from(e));
     }
-    let rc = crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0).unwrap_or(127));
+    let rc = crate::sig::run_status(c).unwrap_or(127);
     let secs = format!("{}.{:03}", o.hold / 1000, o.hold % 1000);
     crate::trap::sleep(secs.as_bytes());
     crate::cmd::record_stop::stop(ctx, &mut rec, &st)?;

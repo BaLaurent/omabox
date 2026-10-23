@@ -5599,8 +5599,8 @@ PYEOF
   magick "$im/a.png" -fill '#fefefe' -draw 'point 50,5' "$im/d.png"
   magick -size 90x80 xc:white "$im/c.png"
   echo no > "$im/t.png"; cp "$im/a.png" "$im/tab"$'\t'"a.png"
-  # (a montage's words logged too, the numbers in them out: a contact sheet's labels carry a time)
-  printf '#!/bin/sh\nfor a; do case $a in -composite) [ -f %s/magick.fail.compose ] && exit 1 ;; -stroke) [ -f %s/magick.fail.draw ] && exit 1 ;; *rep-fail.png*) exit 1 ;; esac; done\n[ "$1" != montage ] || echo "magick $*" | sed -E "s#%s#R#g; s/[0-9]+/N/g" >> %s/magick.log\nexec /usr/bin/magick "$@"\n' "$st" "$st" "$r" "$st" > "$r/mbin/magick"
+  # (a contact sheet's montage and --fit resize logged too, their times out: its labels carry one)
+  printf '#!/bin/sh\nfor a; do case $a in -composite) [ -f %s/magick.fail.compose ] && exit 1 ;; -stroke) [ -f %s/magick.fail.draw ] && exit 1 ;; *rep-fail.png*) exit 1 ;; esac; done\ncase "$1 $*" in montage*|*" -resize "*) echo "magick $*" | sed -E "s#%s#R#g; s/[0-9]+[.][0-9]+s/T/g" >> %s/magick.log ;; esac\nexec /usr/bin/magick "$@"\n' "$st" "$st" "$r" "$st" > "$r/mbin/magick"
   chmod +x "$r/mbin/magick"
   rp_env=("${rp_env4b[@]}" PATH="$r/mbin:$PATH")
   local rp_env4c=("${rp_env[@]}")
@@ -6018,6 +6018,13 @@ while time.time() < end:
     rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/tiles-made")
     parity "record sheet and $i while it takes the frames" record -b rc sheet "$im/a.png" -o "$r/co/s.png" --frames 3
   done
+  # A TERM to omabox alone there: bash's main dies of it at once and its subshell finishes the
+  # sheet; the Rust half's answer (a listed difference) checked on its own: 143, no sheet, its
+  # folder in the box dir gone.
+  rp4b_tilesonly; rm -f "$r/co/s.png" "$st/tiles-made"
+  local srs; srs=$(env "${rp_env4r[@]}" XDG_RUNTIME_DIR="$r/rt" "$r/rp-sig" TERM "$st/tiles-made" "$CLI" -b rc record sheet "$im/a.png" -o "$r/co/s.png" --frames 3 >/dev/null 2>&1; echo $?)
+  check_eq "record sheet and TERM to omabox alone (Rust): 143, no sheet, no .record-* left" "143 no no" \
+    "$srs $([ -e "$r/co/s.png" ] && echo yes || echo no) $(compgen -G "$r/rt/omabox/rc/.record-*" >/dev/null && echo yes || echo no)"
   # An INT during `first=$(record_first_us)` (its first-frame a FIFO the box writes 2 s after it is
   # opened), the input's temp file made: its EXIT trap runs, then 130, the file gone (finding 432).
   rp4b_fifo() { rp4b_marked
@@ -12794,36 +12801,46 @@ t_rust_parity() {
   rp_prep=rp_lay
   # (the figures are the window's: their numbers left out, the rows and what they are kept)
   rp_sed='s/[0-9]+\.[0-9]+(%|M|G)/N\1/g; s/: [0-9]+(\.[0-9]+)?(,?)$/: N\2/'
-  # (labwc's engines left out: it draws now and then, and NVIDIA's pmon samples once a second, so
-  # one side's window caught it and the other's not, at 500 ms and at 2 s alike; every other
-  # process's engines, and the keys, still compared)
-  rp_gpu_nolabwc() { python3 -c 'import json, sys
-p = sys.argv[1]
-try:
-    d = json.load(open(p))
-except ValueError:
-    sys.exit(0)
-def drop(o):
-    if isinstance(o, dict):
-        for k, v in o.items():
-            if k == "engines" and isinstance(v, dict):
-                v.pop("omabox-labwc", None)
-            drop(v)
-    elif isinstance(o, list):
-        for v in o:
-            drop(v)
-drop(d)
-json.dump(d, open(p, "w"), indent=2)' "$2"; }
-  rp_check=rp_gpu_nolabwc
+  # (NVIDIA: pmon's figures through a stand-in nvidia-smi on PATH. The real one samples once a
+  # second, and whether the box's Hyprland, quickshell or labwc drew in a sampled second (a number,
+  # not "-": an engines entry then) is the moment's, not the half's: labwc's on one side at 500 ms and
+  # at 2 s, then Hyprland's or quickshell's with labwc's left out. The stand-in prints a fixed table
+  # for every process on the host named Hyprland, quickshell or omabox-labwc (gpu keeps the box's),
+  # and logs its words: the box found on NVIDIA, its PCI slot, its processes by pid namespace and the
+  # figures made from them are still compared. The real driver's table is t_main's (gpu --json on
+  # NVIDIA lists the box's Hyprland); both halves' parsing of a fixed one, t_unit_rust_parity4's.)
+  local rpnv=$TMP/rp-nv; mkdir -p "$rpnv"
+  cat > "$rpnv/nvidia-smi" <<EOF
+#!/bin/bash
+echo "nvidia-smi \$*" >> $rpnv/log
+[ "\${1:-}" = pmon ] || exec /usr/bin/nvidia-smi "\$@"
+n=1; while [ \$# -gt 0 ]; do [ "\$1" != -c ] || n=\$2; shift; done
+echo "# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command "
+echo "# Idx           #    C/G      %      %      %      %      %      %    name "
+for i in \$(seq "\$n"); do
+  for p in \$(pgrep -x 'Hyprland|quickshell|omabox-labwc' | sort -n); do
+    case \$(cat /proc/\$p/comm 2>/dev/null) in
+      Hyprland) v="     3      1      -      -      -      -";;
+      quickshell) v="     \$i      -      0      -      -      -";;
+      *) v="     -      -      -      -      -      -";;
+    esac
+    printf '    0 %10d     G %s    %s\\n' "\$p" "\$v" "\$(cat /proc/\$p/comm 2>/dev/null)"
+  done
+done
+EOF
+  chmod +x "$rpnv/nvidia-smi"
+  rp_gpu_also() { cat "$rpnv/log" 2>/dev/null; rm -f "$rpnv/log"; }
+  rp_env=(PATH="$rpnv:$PATH") rp_also=rp_gpu_also
   parity "gpu --json (both ways)" gpu -b "$B" 500ms --json
+  rp_env=() rp_also=rp_lay_also
   rp_check=""
   parity "cpu --pid 1 (both ways)" cpu -b "$B" 300ms --pid 1
   # (--threads of a one-thread process of its own: PID 1's threads come in CPU order, which flakes)
   ob run -b "$B" -d -q -- sleep 600 >/dev/null 2>&1
   parity "cpu --app --threads --json (both ways)" cpu -b "$B" 300ms --app sleep --threads --json
-  rp_sed='s/^  [^ ]+ +[0-9]+\.[0-9]%$/  ROW/'
+  rp_sed='s/^  [^ ]+ +[0-9]+\.[0-9]%$/  ROW/' rp_env=(PATH="$rpnv:$PATH") rp_also=rp_gpu_also
   parity "gpu (both ways): its rows" gpu -b "$B" 300ms
-  rp_sed=""
+  rp_sed="" rp_env=() rp_also=rp_lay_also
   check "...the box lived through them" ob hyprctl -b "$B" version
   # (The main screen's drop and back are on the stand-in desktop of t_unit_rust_parity4, and t_output's
   # on a real box: here the main screen dropped once more, after it was back, crashed this Hyprland
@@ -12908,6 +12925,9 @@ json.dump(d, open(p, "w"), indent=2)' "$2"; }
     rp_wrap=(env RP_LINGER=8 "$r_sig" "$i" "$ck/scen-started")
     parity "check run and $i during its scenario (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/slow"
   done
+  # (a scenario a Ctrl-C kills: bash ends 130 at once, its boxes taken down)
+  rp_wrap=(env RP_LINGER=8 "$r_sig" group-INT "$ck/o/run1.log")
+  parity "check run and group-INT killing a bare sleep scenario (both ways)" check run --base "$ck/base" -o "$ck/o" -- sleep 6
   rp_wrap=() rp_also=rp_ckls; rp_ckdown
   # --approve into a base that cannot be made: mkdir's failure ends it, 1, its boxes gone.
   mkdir -p "$ck/ro"; chmod 555 "$ck/ro"

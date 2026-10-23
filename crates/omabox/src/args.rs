@@ -426,7 +426,7 @@ pub fn name_arg(ctx: &Ctx, cmd: &str, args: &[Vec<u8>]) -> Res<Vec<u8>> {
 pub fn usage(cmd: &str) -> Res<()> {
     let mut c = crate::sig::omabox_cmd();
     c.args(["help", cmd]);
-    let rc = c.status().map(|s| crate::exec::status(s).0).unwrap_or(126);
+    let rc = crate::sig::run_status(c).unwrap_or(126);
     crate::cmd::hyprctl::code(rc)
 }
 

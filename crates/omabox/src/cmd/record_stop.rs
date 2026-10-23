@@ -798,7 +798,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 c.arg("--")
                     .arg(std::ffi::OsStr::from_bytes(src))
                     .stdout(std::process::Stdio::from(o));
-                crate::sig::foreground(|| c.status().is_ok_and(|s| s.success()))
+                crate::sig::run_status(c).is_ok_and(|rc| rc == 0)
             };
             if !put(&tsv, &so.mfd) || !put(&cat!(tmpd, "/v.vtt"), &so.vfd) {
                 let _ = std::fs::remove_dir_all(shell::path(&tmpd));
@@ -1369,14 +1369,13 @@ fn record_overlay(
 ) -> Option<Vec<u8>> {
     let mut feed = Vec::new();
     if !input.is_empty() && shell::path(input).is_file() && show {
-        let o = crate::sig::command("sort")
-            .args(["-s", "-n", "-k1,1", "--"])
+        let mut c = crate::sig::command("sort");
+        c.args(["-s", "-n", "-k1,1", "--"])
             .arg(std::ffi::OsStr::from_encoded_bytes_checked(input))
             .stdin(std::process::Stdio::inherit())
-            .stderr(std::process::Stdio::inherit())
-            .output()
-            .ok()?;
-        feed.extend(o.stdout);
+            .stderr(std::process::Stdio::inherit());
+        let (_, o) = crate::sig::run_output(c).ok()?;
+        feed.extend(o);
     }
     if caps && !marks.is_empty() {
         let s = sort(&["-s", "-t", "\t", "-k1,1n"], &cat!(marks, "\n"));
@@ -1408,12 +1407,20 @@ fn record_overlay(
     c.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit());
-    let mut ch = c.spawn().ok()?;
-    let si = ch.stdin.take()?;
-    let feeder = crate::exec::feed(si.into(), feed);
-    let o = crate::sig::foreground(|| ch.wait_with_output()).ok()?;
-    let _ = feeder.join();
-    o.status.success().then_some(o.stdout)
+    // (a foreground child, sig::run_child: fed, read, its end recorded)
+    let (out, (rc, _)) = crate::sig::run_child(c, false, |ch| {
+        let feeder = ch.stdin.take().map(|si| crate::exec::feed(si.into(), feed));
+        let mut out = Vec::new();
+        if let Some(mut o) = ch.stdout.take() {
+            let _ = std::io::Read::read_to_end(&mut o, &mut out);
+        }
+        if let Some(f) = feeder {
+            let _ = f.join();
+        }
+        out
+    })
+    .ok()?;
+    (rc == 0).then_some(out)
 }
 
 /// OsStr from bytes (Unix).
@@ -1745,14 +1752,13 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
                 .ok()
                 .and_then(|f| {
                     let fd = dup_hi(num(&so.mfromfd) as i32).ok()?;
-                    crate::sig::command("timeout")
-                        .args(["10", "head", "-c", "1048576"])
+                    let mut c = crate::sig::command("timeout");
+                    c.args(["10", "head", "-c", "1048576"])
                         .stdin(std::process::Stdio::from(fd))
-                        .stdout(std::process::Stdio::from(f))
-                        .status()
-                        .ok()
+                        .stdout(std::process::Stdio::from(f));
+                    crate::sig::run_status(c).ok()
                 })
-                .is_some_and(|s| s.success());
+                .is_some_and(|rc| rc == 0);
             if !ok {
                 let _ = std::fs::remove_dir_all(shell::path(&tmpd));
                 return Err(ctx.die("record sheet: cannot read the marks"));

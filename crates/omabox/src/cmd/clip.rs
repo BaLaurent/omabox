@@ -182,8 +182,8 @@ fn host_wl(wl: &[u8], args: &[&[u8]]) -> std::process::Command {
 }
 
 /// A command's status as bash's `$?` (127 for one that could not start).
-fn status(c: &mut std::process::Command) -> i32 {
-    crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0)).unwrap_or(127)
+fn status(c: std::process::Command) -> i32 {
+    crate::sig::run_status(c).unwrap_or(127)
 }
 
 /// `>"/dev/fd/N"`: the file open again for writing, emptied, from its start (a description of its
@@ -209,8 +209,6 @@ fn into_file(mut c: std::process::Command, f: &File, e: &File, n: usize) -> i32 
     };
     c.stdout(Stdio::from(w));
     c.stderr(reopen_w(e).map_or(Stdio::null(), Stdio::from));
-    let child = c.spawn();
-    drop(c);
     let mut sink = reopen_w(f);
     let reader = std::thread::spawn(move || {
         let got = read_all(r, Some(n));
@@ -218,12 +216,7 @@ fn into_file(mut c: std::process::Command, f: &File, e: &File, n: usize) -> i32 
             let _ = std::io::Write::write_all(s, &got);
         }
     });
-    let rc = match child {
-        Ok(mut ch) => {
-            crate::sig::foreground(|| ch.wait().map(|s| crate::exec::status(s).0)).unwrap_or(1)
-        }
-        Err(_) => 127,
-    };
+    let rc = crate::sig::run_status(c).unwrap_or(127);
     let _ = reader.join();
     rc
 }
@@ -373,10 +366,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let mut c = host_wl(&wl, &[b"timeout", b"10", b"wl-paste", b"--list-types"]);
         c.stdin(Stdio::inherit())
             .stderr(reopen_w(&e).map_or(Stdio::null(), Stdio::from));
-        let o = crate::sig::foreground(|| {
-            c.output()
-                .map(|o| (crate::exec::status(o.status).0, o.stdout))
-        });
+        let o = crate::sig::run_output(c);
         let (r, out) = o.unwrap_or((127, Vec::new()));
         types = shell::subst(&out);
         if r != 0 {
@@ -545,7 +535,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         c.stdin(reopen_r(&f).map_or(Stdio::null(), Stdio::from))
             .stdout(Stdio::null())
             .stderr(reopen_w(&e).map_or(Stdio::null(), Stdio::from));
-        if status(&mut c) != 0 {
+        if status(c) != 0 {
             return Err(ctx.die(cat!(
                 "clip: could not put it on your clipboard: ",
                 err_text(&e)

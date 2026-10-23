@@ -72,30 +72,8 @@ pub fn tool<A: AsRef<[u8]>>(name: &str, args: &[A], input: Option<&[u8]>, err: E
         (Err::Null, _) | (Err::Out, None) => c.stderr(Stdio::null()),
         (Err::Inherit, _) => c.stderr(Stdio::inherit()),
     };
-    // (spawn and wait one foreground step, as bash's child is from its fork on)
-    crate::sig::foreground(|| {
-        let child = c.spawn();
-        drop(c);
-        let mut child = match child {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = read_all(r, None);
-                // bash's own line for a command it could not run (in the child, after its
-                // redirections: where jq's stderr goes), less its "SCRIPT: line N: ".
-                let (rc, m) = not_run(name, &e);
-                match err {
-                    Err::Inherit => {
-                        let _ = std::io::Write::write_all(&mut std::io::stderr(), &m);
-                    }
-                    Err::Out => return Ran { rc, out: m },
-                    Err::Null => {}
-                }
-                return Ran {
-                    rc,
-                    out: Vec::new(),
-                };
-            }
-        };
+    // (a foreground child, sig::run_child)
+    let ran = crate::sig::run_child(c, false, |child| {
         let feeder = match (input, child.stdin.take()) {
             (Some(i), Some(si)) => Some(feed(si.into(), i.to_vec())),
             _ => None,
@@ -104,9 +82,27 @@ pub fn tool<A: AsRef<[u8]>>(name: &str, args: &[A], input: Option<&[u8]>, err: E
         if let Some(f) = feeder {
             let _ = f.join();
         }
-        let rc = child.wait().map(|s| crate::exec::status(s).0).unwrap_or(1);
-        Ran { rc, out }
-    })
+        out
+    });
+    match ran {
+        Ok((out, (rc, _))) => Ran { rc, out },
+        Err(e) => {
+            // bash's own line for a command it could not run (in the child, after its
+            // redirections: where jq's stderr goes), less its "SCRIPT: line N: ".
+            let (rc, m) = not_run(name, &e);
+            match err {
+                Err::Inherit => {
+                    let _ = std::io::Write::write_all(&mut std::io::stderr(), &m);
+                }
+                Err::Out => return Ran { rc, out: m },
+                Err::Null => {}
+            }
+            Ran {
+                rc,
+                out: Vec::new(),
+            }
+        }
+    }
 }
 
 /// Bash's status and words for a tool not run: 127 "jq: command not found" when none is on PATH, else

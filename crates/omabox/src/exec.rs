@@ -791,6 +791,7 @@ fn held_run(
     }
     fds.keep.push(efd.as_raw_fd());
     let pid_to = fds.pid.take();
+    let bg = fds.bg;
     let mut c = command(&argv, fds);
     c.stdin(match stdin {
         In::Inherit => Stdio::inherit(),
@@ -799,13 +800,9 @@ fn held_run(
     });
     c.stdout(stdout);
     c.stderr(Stdio::from(hw));
-    // (spawned inside the foreground step: a signal's trap never runs between the spawn and
-    // FOREGROUND, while the child is on its way)
-    let (held, out, (rc, sig)) = crate::sig::foreground(|| {
-        let spawned = c.spawn();
-        drop(c);
+    // (a foreground child, sig::run_child; one bash backgrounds, INT ignored, is not busy)
+    let ((held, out), (rc, sig)) = crate::sig::run_child(c, bg, |child| {
         drop(efd);
-        let mut child = spawned?;
         crate::sig::spawned(child.id());
         if let Some(p) = &pid_to {
             p.store(i32::try_from(child.id()).unwrap_or(0), Ordering::SeqCst);
@@ -818,7 +815,7 @@ fn held_run(
             }
             None => Vec::new(),
         };
-        std::io::Result::Ok((held, out, wait(&mut child)))
+        (held, out)
     })?;
     if let Some(p) = &pid_to {
         p.store(0, Ordering::SeqCst);
@@ -1340,12 +1337,8 @@ pub fn stdio_relay(argv: &[Vec<u8>], capture: bool, err_null: bool) -> std::io::
     c.stdin(Stdio::from(i))
         .stdout(Stdio::from(o))
         .stderr(Stdio::from(e));
-    // (spawned inside the foreground step, as held_run's)
-    let spawned = crate::sig::foreground(|| {
-        let spawned = c.spawn();
-        drop(c);
-        spawned.map(|mut child| wait(&mut child).0)
-    });
+    // (a foreground child, sig::run_child)
+    let spawned = crate::sig::run_status(c);
     let rc = match spawned {
         Ok(rc) => rc,
         Err(e) => {
@@ -1501,6 +1494,7 @@ fn held_run_err(
         *w = format!("OMABOX_EFD={}", efd.as_raw_fd()).into_bytes();
     }
     fds.keep.push(efd.as_raw_fd());
+    let bg = fds.bg;
     let mut c = command(&argv, fds);
     c.stdin(match stdin {
         In::Inherit => Stdio::inherit(),
@@ -1513,14 +1507,10 @@ fn held_run_err(
         _ => Stdio::inherit(),
     });
     c.stderr(Stdio::from(hw));
-    // (spawned inside the foreground step, as held_run's)
-    let (held, (rc, sig)) = crate::sig::foreground(|| {
-        let spawned = c.spawn();
-        drop(c);
+    // (a foreground child, sig::run_child)
+    let (held, (rc, sig)) = crate::sig::run_child(c, bg, |_| {
         drop(efd);
-        let mut child = spawned?;
-        let held = hold(hr);
-        std::io::Result::Ok((held, wait(&mut child)))
+        hold(hr)
     })?;
     Ok(HeldRun {
         rc,

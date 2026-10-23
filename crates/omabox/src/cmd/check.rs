@@ -99,31 +99,32 @@ fn py(args: &[Vec<u8>], input: Option<&[u8]>, err_null: bool) -> jq::Ran {
     } else {
         Stdio::inherit()
     });
-    let Ok(mut child) = c.spawn() else {
-        let _ = std::io::stderr().write_all(b"/usr/bin/python3: No such file or directory\n");
-        return jq::Ran {
-            rc: 127,
-            out: Vec::new(),
+    // (a foreground child, sig::run_child: fed, read, its end recorded)
+    let ran = crate::sig::run_child(c, false, |child| {
+        let feeder = match (input, child.stdin.take()) {
+            (Some(i), Some(si)) => Some(crate::exec::feed(si.into(), i.to_vec())),
+            _ => None,
         };
-    };
-    let feeder = match (input, child.stdin.take()) {
-        (Some(i), Some(si)) => Some(crate::exec::feed(si.into(), i.to_vec())),
-        _ => None,
-    };
-    let stdout = child.stdout.take();
-    let (out, rc) = crate::sig::foreground(|| {
-        let out = stdout
+        let out = child
+            .stdout
+            .take()
             .map(|s| crate::exec::read_all(s.into(), None))
             .unwrap_or_default();
         if let Some(f) = feeder {
             let _ = f.join();
         }
-        (
-            out,
-            child.wait().map(|s| crate::exec::status(s).0).unwrap_or(1),
-        )
+        out
     });
-    jq::Ran { rc, out }
+    match ran {
+        Ok((out, (rc, _))) => jq::Ran { rc, out },
+        Err(_) => {
+            let _ = std::io::stderr().write_all(b"/usr/bin/python3: No such file or directory\n");
+            jq::Ran {
+                rc: 127,
+                out: Vec::new(),
+            }
+        }
+    }
 }
 
 /// `<<<"$V"`: V and a newline.
@@ -284,13 +285,9 @@ fn say_raw(v: &[u8]) {
 }
 
 fn run_tool(name: &str, args: &[Vec<u8>]) -> i32 {
-    crate::sig::foreground(|| {
-        crate::sig::command(name)
-            .args(args.iter().map(|a| OsStr::from_bytes(a)))
-            .status()
-            .map(|s| crate::exec::status(s).0)
-            .unwrap_or(127)
-    })
+    let mut c = crate::sig::command(name);
+    c.args(args.iter().map(|a| OsStr::from_bytes(a)));
+    crate::sig::run_status(c).unwrap_or(127)
 }
 
 /// `cut -d' ' -f1,2 <<<"$REGIONS"`: each line's first two fields.
@@ -571,16 +568,14 @@ fn check_ids(dir: &[u8]) -> Vec<Vec<u8>> {
     if !shell::path(dir).is_dir() {
         return Vec::new();
     }
-    let find = crate::sig::foreground(|| {
-        crate::sig::command("find")
-            .arg(OsStr::from_bytes(dir))
-            .args(["-maxdepth", "1", "-name", "*.point", "-printf", "%T@ %f\n"])
-            .stdin(Stdio::inherit())
-            .stderr(Stdio::null())
-            .output()
-            .map(|o| o.stdout)
-            .unwrap_or_default()
-    });
+    let mut c = crate::sig::command("find");
+    c.arg(OsStr::from_bytes(dir))
+        .args(["-maxdepth", "1", "-name", "*.point", "-printf", "%T@ %f\n"])
+        .stdin(Stdio::inherit())
+        .stderr(Stdio::null());
+    let find = crate::sig::run_output(c)
+        .map(|(_, o)| o)
+        .unwrap_or_default();
     let sorted = jq::tool("sort", &["-n"], Some(&find), jq::Err::Inherit).out;
     let sed = jq::tool(
         "sed",
@@ -1090,7 +1085,7 @@ fn self_cmd(ctx: &Ctx, args: &[Vec<u8>], err: Option<&[u8]>, env: &[(&str, &str)
         },
         None => c.stderr(Stdio::null()),
     };
-    crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0).unwrap_or(127))
+    crate::sig::run_status(c).unwrap_or(127)
 }
 
 /// `$(tail -n 1 FILE)`.
@@ -1528,24 +1523,18 @@ fn self_out(ctx: &Ctx, args: &[Vec<u8>], file: &[u8]) -> i32 {
     c.arg("-b").arg(OsStr::from_bytes(&ctx.name));
     c.args(args.iter().map(|a| OsStr::from_bytes(a)));
     c.stdout(Stdio::from(f)).stderr(Stdio::null());
-    crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0).unwrap_or(127))
+    crate::sig::run_status(c).unwrap_or(127)
 }
 
 // --- check run ---
 
 /// check_env BOX: what the box of a run was (`ls --json` | jq), `{}` when that fails.
 fn check_env(box_name: &[u8]) -> Vec<u8> {
-    let ls = crate::sig::foreground(|| {
-        crate::sig::omabox_cmd()
-            .args(["ls", "--json"])
-            .stdin(Stdio::inherit())
-            .stderr(Stdio::null())
-            .output()
-    });
-    let (lrc, lout) = match ls {
-        Ok(o) => (crate::exec::status(o.status).0, o.stdout),
-        Err(_) => (127, Vec::new()),
-    };
+    let mut c = crate::sig::omabox_cmd();
+    c.args(["ls", "--json"])
+        .stdin(Stdio::inherit())
+        .stderr(Stdio::null());
+    let (lrc, lout) = crate::sig::run_output(c).unwrap_or((127, Vec::new()));
     let ver = std::fs::read(crate::root().join("VERSION"))
         .map(|v| strip_nl(&v))
         .unwrap_or_default();
@@ -1861,9 +1850,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let rc = match std::fs::File::create(shell::path(&uplog)) {
             Ok(f) => {
                 c.stderr(Stdio::from(f));
-                crate::sig::foreground(|| {
-                    c.status().map(|s| crate::exec::status(s).0).unwrap_or(127)
-                })
+                crate::sig::run_status(c).unwrap_or(127)
             }
             Err(e) => {
                 say(cat!(uplog, ": ", crate::shots::why(&e)));
@@ -1900,15 +1887,13 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let path = cat!(root_bin, ":", shell::env_or_empty("PATH"));
         let runlog = cat!(outd, "/run", k.to_string(), ".log");
         let rc = scenario(&scen, &path, &bname, &rund, &runlog);
-        let _ = crate::sig::foreground(|| {
-            crate::sig::omabox_cmd()
-                .arg("down")
-                .arg(OsStr::from_bytes(&bname))
-                .stdin(Stdio::inherit())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-        });
+        let mut c = crate::sig::omabox_cmd();
+        c.arg("down")
+            .arg(OsStr::from_bytes(&bname))
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let _ = crate::sig::run_status(c);
         if rc != 0 {
             say(cat!(
                 "check: the scenario failed in run ",
@@ -2043,7 +2028,8 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
         Ok(rc) => rc,
         Err(e) => match e.raw_os_error() {
             Some(libc::ENOEXEC) => {
-                let mut head = [0u8; 80];
+                // (bash 5.3's sample: 128 bytes)
+                let mut head = [0u8; 128];
                 let n = std::fs::File::open(&pth)
                     .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
                     .unwrap_or(0);
@@ -2064,8 +2050,10 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
             }
             Some(errno) => {
                 // (a #! file the kernel refused: its interpreter named, as bash reads it from its
-                // 80-byte sample less the last byte; `#!/bin/sh\r` from a CRLF file, mostly)
-                match interp_of(&pth) {
+                // 128-byte sample less the last byte; `#!/bin/sh\r` from a CRLF file, mostly)
+                // (E2BIG, ENOMEM: bash says the words alone, #! or not)
+                let plain = matches!(errno, libc::E2BIG | libc::ENOMEM);
+                match interp_of(&pth).filter(|_| !plain) {
                     Some(name) => said(
                         cat!(
                             exe,
@@ -2088,11 +2076,11 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
     }
 }
 
-/// A `#!` file's interpreter as bash names it in "bad interpreter": from its first 80 bytes less
+/// A `#!` file's interpreter as bash names it in "bad interpreter": from its first 128 bytes less
 /// the last one read, blanks after the #! skipped, up to a blank or newline; a CR that ends it
 /// shown ^M (any other byte as it is). None for a file with no #!.
 fn interp_of(p: &std::path::Path) -> Option<Vec<u8>> {
-    let mut head = [0u8; 80];
+    let mut head = [0u8; 128];
     let n = std::fs::File::open(p)
         .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
         .unwrap_or(0);
@@ -2150,7 +2138,8 @@ fn exec_in_child(
             Err(std::io::Error::last_os_error())
         });
     }
-    let r = crate::sig::foreground(|| c.status()).map(|s| crate::exec::status(s).0);
+    // (a foreground child, sig::run_child: a group Ctrl-C that kills it is the foreground's)
+    let r = crate::sig::run_status(c);
     drop((prog, cargv));
     r
 }
@@ -3137,8 +3126,11 @@ mod tests {
         assert_eq!(t(b"#! /x -e\n"), Some(b"/x".to_vec()));
         assert_eq!(t(b"#!/bin/s\rh x\n"), Some(b"/bin/s\rh".to_vec()));
         assert_eq!(t(b"\x7fELF"), None);
+        // (bash 5.3.20, probed: 100 a's named whole, 130 cut to 124)
         let long = cat!("#!/", [b'a'; 100].as_slice(), "\n");
-        assert_eq!(t(&long).map(|v| v.len()), Some(77));
+        assert_eq!(t(&long).map(|v| v.len()), Some(101));
+        let longer = cat!("#!/", [b'a'; 130].as_slice(), "\n");
+        assert_eq!(t(&longer).map(|v| v.len()), Some(125));
         let _ = std::fs::remove_dir_all(&d);
     }
 

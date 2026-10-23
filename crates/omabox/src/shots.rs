@@ -40,13 +40,12 @@ pub fn dirname(p: &[u8]) -> Vec<u8> {
 
 /// `mkdir -p -- DIR`: its own words on stderr when it cannot.
 pub fn mkdir_p(dir: &[u8]) -> bool {
-    crate::sig::command("mkdir")
-        .arg("-p")
+    let mut c = crate::sig::command("mkdir");
+    c.arg("-p")
         .arg("--")
         .arg(std::ffi::OsStr::from_bytes(dir))
-        .stdin(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+        .stdin(Stdio::null());
+    crate::sig::run_status(c).is_ok_and(|rc| rc == 0)
 }
 
 /// `readlink -f -- V`, empty when it fails (`[ "$X" = "$(readlink -f -- "$V")" ]`).
@@ -72,13 +71,12 @@ pub fn mv_f(src: &[u8], dst: &[u8]) -> bool {
     if std::fs::rename(shell::path(src), shell::path(&to)).is_ok() {
         return true;
     }
-    crate::sig::command("mv")
-        .args(["-f", "--"])
+    let mut c = crate::sig::command("mv");
+    c.args(["-f", "--"])
         .arg(std::ffi::OsStr::from_bytes(src))
         .arg(std::ffi::OsStr::from_bytes(dst))
-        .stdin(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+        .stdin(Stdio::null());
+    crate::sig::run_status(c).is_ok_and(|rc| rc == 0)
 }
 
 /// strerror's words for an error, as bash says them after a redirection that failed.
@@ -151,14 +149,14 @@ pub fn fd_file(ctx: &Ctx, n: &[u8], write: bool, what: &str) -> Res<()> {
         (false, _) => return Err(ctx.die(cat!(what, ": fd ", n, " is not open for reading"))),
         (true, _) => return Err(ctx.die(cat!(what, ": fd ", n, " is not open for writing"))),
     }
-    let t = crate::sig::command("stat")
-        .args(["-f", "-c", "%T"])
+    let mut c = crate::sig::command("stat");
+    c.args(["-f", "-c", "%T"])
         .arg(std::ffi::OsStr::from_bytes(&dev))
-        .stderr(Stdio::null())
-        .output()
+        .stderr(Stdio::null());
+    let t = crate::sig::run_output(c)
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| strip_nl(&o.stdout));
+        .filter(|(rc, _)| *rc == 0)
+        .map(|(_, out)| strip_nl(&out));
     let Some(t) = t else {
         return Err(ctx.die(cat!(what, ": fd ", n, ": cannot tell its filesystem")));
     };

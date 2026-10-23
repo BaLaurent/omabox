@@ -94,7 +94,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .and_then(|f| {
                 let f2 = f.try_clone()?;
                 c.stdout(f).stderr(f2);
-                crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0))
+                crate::sig::run_status(c)
             })
             .is_ok_and(|rc| rc == 0);
         if !ok {
@@ -383,7 +383,7 @@ fn gpu_release(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut c = crate::sig::omabox_cmd();
     c.arg("down")
         .args(names.iter().map(|n| std::ffi::OsStr::from_bytes(n)));
-    let rc = crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0)).unwrap_or(126);
+    let rc = crate::sig::run_status(c).unwrap_or(126);
     crate::cmd::hyprctl::code(rc)
 }
 

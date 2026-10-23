@@ -26,15 +26,15 @@ pub fn host_session(ctx: &Ctx) -> Result<Vec<u8>, Vec<u8>> {
 pub fn host_session_wl(ctx: &Ctx) -> Result<(Vec<u8>, Vec<u8>), Vec<u8>> {
     let rt = shell::env_or_empty("XDG_RUNTIME_DIR");
     let sig = shell::env_or_empty("HYPRLAND_INSTANCE_SIGNATURE");
-    let all = crate::sig::command("hyprctl")
-        .args(["-j", "instances"])
+    let mut c = crate::sig::command("hyprctl");
+    c.args(["-j", "instances"])
         .env("HYPRLAND_INSTANCE_SIGNATURE", GUARD)
         .stdin(Stdio::inherit())
-        .stderr(Stdio::null())
-        .output()
+        .stderr(Stdio::null());
+    let all = crate::sig::run_output(c)
         .ok()
-        .filter(|o| o.status.success())
-        .map(|o| shell::subst(&o.stdout))
+        .filter(|(rc, _)| *rc == 0)
+        .map(|(_, out)| shell::subst(&out))
         .filter(|a| jq::jq(&["-e", r#"type == "array""#], Some(a), jq::Err::Null).ok())
         .unwrap_or(b"[]".to_vec());
     let live = !sig.is_empty()
@@ -113,11 +113,8 @@ pub fn host_hyprctl(ctx: &Ctx, args: &[&[u8]], quiet: bool) -> (i32, Vec<u8>) {
         } else {
             Stdio::inherit()
         });
-    // (the status read inside: a child's death by SIGINT is the foreground's, sig::FG_INT)
-    match crate::sig::foreground(|| {
-        c.output()
-            .map(|o| (crate::exec::status(o.status).0, o.stdout))
-    }) {
+    // (a foreground child, sig::run_child: its death by SIGINT read inside, sig::FG_INT)
+    match crate::sig::run_output(c) {
         Ok(o) => o,
         Err(_) => {
             if !quiet {
@@ -150,19 +147,11 @@ pub fn host_eval(ctx: &Ctx, lua: &[u8]) -> Res<()> {
                     if let Some(w2) = w2 {
                         c.stderr(Stdio::from(w2));
                     }
-                    // (a foreground child: a trap on its way waits for it, and nothing new starts)
-                    crate::sig::foreground(|| {
-                        let child = c.spawn();
-                        drop(c);
-                        let got = crate::exec::read_all(r, None);
-                        match child {
-                            Ok(mut ch) => {
-                                let _ = ch.wait().map(crate::exec::status);
-                                shell::subst(&got)
-                            }
-                            Err(_) => b"hyprctl: command not found".to_vec(),
-                        }
-                    })
+                    // (a foreground child, sig::run_child)
+                    match crate::sig::run_child(c, false, |_| crate::exec::read_all(r, None)) {
+                        Ok((got, _)) => shell::subst(&got),
+                        Err(_) => b"hyprctl: command not found".to_vec(),
+                    }
                 }
                 Err(_) => Vec::new(),
             }

@@ -69,35 +69,79 @@ pub fn set_main() {
 pub static STOPPING: AtomicBool = AtomicBool::new(false);
 pub static GATED: AtomicBool = AtomicBool::new(false);
 
-/// F as a foreground command: on main's thread, with FOREGROUND held; once it is over, a trap on its
-/// way runs before anything more (main waits there for it to end this process), as bash's does.
-pub fn foreground<T>(f: impl FnOnce() -> T) -> T {
+/// C run as bash runs a foreground command (every child of main's waited for goes through here):
+/// C made before (sig::command parks, never under FOREGROUND), then with FOREGROUND held: spawned
+/// (nothing once a trap is on its way), FG_ACTIVE raised only once it exists (unless it was
+/// started with SIGINT ignored, INT_IGNORED: a group Ctrl-C reaches no child then, and is no INT
+/// to omabox alone, finding 112's `<(...)`), WITH run on it (feeding or reading its pipes), its end
+/// read and recorded (exec::status: FG_INT, FG_SIG) before the lock drops. C is dropped right after
+/// the spawn, so the pipe ends it held close. Its status and signal, or the spawn's error.
+pub fn run_child<T>(
+    c: Command,
+    int_ignored: bool,
+    with: impl FnOnce(&mut std::process::Child) -> T,
+) -> std::io::Result<(T, (i32, Option<i32>))> {
+    let mut c = c;
+    let end = |ch: &mut std::process::Child| match ch.wait() {
+        Ok(s) => crate::exec::status(s),
+        Err(_) => (1, None),
+    };
     if MAIN.get() != Some(&std::thread::current().id()) {
-        return f();
+        let spawned = c.spawn();
+        drop(c);
+        let mut ch = spawned?;
+        let t = with(&mut ch);
+        let st = end(&mut ch);
+        return Ok((t, st));
     }
-    // Nothing new starts once a trap is on its way, as bash starts nothing after its trap: a TERM
-    // between two steps of monitor add must not see the host rule turned off and the window made.
     let r = loop {
         park_while_stopping();
         let g = FOREGROUND
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        FG_INT.store(false, Ordering::SeqCst);
-        FG_SIG.store(0, Ordering::SeqCst);
-        FG_ACTIVE.store(true, Ordering::SeqCst);
-        // (a signal between the park and here: its trap goes first, nothing is started)
+        // (a signal between the park and the lock: its trap first, nothing started)
         if STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
-            FG_ACTIVE.store(false, Ordering::SeqCst);
             drop(g);
             continue;
         }
-        let r = f();
+        FG_INT.store(false, Ordering::SeqCst);
+        FG_SIG.store(0, Ordering::SeqCst);
+        let spawned = c.spawn();
+        drop(c);
+        let mut ch = match spawned {
+            Ok(ch) => ch,
+            Err(e) => {
+                drop(g);
+                break Err(e);
+            }
+        };
+        FG_ACTIVE.store(!int_ignored, Ordering::SeqCst);
+        let t = with(&mut ch);
+        let st = end(&mut ch);
         FG_ACTIVE.store(false, Ordering::SeqCst);
         drop(g);
-        break r;
+        break Ok((t, st));
     };
     park_while_stopping();
     r
+}
+
+/// run_child for a status: bash's `$?` (128+N for signal N).
+pub fn run_status(c: Command) -> std::io::Result<i32> {
+    run_child(c, false, |_| ()).map(|(_, (rc, _))| rc)
+}
+
+/// run_child for `$(...)`-like output: its stdout read whole (a pipe of its own), and its status.
+pub fn run_output(mut c: Command) -> std::io::Result<(i32, Vec<u8>)> {
+    c.stdout(std::process::Stdio::piped());
+    run_child(c, false, |ch| {
+        let mut out = Vec::new();
+        if let Some(mut o) = ch.stdout.take() {
+            let _ = std::io::Read::read_to_end(&mut o, &mut out);
+        }
+        out
+    })
+    .map(|(out, (rc, _))| (rc, out))
 }
 
 /// Main waits here while a trap is on its way (it ends this process, or lets main go on); another
@@ -169,7 +213,9 @@ pub static SUBST_STOP: AtomicBool = AtomicBool::new(false);
 /// An INT deferred (INT_DEFERRED) ends this process now, of SIGINT, as bash's main did.
 pub fn int_deferred_end() {
     if INT_DEFERRED.load(Ordering::SeqCst) {
-        // (bash's EXIT trap runs on the way, its undos: a temp file of record stop's, finding 432)
+        // (a trap on its way ends this process itself; else bash's EXIT trap runs on the way, its
+        // undos: a temp file of record stop's, finding 432)
+        park_while_stopping();
         crate::trap::run_undos();
         // SAFETY: the default disposition back, then the signal to this process: it ends of it.
         unsafe {

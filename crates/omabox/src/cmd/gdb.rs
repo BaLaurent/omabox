@@ -270,12 +270,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // own files; a link or FIFO is replaced (log reads only a regular file, finding 107; a FIFO would
     // hang this write, 10 s at most).
     let log = b"/home/sbx/gdb.log".to_vec();
-    let date = crate::sig::command("date")
-        .arg("-Is")
+    let mut c = crate::sig::command("date");
+    c.arg("-Is")
         .stdin(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .map(|o| shell::strip_nl(&o.stdout))
+        .stderr(std::process::Stdio::inherit());
+    let date = crate::sig::run_output(c)
+        .map(|(_, o)| shell::strip_nl(&o))
         .unwrap_or_default();
     let head = cat!(
         "\n== omabox gdb --watch ",

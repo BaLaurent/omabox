@@ -3,7 +3,7 @@
 //! the signal then raised again: bash runs its EXIT trap and dies of the signal (probed: at once for
 //! TERM and HUP, its foreground child left running; for INT once that child is over, and not at all
 //! when that child did not die of it: an INT to omabox alone). Nothing new starts meanwhile
-//! (sig::foreground). A signal ignored when omabox started stays ignored (sig::catch).
+//! (sig::run_child). A signal ignored when omabox started stays ignored (sig::catch).
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -58,6 +58,12 @@ pub fn on_exit_code(f: impl FnOnce() + Send + 'static) -> Trap {
 
 /// Every undo still pending, the last made first (bash's EXIT trap on the way out).
 pub fn run_undos() {
+    // (one at a time: main's int_deferred_end waits for a signal's undos the thread runs, so the
+    // process never ends of its INT halfway through them)
+    static UNDOING: Mutex<()> = Mutex::new(());
+    let _u = UNDOING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let all: Vec<(u64, Undo)> = TRAPS
         .lock()
         .map(|mut t| std::mem::take(&mut *t))
@@ -124,13 +130,9 @@ extern "C" fn on_signal(sig: libc::c_int) {
         crate::sig::FG_ACTIVE.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
-    // Nothing new starts from here (a code trap inside a `$(...)` lets the substitution finish
-    // first, sig::subst).
-    if !(CODE_TRAPS.load(Ordering::SeqCst) > 0
-        && crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0)
-    {
-        crate::sig::STOPPING.store(true, Ordering::SeqCst);
-    }
+    // Nothing new starts from here (the thread lets main go on where bash would: an INT to omabox
+    // alone, a code trap's substitution to finish; it clears this then).
+    crate::sig::STOPPING.store(true, Ordering::SeqCst);
     let fd = SIG_W.load(Ordering::Relaxed);
     if fd >= 0 {
         let b = [u8::try_from(sig).unwrap_or(0)];
@@ -180,8 +182,10 @@ fn arm() {
             if code && crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
                 let g = busy_at.then(lock_fg);
                 if g.is_some() && crate::sig::FG_SIG.load(Ordering::SeqCst) != sig {
-                    drop(g);
+                    // (main goes on to the substitution's end, where it parks: sig::subst)
                     crate::sig::SUBST_STOP.store(true, Ordering::SeqCst);
+                    crate::sig::STOPPING.store(false, Ordering::SeqCst);
+                    drop(g);
                     while crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
@@ -246,5 +250,5 @@ pub fn sleep(secs: &[u8]) -> i32 {
     // (made before the foreground step: sig::command parks, which must not hold FOREGROUND)
     let mut c = crate::sig::command("sleep");
     c.arg(std::ffi::OsStr::from_bytes(secs));
-    crate::sig::foreground(|| c.status().map(|s| crate::exec::status(s).0).unwrap_or(127))
+    crate::sig::run_status(c).unwrap_or(127)
 }
