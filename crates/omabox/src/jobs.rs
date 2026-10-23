@@ -104,7 +104,7 @@ pub fn job_note(ctx: &Ctx) {
             job_noted(ctx, &[n]);
             continue;
         };
-        let ms = end.wrapping_sub(shell::arith(&ns).unwrap_or(0) / 1_000_000);
+        let ms = end.saturating_sub(shell::dec(&ns).unwrap_or(0) / 1_000_000);
         if !(0..=JOB_EARLY_MS).contains(&ms) {
             job_noted(ctx, &[n]);
             continue;
@@ -113,11 +113,7 @@ pub fn job_note(ctx: &Ctx) {
         let mut st = run_read(&ctx.d, &name).unwrap_or_default();
         st.truncate(64);
         let st = shell::strip_nl(&st);
-        let st = if shell::re_match("^[0-9]+$", &st) {
-            st
-        } else {
-            Vec::new()
-        };
+        let st = if shell::is_num(&st) { st } else { Vec::new() };
         // Made, not yet written (the waiter's `echo $? >`): the next command reads it; one still
         // empty 2 s on was not kept.
         if st.is_empty() && now / 1000 - end < 2000 {
@@ -384,7 +380,7 @@ pub fn job_procs(procs: &[[Vec<u8>; 4]], pid: &[u8], start: &[u8]) -> Vec<(Vec<u
 /// than 0 (its waiter's status file, read here in $D/run), nothing of its session left. A 0 is no
 /// death: a one-shot changes the screen and ends with 0.
 pub fn job_failed(ctx: &Ctx, pid: &[u8]) -> bool {
-    if !shell::re_match("^[0-9]+$", pid) {
+    if !shell::is_num(pid) {
         return false;
     }
     let f = ctx.at("jobs").join(shell::path(pid));
@@ -405,7 +401,7 @@ pub fn job_failed(ctx: &Ctx, pid: &[u8]) -> bool {
     )
     .map(|v| shell::subst(&v[..v.len().min(64)]))
     .unwrap_or_default();
-    if !shell::re_match("^[0-9]+$", &st) || st == b"0" {
+    if !shell::is_num(&st) || st == b"0" {
         return false;
     }
     job_live(ctx, std::slice::from_ref(&f)).is_empty()
@@ -791,7 +787,7 @@ pub fn job_ended(
     argv: &[Vec<u8>],
 ) -> crate::exit::Res<Option<i32>> {
     use crate::exec::{ErrTo, Out, on_box};
-    if !shell::re_match("^[0-9]+$", jpid) {
+    if !shell::is_num(jpid) {
         return Ok(None);
     }
     let rec = ctx.at("jobs").join(shell::path(jpid));
@@ -810,7 +806,7 @@ pub fn job_ended(
         ];
         let r = on_box(ctx, &argv, false, Out::Capture(Some(64)), ErrTo::Null);
         st = shell::subst(&r.out);
-        if shell::re_match("^[0-9]+$", &st) {
+        if shell::is_num(&st) {
             break;
         }
         st.clear();

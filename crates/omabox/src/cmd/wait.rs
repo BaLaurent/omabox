@@ -15,7 +15,7 @@ use crate::select::select_box;
 use crate::settle::{
     Settle, WAIT_MAX_MS, cursor_now, cursor_rect, geom_csv, geom_parse, now_ms, rects_meet, secs,
 };
-use crate::shell::{bash_int, strip_nl};
+use crate::shell::{dec, strip_nl};
 use crate::shellnote::shell_note;
 use crate::win::{
     box_windows, joined, jq_error_text, jq_length, jq_r, win_desc, win_hits, win_select,
@@ -246,10 +246,10 @@ fn poll_until(
     }
 }
 
-/// Bash's arithmetic refused a number (an X of 08): it says so in its own words (not reproduced) and
-/// the command ends, 1.
-fn arith_fail() -> Exit {
-    Exit(1)
+/// A number omabox cannot read in WHAT (one past 64 bits; finding 448: bash's arithmetic refused an
+/// X of 08 in its own words): said, the command ends, 1.
+fn num_fail(ctx: &Ctx, what: &[u8]) -> Exit {
+    ctx.die(cat!("wait: cannot read the numbers of ", what))
 }
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
@@ -526,17 +526,15 @@ fn screen(
             let mut it = line.splitn(4, |&c| c == b',');
             let mut f = || it.next().unwrap_or_default().to_vec();
             let (x, y, mw, mh) = (f(), f(), f(), f());
-            let add = |a: &[u8], b: &[u8]| -> Option<i64> {
-                Some(bash_int(a)?.wrapping_add(bash_int(b)?))
-            };
+            let add = |a: &[u8], b: &[u8]| -> Option<i64> { Some(dec(a)?.saturating_add(dec(b)?)) };
             let (Some(nx), Some(ny)) = (add(&x, &ox), add(&y, &oy)) else {
-                return Err(arith_fail());
+                return Err(num_fail(ctx, &cat!(line, " (at ", ox, ",", oy, ")")));
             };
             masks[k] = cat!(nx.to_string(), ",", ny.to_string(), ",", mw, ",", mh);
         }
         if !region.is_empty() {
             match rects_meet(&masks[k], &region) {
-                None => return Err(arith_fail()),
+                None => return Err(num_fail(ctx, &cat!(masks[k], " and ", region))),
                 Some(true) => {}
                 Some(false) => {
                     let (zx, zy): (&[u8], &[u8]) = if ox.is_empty() {
@@ -560,7 +558,7 @@ fn screen(
     let p = cursor_now(ctx)?;
     if !p.is_empty() {
         let Some(r) = cursor_rect(&p) else {
-            return Err(arith_fail());
+            return Err(num_fail(ctx, &cat!("the pointer's place ", p)));
         };
         args.extend([b"--ignore".to_vec(), r]);
     }

@@ -6,7 +6,7 @@
 use crate::boxes::{box_home_file, meta, run_read};
 use crate::cat;
 use crate::exec::{ErrTo, Out, on_box};
-use crate::exit::{Ctx, Exit, Res, say};
+use crate::exit::{Ctx, Res, say};
 use crate::jobs::job_how;
 use crate::repo::readlink_e;
 use crate::shell::{self, strip_nl};
@@ -30,7 +30,7 @@ pub fn box_qs(ctx: &Ctx) -> Vec<u8> {
 /// shell_pid: the shell's pid in the box (share/shell.sh writes it), or None.
 pub fn shell_pid(ctx: &Ctx) -> Option<Vec<u8>> {
     let p = strip_nl(&run_read(&ctx.d, "omabox-shell.pid")?);
-    shell::re_match("^[0-9]+$", &p).then_some(p)
+    shell::is_num(&p).then_some(p)
 }
 
 /// shell_running PID: a process in the box, and not one that exited and was not reaped yet.
@@ -77,7 +77,7 @@ pub fn shell_hung(ctx: &Ctx, pid: &[u8]) -> bool {
         return false;
     }
     let a = shell::subst(&age.out);
-    shell::re_match("^[0-9]+$", &a) && shell::test_int(&a).is_some_and(|n| n >= 10)
+    shell::is_num(&a) && shell::test_int(&a).is_some_and(|n| n >= 10)
 }
 
 /// shell_state: none (--no-shell), running, hung, restarting (its launcher about to start it again)
@@ -179,7 +179,7 @@ pub fn shell_crashes(ctx: &Ctx) -> usize {
 pub fn shell_relaunches(ctx: &Ctx) -> Vec<u8> {
     let mark = run_read(&ctx.d, "omabox-shell.mark")
         .map(|m| strip_nl(&m))
-        .filter(|m| shell::re_match("^[0-9]+$", m))
+        .filter(|m| shell::is_num(m))
         .unwrap_or(b"0".to_vec());
     let (mut n, mut st) = (0usize, b"-".to_vec());
     if let Some(f) = box_home_file(&ctx.d, "shell.log") {
@@ -227,7 +227,7 @@ pub fn shell_note(ctx: &Ctx) -> Res<()> {
     let seen = std::fs::read(ctx.at("shell-crashes-seen"))
         .map(|s| strip_nl(&s))
         .unwrap_or(b"0".to_vec());
-    let seen = if shell::re_match("^[0-9]+$", &seen) {
+    let seen = if shell::is_num(&seen) {
         seen
     } else {
         b"0".to_vec()
@@ -242,14 +242,12 @@ pub fn shell_note(ctx: &Ctx) -> Res<()> {
     let ow = shell::read_fields(&old, 3);
     let (om, oc) = (ow[0].clone(), ow[1].clone());
     let mut new = 0i64;
-    if shell::re_match("^[0-9]+$", &om) && shell::re_match("^[0-9]+$", &oc) {
+    if shell::is_num(&om) && shell::is_num(&oc) {
         new = if m == om {
-            // (`$((c - oc))`: a number bash's arithmetic refuses, an 08 in the seen file, is its
-            // own words, then exit 1)
-            let (Some(ci), Some(oi)) = (shell::bash_int(&c), shell::bash_int(&oc)) else {
-                return Err(Exit(1));
-            };
-            ci.wrapping_sub(oi)
+            // (`$((c - oc))`, decimal: an 08 in the seen file is 8, where bash's arithmetic ended
+            // the command in its own words: finding 448)
+            let ci = crate::num::read(ctx, "the shell's relaunch count", &c)?;
+            ci.saturating_sub(shell::dec(&oc).unwrap_or(0))
         } else {
             shell::test_int(&c).unwrap_or(0)
         };
@@ -298,7 +296,7 @@ pub fn shell_note(ctx: &Ctx) -> Res<()> {
             " shell)"
         ));
     } else if new > 0 {
-        let how = if shell::re_match("^[0-9]+$", &st) {
+        let how = if shell::is_num(&st) {
             job_how(&st)
         } else {
             "exited".to_string()

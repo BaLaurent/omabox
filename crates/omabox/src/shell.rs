@@ -617,57 +617,45 @@ pub fn re_group(pattern: &str, s: &[u8], i: usize) -> Option<Vec<u8>> {
     Re::new(pattern)?.group(s, i)
 }
 
-/// Bash arithmetic's reading of a decimal word (`10#N`, `$((N))`): 64 bits, wrapping as bash does.
-pub fn arith(v: &[u8]) -> Option<i64> {
-    if v.is_empty() || !v.iter().all(u8::is_ascii_digit) {
+/// A whole number as omabox reads one (finding 448): an optional sign, then ASCII digits, decimal
+/// whatever its zeros (`010` is 10, `08` is 8); None for anything else, an empty word or one past
+/// 64 bits. Bash's arithmetic read a 0 in front as octal (`08` ended the command in its words),
+/// 0x as hex, an empty word as 0, and wrapped past 64 bits.
+pub fn dec(v: &[u8]) -> Option<i64> {
+    let (neg, d) = match v.first() {
+        Some(b'-') => (true, &v[1..]),
+        Some(b'+') => (false, &v[1..]),
+        _ => (false, v),
+    };
+    if d.is_empty() || !d.iter().all(u8::is_ascii_digit) {
         return None;
     }
-    Some(v.iter().fold(0i64, |n, &c| {
-        n.wrapping_mul(10).wrapping_add(i64::from(c - b'0'))
-    }))
-}
-
-/// Bash arithmetic's reading of a number word (`$((X + 1))` where X holds it): blanks around, a sign,
-/// then decimal, octal after a 0, hex after 0x, wrapping at 64 bits. None where bash refuses it ("08:
-/// value too great for base"), which bash says in its own words and ends the command list with; an
-/// empty one (or blanks) is 0.
-pub fn bash_int(v: &[u8]) -> Option<i64> {
-    let s = std::str::from_utf8(v)
-        .ok()?
-        .trim_matches(|c: char| c == ' ' || c == '\t' || c == '\n');
-    if s.is_empty() {
-        return Some(0);
-    }
-    let (neg, s) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let (base, digits) = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        (16, h)
-    } else if s.len() > 1 && s.starts_with('0') {
-        (8, &s[1..])
-    } else {
-        (10, s)
-    };
-    if digits.is_empty() {
-        return (base == 8).then_some(0);
-    }
     let mut n: i64 = 0;
-    for c in digits.chars() {
-        let d = i64::from(c.to_digit(base)?);
-        n = n.wrapping_mul(i64::from(base)).wrapping_add(d);
+    for &c in d {
+        let k = i64::from(c - b'0');
+        n = n.checked_mul(10).and_then(|n| {
+            if neg {
+                n.checked_sub(k)
+            } else {
+                n.checked_add(k)
+            }
+        })?;
     }
-    Some(if neg { n.wrapping_neg() } else { n })
+    Some(n)
 }
 
-/// `[ A -le B ]`'s reading of a number: optional blanks and sign, decimal digits; None for what
-/// test refuses as no integer (it says so, and the test fails).
+/// A number word omabox takes (`^[0-9]+$`): ASCII digits, decimal, no more than 64 bits hold.
+pub fn is_num(v: &[u8]) -> bool {
+    v.first().is_some_and(u8::is_ascii_digit) && dec(v).is_some()
+}
+
+/// `[ A -le B ]`'s reading of a number: optional blanks around, then dec's; None for what test
+/// refuses as no integer (it says so, and the test fails).
 pub fn test_int(v: &[u8]) -> Option<i64> {
     let s = std::str::from_utf8(v)
         .ok()?
         .trim_matches(|c| c == ' ' || c == '\t');
-    s.parse::<i64>().ok()
+    dec(s.as_bytes())
 }
 
 #[cfg(test)]
@@ -920,25 +908,26 @@ mod tests {
     }
 
     #[test]
-    fn bash_reads_numbers() {
-        assert_eq!(bash_int(b"12"), Some(12));
-        assert_eq!(bash_int(b"-5"), Some(-5));
-        assert_eq!(bash_int(b"010"), Some(8));
-        assert_eq!(bash_int(b"08"), None);
-        assert_eq!(bash_int(b"0x1f"), Some(31));
-        assert_eq!(bash_int(b"0"), Some(0));
-        assert_eq!(bash_int(b" 3 "), Some(3));
-        assert_eq!(bash_int(b"x"), None);
-        assert_eq!(bash_int(b""), Some(0));
-        assert_eq!(bash_int(b" "), Some(0));
-        assert_eq!(bash_int(b"-"), None);
-    }
-
-    #[test]
-    fn arith_wraps() {
-        assert_eq!(arith(b"0042"), Some(42));
-        assert_eq!(arith(b"9999999999999999999"), Some(-8446744073709551617));
-        assert_eq!(arith(b"x"), None);
+    fn numbers_are_decimal() {
+        assert_eq!(dec(b"12"), Some(12));
+        assert_eq!(dec(b"-5"), Some(-5));
+        assert_eq!(dec(b"+5"), Some(5));
+        assert_eq!(dec(b"010"), Some(10));
+        assert_eq!(dec(b"08"), Some(8));
+        assert_eq!(dec(b"0042"), Some(42));
+        assert_eq!(dec(b"0"), Some(0));
+        assert_eq!(dec(b"0x1f"), None);
+        assert_eq!(dec(b" 3 "), None);
+        assert_eq!(dec(b"x"), None);
+        assert_eq!(dec(b""), None);
+        assert_eq!(dec(b"-"), None);
+        assert_eq!(dec("²".as_bytes()), None);
+        assert_eq!(dec(b"9223372036854775807"), Some(i64::MAX));
+        assert_eq!(dec(b"-9223372036854775808"), Some(i64::MIN));
+        assert_eq!(dec(b"9223372036854775808"), None);
+        assert_eq!(dec(b"9999999999999999999"), None);
+        assert!(is_num(b"007") && !is_num(b"-1") && !is_num(b"99999999999999999999"));
+        assert_eq!(test_int(b" 08 "), Some(8));
     }
 
     #[test]

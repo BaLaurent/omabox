@@ -203,10 +203,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         .filter(|l| shell::grep_dot(l))
         .count();
     let shown = cycles.unwrap_or(b"1".to_vec());
-    // (`((i <= N))`: a number bash's arithmetic refuses ends the command, 1, in bash's own words)
-    let Some(total) = shell::arith(&shown) else {
-        return Err(crate::exit::Exit(1));
-    };
+    // (--cycles 1-999, checked, decimal: `010` is 10; bash's arithmetic read it octal, 8, and ended
+    // the command at an 08 in its own words: finding 448)
+    let total = crate::num::read(ctx, "--cycles", &shown)?;
     for i in 1..=total {
         let g = gap.unwrap_or(OUTPUT_GAPS[usize::try_from((i - 1) % 8).unwrap_or(0)]);
         let dropped = output_drop(ctx, &outn)?;

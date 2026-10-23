@@ -56,7 +56,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             _ => {
                 // (`$((10#N))`: decimal, whatever its zeros)
                 let n = shell::re_match("^[0-9]{1,5}$", a)
-                    .then(|| shell::arith(a))
+                    .then(|| shell::dec(a))
                     .flatten();
                 let Some(n) = n else {
                     return Err(ctx.die(cat!("pixel: bad argument ", a, " (X Y, in pixels)")));
@@ -278,20 +278,19 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (magic, dims, maxv) = (line(whole[0]), line(whole[1]), line(whole[2]));
     let d = shell::read_fields(&dims, 2);
     let (iw, ih) = (&d[0], &d[1]);
-    let num = |v: &[u8]| shell::re_match("^[0-9]+$", v);
+    let num = |v: &[u8]| shell::is_num(v);
     if !(magic == b"P6" && maxv == b"255" && num(iw) && num(ih)) {
         return Err(ctx.die("pixel: grim's image is not a PPM it reads"));
     }
     let hdr = (magic.len() + dims.len() + maxv.len() + 3) as i64;
-    // (one bash's arithmetic refuses, an 08: said, where bash's own words ended it, 1, the image
-    // left: finding 442)
-    let (Some(iw), Some(ih)) = (shell::bash_int(iw), shell::bash_int(ih)) else {
+    // (decimal, an 08 is 8: bash's arithmetic ended pixel there in its own words, finding 448)
+    let (Some(iw), Some(ih)) = (shell::dec(iw), shell::dec(ih)) else {
         return Err(ctx.die("pixel: grim's image is not a PPM it reads"));
     };
     let mut text = Vec::new();
     for k in (0..pts.len()).step_by(2) {
-        let px = (pts[k] - x0).wrapping_mul(iw) / bw;
-        let py = (pts[k + 1] - y0).wrapping_mul(ih) / bh;
+        let px = (pts[k] - x0).saturating_mul(iw) / bw;
+        let py = (pts[k + 1] - y0).saturating_mul(ih) / bh;
         let at = hdr + (py * iw + px) * 3;
         let mut rgb = [0u8; 3];
         let got = u64::try_from(at)

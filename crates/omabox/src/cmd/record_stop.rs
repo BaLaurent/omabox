@@ -48,7 +48,7 @@ fn rec_ff(ctx: &mut Ctx, mode: Ff, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
     };
     let e = shell::env_or_empty("OMABOX_RECORD_FF_SECS");
     if shell::re_match("^[1-9][0-9]{0,6}$", &e) {
-        if let Some(v) = shell::arith(&e) {
+        if let Some(v) = shell::dec(&e) {
             if v < secs {
                 secs = v;
             }
@@ -101,21 +101,6 @@ fn rec_ff(ctx: &mut Ctx, mode: Ff, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
 /// `$(rec_ff -o ARGV...)`, a substitution's step.
 fn rec_ff_subst(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
     crate::sig::subst(|| rec_ff(ctx, Ff::Out, argv))
-}
-
-/// Bash's words for a number its arithmetic cannot read (a leading 0 that is no octal: 08), less
-/// its "SCRIPT: line N: ".
-fn arith_said(v: &[u8]) {
-    let tok = v
-        .strip_prefix(b"-")
-        .or_else(|| v.strip_prefix(b"+"))
-        .unwrap_or(v);
-    let _ = std::io::stderr().write_all(&cat!(
-        v,
-        ": value too great for base (error token is \"",
-        tok,
-        "\")\n"
-    ));
 }
 
 /// `$(rec_ff -o ... | head -c N | head -n 1) || V=""`.
@@ -465,16 +450,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     };
     let mut fr = 0;
     if shell::re_match("^[0-9]{1,17} [0-9]{1,3}$", &cat!(rec.start, " ", rec.fps)) {
-        // (`$(( ... * REC_FPS ... ))`: an fps bash's arithmetic cannot read, 08, ends the command
-        // there, 1)
-        let (Some(st), Some(f)) = (shell::bash_int(&rec.start), shell::bash_int(&rec.fps)) else {
-            arith_said(if shell::bash_int(&rec.start).is_none() {
-                &rec.start
-            } else {
-                &rec.fps
-            });
-            return Err(Exit(1));
-        };
+        // (decimal: an fps of 08 is 8, where bash's arithmetic ended the command in its own words,
+        // finding 448)
+        let st = crate::num::read(ctx, "the recording's start", &rec.start)?;
+        let f = crate::num::read(ctx, "the recording's fps", &rec.fps)?;
         fr = (now_us() - st) * f / 1_000_000;
     }
     let fr = fr.max(0);
@@ -716,7 +695,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         while frac.len() < 3 {
             frac.push(b'0');
         }
-        dur = Some(shell::arith(&g(1)).unwrap_or(0) * 1000 + shell::arith(&frac).unwrap_or(0));
+        dur = Some(shell::dec(&g(1)).unwrap_or(0) * 1000 + shell::dec(&frac).unwrap_or(0));
     }
     let durb = dur.map(|d| d.to_string().into_bytes()).unwrap_or_default();
     let base = rec.file.strip_suffix(b".mp4").unwrap_or(&rec.file).to_vec();
@@ -904,7 +883,7 @@ fn audio_filter(ctx: &mut Ctx, first: i64) -> Option<Vec<u8>> {
     if !shell::re_match("^[0-9]{7,18}$", &a) {
         return None;
     }
-    let off = shell::arith(&a).unwrap_or(0) - first;
+    let off = shell::dec(&a).unwrap_or(0) - first;
     let ms = awk_begin(
         &[("o", off.abs().to_string().as_bytes())],
         r#"BEGIN { printf "%.3f", o / 1000 }"#,
@@ -1245,7 +1224,7 @@ fn record_ass(
     let ok = shell::re_match("^-?[0-9]{1,6}$", &g[0])
         && shell::re_match("^-?[0-9]{1,6}$", &g[1])
         && shell::re_match("^[0-9]{1,3}(\\.[0-9]{1,12})?$", &g[2])
-        && shell::re_match("^[0-9]+$", first);
+        && shell::is_num(first);
     if !ok {
         return Ok(None);
     }
@@ -1974,29 +1953,15 @@ fn record_sheet(
             i += 1;
         }
     } else {
-        // (`[ "$n" -le "$nb" ]` reads decimal, `[ "$n" = 1 ]` the word, the loop bash's arithmetic:
-        // an 08 there fails the loop alone, no frame picked; a 01 divides by 0 and ends the sheet)
-        let mut nstr = nstr;
-        if shell::test_int(&nstr).is_some_and(|v| v > nb) {
-            nstr = nb.to_string().into_bytes();
-        }
-        if nstr == b"1" {
+        // --frames N (1-100, decimal: `010` is 10), at most the video's frames. Bash's loop read a 0
+        // in front as octal: an 08 picked no frame, a 01 divided by 0 and ended the sheet, each in
+        // its own words (finding 448).
+        let n = shell::dec(&nstr).unwrap_or(15).min(nb);
+        if n == 1 {
             ks = vec![0];
         } else {
-            match shell::bash_int(&nstr) {
-                None => {
-                    let _ = std::io::stderr().write_all(&cat!("((: "));
-                    arith_said(&nstr);
-                }
-                Some(n) => {
-                    for i in 0..n {
-                        if n == 1 {
-                            let _ = std::io::stderr().write_all(b"(2 * i * (nb - 1) + n - 1) / (2 * (n - 1)) : division by 0 (error token is \"(2 * (n - 1)) \")\n");
-                            return Ok(None);
-                        }
-                        ks.push((2 * i * (nb - 1) + n - 1) / (2 * (n - 1)));
-                    }
-                }
+            for i in 0..n {
+                ks.push((2 * i * (nb - 1) + n - 1) / (2 * (n - 1)));
             }
         }
     }
@@ -2004,10 +1969,9 @@ fn record_sheet(
     let cols = cnt.min(5);
     let mut tw = 320;
     if !fit.is_empty() {
-        // (no frame picked: `$((fit / cols - 6))` divides by 0 and ends the sheet)
+        // (every way above picks one frame at least: no sheet without)
         if cols == 0 {
-            let _ = std::io::stderr()
-                .write_all(b"fit / cols - 6: division by 0 (error token is \"cols - 6\")\n");
+            say("record: the contact sheet: no frame picked");
             return Ok(None);
         }
         tw = num(fit) / cols - 6;

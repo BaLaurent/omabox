@@ -92,6 +92,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   and rate are written with a dot whatever LC_NUMERIC says, and a system error in omabox's message
   in English. `events --grep` and `--until` still read your pattern in your locale. Scripts:
   nothing to change.
+- **Numbers with zeros in front are decimal**: `--fps 010` is 10 fps, `-g 010,0,…` starts at
+  x=10, `--frames 08` is 8 frames. The bash omabox read them as octal (8), and `08` or `09` ended
+  the command with bash's "value too great for base", exit 1. A number too big for 64 bits gets the
+  option's usual refusal (it wrapped). Scripts that padded numbers with zeros get what they wrote.
 
 ## 1.0.1 — unreleased
 

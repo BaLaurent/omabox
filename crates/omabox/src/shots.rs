@@ -247,29 +247,29 @@ pub fn two_files(ctx: &Ctx, cmd: &str, so_far: &[u8], new: &[u8]) -> Res<()> {
 /// ", " between); None when nothing of it is inside.
 pub fn geom_clip(r: [i64; 4], lw: i64, lh: i64) -> Option<([i64; 4], Vec<u8>)> {
     let [mut x, mut y, w, h] = r;
-    let (mut x1, mut y1) = (x.wrapping_add(w), y.wrapping_add(h));
+    let (mut x1, mut y1) = (x.saturating_add(w), y.saturating_add(h));
     let mut cut: Vec<String> = Vec::new();
     if x < 0 {
-        cut.push(format!("{} px past the left edge", x.wrapping_neg()));
+        cut.push(format!("{} px past the left edge", x.saturating_neg()));
         x = 0;
     }
     if y < 0 {
-        cut.push(format!("{} px past the top edge", y.wrapping_neg()));
+        cut.push(format!("{} px past the top edge", y.saturating_neg()));
         y = 0;
     }
     if x1 > lw {
-        cut.push(format!("{} px past the right edge", x1.wrapping_sub(lw)));
+        cut.push(format!("{} px past the right edge", x1.saturating_sub(lw)));
         x1 = lw;
     }
     if y1 > lh {
-        cut.push(format!("{} px past the bottom edge", y1.wrapping_sub(lh)));
+        cut.push(format!("{} px past the bottom edge", y1.saturating_sub(lh)));
         y1 = lh;
     }
     if !(x1 > x && y1 > y) {
         return None;
     }
     Some((
-        [x, y, x1.wrapping_sub(x), y1.wrapping_sub(y)],
+        [x, y, x1.saturating_sub(x), y1.saturating_sub(y)],
         cut.join(", ").into_bytes(),
     ))
 }
@@ -442,9 +442,9 @@ fn mask_draws(masks: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
     for m in masks {
         let f = shell::read_ifs(m, 4, b",");
         let (x, y) = (&f[0], &f[1]);
-        let w = shell::bash_int(&f[2])?;
-        let h = shell::bash_int(&f[3])?;
-        let (xi, yi) = (shell::bash_int(x)?, shell::bash_int(y)?);
+        let w = shell::dec(&f[2])?;
+        let h = shell::dec(&f[3])?;
+        let (xi, yi) = (shell::dec(x)?, shell::dec(y)?);
         d.push(b"-draw".to_vec());
         d.push(cat!(
             "rectangle ",
@@ -452,9 +452,9 @@ fn mask_draws(masks: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
             ",",
             y,
             " ",
-            xi.wrapping_add(w).wrapping_sub(1).to_string(),
+            xi.saturating_add(w).saturating_sub(1).to_string(),
             ",",
-            yi.wrapping_add(h).wrapping_sub(1).to_string()
+            yi.saturating_add(h).saturating_sub(1).to_string()
         ));
     }
     Some(d)
@@ -505,7 +505,7 @@ pub fn diff_box(a: &[u8], b: &[u8], masks: &[Vec<u8>]) -> Option<Option<[i64; 4]
     let g = shell::subst(&out);
     let re = shell::Re::new(r"^([0-9]+)x([0-9]+)\+(-?[0-9]+)\+(-?[0-9]+)$")?;
     let m: Vec<i64> = (1..=4)
-        .map(|i| re.group(&g, i).and_then(|v| shell::bash_int(&v)))
+        .map(|i| re.group(&g, i).and_then(|v| shell::dec(&v)))
         .collect::<Option<Vec<i64>>>()?;
     if m[0] == 0 || m[1] == 0 {
         return Some(None);

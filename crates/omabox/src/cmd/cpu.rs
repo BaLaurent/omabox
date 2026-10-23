@@ -327,9 +327,9 @@ fn line_words(p: &[u8]) -> Vec<Vec<Vec<u8>>> {
 
 /// `$((A + B))` of two stat fields.
 fn ticks(st: &[Vec<u8>]) -> String {
-    let a = shell::bash_int(&st[11]).unwrap_or(0);
-    let b = shell::bash_int(&st[12]).unwrap_or(0);
-    a.wrapping_add(b).to_string()
+    let a = shell::dec(&st[11]).unwrap_or(0);
+    let b = shell::dec(&st[12]).unwrap_or(0);
+    a.saturating_add(b).to_string()
 }
 
 /// cpu_sample PID...: a line each, "HOSTPID START TICKS RSS PSS BOXPID NAME" (PSS - when

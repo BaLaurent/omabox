@@ -25,7 +25,7 @@ pub fn after_comm(s: &[u8]) -> &[u8] {
 /// when it has none; None for no such process. A pid only: an empty one would read /proc//stat,
 /// which is the system-wide /proc/stat.
 pub fn proc_stat(pid: &[u8], i: usize) -> Option<Vec<u8>> {
-    if !shell::re_match("^[0-9]+$", pid) {
+    if !shell::is_num(pid) {
         return None;
     }
     let s = read(pid, "stat")?;
@@ -171,7 +171,7 @@ pub fn signame(word: &[u8]) -> Option<&'static str> {
         "RTMAX-8", "RTMAX-7", "RTMAX-6", "RTMAX-5", "RTMAX-4", "RTMAX-3", "RTMAX-2", "RTMAX-1",
         "RTMAX",
     ];
-    let mut n = shell::arith(word)?;
+    let mut n = shell::dec(word)?;
     if n > 128 {
         n -= 128;
     }

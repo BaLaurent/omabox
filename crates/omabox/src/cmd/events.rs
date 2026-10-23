@@ -417,11 +417,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 /// as 30s, 2m or 1h (offset 0, the events from then on).
 fn events_since(ctx: &Ctx, v: &[u8]) -> Res<(i64, i64)> {
     if shell::re_match("^[0-9]{1,15}$", v) {
-        return Ok((shell::arith(v).unwrap_or(0), 0));
+        return Ok((shell::dec(v).unwrap_or(0), 0));
     }
     if let Some(re) = Re::new("^([0-9]{1,6})(ms|s|m|h)$") {
         if let (Some(k), Some(u)) = (re.group(v, 1), re.group(v, 2)) {
-            let k = shell::arith(&k).unwrap_or(0);
+            let k = shell::dec(&k).unwrap_or(0);
             let ms = match u.as_slice() {
                 b"ms" => k,
                 b"s" => k * 1000,
@@ -657,8 +657,7 @@ fn wait_until(ctx: &Ctx, sh: &Show, lr: &mut LineReader, until: &[u8], tmo: i64)
                 if sh.min != 0 {
                     let (a, b) =
                         ts.split_at(ts.iter().position(|&c| c == b'.').unwrap_or(ts.len()));
-                    let t =
-                        shell::arith(a).unwrap_or(0) * 1000 + shell::arith(&b[1..]).unwrap_or(0);
+                    let t = shell::dec(a).unwrap_or(0) * 1000 + shell::dec(&b[1..]).unwrap_or(0);
                     if t < sh.min {
                         continue;
                     }

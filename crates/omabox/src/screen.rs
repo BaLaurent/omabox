@@ -11,7 +11,7 @@ use crate::jail::in_jail;
 use crate::jq::{self, Args};
 use crate::jqprog::JQ_MON;
 use crate::num::awk_num;
-use crate::shell::{self, bash_int, strip_nl};
+use crate::shell::{self, dec, strip_nl};
 use crate::win::{box_windows, jq_r, win_desc};
 use std::os::unix::fs::MetadataExt;
 
@@ -102,18 +102,19 @@ pub fn win_buf_geom(v: [&[u8]; 7]) -> Vec<u8> {
     .into_bytes()
 }
 
-/// img_px P IMAGE SCREEN: the screen pixel under the centre of image pixel P (bash's arithmetic).
+/// img_px P IMAGE SCREEN: the screen pixel under the centre of image pixel P; None for a number that
+/// is none, or an image of no size.
 fn img_px(p: &[u8], image: &[u8], screen: &[u8]) -> Option<i64> {
-    let (p, i, s) = (bash_int(p)?, bash_int(image)?, bash_int(screen)?);
-    let d = 2i64.wrapping_mul(i);
+    let (p, i, s) = (dec(p)?, dec(image)?, dec(screen)?);
+    let d = 2i64.saturating_mul(i);
     if d == 0 {
         return None;
     }
     Some(
-        2i64.wrapping_mul(p)
-            .wrapping_add(1)
-            .wrapping_mul(s)
-            .wrapping_div(d),
+        2i64.saturating_mul(p)
+            .saturating_add(1)
+            .saturating_mul(s)
+            .saturating_div(d),
     )
 }
 
@@ -227,8 +228,17 @@ pub fn shot_point(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
             ")"
         )));
     }
+    // (a record omabox cannot read: said, 1; finding 448, where bash's arithmetic ended it in its
+    // own words)
+    let unread = || {
+        ctx.die(cat!(
+            "--in: ",
+            key,
+            ": its record in shots.tsv is not one omabox reads"
+        ))
+    };
     let (Some(rx), Some(ry)) = (img_px(x, iw, lw), img_px(y, ih, lh)) else {
-        return Err(Exit(1)); // (bash's arithmetic refused it: its own words, then exit 1)
+        return Err(unread());
     };
     let half = |v: &[u8], first: bool| -> Option<i64> {
         // ${V%,*} and ${V#*,}
@@ -237,7 +247,7 @@ pub fn shot_point(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
         } else {
             &v[v.iter().position(|&c| c == b',').map_or(0, |i| i + 1)..]
         };
-        bash_int(p)
+        dec(p)
     };
     if kind == b"window" {
         // "ADDRESS", or "ADDRESS X,Y WxH" for a -g crop of it: where the crop starts, the window's
@@ -270,18 +280,18 @@ pub fn shot_point(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
             )));
         }
         let (Some(ox), Some(oy)) = (half(&org, true), half(&org, false)) else {
-            return Err(Exit(1));
+            return Err(unread());
         };
         return Ok(Point::Window(
             addr,
-            ox.wrapping_add(rx),
-            oy.wrapping_add(ry),
+            ox.saturating_add(rx),
+            oy.saturating_add(ry),
         ));
     }
     let (Some(ox), Some(oy)) = (half(&ref_, true), half(&ref_, false)) else {
-        return Err(Exit(1));
+        return Err(unread());
     };
-    Ok(Point::Screen(ox.wrapping_add(rx), oy.wrapping_add(ry)))
+    Ok(Point::Screen(ox.saturating_add(rx), oy.saturating_add(ry)))
 }
 
 #[cfg(test)]

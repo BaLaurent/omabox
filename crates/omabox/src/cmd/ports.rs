@@ -173,9 +173,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             let (allow, _) = meta(&ctx.d, "allow");
             for port in comma_words(&allow) {
                 let key = cat!(ctx.name, " ", port);
-                if !shell::re_match("^[0-9]+$", &port)
-                    || addrs.get(&key).is_some_and(|a| !a.is_empty())
-                {
+                if !shell::is_num(&port) || addrs.get(&key).is_some_and(|a| !a.is_empty()) {
                     continue;
                 }
                 pkeys.push(key.clone());

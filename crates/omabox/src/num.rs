@@ -1,7 +1,24 @@
 //! Numbers as bin/omabox writes and reads them: the one duration grammar (ms_duration, #273), awk's
 //! printf of seconds (ms_s), and awk's reading and writing of a number in a field.
 
+use crate::cat;
+use crate::exit::{Ctx, Res};
 use crate::shell::Re;
+
+/// V as a number (shell::dec), or the command ends saying WHAT it could not read, 1 (finding 448:
+/// where bash's arithmetic ended it in its own words, or wrapped).
+pub fn read(ctx: &Ctx, what: &str, v: &[u8]) -> Res<i64> {
+    crate::shell::dec(v).ok_or_else(|| {
+        ctx.die(cat!(
+            ctx.label(),
+            "cannot read ",
+            what,
+            " as a number: '",
+            v,
+            "'"
+        ))
+    })
+}
 
 /// ms_duration: the one duration grammar (#273): 300ms, 2s, 1.5s, 2m, 1h, or a bare number of
 /// seconds, as milliseconds (at least 1).

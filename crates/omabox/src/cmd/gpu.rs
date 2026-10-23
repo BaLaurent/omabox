@@ -86,10 +86,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 .run_file(jq::Err::Null)
         });
         let pci = if pci.ok() { pci.text() } else { Vec::new() };
-        let n = shell::bash_int(&secs)
-            .unwrap_or(0)
-            .wrapping_add(1)
-            .to_string();
+        let n = shell::dec(&secs).unwrap_or(0).saturating_add(1).to_string();
         let mut c = crate::sig::command("nvidia-smi");
         c.args(["pmon", "-s", "u", "-d", "1", "-c", &n]);
         if !pci.is_empty() {

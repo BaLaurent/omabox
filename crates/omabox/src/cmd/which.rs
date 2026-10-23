@@ -34,7 +34,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let [pid] = words.as_slice() else {
         return Err(ctx.usage_die("which: one PID (omabox which [--json] PID)"));
     };
-    if !shell::re_match("^[0-9]+$", pid) {
+    if !shell::is_num(pid) {
         return Err(ctx.usage_die("which: one PID (omabox which [--json] PID)"));
     }
     ctx.parsed();

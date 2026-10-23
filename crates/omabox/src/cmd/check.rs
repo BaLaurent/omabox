@@ -12,7 +12,7 @@ use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::jq::{self, Args};
 use crate::select::select_box;
 use crate::settle::geom_parse;
-use crate::shell::{self, bash_int, strip_nl};
+use crate::shell::{self, dec, strip_nl};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::Write;
@@ -190,25 +190,18 @@ fn count_starting(p: &[u8], lead: &[u8]) -> usize {
     file_lines(p).iter().filter(|l| l.starts_with(lead)).count()
 }
 
-/// The sum of WORDS as bash's `$((A + B))` has it: None (its error said, less its "SCRIPT: line
-/// N: ") at the first it cannot read, 08.
+/// The sum of WORDS (decimal, 0 for an empty one); None, said, at the first that is no number
+/// (finding 448: bash's arithmetic ended there in its own words, at an 08).
 fn arith(words: &[&[u8]]) -> Option<i64> {
     let mut t = 0i64;
     for v in words {
-        match bash_int(v) {
-            Some(n) => t = t.wrapping_add(n),
+        if v.is_empty() {
+            continue;
+        }
+        match dec(v) {
+            Some(n) => t = t.saturating_add(n),
             None => {
-                // (its token without the sign: `-08: ... (error token is "08")`)
-                let tok = v
-                    .strip_prefix(b"-")
-                    .or_else(|| v.strip_prefix(b"+"))
-                    .unwrap_or(v);
-                let _ = std::io::stderr().write_all(&cat!(
-                    v,
-                    ": value too great for base (error token is \"",
-                    tok,
-                    "\")\n"
-                ));
+                crate::exit::say(cat!("check: cannot read '", v, "' as a number"));
                 return None;
             }
         }
@@ -216,9 +209,9 @@ fn arith(words: &[&[u8]]) -> Option<i64> {
     Some(t)
 }
 
-/// Bash arithmetic on a word (an arithmetic error is 0 here: the callers' numbers are decimal).
+/// A word as a number, 0 for one that is none (the callers' numbers are checked before).
 fn ai(v: &[u8]) -> i64 {
-    bash_int(v).unwrap_or(0)
+    dec(v).unwrap_or(0)
 }
 
 /// A region line's "X,Y WxH", as its four numbers (`^(-?[0-9]+),(-?[0-9]+)\ ([0-9]+)x([0-9]+)`).
@@ -345,8 +338,7 @@ fn check_regions_in(fa: &[u8], fb: &[u8], speck: &[u8], masks: &[Vec<u8>]) -> Op
     let mut draw: Vec<Vec<u8>> = Vec::new();
     for m in masks {
         let f = shell::read_fields(m, 4);
-        // (`$((x + w - 1))` in its substitution: a word bash's arithmetic cannot read, 08, ends
-        // it, said; the first point is the words as they are)
+        // (`$((x + w - 1))`; the first point is the words as they are)
         let x2 = arith(&[&f[0], &f[2]])?;
         let y2 = arith(&[&f[1], &f[3]])?;
         draw.push(b"-draw".to_vec());
@@ -905,7 +897,7 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 if !shell::re_match("^[0-9]{1,6}$", s) {
                     return Err(ctx.die(cat!("check diff: --speck is a number of pixels, got ", s)));
                 }
-                speck = shell::arith(s).unwrap_or(0);
+                speck = shell::dec(s).unwrap_or(0);
                 i += 1;
             }
             b"-o" | b"--output" => {
@@ -1363,8 +1355,8 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let mut px = Vec::new();
         for g in &masks {
             let gw = shell::read_fields(g, 4);
-            // (`local ... x2=$(($7 + $9)) y2=$(($8 + ${10}))` in its substitution: an 08 ends it,
-            // said, and the region is left out)
+            // (`local ... x2=$(($7 + $9)) y2=$(($8 + ${10}))`: one that is no number is said, and
+            // the region left out)
             let ok = arith(&[&gw[0], &gw[2]]).is_some() && arith(&[&gw[1], &gw[3]]).is_some();
             let v = [
                 ai(&ox),
@@ -1457,8 +1449,7 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             let sp = f(".screen.png");
             let sa = w(&[b"shot".as_slice(), b"--fit", b"0", b"-o", &sp]);
             if self_cmd(ctx, &sa, None, &[("OMABOX_SHOT_NO_BASELINE", "1")]) == 0 {
-                // (`$((x * iw / w))` ... in check_holes' substitution: an 08 ends it, its holes
-                // unread)
+                // (`$((x * iw / w))` ...: one that is no number is said, its holes unread)
                 let mut vals = Vec::new();
                 for v in [&g[0], &iws, &g[2], &g[1], &g[3]] {
                     match arith(&[v]) {
@@ -1718,7 +1709,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                         args[i + 1]
                     )));
                 }
-                speck = shell::arith(&args[i + 1])
+                speck = shell::dec(&args[i + 1])
                     .unwrap_or(0)
                     .to_string()
                     .into_bytes();
@@ -1842,7 +1833,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if runs.is_empty() {
             3
         } else {
-            usize::try_from(shell::arith(&runs).unwrap_or(3)).unwrap_or(3)
+            usize::try_from(shell::dec(&runs).unwrap_or(3)).unwrap_or(3)
         }
     } else {
         1
@@ -2218,7 +2209,7 @@ pub fn idle_duration(v: &[u8], how: &str) -> Result<i64, i32> {
             v,
             " is refused since 1.0 (a bare number was minutes there, and is seconds everywhere else): write ",
             how,
-            shell::arith(v).unwrap_or(0).to_string(),
+            shell::dec(v).unwrap_or(0).to_string(),
             "m"
         ));
         return Err(2);
@@ -2345,7 +2336,7 @@ fn check_compare(
                 for l in file_lines(&cat!(base, "/", id, ".point")) {
                     if let Some(d) = l.strip_prefix(b"speck ") {
                         if shell::re_match("^[0-9]{1,6}$", d) {
-                            v = shell::arith(d);
+                            v = shell::dec(d);
                             break;
                         }
                     }

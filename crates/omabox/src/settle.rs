@@ -13,9 +13,9 @@ use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::hypr::{hung_text, hypr_answers, hypr_json};
 use crate::jobs::job_failed;
 use crate::jq::{self, Args};
-use crate::num::{ms_duration, ms_s, xywh_less, xywh_words};
+use crate::num::{ms_duration, ms_s, read, xywh_less, xywh_words};
 use crate::procfs;
-use crate::shell::{self, bash_int};
+use crate::shell::{self, dec};
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -42,7 +42,8 @@ pub fn secs() -> i64 {
     unsafe { libc::time(std::ptr::null_mut()) }
 }
 
-/// geom_parse: a -g value as its X Y W H, from grim's "X,Y WxH" or X,Y,W,H and X,Y W,H (#27).
+/// geom_parse: a -g value as its X Y W H, from grim's "X,Y WxH" or X,Y,W,H and X,Y W,H (#27); each a
+/// number 64 bits hold (finding 448: bash's arithmetic wrapped past them).
 pub fn geom_parse(v: &[u8]) -> Option<[Vec<u8>; 4]> {
     let re = shell::Re::new(r"^(-?[0-9]+),(-?[0-9]+)[\ ,]([1-9][0-9]*)[x,]([1-9][0-9]*)$")?;
     let m = re.captures(v, false)?;
@@ -53,7 +54,8 @@ pub fn geom_parse(v: &[u8]) -> Option<[Vec<u8>; 4]> {
             .map(|(a, b)| v[a..b].to_vec())
             .unwrap_or_default()
     };
-    Some([g(1), g(2), g(3), g(4)])
+    let all = [g(1), g(2), g(3), g(4)];
+    all.iter().all(|n| shell::dec(n).is_some()).then_some(all)
 }
 
 /// `${g// /,}` of geom_parse's answer: omabox-still's X,Y,W,H.
@@ -69,24 +71,18 @@ fn csv4(v: &[u8]) -> [Vec<u8>; 4] {
     [f(), f(), f(), f()]
 }
 
-/// rects_meet A B: whether two X,Y,W,H rectangles overlap; None where bash's arithmetic refuses a
-/// number (an X of 08: its own error line, the check skipped).
+/// rects_meet A B: whether two X,Y,W,H rectangles overlap; None where a number is none (dec).
 pub fn rects_meet(a: &[u8], b: &[u8]) -> Option<bool> {
     let n = |v: &[Vec<u8>; 4]| -> Option<[i64; 4]> {
-        Some([
-            bash_int(&v[0])?,
-            bash_int(&v[1])?,
-            bash_int(&v[2])?,
-            bash_int(&v[3])?,
-        ])
+        Some([dec(&v[0])?, dec(&v[1])?, dec(&v[2])?, dec(&v[3])?])
     };
     let [ax, ay, aw, ah] = n(&csv4(a))?;
     let [bx, by, bw, bh] = n(&csv4(b))?;
     Some(
-        ax < bx.wrapping_add(bw)
-            && bx < ax.wrapping_add(aw)
-            && ay < by.wrapping_add(bh)
-            && by < ay.wrapping_add(ah),
+        ax < bx.saturating_add(bw)
+            && bx < ax.saturating_add(aw)
+            && ay < by.saturating_add(bh)
+            && by < ay.saturating_add(ah),
     )
 }
 
@@ -95,9 +91,9 @@ pub fn rects_meet(a: &[u8], b: &[u8]) -> Option<bool> {
 pub fn cursor_rect(p: &[u8]) -> Option<Vec<u8>> {
     let sp = p.iter().rposition(|&c| c == b' ').unwrap_or(0);
     let fp = p.iter().position(|&c| c == b' ').map_or(p.len(), |i| i + 1);
-    let x = bash_int(&p[..sp])?;
-    let y = bash_int(&p[fp.min(p.len())..])?;
-    Some(format!("{},{},64,64", x.wrapping_sub(16), y.wrapping_sub(16)).into_bytes())
+    let x = dec(&p[..sp])?;
+    let y = dec(&p[fp.min(p.len())..])?;
+    Some(format!("{},{},64,64", x.saturating_sub(16), y.saturating_sub(16)).into_bytes())
 }
 
 /// cursor_now: where the pointer is, "X Y" (nothing when it is not two numbers); a box not answering
@@ -344,8 +340,15 @@ impl Settle {
             match rects_meet(&self.args[i + 1], &region) {
                 Some(true) => continue,
                 Some(false) => {}
-                // (bash's arithmetic refused a number: its own words, then the command ends, 1)
-                None => return Err(Exit(1)),
+                // (geom_parse took both: numbers it reads)
+                None => {
+                    return Err(ctx.die(cat!(
+                        "cannot read the numbers of ",
+                        self.args[i + 1],
+                        " and ",
+                        region
+                    )));
+                }
             }
             say(cat!(
                 "--ignore \"",
@@ -357,27 +360,29 @@ impl Settle {
     }
 
     /// settle_in_window X Y (F8, #287): the caller's regions, given in the window's coordinates,
-    /// moved by the window's place. None where bash's arithmetic refuses a number of theirs.
-    pub fn in_window(&mut self, x: &[u8], y: &[u8]) -> Option<()> {
+    /// moved by the window's place (X Y: the window's, read as numbers or the command ends).
+    pub fn in_window(&mut self, ctx: &Ctx, x: &[u8], y: &[u8]) -> Res<()> {
         self.origin = Some((x.to_vec(), y.to_vec()));
-        let (ox, oy) = (bash_int(x)?, bash_int(y)?);
+        let ox = crate::num::read(ctx, "the window's place", x)?;
+        let oy = crate::num::read(ctx, "the window's place", y)?;
         for i in 0..self.args.len().saturating_sub(1) {
             if !matches!(self.args[i].as_slice(), b"--region" | b"--mask") {
                 continue;
             }
             let [a, b, w, h] = csv4(&self.args[i + 1]);
-            let (a, b) = (bash_int(&a)?, bash_int(&b)?);
+            let a = crate::num::read(ctx, "a region", &a)?;
+            let b = crate::num::read(ctx, "a region", &b)?;
             self.args[i + 1] = cat!(
-                a.wrapping_add(ox).to_string(),
+                a.saturating_add(ox).to_string(),
                 ",",
-                b.wrapping_add(oy).to_string(),
+                b.saturating_add(oy).to_string(),
                 ",",
                 w,
                 ",",
                 h
             );
         }
-        Some(())
+        Ok(())
     }
 
     /// The before snapshot (an action's), read in the background while the tool starts.
@@ -768,8 +773,8 @@ impl Settle {
                 // was watched: `ready WxH area=N`, finding 231): an animation there is --ignore'd by
                 // name (#131).
                 let la = dash("late");
-                // (`-le "$area"`: test's reading of N; the product, arithmetic's. A number bash's
-                // arithmetic refuses, an 08: its own words, then exit 1.)
+                // (`-le "$area"`: test's reading of N; the product, arithmetic's. A number that is
+                // none ends the command, said: finding 448, where bash's arithmetic refused an 08.)
                 let mut area: Option<Vec<u8>> = None;
                 if let Some(re) = shell::Re::new("^([0-9]+)x([0-9]+)( area=([0-9]+))?$") {
                     if let Some(c) = re.captures(&scr, false) {
@@ -778,10 +783,9 @@ impl Settle {
                             Some(a) => a.to_vec(),
                             None => {
                                 let (w, h) = (g(1).unwrap_or_default(), g(2).unwrap_or_default());
-                                let (Some(w), Some(h)) = (bash_int(w), bash_int(h)) else {
-                                    return Err(Exit(1));
-                                };
-                                w.wrapping_mul(h).to_string().into_bytes()
+                                let w = read(ctx, "the still tool's size", w)?;
+                                let h = read(ctx, "the still tool's size", h)?;
+                                w.saturating_mul(h).to_string().into_bytes()
                             }
                         });
                     }
@@ -789,11 +793,10 @@ impl Settle {
                 if la != b"-" {
                     if let Some(area) = area {
                         let [_, _, lw, lh] = csv4(&la);
-                        let (Some(w), Some(h)) = (bash_int(&lw), bash_int(&lh)) else {
-                            return Err(Exit(1));
-                        };
+                        let w = read(ctx, "the still tool's late part", &lw)?;
+                        let h = read(ctx, "the still tool's late part", &lh)?;
                         let small = shell::test_int(&area)
-                            .is_some_and(|a| 4i64.wrapping_mul(w).wrapping_mul(h) <= a);
+                            .is_some_and(|a| 4i64.saturating_mul(w).saturating_mul(h) <= a);
                         if small {
                             // (in the window's own coordinates when the --ignore given was, F8)
                             let (ox, oy) = self
@@ -802,9 +805,7 @@ impl Settle {
                                 .unwrap_or((b"0".to_vec(), b"0".to_vec()));
                             let lo = xywh_less(&la, &ox, &oy);
                             let laz = xywh_words(&la);
-                            let Some(t) = bash_int(&get("t")) else {
-                                return Err(Exit(1));
-                            };
+                            let t = read(ctx, "the still tool's time", &get("t"))?;
                             let half = ms_s((t / 2).to_string());
                             if self.origin.is_some() {
                                 m = cat!(
@@ -998,8 +999,12 @@ mod tests {
         assert_eq!(geom_parse(b"1,2 3x4 "), None);
         assert_eq!(rects_meet(b"0,0,10,10", b"5,5,10,10"), Some(true));
         assert_eq!(rects_meet(b"0,0,10,10", b"10,0,10,10"), Some(false));
-        assert_eq!(rects_meet(b"08,0,10,10", b"0,0,1,1"), None);
-        assert_eq!(rects_meet(b"010,0,1,1", b"8,0,1,1"), Some(true));
+        // (decimal: finding 448; bash read 010 as 8 and refused 08)
+        assert_eq!(rects_meet(b"08,0,10,10", b"0,0,1,1"), Some(false));
+        assert_eq!(rects_meet(b"010,0,1,1", b"8,0,1,1"), Some(false));
+        assert_eq!(rects_meet(b"010,0,1,1", b"10,0,1,1"), Some(true));
+        assert_eq!(rects_meet(b"x,0,1,1", b"10,0,1,1"), None);
+        assert_eq!(geom_parse(b"99999999999999999999,0 1x1"), None);
         assert_eq!(cursor_rect(b"100 200"), Some(b"84,184,64,64".to_vec()));
         assert_eq!(cursor_rect(b"-5 3"), Some(b"-21,-13,64,64".to_vec()));
     }
@@ -1017,7 +1022,7 @@ mod tests {
         s.opt(&c, &w(&["--other"])).ok();
         assert_eq!(s.took, 0);
         assert_eq!(s.args, w(&["--timeout", "2000", "--region", "1,2,3,4"]));
-        assert!(s.in_window(b"10", b"20").is_some());
+        assert!(s.in_window(&c, b"10", b"20").is_ok());
         assert_eq!(s.args[3], b"11,22,3,4");
         assert_eq!(ws_text(b"3"), b"workspace 3");
         assert_eq!(

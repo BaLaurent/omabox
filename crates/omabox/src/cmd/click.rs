@@ -20,7 +20,7 @@ use crate::num::awk_num;
 use crate::screen::{Point, extent, shot_point};
 use crate::select::select_box;
 use crate::settle::{Settle, cursor_now, cursor_rect};
-use crate::shell::{self, bash_int};
+use crate::shell;
 use crate::shellnote::shell_note;
 use crate::win::{Raise, win_point};
 
@@ -77,11 +77,10 @@ fn to_screen(
         let r = if raise { Raise::Yes } else { Raise::No };
         let p = win_point(ctx, r, &num(x), &num(y), sels)?;
         let (px, py) = xy(&p);
-        // (bash's arithmetic refusing a number: its own words, then exit 1)
-        let (px, py) = (bash_int(&px).ok_or(Exit(1))?, bash_int(&py).ok_or(Exit(1))?);
+        let px = crate::num::read(ctx, "the window's point", &px)?;
+        let py = crate::num::read(ctx, "the window's point", &py)?;
         if st.window {
-            st.in_window(&num(px.wrapping_sub(x)), &num(py.wrapping_sub(y)))
-                .ok_or(Exit(1))?;
+            st.in_window(ctx, &num(px.saturating_sub(x)), &num(py.saturating_sub(y)))?;
         }
         (x, y) = (px, py);
     }
@@ -165,7 +164,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 i += st.took - 1;
             }
             w => {
-                if !shell::re_match("^[0-9]+$", w) {
+                if !shell::is_num(w) {
                     return Err(unexpected(
                         ctx,
                         "click",
@@ -173,7 +172,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                         "(X Y in whole pixels, then a button: left, right, middle, side, extra, back or forward)",
                     ));
                 }
-                xyv.push(shell::arith(w).unwrap_or(0));
+                xyv.push(shell::dec(w).unwrap_or(0));
             }
         }
         i += 1;
@@ -197,7 +196,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     shell_note(ctx)?;
     // A recording's glide (record start --glide) unless --steps says how to get there.
     if steps.is_none() && glide.is_none() {
-        glide = rec_glide(ctx).and_then(|g| shell::arith(&g));
+        glide = rec_glide(ctx).and_then(|g| shell::dec(&g));
     }
     let (x, y) = to_screen(ctx, &mut st, raise, &inp, &mut sels, xyv[0], xyv[1])?;
     let mut seq = vec![
@@ -324,7 +323,7 @@ pub fn scroll(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ctx.die("scroll: need X Y DY [DX] (15 is one wheel notch; positive is down and right)")
         );
     }
-    if !(shell::re_match("^[0-9]+$", &xyv[0]) && shell::re_match("^[0-9]+$", &xyv[1])) {
+    if !(shell::is_num(&xyv[0]) && shell::is_num(&xyv[1])) {
         return Err(ctx.die(cat!(
             "scroll: X Y are whole pixels, got ",
             xyv[0],
@@ -351,8 +350,8 @@ pub fn scroll(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     need_box(ctx)?;
     shell_note(ctx)?;
     let (x0, y0) = (
-        shell::arith(&xyv[0]).unwrap_or(0),
-        shell::arith(&xyv[1]).unwrap_or(0),
+        shell::dec(&xyv[0]).unwrap_or(0),
+        shell::dec(&xyv[1]).unwrap_or(0),
     );
     let (x, y) = to_screen(ctx, &mut st, raise, &inp, &mut sels, x0, y0)?;
     let ext = extent(ctx)?;

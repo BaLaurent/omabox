@@ -14,7 +14,7 @@ use crate::input::{wh, xy};
 use crate::procfs::running;
 use crate::screen::extent;
 use crate::settle::cursor_now;
-use crate::shell::{self, bash_int};
+use crate::shell::{self, dec};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -86,13 +86,13 @@ fn ptr_seen(ctx: &Ctx, v: &[u8]) -> Result<(), Vec<u8>> {
     };
     let (px, py) = xy(&p);
     let (ew, eh) = wh(&ext);
-    let n = |v: &[u8]| bash_int(v).unwrap_or(0);
-    let mut x = n(&px).wrapping_sub(16);
-    let mut y = n(&py).wrapping_sub(16);
+    let n = |v: &[u8]| dec(v).unwrap_or(0);
+    let mut x = n(&px).saturating_sub(16);
+    let mut y = n(&py).saturating_sub(16);
     x = x.max(0);
     y = y.max(0);
-    let w = n(&ew).wrapping_sub(x).min(64);
-    let h = n(&eh).wrapping_sub(y).min(64);
+    let w = n(&ew).saturating_sub(x).min(64);
+    let h = n(&eh).saturating_sub(y).min(64);
     if w <= 0 || h <= 0 {
         return ptr_live_set(ctx, v);
     }
@@ -147,7 +147,7 @@ pub fn ptr_change(ctx: &Ctx, p: &mut Ptr, op: Op, tag: &[u8], wait: bool) -> Res
             if l == b"hidden" || l.starts_with(b"hold ") {
                 on0 = true;
             }
-            let pid_ok = |pid: &[u8]| shell::re_match("^[0-9]+$", pid) && running(pid);
+            let pid_ok = |pid: &[u8]| shell::is_num(pid) && running(pid);
             if l == b"hidden" {
                 hidden = true;
             } else if l == b"was true" || l == b"was false" {
@@ -157,8 +157,7 @@ pub fn ptr_change(ctx: &Ctx, p: &mut Ptr, op: Op, tag: &[u8], wait: bool) -> Res
                     holds.push(l.to_vec());
                 }
             } else if let Some(pid) = l.strip_prefix(b"hold record ".as_slice()) {
-                if shell::re_match("^[0-9]+$", pid) && (running(pid) || ctx.at("record").is_file())
-                {
+                if shell::is_num(pid) && (running(pid) || ctx.at("record").is_file()) {
                     holds.push(l.to_vec());
                 }
             }

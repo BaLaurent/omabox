@@ -43,7 +43,7 @@ fn agent_caller() -> Option<Vec<u8>> {
     let me = std::process::id().to_string().into_bytes();
     let agent_re = shell::Re::new("claude-code|@openai/codex|opencode|pi-coding-agent|hermes")?;
     let mut p = me.clone();
-    while shell::re_match("^[0-9]+$", &p) && shell::test_int(&p).is_some_and(|n| n > 1) {
+    while shell::is_num(&p) && shell::test_int(&p).is_some_and(|n| n > 1) {
         // (this process's environment as the caller gave it to bin/omabox: the exec made it ours)
         let env = if p == me {
             crate::exec::caller_environ()

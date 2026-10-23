@@ -18,7 +18,7 @@ use crate::marks::{epoch_us, mark, rec_glide, rec_input};
 use crate::ptr::pointer_shown;
 use crate::screen::{Point, extent, shot_point};
 use crate::select::select_box;
-use crate::shell::{self, bash_int};
+use crate::shell::{self, dec};
 use crate::win::{Raise, win_point};
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
@@ -118,7 +118,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     need_box(ctx)?;
     // A recording's glide (record start --glide) unless --steps says how to get there.
     if steps.is_none() && glide.is_none() {
-        glide = rec_glide(ctx).and_then(|g| shell::arith(&g));
+        glide = rec_glide(ctx).and_then(|g| shell::dec(&g));
     }
     let steps = steps.unwrap_or(1);
     // Moves to screen pixels (--in, --window), in steps from where the pointer was (--steps). The
@@ -145,7 +145,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             n = steps_arg(ctx, "pointer", v)?;
             g = None;
         }
-        if !(shell::re_match("^[0-9]+$", &r[1]) && shell::re_match("^[0-9]+$", &r[2])) {
+        if !(shell::is_num(&r[1]) && shell::is_num(&r[2])) {
             // Left to the tool, which refuses it, when nothing here needs the numbers.
             if mapped || n != 1 || g.is_some() {
                 return Err(ctx.die(cat!(
@@ -161,12 +161,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             continue;
         }
         let (mut px, mut py) = (
-            shell::arith(&r[1]).unwrap_or(0),
-            shell::arith(&r[2]).unwrap_or(0),
+            shell::dec(&r[1]).unwrap_or(0),
+            shell::dec(&r[2]).unwrap_or(0),
         );
         let at = |p: Vec<u8>| -> Res<(i64, i64)> {
             let (a, b) = xy(&p);
-            Ok((bash_int(&a).ok_or(Exit(1))?, bash_int(&b).ok_or(Exit(1))?))
+            Ok((dec(&a).ok_or(Exit(1))?, dec(&b).ok_or(Exit(1))?))
         };
         if !sels.is_empty() {
             (px, py) = at(win_point(ctx, Raise::Pointer, &num(px), &num(py), &sels)?)?;

@@ -17,7 +17,7 @@ use crate::num::{awk_num, fixed, ms_duration, ms_s};
 use crate::screen::{box_screen, extent, stamp, tsv_last, win_buf_geom, win_scale};
 use crate::select::select_box;
 use crate::settle::{Settle, cursor_now, cursor_rect, geom_parse, kill_tree, now_ms};
-use crate::shell::{self, bash_int, strip_nl};
+use crate::shell::{self, dec, strip_nl};
 use crate::shellnote::shell_note;
 use crate::shots::{
     diff_box, diff_parts, fd_file, geom_clip, png_size, ratio, shot_fit_default, shot_path,
@@ -64,9 +64,13 @@ fn hms_ms() -> Vec<u8> {
     .into_bytes()
 }
 
-/// `$((V))`: bash's arithmetic; a number it refuses ends the command (its own words, then 1).
+/// V as a number (decimal, whatever its zeros); one that is none ends the command, said, 1 (finding
+/// 448: bash's arithmetic read a 0 in front as octal and ended it at an 08 in its own words).
 fn bi(v: &[u8]) -> Res<i64> {
-    bash_int(v).ok_or(Exit(1))
+    dec(v).ok_or_else(|| {
+        crate::exit::say(cat!("shot: cannot read '", v, "' as a number"));
+        Exit(1)
+    })
 }
 
 fn n(v: i64) -> Vec<u8> {
@@ -735,7 +739,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // --zoom's limit on the region left once -g was cut (#240).
     if !s.zoom.is_empty() {
         let z = bi(&s.zoom)?;
-        if lw.max(lh).wrapping_mul(z) > 2000 {
+        if lw.max(lh).saturating_mul(z) > 2000 {
             return Err(ctx.die(cat!(
                 "shot: --zoom ",
                 s.zoom,
@@ -744,9 +748,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 "x",
                 s.lh,
                 " is ",
-                n(lw.wrapping_mul(z)),
+                n(lw.saturating_mul(z)),
                 "x",
-                n(lh.wrapping_mul(z)),
+                n(lh.saturating_mul(z)),
                 ": at most 2000 px a side, a smaller -g"
             )));
         }
@@ -824,10 +828,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     capture(ctx, &mut s, long, lw, lh, scaled)
 }
 
-/// geom_clip X Y W H LW LH, the words as bash's: X and Y as given unless cut (bash's arithmetic reads
-/// them, octal after a 0, and printf writes them back as they were), the rest what arithmetic made.
-/// None when nothing of it is inside, or a number bash's arithmetic refuses (its own line, then
-/// the same refusal).
+/// geom_clip X Y W H LW LH: the region cut to LW x LH, as numbers (`010` is 10 and written 10:
+/// bash's arithmetic clipped it as octal 8 and handed grim the word as given, finding 448). None
+/// when nothing of it is inside, or a word that is no number (geom_parse took none such).
 fn clip(
     x: &[u8],
     y: &[u8],
@@ -836,11 +839,9 @@ fn clip(
     lw: &[u8],
     lh: &[u8],
 ) -> Option<([Vec<u8>; 4], Vec<u8>)> {
-    let v = [bash_int(x)?, bash_int(y)?, bash_int(w)?, bash_int(h)?];
-    let ([cx, cy, cw, ch], note) = geom_clip(v, bash_int(lw)?, bash_int(lh)?)?;
-    let gx = if cx == v[0] { x.to_vec() } else { n(cx) };
-    let gy = if cy == v[1] { y.to_vec() } else { n(cy) };
-    Some(([gx, gy, n(cw), n(ch)], note))
+    let v = [dec(x)?, dec(y)?, dec(w)?, dec(h)?];
+    let ([cx, cy, cw, ch], note) = geom_clip(v, dec(lw)?, dec(lh)?)?;
+    Some(([n(cx), n(cy), n(cw), n(ch)], note))
 }
 
 /// The capture, its failures in words, then the record and what shot says.
@@ -1334,14 +1335,20 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
             if b == 0 {
                 None
             } else {
-                Some(a.wrapping_div(b))
+                Some(a.saturating_div(b))
             }
         };
         let (Some(a), Some(b), Some(c), Some(e)) = (
-            d(x.wrapping_mul(iw), lw),
-            d(y.wrapping_mul(ih), lh),
-            d(w.wrapping_mul(iw).wrapping_add(lw).wrapping_sub(1), lw),
-            d(h.wrapping_mul(ih).wrapping_add(lh).wrapping_sub(1), lh),
+            d(x.saturating_mul(iw), lw),
+            d(y.saturating_mul(ih), lh),
+            d(
+                w.saturating_mul(iw).saturating_add(lw).saturating_sub(1),
+                lw,
+            ),
+            d(
+                h.saturating_mul(ih).saturating_add(lh).saturating_sub(1),
+                lh,
+            ),
         ) else {
             return Err(Exit(1));
         };
@@ -1351,24 +1358,24 @@ fn changed(ctx: &mut Ctx, s: &mut Shot, lw: i64, lh: i64) -> Res<()> {
         rmf(&s.file);
         return Err(ctx.die("shot: --changed could not compare the frames (magick)"));
     };
-    let ago = ms_s(n(now_ms().wrapping_sub(bi(&rt)?)));
+    let ago = ms_s(n(now_ms().saturating_sub(bi(&rt)?)));
     let (mut x0, mut y0, mut x1, mut y1) = (0i64, 0i64, 0i64, 0i64);
     let mut caret = Vec::new();
     let mut boxed = dbox;
     if let Some([dx, dy, dw, dh]) = dbox {
-        x0 = dx.wrapping_mul(lw) / iw;
-        y0 = dy.wrapping_mul(lh) / ih;
+        x0 = dx.saturating_mul(lw) / iw;
+        y0 = dy.saturating_mul(lh) / ih;
         x1 = (dx
-            .wrapping_add(dw)
-            .wrapping_mul(lw)
-            .wrapping_add(iw)
-            .wrapping_sub(1))
+            .saturating_add(dw)
+            .saturating_mul(lw)
+            .saturating_add(iw)
+            .saturating_sub(1))
             / iw;
         y1 = (dy
-            .wrapping_add(dh)
-            .wrapping_mul(lh)
-            .wrapping_add(ih)
-            .wrapping_sub(1))
+            .saturating_add(dh)
+            .saturating_mul(lh)
+            .saturating_add(ih)
+            .saturating_sub(1))
             / ih;
         let (w, h) = (x1 - x0, y1 - y0);
         // A caret: 4 px thin, 40 long at most; tools/still's THIN and CARET_LONG are the same.
@@ -1627,15 +1634,9 @@ fn burst_run(
     let one = on_box(ctx, &probe, false, Out::Inherit, ErrTo::Null).rc == 0;
     let (mut ts, mut files): (Vec<Vec<u8>>, Vec<Vec<u8>>) = (Vec::new(), Vec::new());
     let mut act: Option<std::process::Child> = None;
-    // (`f=$(printf '%s/frame-%03d.png' ...)`: printf reads the number as bash's arithmetic does,
-    // octal after a 0; one it refuses (08) fails it, and set -e ends the command, 1. The tool writes
-    // its frame numbers with %ld: never so.)
+    // (`frame-%03d.png` of the tool's frame number, decimal: the tool writes them with %ld)
     let frame = |out: &[u8], i: &[u8]| -> Res<Vec<u8>> {
-        Ok(cat!(
-            out,
-            "/frame-",
-            format!("{:03}", bash_int(i).ok_or(Exit(1))?)
-        ))
+        Ok(cat!(out, "/frame-", format!("{:03}", bi(i)?)))
     };
     let spawn_act = |ctx: &Ctx| -> Option<std::process::Child> {
         if act_args.is_empty() {
@@ -1737,12 +1738,13 @@ fn burst_run(
             line.retain(|&c| c != 0);
             let f = shell::read_fields(&line, 4);
             let (w, fno, ft, fl) = (&f[0], &f[1], &f[2], &f[3]);
-            if w != b"frame" || !shell::re_match("^[0-9]+$", &cat!(fno, ft, fl)) {
+            let digits = cat!(fno, ft, fl);
+            if w != b"frame" || digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
                 break;
             }
             let fpath = cat!(frame(&s.out, fno)?, ".png");
             let len = fl.iter().fold(0u64, |a, &c| {
-                a.wrapping_mul(10).wrapping_add(u64::from(c - b'0'))
+                a.saturating_mul(10).saturating_add(u64::from(c - b'0'))
             });
             let mut data = Vec::new();
             let _ = (&mut rd).take(len).read_to_end(&mut data);
@@ -1975,7 +1977,8 @@ fn burst_run(
 mod tests {
     use super::*;
 
-    // What bash's geom_clip printed for each: X and Y as given unless cut, octal to its arithmetic.
+    // What bash's geom_clip printed for each, but numbers written as numbers and read as decimal
+    // (finding 448: it printed X and Y as given, 010, and clipped them as octal).
     #[test]
     fn clip_as_bash() {
         let c = |v: [&str; 6]| {
@@ -1992,7 +1995,7 @@ mod tests {
         assert_eq!(
             c(["010", "0", "100", "50", "1920", "1080"]),
             Some((
-                ["010".into(), "0".into(), "100".into(), "50".into()],
+                ["10".into(), "0".into(), "100".into(), "50".into()],
                 Vec::new()
             ))
         );
@@ -2003,7 +2006,11 @@ mod tests {
                 b"5 px past the left edge, 5 px past the top edge".to_vec()
             ))
         );
-        assert_eq!(c(["08", "0", "1", "1", "10", "10"]), None);
+        assert_eq!(
+            c(["08", "0", "1", "1", "10", "10"]),
+            Some((["8".into(), "0".into(), "1".into(), "1".into()], Vec::new()))
+        );
+        assert_eq!(c(["x", "0", "1", "1", "10", "10"]), None);
         assert_eq!(c(["5000", "0", "10", "10", "1920", "1080"]), None);
         assert_eq!(
             split_at(b"1920x1080@60 x", b' '),

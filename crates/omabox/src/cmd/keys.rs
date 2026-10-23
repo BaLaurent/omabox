@@ -173,8 +173,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             // (`$(box_windows)` as an argument: its failure said, then an empty list)
             let wins = box_windows(ctx, None).unwrap_or_default();
             let w = win_select(ctx, &wins, &[jq_r(".address", &w)])?;
-            st.in_window(&jq_r(".at[0]", &w), &jq_r(".at[1]", &w))
-                .ok_or(Exit(1))?;
+            st.in_window(ctx, &jq_r(".at[0]", &w), &jq_r(".at[1]", &w))?;
         }
     }
     let mut kb = kb_tool(ctx)?;

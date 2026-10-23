@@ -315,7 +315,7 @@ fn peek_marker(ctx: &Ctx) -> Vec<u8> {
 
 /// focus_pid PID: a host window focused by its pid (Hyprland switches to its workspace).
 fn focus_pid(ctx: &Ctx, pid: &[u8]) -> Res<()> {
-    if !shell::re_match("^[0-9]+$", pid) {
+    if !shell::is_num(pid) {
         let lead = if ctx.main_cmd.is_empty() {
             Vec::new()
         } else {

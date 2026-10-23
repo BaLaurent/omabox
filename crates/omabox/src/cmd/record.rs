@@ -52,7 +52,7 @@ pub(crate) fn rec_max() -> i64 {
     let max = 16i64 << 30;
     let e = shell::env_or_empty("OMABOX_RECORD_MAX");
     if shell::re_match("^[0-9]{1,12}$", &e) {
-        if let Some(v) = shell::arith(&e) {
+        if let Some(v) = shell::dec(&e) {
             if v < max {
                 return v;
             }
@@ -66,7 +66,7 @@ pub(crate) fn w<A: AsRef<[u8]>>(v: &[A]) -> Vec<Vec<u8>> {
 }
 
 pub(crate) fn num(v: &[u8]) -> i64 {
-    shell::bash_int(v).unwrap_or(0)
+    shell::dec(v).unwrap_or(0)
 }
 
 pub(crate) fn now_us() -> i64 {
@@ -306,7 +306,7 @@ pub(crate) fn record_firsts(ctx: &mut Ctx, rec: &Rec) -> Vec<Option<(i64, i64)>>
                 caps.get(i)
                     .copied()
                     .flatten()
-                    .map_or(0, |(a, b)| shell::arith(&l[a..b]).unwrap_or(0))
+                    .map_or(0, |(a, b)| shell::dec(&l[a..b]).unwrap_or(0))
             };
             Some((g(1), g(1) + (g(2) + g(4)) / 2 - g(3)))
         })
@@ -611,11 +611,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut o = parse(ctx, args)?;
     let sub = o.sub.clone();
     let s = sub.as_slice();
-    let fps_ok = shell::re_match("^[0-9]+$", &o.fps)
-        && shell::test_int(&o.fps).is_some_and(|f| (1..=120).contains(&f));
+    let fps_ok =
+        shell::is_num(&o.fps) && shell::test_int(&o.fps).is_some_and(|f| (1..=120).contains(&f));
     if !fps_ok {
         return Err(ctx.die(cat!("record: --fps is 1 to 120, got ", o.fps)));
     }
+    // (as the number read: 010 is 10 for wf-recorder, ffmpeg and stop alike, where bash recorded
+    // the word and stop's arithmetic read it as octal, finding 448)
+    o.fps = shell::test_int(&o.fps)
+        .unwrap_or(30)
+        .to_string()
+        .into_bytes();
     if o.forms.is_some() {
         if !o.ract.is_empty() {
             return Err(say_exit2(
@@ -1538,7 +1544,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         )));
     }
     for p in &pids {
-        if !shell::re_match("^[0-9]+$", p) {
+        if !shell::is_num(p) {
             audio_end(ctx, &apid)?;
             return Err(ctx.die(cat!(
                 "record: could not start wf-recorder in box '",
@@ -1687,7 +1693,7 @@ fn audio_start(ctx: &mut Ctx) -> Res<Vec<u8>> {
         );
         strip_nl(&reader.join().unwrap_or_default())
     };
-    if !shell::re_match("^[0-9]+$", &apid) {
+    if !shell::is_num(&apid) {
         return Err(ctx.die(cat!(
             "record --audio: could not start ffmpeg in box '",
             ctx.name,
@@ -1732,7 +1738,7 @@ fn audio_start(ctx: &mut Ctx) -> Res<Vec<u8>> {
 /// record_audio_end PID: the recording's ffmpeg told to finish (INT), then waited for (5 s, then
 /// KILL), in the box. Nothing for no pid.
 pub fn audio_end(ctx: &mut Ctx, pid: &[u8]) -> Res<()> {
-    if !shell::re_match("^[0-9]+$", pid) {
+    if !shell::is_num(pid) {
         return Ok(());
     }
     sh_quiet(ctx, "/usr/bin/sh", P::AUDIO_END_SH, &[pid.to_vec()])?;

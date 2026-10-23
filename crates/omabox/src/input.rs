@@ -4,13 +4,13 @@
 
 use crate::cat;
 use crate::exec::{ErrTo, In, Out, on_box, pipe};
-use crate::exit::{Ctx, Exit, Res, say};
+use crate::exit::{Ctx, Res, say};
 use crate::hypr::hypr_json;
 use crate::jq;
 use crate::num::{awk_num, ms_duration};
 use crate::screen::extent;
 use crate::settle::{Got, Lines, cursor_now};
-use crate::shell::{self, bash_int, strip_nl, test_int};
+use crate::shell::{self, dec, strip_nl, test_int};
 use std::time::Duration;
 
 pub const BOX_KEYBOARD: &str = "/opt/omabox/bin/omabox-keyboard";
@@ -69,7 +69,7 @@ pub fn on_screen(ctx: &Ctx, cmd: &str, x: &[u8], y: &[u8], ext: &[u8]) -> Res<()
 /// steps_arg CMD N: --steps is 1-999 (1 is a jump).
 pub fn steps_arg(ctx: &Ctx, cmd: &str, n: &[u8]) -> Res<i64> {
     if shell::re_match("^[1-9][0-9]{0,2}$", n) {
-        return Ok(shell::arith(n).unwrap_or(1));
+        return Ok(shell::dec(n).unwrap_or(1));
     }
     Err(ctx.die(cat!(cmd, ": --steps is 1-999, got ", n)))
 }
@@ -96,7 +96,7 @@ pub fn pause_ms(ctx: &Ctx, what: &str, v: &[u8]) -> Res<i64> {
     let mut c = ctx.clone();
     c.die_rc = Some(2);
     if shell::re_match("^[0-9]{1,6}$", v) {
-        let n = shell::arith(v).unwrap_or(0);
+        let n = shell::dec(v).unwrap_or(0);
         return Err(c.usage_die(cat!(
             what,
             " ",
@@ -176,8 +176,8 @@ pub fn steps_to(seq: &mut Vec<Vec<u8>>, p: [i64; 4], n: i64) {
     let [x0, y0, x1, y1] = p;
     let mut k = 1;
     while k <= n {
-        let x = x0.wrapping_add(x1.wrapping_sub(x0).wrapping_mul(k).wrapping_div(n));
-        let y = y0.wrapping_add(y1.wrapping_sub(y0).wrapping_mul(k).wrapping_div(n));
+        let x = x0.saturating_add(x1.saturating_sub(x0).saturating_mul(k).saturating_div(n));
+        let y = y0.saturating_add(y1.saturating_sub(y0).saturating_mul(k).saturating_div(n));
         seq.extend([b"move".to_vec(), num(x), num(y)]);
         k += 1;
     }
@@ -190,7 +190,7 @@ pub fn glide_to(seq: &mut Vec<Vec<u8>>, p: [&[u8]; 4], ms: i64) {
     if cat!(x0, " ", y0) == cat!(x1, " ", y1) {
         return;
     }
-    let n = (ms.wrapping_add(20) / 40).max(2);
+    let n = (ms.saturating_add(20) / 40).max(2);
     let (x0, y0, x1, y1) = (awk_num(x0), awk_num(y0), awk_num(x1), awk_num(y1));
     let nf = n as f64;
     for i in 1..=n {
@@ -217,8 +217,8 @@ pub fn path_rects(x: i64, y: i64, seq: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
     let (mut xs, mut ys) = (vec![x], vec![y]);
     let mut i = 0;
     while i + 3 <= seq.len() {
-        xs.push(bash_int(&seq[i + 1])?);
-        ys.push(bash_int(&seq[i + 2])?);
+        xs.push(dec(&seq[i + 1])?);
+        ys.push(dec(&seq[i + 2])?);
         i += 3;
     }
     let n = xs.len();
@@ -238,10 +238,10 @@ pub fn path_rects(x: i64, y: i64, seq: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
         out.push(
             format!(
                 "{},{},{},{}",
-                x0.wrapping_sub(16),
-                y0.wrapping_sub(16),
-                x1.wrapping_sub(x0).wrapping_add(64),
-                y1.wrapping_sub(y0).wrapping_add(64)
+                x0.saturating_sub(16),
+                y0.saturating_sub(16),
+                x1.saturating_sub(x0).saturating_add(64),
+                y1.saturating_sub(y0).saturating_add(64)
             )
             .into_bytes(),
         );
@@ -317,12 +317,24 @@ pub fn pointer_at(ctx: &Ctx) -> Res<(i64, i64)> {
     let ext = extent(ctx)?;
     let (px, py) = xy(&p);
     let (ew, eh) = wh(&ext);
-    // (bash's arithmetic refusing a number: its own words, then exit 1)
-    let n = |v: &[u8]| bash_int(v).ok_or(Exit(1));
+    // (a number omabox cannot read: said, 1; bash's arithmetic ended it in its own words: finding 448)
+    let n = |v: &[u8]| {
+        dec(v).ok_or_else(|| {
+            ctx.die(cat!(
+                "cannot read the pointer of box '",
+                ctx.name,
+                "' (",
+                p,
+                ") or its screen (",
+                ext,
+                ")"
+            ))
+        })
+    };
     let (x, y, w, h) = (n(&px)?, n(&py)?, n(&ew)?, n(&eh)?);
     Ok((
-        if x < w { x } else { w.wrapping_sub(1) },
-        if y < h { y } else { h.wrapping_sub(1) },
+        if x < w { x } else { w.saturating_sub(1) },
+        if y < h { y } else { h.saturating_sub(1) },
     ))
 }
 
@@ -496,6 +508,7 @@ mod tests {
 #[cfg(test)]
 mod parse_tests {
     use super::*;
+    use crate::exit::Exit;
 
     #[test]
     fn options_as_bash_reads_them() {

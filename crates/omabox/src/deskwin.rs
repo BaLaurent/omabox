@@ -20,7 +20,7 @@ use crate::mon::{
 };
 use crate::screen::main_screen;
 use crate::settle::secs;
-use crate::shell::{self, bash_int, strip_nl};
+use crate::shell::{self, dec, strip_nl};
 
 /// ws_check WS: where interactive and peek windows open (a workspace 1-99, `special`, or
 /// special:NAME: #292, finding 423), in its normal form; None for anything else.
@@ -70,7 +70,7 @@ pub fn desk_windows(ctx: &Ctx, clients: Option<&[u8]>) -> Option<Vec<u8>> {
         }
     };
     let pid = win_pid(ctx);
-    if !shell::re_match("^[0-9]+$", &pid) {
+    if !shell::is_num(&pid) {
         return None;
     }
     let ws = box_ws(ctx)?;
@@ -181,10 +181,20 @@ fn chk(ctx: &Ctx, rc: i32, what: &str) -> Res<()> {
     Ok(())
 }
 
-/// `$((EXPR))` of the words desk_relay adds up (jq's and the picture's integers): bash's reading,
-/// 0 for an empty one; None where bash's arithmetic refuses one (it ends the command, 1).
-fn ints(v: &[&[u8]]) -> Option<Vec<i64>> {
-    v.iter().map(|x| bash_int(x)).collect()
+/// The words desk_relay adds up (jq's and the picture's integers), decimal, 0 for an empty one; one
+/// that is no number ends the command, said (finding 448: bash's arithmetic, in its own words).
+fn ints(ctx: &Ctx, v: &[&[u8]]) -> Res<Vec<i64>> {
+    let n: Option<Vec<i64>> = v
+        .iter()
+        .map(|x| if x.is_empty() { Some(0) } else { dec(x) })
+        .collect();
+    n.ok_or_else(|| {
+        ctx.die(cat!(
+            ctx.label(),
+            "cannot read the layout's numbers: ",
+            v.join(&b' ')
+        ))
+    })
 }
 
 /// desk_relay [LINE]: lay an interactive box's windows out on the host as its layout, scaled as a
@@ -273,15 +283,13 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
     };
     let mut gap = opt(b"general:gaps_out", crate::jqprog::GAPS_JQ);
     let mut bw = opt(b"general:border_size", ".int // empty");
-    if !shell::re_match("^[0-9]+$", &gap) {
+    if !shell::is_num(&gap) {
         gap = b"10".to_vec();
     }
-    if !shell::re_match("^[0-9]+$", &bw) {
+    if !shell::is_num(&bw) {
         bw = b"2".to_vec();
     }
-    let Some(g) = ints(&[&gap, &bw]).map(|v| v[0].wrapping_add(v[1])) else {
-        return Err(Exit(1));
-    };
+    let g = ints(ctx, &[&gap, &bw]).map(|v| v[0].saturating_add(v[1]))?;
     let g = g.to_string();
     let r = Args::new(&["-r"])
         .kv("--argjson", "g", &g)
@@ -382,9 +390,7 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
         let f = shell::read_fields(row, 5);
         let (name, x, y, wd, ht) = (&f[0], &f[1], &f[2], &f[3], &f[4]);
         if !new.is_empty() && name == new_name {
-            let Some(v) = ints(&[&a[2], &a[0], x, &a[3], &a[1], y]) else {
-                return Err(Exit(1));
-            };
+            let v = ints(ctx, &[&a[2], &a[0], x, &a[3], &a[1], y])?;
             said.extend_from_slice(&cat!(
                 wd,
                 " ",
@@ -423,9 +429,7 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
                 " }))"
             ),
         )?;
-        let Some(v) = ints(&[&a[2], x, &a[3], y]) else {
-            return Err(Exit(1));
-        };
+        let v = ints(ctx, &[&a[2], x, &a[3], y])?;
         host_eval(
             ctx,
             &cat!(
@@ -622,7 +626,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
         )));
     };
     let pid = win_pid(ctx);
-    if !shell::re_match("^[0-9]+$", &pid) {
+    if !shell::is_num(&pid) {
         return Err(ctx.die(cat!(
             "monitor add: cannot find box '",
             ctx.name,

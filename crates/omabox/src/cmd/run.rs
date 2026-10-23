@@ -405,8 +405,13 @@ fn detached(
     if st.wait {
         let p = cursor_now(ctx)?;
         if !p.is_empty() {
-            // (bash's arithmetic refusing a number: its own words, then exit 1)
-            let r = cursor_rect(&p).ok_or(Exit(1))?;
+            let r = cursor_rect(&p).ok_or_else(|| {
+                ctx.die(cat!(
+                    "run: cannot read the pointer's place as numbers: '",
+                    p,
+                    "'"
+                ))
+            })?;
             st.args.extend([b"--ignore".to_vec(), r]);
         }
         st.facts = "run";
@@ -456,7 +461,7 @@ fn detached(
         )));
     }
     let log = cat!(ctx.d, "/home/", lname);
-    let numeric = shell::re_match("^[0-9]+$", &jpid);
+    let numeric = shell::is_num(&jpid);
     if numeric {
         job_record(ctx, &jpid, &log, cmd);
         st.fpid = jpid.clone();

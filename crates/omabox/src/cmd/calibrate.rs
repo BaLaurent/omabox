@@ -12,7 +12,7 @@ use crate::exit::{Ctx, Exit, Res, out, say};
 use crate::jq::{self, Args};
 use crate::jqprog::{CALIB_FIT_AWK, CALIB_MARKS_AWK, JQ_MON};
 use crate::num::{awk_num, fixed};
-use crate::shell::{self, bash_int, strip_nl, test_int};
+use crate::shell::{self, dec, strip_nl, test_int};
 use crate::shots::{dirname, mkdir_p, real, shot_fit_default, two_files};
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -69,22 +69,22 @@ fn calib_marks(w: &[u8], h: &[u8]) -> Vec<u8> {
 }
 
 /// calib_card FILE W H MARKS: each mark a red cross in a ring, its letter above it to the right, on
-/// light grey; sized from the card's longest side. MARKS in the PNG's comment. None where bash's
-/// arithmetic refuses a number (its own words; the command ends, 1).
+/// light grey; sized from the card's longest side. MARKS in the PNG's comment. None where a number is
+/// none (dec).
 fn calib_card(file: &[u8], w: &[u8], h: &[u8], marks: &[u8]) -> Option<bool> {
-    let (wi, hi) = (bash_int(w)?, bash_int(h)?);
+    let (wi, hi) = (dec(w)?, dec(h)?);
     let long = wi.max(hi);
-    let arm = (long.wrapping_mul(18) / 1920).max(6);
-    let sw = (long.wrapping_mul(3) / 1920).max(2);
-    let r = (long.wrapping_mul(11) / 1920).max(4);
-    let pt = (long.wrapping_mul(34) / 1920).max(12);
+    let arm = (long.saturating_mul(18) / 1920).max(6);
+    let sw = (long.saturating_mul(3) / 1920).max(2);
+    let r = (long.saturating_mul(11) / 1920).max(4);
+    let pt = (long.saturating_mul(34) / 1920).max(12);
     let mut comment = cat!("omabox-calibrate 1 ", w, " ", h);
     let (mut draw, mut text): (Vec<Vec<u8>>, Vec<Vec<u8>>) = (Vec::new(), Vec::new());
     let m = strip_nl(marks);
     for line in m.split(|&c| c == b'\n') {
         let f = shell::read_fields(line, 3);
         let (l, xs, ys) = (&f[0], &f[1], &f[2]);
-        let (x, y) = (bash_int(xs)?, bash_int(ys)?);
+        let (x, y) = (dec(xs)?, dec(ys)?);
         draw.extend([
             b"-draw".to_vec(),
             format!("line {},{y} {},{y}", x - arm, x + arm).into_bytes(),
@@ -601,7 +601,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let card = crate::shots::real_or_end(ctx, &card)?;
     let part = cat!(card, ".part");
     let marks = calib_marks(&w, &h);
-    let drawn = calib_card(&part, &w, &h, &marks).ok_or(Exit(1))?;
+    let drawn = calib_card(&part, &w, &h, &marks).unwrap_or(false);
     if !drawn || !crate::shots::mv_f(&part, &card) {
         let _ = std::fs::remove_file(shell::path(&part));
         return Err(ctx.die(cat!("calibrate: could not draw the card at ", card)));

@@ -3634,7 +3634,9 @@ t_unit_rust_parity() {
   parity "run -g twice" run -b own -d --wait -g 1,2,3,4 -g 1,2,3,4 -- true
   parity "run --ignore: no value" run -b own -d --wait --ignore
   parity "run --ignore outside -g's region: said, then on" run -b dead1 -d --wait -g 0,0,10,10 --ignore 100,100,5,5 -- true
-  parity "run --ignore with a zero in front (bash's arithmetic: octal)" run -b dead1 -d --wait -g 0,0,10,10 --ignore 010,0,5,5 -- true
+  # (decimal: 010 is 10, outside; bash's arithmetic read 8, inside: finding 448)
+  rp_why=448 rp_bash=('err!~outside') rp_rust=('err~^omabox: --ignore "010,0 5x5" is outside -g.s region')
+  parity "run --ignore with a zero in front: decimal" run -b dead1 -d --wait -g 0,0,10,10 --ignore 010,0,5,5 -- true
   parity "run -d --wait of a dead box" run -b dead1 -d --wait -- true
   parity "run -d --wait: a Hyprland that does not answer (cursor_now), 125" run -b own -d --wait -- true
   parity "run: --help after the options" run -b own -d --wait --help
@@ -3781,7 +3783,9 @@ EOF
   rp_s2() { rp_fk_still 'ready 1920x1080' 'unsatisfied changing t=1500 last=1400 change=10,10,100,20 late=0,0,1000,1000'; }
   rp_prep=rp_s2; parity "wait still: changing all over (no area= given: W x H)" wait -b fk still
   rp_s3() { rp_fk_still 'ready 08x10' 'unsatisfied changing t=1500 last=1400 change=1,1,1,1 late=0,0,1,1'; }
-  rp_prep=rp_s3; parity "wait still: a ready size bash's arithmetic refuses (08), 1" wait -b fk still
+  # (decimal: 08 is 8; bash's arithmetic ended the command there, 1, in its own words: finding 448)
+  rp_why=448 rp_bash=(rc=1 out=) rp_rust=(rc=124 'out~^unsatisfied: still changing after Ts .*it changed only at 0,0 1x1')
+  rp_prep=rp_s3; parity "wait still: a ready size with a zero in front (08)" wait -b fk still
   rp_s4() { rp_fk_still 'ready 1920x1080 area=2073600' 'satisfied settled t=500 last=100 change=1,2,3,4 ignored=5,6,7,8 why=caret'; }
   rp_prep=rp_s4; parity "wait still: settled, a caret ignored" wait -b fk still --json
   rp_s5() { rp_fk_still 'ready 1920x1080 area=2073600' 'unsatisfied nothing t=400 ignored=5,6,7,8 why=mask'; }
@@ -3833,8 +3837,10 @@ EOF
   rp_why="441, 443" rp_bash=("err=od: cannot skip past end of combined input" state~^TMPFILE$) rp_rust=("err=omabox: pixel: the point is past the end of grim's image" state!~^TMPFILE$)
   rp_prep=rp_p3; parity "...a point past its end (od's own words in bash)" pixel -b fk 1 900 1 1
   rp_p4() { rp_ppm 'P6\n08 2\n255\n\001\002\003'; }
-  rp_why="442, 443" rp_bash=(err= state~^TMPFILE$) rp_rust=("err=omabox: pixel: grim's image is not a PPM it reads" state!~^TMPFILE$)
-  rp_prep=rp_p4; parity "pixel: a width bash's arithmetic refuses (08), 1, unsaid in bash, its frame left" pixel -b fk 1 1
+  # (decimal: a width of 08 is 8; bash's arithmetic ended pixel there, 1, unsaid, its frame left:
+  # findings 443, 448)
+  rp_why="443, 448" rp_bash=(rc=1 out= state~^TMPFILE$) rp_rust=(rc=0 'out=#010203' state!~^TMPFILE$)
+  rp_prep=rp_p4; parity "pixel: a width with a zero in front (08)" pixel -b fk 1 1
   rp_p5() { rp_ppm 'P5\n2 2\n255\n\001\002\003'; }
   rp_prep=rp_p5; parity "pixel: not a PPM it reads" pixel -b fk 1 1
   rp_p6() { rp_fk; rm -f "$fk/grim.ppm"; }
@@ -4189,7 +4195,9 @@ EOF
   parity "shot: the default name in TMPDIR" shot -b fk
   parity "screenshot -g: a region" screenshot -b fk -g '10,20 100x50' -o "$o3/g.png"
   parity "shot -g past the screen: cut, said" shot -b fk -g -5,-5,100,50 -o "$o3/g.png" --json
-  parity "shot -g with zeros in front (octal to bash's arithmetic)" shot -b fk -g 010,0,100,50 -o "$o3/g.png" --json
+  # (010 is 10 and written so; bash clipped it as octal 8 and handed grim the word: finding 448)
+  rp_why=448 rp_bash=('err~ at 010,0 ' 'state~-g 010,0 100x50' 'state~screen 010,0') rp_rust=('err~ at 10,0 ' 'state~-g 10,0 100x50' 'state~screen 10,0')
+  parity "shot -g with zeros in front: decimal" shot -b fk -g 010,0,100,50 -o "$o3/g.png" --json
   parity "shot -g: nothing on the screen" shot -b fk -g 5000,0,10,10 -o "$o3/g.png"
   parity "shot --window" shot -b fk --window title:one -o "$o3/w.png"
   parity "shot --window --json -g past it" shot -b fk --window title:one -g 0,0,1000,10 -o "$o3/w.png" --json
@@ -6031,9 +6039,12 @@ PYEOF
   parity "check diff --report --json: two regions" check diff --report "$r/co/r.png" --json "$im/a.png" "$im/b.png"
   parity "check diff --report: the same (the plan gone)" check diff --report "$r/co/r.png" "$im/a.png" "$im/a2.png"
   parity "check diff --report: not drawn" check diff --report "$r/co/rep-fail.png" "$im/a.png" "$im/b.png"
-  # A number bash's arithmetic cannot read (08) or reads as octal (010): as bash ends, or reads.
+  # A number with a zero in front: bash's arithmetic cannot read 08 (it ended check diff, 2) and reads
+  # 010 as octal; the Rust half reads them as decimal (finding 448).
   rp_sed='s#^[^ ]*/bin/omabox: line [0-9]+: ##; s/kill: \(-?[0-9]+\)/kill: (PID)/' 
-  parity "check diff --ignore 08,0: could not compare, exit 2, no plan left" check diff --report "$r/co/r.png" --ignore "08,0 10x10" "$im/a.png" "$im/b.png"
+  rp_why=448 rp_bash=(rc=2 out= 'err~^08: value too great for base' 'err~could not compare them \(magick\)' 'state~^\. d [0-9]+$')
+  rp_rust=(rc=1 'out~^10,10 20x20 \(400 px\)$' 'out~^60,50 10x10 \(100 px\)$' 'out~^specks: 0, 0 px$' 'out~^report: ' err= 'state~^\. d [0-9]+$' 'state~^\./r\.png f ')
+  parity "check diff --ignore 08,0: decimal, compared" check diff --report "$r/co/r.png" --ignore "08,0 10x10" "$im/a.png" "$im/b.png"
   parity "check diff --ignore 0,0 09x9" check diff --ignore "0,0 09x9" "$im/a.png" "$im/b.png"
   parity "check diff --ignore 010,010 020x020: octal" check diff --json --ignore "010,010 020x020" "$im/a.png" "$im/b.png"
   rp_sed=""
@@ -6374,13 +6385,22 @@ while time.time() < end:
   parity "record stop --show-input --captions --cut-idle 200ms" record -b rc stop --show-input --captions --cut-idle 200ms
   parity "record stop --sheet --frames 4 --fit 400" record -b rc stop --sheet --frames 4 --fit 400
   parity "record stop --sheet --every 1s" record -b rc stop --sheet --every 1s
-  # --frames as bash's arithmetic reads it: 010 octal (8), 08 none (no frame picked; with --fit a
-  # division by 0 ends the sheet), 01 a division by 0.
+  # --frames as bash's arithmetic read it: 010 octal (8), 08 none (no frame picked; with --fit a
+  # division by 0 ended the sheet), 01 a division by 0. The Rust half reads decimal: 10, 8, 1 frames
+  # (finding 448).
   rp_sed="$rp_sed_r"'; s#^[^ ]*/bin/omabox: line [0-9]+: ##'
-  parity "record stop --sheet --frames 010" record -b rc stop --sheet --frames 010
-  parity "record stop --sheet --frames 08 --fit 400" record -b rc stop --sheet --frames 08 --fit 400
-  parity "record stop --sheet --frames 08" record -b rc stop --sheet --frames 08
-  parity "record stop --sheet --frames 01" record -b rc stop --sheet --frames 01
+  rp_why=448 rp_bash=('err~sheet of 8 frames' 'state~^ffmpeg .*eq\(n,11\)' 'state~^magick montage .*-label 4: T$' 'state~^> T a mark .*/004\.png')
+  rp_rust=('err~sheet of 10 frames' 'state~^ffmpeg .*eq\(n,8\)' 'state~^magick montage .*-label 5: T$' 'state~^> T a mark .*/005\.png')
+  parity "record stop --sheet --frames 010: 10" record -b rc stop --sheet --frames 010
+  rp_why=448 rp_bash=(rc=1 'out!~sheet' 'err~^\(\(: 08: value too great for base' 'err~^fit / cols - 6: division by 0' 'state~^\. d [0-9]+$')
+  rp_rust=(rc=0 'out~/v\.sheet\.png$' 'err~sheet of 8 frames' 'state~^\. d [0-9]+$' 'state~^\./v\.sheet\.png f SIZE$' "state~^ffmpeg .*select='eq\\(n,0\\)" 'state~^== magick\.log$' 'state~^magick montage ' 'state~^> T a mark' 'state~^magick PNG:')
+  parity "record stop --sheet --frames 08 --fit 400: 8" record -b rc stop --sheet --frames 08 --fit 400
+  rp_why=448 rp_bash=(rc=1 'out!~sheet' 'err~^\(\(: 08: value too great for base' 'err~contact sheet failed \(magick montage' 'state~^\. d [0-9]+$' "state~select='',scale" 'state~^magick montage -tile 0x')
+  rp_rust=(rc=0 'out~/v\.sheet\.png$' 'err~sheet of 8 frames' 'state~^\. d [0-9]+$' 'state~^\./v\.sheet\.png f SIZE$' "state~select='eq\\(n,0\\)" 'state~^magick montage -label 1:' 'state~^> T a mark')
+  parity "record stop --sheet --frames 08: 8" record -b rc stop --sheet --frames 08
+  rp_why=448 rp_bash=(rc=1 'out!~sheet' 'err~^\(2 \* i \* \(nb - 1\) \+ n - 1\) / \(2 \* \(n - 1\)\) : division by 0' 'state~^\. d [0-9]+$')
+  rp_rust=(rc=0 'out~/v\.sheet\.png$' 'err~sheet of 1 frames' 'state~^\. d [0-9]+$' 'state~^\./v\.sheet\.png f SIZE$' "state~select='eq\\(n,0\\)'" 'state~^== magick\.log$' 'state~^magick montage -label 1: T$' 'state~^> T a mark')
+  parity "record stop --sheet --frames 01: 1" record -b rc stop --sheet --frames 01
   rp_sed=$rp_sed_r
   # Signals during stop's encode (2 s), the input recorded (its temp file gone in both: 432).
   rp4b_slowenc() { rp4b_marked; : > "$st/ffmpeg.sleep"; }; rp4b_pre=(rp4b_slowenc)
@@ -6457,8 +6477,12 @@ while time.time() < end:
   rp_wrap=() rp_sed=$rp_sed_r
   rp4b_pre=(rp4b_recfix)
   rp_sed="$rp_sed_r"'; s#^[^ ]*/bin/omabox: line [0-9]+: ##'
-  parity "record --fps 08: stop ends at bash's arithmetic, 1" record -b rc --for 1s --fps 08 -o "$r/co/v.mp4"
-  parity "record --fps 010" record -b rc --for 1s --fps 010 -o "$r/co/v.mp4"
+  # (decimal, 8 fps; bash recorded the word, and stop's arithmetic ended at it, 1: finding 448)
+  rp_why=448 rp_bash=(rc=1 out= 'err~^08: value too great for base' 'state~^\. d [0-9]+$' 'state~^-- rc/record\.geo$' 'state~^0 0 1\.0$')
+  rp_rust=(rc=0 'out~/co/v\.mp4$' 'err~^omabox: record: 1920x1080, .* at 8 fps$' 'state~^\. d [0-9]+$' 'state~^\./v\.mp4 f ' 'state~^ffmpeg -v error -y -i .*fps=8,' 'state~^ffprobe -v error -select_streams v:0 -show_entries stream=width,height:format=duration ')
+  parity "record --fps 08: decimal, 8" record -b rc --for 1s --fps 08 -o "$r/co/v.mp4"
+  rp_why=448 rp_bash=('err~ at 010 fps$' 'state~ -vf fps=010,') rp_rust=('err~ at 10 fps$' 'state~ -vf fps=10,')
+  parity "record --fps 010: decimal, written 10" record -b rc --for 1s --fps 010 -o "$r/co/v.mp4"
   rp_sed=$rp_sed_r
   parity "record start --no-pointer: the hold, then its wait for the frame" record -b rc start --no-pointer -o "$r/co/v.mp4"
   rp4b_pre=(rp4b_wffail)

@@ -9354,6 +9354,29 @@ from them.
     "...in characters under LC_ALL=C too": expected differences), shell.rs's
     cut_counts_characters_in_any_locale, length_controls_and_case_in_any_locale.
 
+448. **Numbers were read as bash's arithmetic reads them** (2026-10-23, #324 wave 4c; decided by
+    Diogo 2026-10-22). A number with a 0 in front is octal to `$((...))`: shot's `-g 010,0,100,50`
+    was clipped from x=8 while grim was handed `010` (10), `--frames 010` picked 8 frames, a
+    recording at `--fps 010` was counted at 8 by `record stop`, `check diff --ignore "010,010
+    020x020"` masked 8,8 16x16; `08` and `09` ended the command with bash's "value too great for
+    base", exit 1 (`record --fps 08` at its stop, `--frames 08` with no frame picked, a checkpoint's
+    `--ignore 08,0` left out, the still tool's `ready 08x08`); `--frames 01` divided by 0; past 64
+    bits a number wrapped, and an empty word was 0. The Rust half copied it all (shell::bash_int and
+    arith at 67 sites, the arithmetic on them wrapping, arith_said printing bash's line).
+    **Change** (Rust over bash): one reader, shell::dec: an optional sign, then ASCII digits,
+    decimal whatever its zeros (`010` is 10, `08` is 8), checked at 64 bits. Every `^[0-9]+$` check
+    is shell::is_num and every region goes through geom_parse, so a number past 64 bits gets the
+    option's usual refusal; the arithmetic on them saturates instead of wrapping. A number omabox
+    cannot read where it expects one (a tool's answer, a record of its own) ends the command in its
+    words, "omabox: CMD: cannot read WHAT as a number: 'V'" (num::read), exit 1 as before. Regions
+    are written as the numbers read: shot's `-g 010,...` is `10,...` in grim's argument, the record
+    and what shot says, and `record --fps 010` records at 10 and says so (CHANGELOG). Tests:
+    t_unit_rust_parity ("run --ignore with a zero in front", "wait still: a ready size with a zero
+    in front", "pixel: a width with a zero in front", "shot -g with zeros in front") and
+    t_unit_rust_parity4b ("check diff --ignore 08,0", "record stop --sheet --frames" 010, 08 and 01,
+    "record --fps" 08 and 010): expected differences; shell.rs's numbers_are_decimal, shot.rs's
+    clip_as_bash, settle.rs's geometry.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

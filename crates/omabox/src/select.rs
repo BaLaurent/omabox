@@ -224,7 +224,7 @@ pub fn agent_proc() -> Option<(Vec<u8>, Vec<u8>)> {
             pid
         }
     };
-    if !shell::re_match("^[0-9]+$", &pid)
+    if !shell::is_num(&pid)
         || shell::test_int(&pid).is_none_or(|p| p <= 1)
         || !readable(&cat!("/proc/", pid, "/environ"))
         || !descends_from(&pid)

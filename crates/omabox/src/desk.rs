@@ -109,7 +109,7 @@ pub fn desk_target(ctx: &Ctx, what: Target, s: &[u8]) -> Vec<u8> {
             n
         }
     };
-    let num = |v: &[u8]| shell::re_match("^[0-9]+$", v);
+    let num = |v: &[u8]| shell::is_num(v);
     if !(num(&x) && num(&y) && num(&pid)) {
         return Vec::new();
     }

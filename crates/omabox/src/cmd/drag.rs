@@ -22,7 +22,7 @@ use crate::num::ms_duration;
 use crate::screen::{Point, extent, shot_point};
 use crate::select::select_box;
 use crate::settle::{Lines, Settle};
-use crate::shell::{self, bash_int};
+use crate::shell;
 use crate::win::{Raise, win_point};
 use std::os::fd::AsRawFd;
 use std::time::Duration;
@@ -172,7 +172,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 i += st.took - 1;
             }
             w => {
-                if !shell::re_match("^[0-9]+$", w) {
+                if !shell::is_num(w) {
                     return Err(unexpected(
                         ctx,
                         "drag",
@@ -180,7 +180,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                         "(X1 Y1 X2 Y2 in whole pixels, then a button: left, right, middle, side, extra, back or forward)",
                     ));
                 }
-                xyv.push(shell::arith(w).unwrap_or(0));
+                xyv.push(shell::dec(w).unwrap_or(0));
             }
         }
         i += 1;
@@ -214,7 +214,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     need_box(ctx)?;
     // A recording's glide (record start --glide) unless --steps says how to get there.
     if steps.is_none() && glide.is_none() {
-        glide = rec_glide(ctx).and_then(|g| shell::arith(&g));
+        glide = rec_glide(ctx).and_then(|g| shell::dec(&g));
     }
     let steps = steps.unwrap_or(10);
     // Both points to screen pixels: from a shot's image, then from a window's coordinates.
@@ -235,11 +235,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             let r = if raise { Raise::Yes } else { Raise::No };
             let p = win_point(ctx, r, &num(x), &num(y), &wsel)?;
             let (px, py) = xy(&p);
-            let (px, py) = (bash_int(&px).ok_or(Exit(1))?, bash_int(&py).ok_or(Exit(1))?);
+            let px = crate::num::read(ctx, "the window's point", &px)?;
+            let py = crate::num::read(ctx, "the window's point", &py)?;
             // (--wait's -g and --ignore beside --window: the window's own, F8; where it is at the start)
             if st.window && k == 0 {
-                st.in_window(&num(px.wrapping_sub(x)), &num(py.wrapping_sub(y)))
-                    .ok_or(Exit(1))?;
+                st.in_window(ctx, &num(px.saturating_sub(x)), &num(py.saturating_sub(y)))?;
             }
             (x, y) = (px, py);
         }
