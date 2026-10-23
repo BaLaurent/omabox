@@ -3207,7 +3207,8 @@ t_unit_rust_parity() {
     rp_box dead1 '{"mode":"headless"}'; echo "x spawned child 12 terminated with signal 11" > "$r/rt/omabox/dead1/home/labwc.log"
     rp_box dead2 '{"mode":"headless"}'; printf 'spawned child 9 exited with 3\nspawned child 10 exited with -' > "$r/rt/omabox/dead2/home/labwc.log"
     rp_box dead3 '{"mode":"interactive"}'; printf 'a\nomabox: Hyprland terminated with signal 32\n' > "$r/rt/omabox/dead3/home/hyprland.log"
-    rp_box Zed '{"mode":"headless"}'; ln -s /etc/passwd "$r/rt/omabox/Zed/home/labwc.log"
+    # (zed, not Zed: a capital put the "up: ..." lists in an order that hung on the locale, finding 446)
+    rp_box zed '{"mode":"headless"}'; ln -s /etc/passwd "$r/rt/omabox/zed/home/labwc.log"
     mkdir -p "$r/rt/omabox/half"; echo '{"child-pid": 999999999}' > "$r/rt/omabox/half/info.json"
     echo 30m > "$r/rt/omabox/.expired-gone"
     rp_box unk '{"mode":"headless"}' "$nd"
@@ -3266,7 +3267,7 @@ t_unit_rust_parity() {
   parity "env of a dead box: SIGSEGV" env dead1
   parity "env of a dead box: exited" env -b dead2
   parity "env of a dead box: signal 32 (no name)" env dead3
-  parity "env of a dead box whose labwc.log is a link" env Zed
+  parity "env of a dead box whose labwc.log is a link" env zed
   parity "env of a dir with info.json alone" env half
   parity "env of a box gone idle" env gone
   parity "env: no such box" env nobox
@@ -3356,6 +3357,12 @@ t_unit_rust_parity() {
   parity "...not for a name given" env nobox
   rp_prep=rp_session2; parity "two: named, none used" env
   parity "...path: the derived dir" path
+  # (bash's glob lists them in the locale's collation, en_US.UTF-8's a before B; omabox's in byte
+  # order, B before a, the same in every locale: finding 446)
+  rp_session3() { rp_session2; rp_live "B-$s8"; rp_live "a-$s8"; }
+  [ -z "$rp_ul" ] || { rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=$rp_ul); rp_why=446 rp_bash=("err~boxes are a-$s8 B-$s8 other-$s8 rp-repo-$s8 ") rp_rust=("err~boxes are B-$s8 a-$s8 other-$s8 rp-repo-$s8 "); }
+  rp_prep=rp_session3; parity "four: named in byte order" env
+  rp_env=(CLAUDE_CODE_SESSION_ID="$sid")
   # A resumed session (finding 93): the box records an agent gone; this command's agent takes it.
   rp_resumed() { rp_fixture; rp_live "rp-repo-$s8" ',"agent":999999999,"agent_start":"1","n":1.50,"e":1e3'; }
   rp_prep=rp_resumed rp_dir=$repo rp_env=(CLAUDE_CODE_SESSION_ID="$sid" CLAUDE_PID="$$")

@@ -40,7 +40,7 @@ pub fn log_where(ctx: &Ctx, s: &str) -> Option<Vec<u8>> {
                         .is_some_and(|d| !d.is_empty() && d.iter().all(u8::is_ascii_digit))
                 })
                 .collect();
-            runs.sort_by(|a, b| shell::coll_cmp(a, b));
+            runs.sort();
             let r = runs.pop()?;
             Some(cat!("/home/sbx/", r))
         }

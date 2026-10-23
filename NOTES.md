@@ -9321,6 +9321,19 @@ from them.
     the locale's": expected differences under en_US.UTF-8, where the system has it), shell.rs's
     own_patterns_ascii_in_any_locale.
 
+446. **Lists came in the locale's collation** (2026-10-23, #324 wave 4c). Bash sorts a glob's matches
+    with strcoll, and `sort` (run for ports' rows, gpu's processes, record's marks, check's regions)
+    in the caller's locale, so en_US.UTF-8 lists `a` before `B` and skips punctuation at first,
+    where C lists `B` first: a session's boxes in a refusal, the run logs, the checkpoints `check
+    run` goes through, calibrate's marks and output's comm-style merge all came in an order that
+    hung on LANG. The Rust half copied it (shell::coll_cmp, `sort` in the caller's locale).
+    **Change** (Rust over bash): byte order everywhere, the same in every locale: shell::glob and
+    glob_ext sort bytes, coll_cmp is gone, and every `sort` omabox runs gets LC_ALL=C (sig::command;
+    `-n` then reads numbers as C does too). `ls` and `saves` (still bash's) get it when wave 5 ports
+    them (CHANGELOG). Tests: t_unit_rust_parity ("four: named in byte order", an expected difference
+    under en_US.UTF-8); its fixture's box Zed is zed now, whose capital put the "up: ..." list of
+    some 30 refusals in an order that hung on the suite's locale.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

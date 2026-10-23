@@ -427,7 +427,7 @@ pub fn shot_ref_save(ctx: &Ctx, file: &[u8], key: &[u8], v: [&[u8]; 4]) -> Res<(
             pngs.push((t, line, n));
         }
     }
-    pngs.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| shell::coll_cmp(&b.1, &a.1)));
+    pngs.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
     for (_, _, n) in pngs.iter().skip(8) {
         let base = &n[..n.len() - 4];
         let _ = std::fs::remove_file(shell::path(&cat!(dir, "/", n)));
@@ -652,7 +652,7 @@ fn other_gpu(driver: &[u8]) -> Vec<u8> {
                 .collect()
         })
         .unwrap_or_default();
-    nodes.sort_by(|a, b| shell::coll_cmp(a, b));
+    nodes.sort();
     for n in nodes {
         let p = std::ffi::CString::new(cat!("/dev/dri/", n)).unwrap_or_default();
         // SAFETY: a valid C string; access only reads.

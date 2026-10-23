@@ -41,6 +41,11 @@ pub fn command(prog: impl AsRef<OsStr>) -> Command {
     // (every child of main's is made here, just before it starts: none once a trap is on its way)
     park_while_stopping();
     let mut c = Command::new(prog);
+    // Every sort omabox runs orders bytes (and reads numbers) as C does, the same in every locale
+    // (finding 446: bash's ran it in the caller's, whose collation it followed).
+    if c.get_program() == "sort" {
+        c.env("LC_ALL", "C");
+    }
     if pipe_ignored() {
         // SAFETY: signal is async-signal-safe; run between fork and exec, after std's own reset.
         unsafe {

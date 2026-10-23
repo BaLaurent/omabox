@@ -416,7 +416,7 @@ fn gpu_release_wait(ctx: &Ctx) -> Res<()> {
                     .map(|e| e.file_name().as_bytes().to_vec())
                     .filter(|f| f.starts_with(b".lock-"))
                     .collect();
-                v.sort_by(|a, b| shell::coll_cmp(a, b));
+                v.sort();
                 v
             })
             .unwrap_or_default();

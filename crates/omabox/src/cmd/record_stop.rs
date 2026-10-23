@@ -1122,7 +1122,7 @@ fn replace_all(v: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
     o
 }
 
-/// `sort ARGS` of INPUT (the locale's), its output.
+/// `sort ARGS` of INPUT (in byte order: sig::command), its output.
 fn sort(args: &[&str], input: &[u8]) -> Vec<u8> {
     jq::tool("sort", args, Some(input), jq::Err::Inherit).out
 }

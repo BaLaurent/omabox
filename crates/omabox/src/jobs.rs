@@ -615,11 +615,7 @@ fn job_others(ctx: &Ctx, argv: &[Vec<u8>]) -> Vec<String> {
         let d: Vec<u8> = l.iter().copied().take_while(u8::is_ascii_digit).collect();
         String::from_utf8_lossy(&d).parse().unwrap_or(0)
     };
-    out.sort_by(|a, b| {
-        num(&a.0)
-            .cmp(&num(&b.0))
-            .then_with(|| shell::coll_cmp(&a.0, &b.0))
-    });
+    out.sort_by(|a, b| num(&a.0).cmp(&num(&b.0)).then_with(|| a.0.cmp(&b.0)));
     out.into_iter().map(|(_, l)| l).collect()
 }
 

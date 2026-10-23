@@ -1,5 +1,5 @@
 //! What bash and coreutils do to the words bin/omabox handles, done the same way here: `$(...)`'s
-//! trailing newlines, cut, basename, printf %q, glob order, word splitting, and `=~` (glibc's regex;
+//! trailing newlines, cut, basename, printf %q, globs (in byte order), word splitting, and `=~` (glibc's regex;
 //! omabox's own patterns in the C locale, ASCII).
 
 use std::ffi::{CString, OsStr, OsString};
@@ -520,19 +520,8 @@ pub fn init_locale() {
     LOCALE_WHOLE.store(whole, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// Bytes compared as the locale collates them (strcoll), as bash sorts a glob's matches.
-pub fn coll_cmp(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
-    match (CString::new(a), CString::new(b)) {
-        (Ok(x), Ok(y)) => {
-            // SAFETY: both are valid NUL-terminated strings that outlive the call.
-            let r = unsafe { libc::strcoll(x.as_ptr(), y.as_ptr()) };
-            r.cmp(&0).then_with(|| a.cmp(b))
-        }
-        _ => a.cmp(b),
-    }
-}
-
-/// `"$DIR"/*` (or `*/` with `dirs`): the names of DIR's entries but hidden ones, in glob order.
+/// `"$DIR"/*` (or `*/` with `dirs`): the names of DIR's entries but hidden ones, in byte order (bash's
+/// glob sorts by the locale's collation: finding 446).
 pub fn glob(dir: &Path, dirs: bool) -> Vec<Vec<u8>> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -543,12 +532,12 @@ pub fn glob(dir: &Path, dirs: bool) -> Vec<Vec<u8>> {
         .filter(|n| n.first() != Some(&b'.'))
         .filter(|n| !dirs || dir.join(OsStr::from_bytes(n)).is_dir())
         .collect();
-    names.sort_by(|a, b| coll_cmp(a, b));
+    names.sort();
     names
 }
 
 /// `for f in "$DIR"/*EXT; do [ -f "$f" ] || continue`: DIR's regular files (links to one too) named
-/// so, hidden ones aside, in the locale's order, each as DIR/NAME.
+/// so, hidden ones aside, in byte order, each as DIR/NAME.
 pub fn glob_ext(dir: &[u8], ext: &[u8]) -> Vec<Vec<u8>> {
     let Ok(rd) = std::fs::read_dir(path(dir)) else {
         return Vec::new();
@@ -558,7 +547,7 @@ pub fn glob_ext(dir: &[u8], ext: &[u8]) -> Vec<Vec<u8>> {
         .map(|e| e.file_name().into_vec())
         .filter(|n| n.first() != Some(&b'.') && n.ends_with(ext))
         .collect();
-    names.sort_by(|a, b| coll_cmp(a, b));
+    names.sort();
     names
         .into_iter()
         .map(|n| crate::cat!(dir, "/", n))

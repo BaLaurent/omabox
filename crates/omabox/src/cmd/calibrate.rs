@@ -60,7 +60,7 @@ fn calib_marks(w: &[u8], h: &[u8]) -> Vec<u8> {
         CALIB_MARKS_AWK,
     );
     let mut lines: Vec<&[u8]> = o.split(|&c| c == b'\n').filter(|l| !l.is_empty()).collect();
-    lines.sort_by(|a, b| shell::coll_cmp(a, b));
+    lines.sort();
     let mut v = lines.join(&b'\n');
     if !v.is_empty() {
         v.push(b'\n');

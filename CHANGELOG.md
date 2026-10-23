@@ -81,6 +81,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   OMABOX_BOX=é was named box é by `which`, and `pixel 1 ²` ended in bash's own words ("invalid
   integer constant", exit 1). `events --grep` and `--until` still read your pattern in your locale.
   Scripts: nothing to change.
+- **Lists are in byte order, the same in every locale**: a session's boxes in a message, run logs,
+  `check run`'s checkpoints, `ports` and `gpu`'s rows. The bash omabox followed the locale's
+  collation, so under en_US.UTF-8 `a` came before `B`, under C after it. Scripts that sorted the
+  output themselves: nothing to change.
 
 ## 1.0.1 — unreleased
 

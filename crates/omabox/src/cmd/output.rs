@@ -290,14 +290,14 @@ fn newest_new(before: &[u8], now: &[u8]) -> Vec<u8> {
             v.split(|&c| c == b'\n').map(<[u8]>::to_vec).collect()
         };
         l.pop();
-        l.sort_by(|a, b| shell::coll_cmp(a, b));
+        l.sort();
         l
     };
     let (a, b) = (sorted(before, true), sorted(now, false));
     let (mut i, mut j, mut last) = (0, 0, Vec::new());
     while j < b.len() {
         if i < a.len() {
-            match shell::coll_cmp(&a[i], &b[j]) {
+            match a[i].cmp(&b[j]) {
                 std::cmp::Ordering::Less => {
                     i += 1;
                     continue;
