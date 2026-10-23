@@ -261,7 +261,19 @@ fn arm() {
             };
             // An INT to omabox alone while a child ran that did not die of it: bash goes on (probed:
             // `kill -INT` of the script during a sleep, the rest of it ran, its EXIT trap at its end).
-            if !code && sig == libc::SIGINT && busy && !crate::sig::FG_INT.load(Ordering::SeqCst) {
+            // In a DEFER_INT step (bash's `$(...)` subshell) only the first: bash's main has ended of
+            // it, so a second one can only have reached the subshell, which ends of it, its EXIT trap
+            // run (an interactive monitor add's remove, finding 429). Judged when it comes, a group
+            // INT whose child outlives it (timeout's hyprctl, a group of its own) looks like one to
+            // omabox alone; the second one ends the step here, the safe side.
+            let second = crate::sig::DEFER_INT.load(Ordering::SeqCst)
+                && crate::sig::INT_DEFERRED.load(Ordering::SeqCst);
+            if !code
+                && !second
+                && sig == libc::SIGINT
+                && busy
+                && !crate::sig::FG_INT.load(Ordering::SeqCst)
+            {
                 if crate::sig::DEFER_INT.load(Ordering::SeqCst) {
                     crate::sig::INT_DEFERRED.store(true, Ordering::SeqCst);
                 }

@@ -9012,6 +9012,12 @@ from them.
     no token, else the first WAYLAND-N with none, never unnamed, every token kept; one try and the box
     ended when Hyprland does not answer), t_unit_refusals
     (`up -i --monitor` on a private build without +appid).
+    On port-rust after wave 4b (which judges an INT by what ran when it came): a group Ctrl-C during
+    the create looks like an INT to omabox alone, since `timeout`'s hyprctl, a group of its own,
+    outlives it, so it is deferred (DEFER_INT) and the add goes on; a second INT while one is deferred
+    now ends the add there, its trap removing the output, as bash's subshell ends of it (the parity
+    case "group-INT twice", which passed before 4b only because the thread judged that second INT
+    when it read it, after the create).
 
 430. **`cpu --app -n` listed every process** (2026-10-22, #324 wave 4a's review). cpu_tame wrote the
     tamed name with `echo`, which takes a name of `-n`, `-e`, `-E` or their mixes for its options and
