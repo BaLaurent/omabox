@@ -5603,7 +5603,7 @@ PYEOF
   chmod +x "$r/mbin/magick"
   rp_env=("${rp_env4b[@]}" PATH="$r/mbin:$PATH")
   local rp_env4c=("${rp_env[@]}")
-  rp4b_also_c() { rp4b_also; echo "== out"; (cd "$r/co" 2>/dev/null && command find . -printf '%p %y %s\n' | sed -E 's/-[0-9]{6}\.mp4/-HHMMSS.mp4/' | LC_ALL=C sort); }
+  rp4b_also_c() { rp4b_also; echo "== out"; (cd "$r/co" 2>/dev/null && command find . -printf '%p %y %s\n' | sed -E 's/-[0-9]{6}\.mp4/-HHMMSS.mp4/; s/(\.sheet\.png f) [0-9]+$/\1 SIZE/' | LC_ALL=C sort); }
   rp4b_co() { rm -rf "$r/co"; mkdir -p "$r/co"; }
   rp_also=rp4b_also_c rp4b_pre=(rp4b_co)
   parity "check: no subcommand (help, exit 2)" check
