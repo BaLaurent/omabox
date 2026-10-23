@@ -9233,7 +9233,11 @@ from them.
     command killed by any signal but INT and PIPE (which shells leave unsaid) is said "omabox: the
     command was killed by SIGTERM (143)"; the box is polled only when the command failed with words
     held, or died of SIGKILL (what a box's end does to what runs in it). The flag went from on_box's
-    55 callers. Exit codes are unchanged (CHANGELOG). A test leaned on the old wait: t_rust_parity's
+    55 callers, so every box call whose command dies of SIGKILL now waits up to 2 s for the box and
+    may say "box 'X' went down" where it said nothing: `timeout -k` killing what would not stop at
+    record stop's copy and encode (record_stop.rs), record's start (record.rs) and audio's capture
+    (audio.rs); bash waited and said so only where its call sat outside a `$(...)`. Exit codes are
+    unchanged (CHANGELOG). A test leaned on the old wait: t_rust_parity's
     prep for run -d --wait ran `sh -c 'pkill -f rp-w3'`, whose -f kills that sh too, and the 2 s it
     cost let the closed window's last frames pass before the next case; the prep now waits for the
     screen to be still. Tests: t_rust_parity ("run: by SIGTERM", an expected difference), exec.rs's

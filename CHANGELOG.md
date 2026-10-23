@@ -47,14 +47,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   INT and counted on the monitor being made should let the add finish instead.
 - **A box name such as `-n` is named in its refusal** (`OMABOX=-n`, a repo of that name): "bad box
   name -n: ...". The bash omabox read the name through `echo`, which took `-n`, `-e` or `-E` for its
-  own options, so its message showed an empty name. Exit code unchanged.
+  own options, so its message showed an empty name. Exit code unchanged. Scripts: nothing to change.
 - **`--mod` takes its words as written** (click, drag, pointer, scroll): `*`, `?` or `[` are refused
   as modifiers. The bash omabox matched them against the current folder's file names, so `--mod '*'`
   in a folder holding a file named `ctrl` held Ctrl. Name the modifiers instead.
-- **`run`'s command killed by a signal is said, at once**: "omabox: the command was killed by
-  SIGTERM (143)" (any signal but INT and PIPE). The bash omabox counted its own "Terminated" line as
-  nsenter's, said "dropped 50 bytes of other output on nsenter's stderr" for a TERM, and waited 2 s
-  before answering. Exit codes unchanged. A script that matched "dropped N bytes" after a TERM:
+- **`run`'s command killed by a signal is said**: "omabox: the command was killed by SIGTERM (143)"
+  (any signal but INT and PIPE). The bash omabox counted its own "Terminated" line as nsenter's, said
+  "dropped 50 bytes of other output on nsenter's stderr" for a TERM, and waited 2 s before
+  answering; now only a SIGKILL (what a box's end sends) waits up to 2 s, to say whether the box
+  went down. That wait and that word now come from every box step killed so (a `record` or `audio`
+  step that had to be killed after its time limit), where some said nothing. Exit codes unchanged. A script that matched "dropped N bytes" after a TERM:
   match "was killed by", or the exit code.
 - **Errors omabox meets on its way are said in its own words**, no longer in bash's or a tool's: a
   `check run` scenario that cannot run says so in its run's log as "omabox: check: cannot run
