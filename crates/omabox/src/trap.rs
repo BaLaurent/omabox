@@ -268,8 +268,10 @@ fn arm() {
             // omabox alone; the second one ends the step here, the safe side.
             let second = crate::sig::DEFER_INT.load(Ordering::SeqCst)
                 && crate::sig::INT_DEFERRED.load(Ordering::SeqCst);
+            // (never in an interactive monitor add: sig::INT_ENDS)
             if !code
                 && !second
+                && !crate::sig::INT_ENDS.load(Ordering::SeqCst)
                 && sig == libc::SIGINT
                 && busy
                 && !crate::sig::FG_INT.load(Ordering::SeqCst)

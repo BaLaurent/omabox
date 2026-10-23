@@ -5320,6 +5320,21 @@ PYEOF
     done
     [ "$bad" = 1 ] || ok "$label"
   }
+  # rp4_sides LABEL BASH RUST ARGS...: each side run as parity runs it, where the halves differ on
+  # purpose (Rust over bash): each side's exit code and rp4_want, "RC WANT" in BASH and RUST.
+  rp4_sides() {
+    local label=$1 wb=$2 wr=$3 want side rc bad=0 why=""; shift 3
+    for side in bash rust; do
+      want=$wb; [ "$side" = bash ] || want=$wr
+      "$rp_prep"
+      local how=OMABOX_BASH=1; [ "$side" = bash ] || how=OMABOX_BASH=
+      rc=0; (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
+        ${rp_wrap[@]+"${rp_wrap[@]}"} "$CLI" "$@" >/dev/null 2>&1 </dev/null) || rc=$?
+      [ "$rc" = "${want%% *}" ] || { bad=1 why+="${why:+; }$side: exit $rc, not ${want%% *}"; }
+      rp4_want=${want#* } rp4_safe "$side" || bad=1
+    done
+    if [ "$bad" = 1 ]; then no "$label" "${why:-see above}"; else ok "$label"; fi
+  }
   rp_check=rp4_safe
   # (a case's command, then RP_LINGER s for what the stand-in box still has to do)
   printf '#!/bin/sh\n"$@"; rc=$?; sleep "${RP_LINGER:-1}"; exit $rc\n' > "$r/rp-linger"; chmod +x "$r/rp-linger"
@@ -5366,10 +5381,10 @@ PYEOF
   rp_wrap=("$r/rp-sig" group-HUP "$st/creating") rp4_want=""
   rp4_safe_only "monitor add, interactive, and group-HUP during the create: its window on 9 by its rule, both ways (finding 429)" monitor -b fki add 800x600
   # A group INT there: bash's capture of the create dies of it, so bash ends (130), its trap removing
-  # the monitor; the Rust half's child (timeout, a process group of its own) does not, so it takes it
-  # for an INT to itself alone and finishes the add, then 130. Both safe; not alike (older than 429).
-  rp_wrap=("$r/rp-sig" group-INT "$st/creating") rp4_want=""
-  rp4_safe_only "monitor add, interactive, and group-INT during the create: its window on 9 by its rule, both ways (finding 429)" monitor -b fki add 800x600
+  # the monitor; the Rust half's child (timeout, a process group of its own) does not, and it took it
+  # for an INT to itself alone, finishing the add, then 130. Now any INT ends its add (finding 437).
+  rp_wrap=("$r/rp-sig" group-INT "$st/creating") rp4_want=closed
+  parity "monitor add, interactive, and group-INT during the create: its window on 9 by its rule, then closed (finding 437)" monitor -b fki add 800x600
   rp_wrap=("$r/rp-sig" group-KILL "$st/creating") rp4_want=kept
   parity "monitor add, interactive, and group-KILL during the create: its window on 9 by its rule, left (finding 429)" monitor -b fki add 800x600
   # The rule turned on slowly (the stand-in host slow to answer it): no create follows.
@@ -5448,10 +5463,12 @@ PYEOF
   parity "cpu and INT to omabox alone in its window: it goes on" cpu -b fk 2s
   parity "gpu and INT to omabox alone: the same" gpu -b fk 2s
   rp_sed='s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line \1: PID \2 /'
-  # (bash's main ends at once, 130, its subshell finishing the monitor: given the time to)
+  # (bash's main ends at once, 130, its subshell finishing the monitor: given the time to. The Rust
+  # half ends the add, its trap removing the monitor, 130: finding 437, a change from bash)
   rp4_pre=(rp4_late); rp_wrap=(env RP_LINGER=4 "$r/rp-sig" INT "$st/creating")
-  parity "monitor add, interactive, and INT to omabox alone: 130, the monitor made all the same" monitor -b fki add 800x600
-  check "...it is in the box's record" grep -q '^WAYLAND-2 ' "$r/rt/omabox/fki/run/omabox.monitors"
+  rp4_sides "monitor add, interactive, and INT to omabox alone: 130; bash made the monitor all the same, the Rust half removes it (finding 437)" \
+    "130 kept" "130 closed" monitor -b fki add 800x600
+  check_fails "...the Rust half's: not in the box's record" grep -q '^WAYLAND-2 ' "$r/rt/omabox/fki/run/omabox.monitors"
   rp_wrap=() rp4_pre=() rp_env=("${rp_env4[@]}") rp_sed=""
   # A process named -n (finding 430): --app -n is that one alone, not every process.
   nsenter -t "$lfk" -U -m -p --preserve-credentials python3 -c 'import ctypes, time; ctypes.CDLL(None).prctl(15, b"-n", 0, 0, 0); time.sleep(3600)' >/dev/null 2>&1 & local un4=$!

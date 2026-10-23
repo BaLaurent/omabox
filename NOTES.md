@@ -9189,6 +9189,19 @@ from them.
     monitor_add_held, the global `omabox_monitor_rule` and their tests went with the merge, 429's
     `mon_answer` replaced this one's; host_hyprctl's HOST_LIMIT stays (t_unit_monitors).
 
+437. **A group Ctrl-C during the Rust half's interactive `monitor add` finished the add** (2026-10-23,
+    #324 integration review). The create's foreground child outlives a group INT (`timeout` puts the
+    box's hyprctl in a group of its own), so trap.rs took the INT for one to omabox alone and
+    deferred it (DEFER_INT, bash's `$(monitor_add_window)`): the add went on, its monitor and window
+    kept, and omabox ended 130 without its line. Bash's add ends there (its capture of the create dies
+    of the INT), its trap removing the output. **Fix** (Rust over bash): during an interactive monitor
+    add any INT ends it (`sig::INT_ENDS`, set by cmd/monitor.rs around the add only), its trap removing
+    the output once the create is over, exit 130; an INT anywhere else is judged as before. This
+    differs from bash for an INT to omabox alone (`kill -INT PID`): bash's main ends at once, 130,
+    while its subshell finishes the add and keeps the monitor; the Rust half removes it (CHANGELOG,
+    "Changes from the bash omabox"). Tests: t_unit_rust_parity ("group-INT during the create", alike
+    now: removed both ways; "INT to omabox alone", each side's ending checked: 130 and kept in bash, 130
+    and removed in Rust).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

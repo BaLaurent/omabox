@@ -205,6 +205,11 @@ pub static FG_SIG: AtomicI32 = AtomicI32::new(0);
 /// of it, having said nothing more.
 pub static DEFER_INT: AtomicBool = AtomicBool::new(false);
 pub static INT_DEFERRED: AtomicBool = AtomicBool::new(false);
+/// An interactive monitor add (cmd/monitor.rs, finding 437): any INT ends it, its trap removing the
+/// output, where bash's main ends of one to itself alone while its subshell finishes the add. A
+/// group Ctrl-C during the create looks like one to omabox alone (timeout's hyprctl, a group of its
+/// own, outlives it), and was taken for that: the add finished, its monitor kept, exit 130.
+pub static INT_ENDS: AtomicBool = AtomicBool::new(false);
 
 /// F as a step bash runs in a `$(...)`: its main waits for the substitution, so an INT to omabox
 /// alone meanwhile lets the step finish, then ends this process of it (int_deferred_end).

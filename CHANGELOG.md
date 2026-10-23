@@ -35,6 +35,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   that fails, with the signal's exit code (130, 143, 129); a Ctrl-C to `up` alone no longer lets it
   go on.
 
+### Changes from the bash omabox
+
+- **An interactive `monitor add` ends at any Ctrl-C or INT**, its half-made monitor removed, exit 130.
+  The bash omabox did so for a Ctrl-C to its terminal, but an INT sent to omabox alone (`kill -INT
+  PID`) ended it with 130 while the add went on and kept the monitor. A script that sent omabox an
+  INT and counted on the monitor being made should let the add finish instead.
+
 ## 1.0.1 — unreleased
 
 Boxes on Omarchy 4.5.

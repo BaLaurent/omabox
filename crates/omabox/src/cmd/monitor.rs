@@ -189,10 +189,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             if !crate::boxes::box_alive(ctx)? {
                 need_box(ctx)?;
             }
-            // (bash's `$(monitor_add_window)`: an INT to omabox alone meanwhile, the step finished,
-            // then the end bash's main had, saying nothing more)
+            // (bash's `$(monitor_add_window)`, but an INT ends the add however it comes, its trap
+            // removing the output: sig::INT_ENDS, finding 437)
             crate::sig::DEFER_INT.store(true, std::sync::atomic::Ordering::SeqCst);
+            crate::sig::INT_ENDS.store(true, std::sync::atomic::Ordering::SeqCst);
             let r = monitor_add_window(ctx, &rest[0]);
+            crate::sig::INT_ENDS.store(false, std::sync::atomic::Ordering::SeqCst);
             crate::sig::DEFER_INT.store(false, std::sync::atomic::Ordering::SeqCst);
             crate::sig::int_deferred_end();
             r?
