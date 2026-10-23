@@ -44,6 +44,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A box name such as `-n` is named in its refusal** (`OMABOX=-n`, a repo of that name): "bad box
   name -n: ...". The bash omabox read the name through `echo`, which took `-n`, `-e` or `-E` for its
   own options, so its message showed an empty name. Exit code unchanged.
+- **`--mod` takes its words as written** (click, drag, pointer, scroll): `*`, `?` or `[` are refused
+  as modifiers. The bash omabox matched them against the current folder's file names, so `--mod '*'`
+  in a folder holding a file named `ctrl` held Ctrl. Name the modifiers instead.
 
 ## 1.0.1 — unreleased
 

@@ -4039,10 +4039,18 @@ EOF
   parity "click --in a window's crop" click -b fk --in "$r/fk-w.png" 1 1
   parity "click --in: outside the image" click -b fk --in "$r/fk-w.png" 400 1
   parity "click --mod: held by the keyboard tool" click -b fk --mod ctrl+Shift --mod control 10 10
-  # (--mod's words are split at + and , then globbed, as bash's unquoted $2 is: the names here)
+  # (--mod's words are split at + and , then globbed by bash, as its unquoted $2 is: the names here;
+  # the Rust half takes them as written)
   mkdir -p "$r/globd"; : > "$r/globd/Ctrl"; : > "$r/globd/b"; : > "$r/globd/.h"
+  rp_why=439 rp_bash=("err~'b' is not a modifier") rp_rust=("err~'\\*' is not a modifier")
   rp_dir=$r/globd; parity "click --mod with a glob" click -b fk --mod '*' 10 10
-  parity "...a dotfile pattern" click -b fk --mod 'ctrl+.*' 10 10; rp_dir=$r/norepo
+  rp_why=439 rp_bash=("err~'\\.h' is not a modifier") rp_rust=("err~'\\.\\*' is not a modifier")
+  parity "...a dotfile pattern" click -b fk --mod 'ctrl+.*' 10 10
+  # (a folder of a modifier's name alone: bash held Ctrl, clicked and said nothing, 0)
+  mkdir -p "$r/globc"; : > "$r/globc/ctrl"
+  rp_why=439 rp_bash=(rc=0 'err!~not a modifier' 'state~^kb .* -m ctrl ' 'state~ click left$')
+  rp_rust=(rc=2 "err~'\\*' is not a modifier" 'state!~^kb ' 'state!~ click')
+  rp_dir=$r/globc; parity "...in a folder of a modifier's name" click -b fk --mod '*' 10 10; rp_dir=$r/norepo
   parity "click --wait" click -b fk --wait 10 10
   parity "click --wait --json --window: regions moved" click -b fk --wait --json --window title:one -g 0,0,50,50 5 5
   rp_ptrfail() { echo 2 > "$fk/ptr.rc"; }; rp3_pre=(rp_ptrfail)

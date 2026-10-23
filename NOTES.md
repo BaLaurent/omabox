@@ -9209,6 +9209,14 @@ from them.
     (shell::echo_sub). **Change** (Rust over bash): the name as it is, "bad box name -n: ...", exit 2
     as before (CHANGELOG, "Changes from the bash omabox"). Tests: t_unit_rust_parity ("OMABOX=-n",
     an expected difference).
+439. **`--mod` words were matched against the current folder's files** (2026-10-23, #324 wave 4c).
+    Bash splits `--mod`'s value unquoted under IFS=+, so each word was also pathname-expanded: `--mod
+    '*'` in a folder holding a file `ctrl` held Ctrl, any other file name there became "'NAME' is not a
+    modifier", and `.*` named the dotfiles. The Rust half copied it with libc's glob. **Change** (Rust
+    over bash): click, drag, pointer and scroll split `--mod` at `+` and `,` only and take each word as
+    written, so `*`, `?` or `[` are refused as modifiers, named as given (CHANGELOG). Tests:
+    t_unit_rust_parity ("click --mod with a glob", "...a dotfile pattern", "...in a folder of a
+    modifier's name", where bash held Ctrl and clicked: expected differences), input.rs's mod_words.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

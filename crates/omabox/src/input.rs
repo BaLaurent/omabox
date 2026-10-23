@@ -120,63 +120,25 @@ pub fn pause_ms(ctx: &Ctx, what: &str, v: &[u8]) -> Res<i64> {
     )))
 }
 
-/// Unquoted `$V` under IFS=CHARS (non-blank ones): each one ends a field, empty ones kept but for a
-/// last one; each field then a glob (pathname expansion: a pattern that matches nothing stays).
-pub fn split_glob(v: &[u8], ifs: &[u8]) -> Vec<Vec<u8>> {
+/// `--mod`'s words: split at `+` and `,`, empty ones kept but for a last one, each taken as it is
+/// (bash split an unquoted `$V` under IFS=+, and globbed each word against the current folder, so
+/// `--mod '*'` there named its files: finding 439).
+pub fn mod_words(v: &[u8]) -> Vec<Vec<u8>> {
     if v.is_empty() {
         return Vec::new();
     }
-    let mut fields: Vec<&[u8]> = v.split(|c| ifs.contains(c)).collect();
+    let mut fields: Vec<&[u8]> = v.split(|c| matches!(c, b'+' | b',')).collect();
     if fields.last().is_some_and(|f| f.is_empty()) {
         fields.pop();
     }
-    let mut out = Vec::new();
-    for f in fields {
-        out.extend(glob_word(f));
-    }
-    out
-}
-
-/// Pathname expansion of one word, as bash does it: unchanged without * ? [, or when nothing
-/// matches; the names in the locale's order, never . or .. (globskipdots).
-fn glob_word(w: &[u8]) -> Vec<Vec<u8>> {
-    if !w.iter().any(|c| matches!(c, b'*' | b'?' | b'[')) {
-        return vec![w.to_vec()];
-    }
-    let Ok(pat) = std::ffi::CString::new(w) else {
-        return vec![w.to_vec()];
-    };
-    let mut out = Vec::new();
-    // SAFETY: a zeroed glob_t is what glob fills in; pat is a valid C string; globfree frees what
-    // glob made, once, after its strings were copied.
-    unsafe {
-        let mut g: libc::glob_t = std::mem::zeroed();
-        if libc::glob(pat.as_ptr(), 0, None, &mut g) == 0 {
-            for i in 0..g.gl_pathc {
-                let p = *g.gl_pathv.add(i);
-                if p.is_null() {
-                    continue;
-                }
-                let s = std::ffi::CStr::from_ptr(p).to_bytes().to_vec();
-                let base = s.rsplit(|&c| c == b'/').next().unwrap_or_default();
-                if base != b"." && base != b".." {
-                    out.push(s);
-                }
-            }
-        }
-        libc::globfree(&mut g);
-    }
-    if out.is_empty() {
-        out.push(w.to_vec());
-    }
-    out
+    fields.into_iter().map(<[u8]>::to_vec).collect()
 }
 
 /// mods_add SO_FAR MODS (click, drag, pointer, scroll --mod; #25): modifiers as the keyboard tool
 /// names them, from one or more --mod (ctrl, ctrl+shift, ctrl,shift), each once.
 pub fn mods_add(ctx: &Ctx, so_far: &[u8], mods: &[u8]) -> Res<Vec<u8>> {
     let mut out = so_far.to_vec();
-    for m in split_glob(mods, b"+,") {
+    for m in mod_words(mods) {
         let m = shell::lower(&m);
         let m: &[u8] = match m.as_slice() {
             b"super" | b"ctrl" | b"shift" | b"alt" | b"altgr" => &m,
@@ -523,9 +485,10 @@ mod tests {
             pointer_marks(&w(&["move", "1", "2", "source", "wheel", "hscroll", "5"])),
             b"move 1 2 scroll 5"
         );
-        assert_eq!(split_glob(b"+a++b+", b"+,"), w(&["", "a", "", "b"]));
-        assert_eq!(split_glob(b",+", b"+,"), w(&["", ""]));
-        assert!(split_glob(b"", b"+,").is_empty());
+        assert_eq!(mod_words(b"+a++b+"), w(&["", "a", "", "b"]));
+        assert_eq!(mod_words(b",+"), w(&["", ""]));
+        assert_eq!(mod_words(b"ctrl+*,.?"), w(&["ctrl", "*", ".?"]));
+        assert!(mod_words(b"").is_empty());
         assert_eq!(xy(b"3 4"), (b"3".to_vec(), b"4".to_vec()));
         assert_eq!(wh(b"1920x1080"), (b"1920".to_vec(), b"1080".to_vec()));
     }
