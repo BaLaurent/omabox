@@ -3012,7 +3012,9 @@ t_unit_rust_handoff() {
 # half gives in the fields that differ: FIELD=TEXT (that side's whole file after the sed, trailing
 # newlines aside), FIELD~ERE (a line of it matches), FIELD!~ERE (no line does); FIELD is rc, out, err
 # or state. Both name the same fields, which must differ between the sides (or it is no difference)
-# and are checked against each side's own; the other fields are compared as ever. The case is said
+# and are checked against each side's own; what a named field holds beyond them (all but its lines
+# a ~ took, none after an =) must still be the same both ways; the other fields are compared as
+# ever. The case is said
 # as "LABEL (expected difference: finding N)", and the three are reset after it. Under --installed
 # (no binary: both sides bash) both are checked against rp_bash.
 rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1 rp_wrap=() rp_in=/dev/null rp_sed="" rp_also="" rp_check="" rp_mask=""
@@ -3032,6 +3034,7 @@ rp_differs() {
   local d=$1 side w f op want re='^(rc|out|err|state)(=|~|!~)(.*)$' fb="" fr=""
   local -a ws
   rp_bad="" rp_fields=""
+  rm -f "$d"/*.rest
   for w in "${rp_bash[@]}"; do [[ $w =~ $re ]] && fb+="${BASH_REMATCH[1]}"$'\n'; done
   for w in "${rp_rust[@]}"; do [[ $w =~ $re ]] && fr+="${BASH_REMATCH[1]}"$'\n'; done
   fb=$(LC_ALL=C sort -u <<<"$fb" | xargs) fr=$(LC_ALL=C sort -u <<<"$fr" | xargs)
@@ -3042,13 +3045,22 @@ rp_differs() {
     for w in "${ws[@]}"; do
       [[ $w =~ $re ]] || { rp_bad+="$side: '$w' is not FIELD=TEXT, FIELD~ERE or FIELD!~ERE; "; continue; }
       f=$d/$side.${BASH_REMATCH[1]} op=${BASH_REMATCH[2]} want=${BASH_REMATCH[3]}
+      # (the rest: what the specs leave of the field, to be the same both ways)
+      [ -e "$f.rest" ] || cp "$f" "$f.rest"
       case $op in
-        =) [ "$(cat "$f")" = "$want" ] || rp_bad+="$side ${BASH_REMATCH[1]}: [$(head -c 400 "$f")], not [$want]; " ;;
-        '~') grep -qE -- "$want" "$f" || rp_bad+="$side ${BASH_REMATCH[1]}: no line matches /$want/ in [$(head -c 400 "$f")]; " ;;
+        =) [ "$(cat "$f")" = "$want" ] || rp_bad+="$side ${BASH_REMATCH[1]}: [$(head -c 400 "$f")], not [$want]; "
+           : > "$f.rest" ;;
+        '~') grep -qE -- "$want" "$f" || rp_bad+="$side ${BASH_REMATCH[1]}: no line matches /$want/ in [$(head -c 400 "$f")]; "
+             grep -vE -- "$want" "$f.rest" > "$f.rest2"; mv "$f.rest2" "$f.rest" ;;
         '!~') ! grep -qE -- "$want" "$f" || rp_bad+="$side ${BASH_REMATCH[1]}: a line matches /$want/: [$(grep -m1 -E -- "$want" "$f" | head -c 400)]; " ;;
       esac
     done
   done
+  for f in $rp_fields; do
+    cmp -s "$d/bash.$f.rest" "$d/rust.$f.rest" ||
+      rp_bad+="$f beyond what is stated: bash [$(head -c 400 "$d/bash.$f.rest" 2>&1)] rust [$(head -c 400 "$d/rust.$f.rest" 2>&1)]; "
+  done
+  rm -f "$d"/*.rest
   [ -x "$ROOT/build/bin/omabox" ] || return 0
   for f in $rp_fields; do cmp -s "$d/bash.$f" "$d/rust.$f" && rp_bad+="$f: the same both ways, so no difference; "; done
   return 0
@@ -3137,8 +3149,18 @@ t_unit_rust_parity() {
   mkdir -p "$r/ed"; printf '1\n' > "$r/ed/bash.rc"; printf '1\n' > "$r/ed/rust.rc"
   printf 'omabox: bad : x\n' > "$r/ed/bash.err"; printf 'omabox: bad -n: x\nmore\n' > "$r/ed/rust.err"
   printf './a f\n./tmp.x f\n' > "$r/ed/bash.state"; printf './a f\n' > "$r/ed/rust.state"
-  rp_bash=('err=omabox: bad : x' 'state~tmp\.') rp_rust=('err~^omabox: bad -n:' 'state!~tmp\.'); rp_differs "$r/ed"
+  rp_bash=('err=omabox: bad : x' 'state~tmp\.') rp_rust=('err~^omabox: bad -n:' 'err~^more$' 'state!~tmp\.'); rp_differs "$r/ed"
   check_eq "expected difference: each side as it is stated" "err state|" "$rp_fields|$rp_bad"
+  # (what a field holds beyond its specs is compared: a line a ~ did not take, one an !~ let by)
+  printf 'grim: -g 1,1 1x1\n== TMPDIR\nTMPFILE\n' > "$r/ed/bash.state"; printf 'grim: -g WRONG\n== TMPDIR\n./STRAY-LEFT f\n' > "$r/ed/rust.state"
+  : > "$r/ed/bash.err"; printf "omabox: pixel: grim's image is short\n" > "$r/ed/rust.err"
+  rp_bash=(err= 'state~^TMPFILE$') rp_rust=("err=omabox: pixel: grim's image is short" 'state!~^TMPFILE$'); rp_differs "$r/ed"
+  check_match "...a stray line and a wrong grim beside a temp file's spec: failed" "^state beyond what is stated: bash \\[grim: -g 1,1 1x1" "$rp_bad"
+  printf 'omabox: env: bad box name : x\n' > "$r/ed/bash.err"; printf "omabox: env: bad box name -n: x\nthread 'main' panicked at x\n" > "$r/ed/rust.err"
+  rp_bash=('err~^omabox: env: bad box name : ') rp_rust=('err~^omabox: env: bad box name -n: '); rp_differs "$r/ed"
+  check_match "...a panic beside the line its ~ takes: failed" "^err beyond what is stated: bash \\[\\] rust \\[thread 'main' panicked" "$rp_bad"
+  printf './a f\n./tmp.x f\n' > "$r/ed/bash.state"; printf './a f\n' > "$r/ed/rust.state"
+  printf 'omabox: bad : x\n' > "$r/ed/bash.err"; printf 'omabox: bad -n: x\nmore\n' > "$r/ed/rust.err"
   rp_bash=('err=omabox: bad -n: x') rp_rust=('err!~^more'); rp_differs "$r/ed"
   check_match "...a side not as stated, each said" "^bash err: .*rust err: a line matches /\^more/" "$rp_bad"
   rp_bash=('rc=1') rp_rust=('rc=1'); rp_differs "$r/ed"
@@ -4057,8 +4079,9 @@ EOF
   parity "...a dotfile pattern" click -b fk --mod 'ctrl+.*' 10 10
   # (a folder of a modifier's name alone: bash held Ctrl, clicked and said nothing, 0)
   mkdir -p "$r/globc"; : > "$r/globc/ctrl"
-  rp_why=439 rp_bash=(rc=0 'err!~not a modifier' 'state~^kb .* -m ctrl ' 'state~ click left$')
-  rp_rust=(rc=2 "err~'\\*' is not a modifier" 'state!~^kb ' 'state!~ click')
+  # (the stand-ins' lines: bash's pointer clicked and its keyboard held ctrl; Rust's ran neither)
+  rp_why=439 rp_bash=(rc=0 'err!~not a modifier' 'state~^input: ptr .* move 10 10 click left$' 'state~^kb .* -m ctrl ' 'state~^hyprctl: grim: still: == shots.tsv$')
+  rp_rust=(rc=2 "err~'\\*' is not a modifier" 'state~^input: hyprctl: grim: still: == shots.tsv$')
   rp_dir=$r/globc; parity "...in a folder of a modifier's name" click -b fk --mod '*' 10 10; rp_dir=$r/norepo
   parity "click --wait" click -b fk --wait 10 10
   parity "click --wait --json --window: regions moved" click -b fk --wait --json --window title:one -g 0,0,50,50 5 5
