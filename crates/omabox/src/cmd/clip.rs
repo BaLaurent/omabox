@@ -366,7 +366,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let mut c = host_wl(&wl, &[b"timeout", b"10", b"wl-paste", b"--list-types"]);
         c.stdin(Stdio::inherit())
             .stderr(reopen_w(&e).map_or(Stdio::null(), Stdio::from));
-        let o = crate::sig::run_output(c);
+        // (`types=$(host_wl ... wl-paste --list-types ...)`)
+        let o = crate::sig::run_subst(c);
         let (r, out) = o.unwrap_or((127, Vec::new()));
         types = shell::subst(&out);
         if r != 0 {

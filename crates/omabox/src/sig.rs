@@ -64,6 +64,22 @@ pub fn set_main() {
     let _ = MAIN.set(std::thread::current().id());
 }
 
+/// Whether this thread is main's, and not running a trap's undo (UNDO_MAIN): what parks and
+/// takes FOREGROUND. An undo main runs (int_deferred_end's) runs its children plainly, as a trap's
+/// thread does: the thread, on its way to the same undos, waits for that one (trap::run_undos' lock)
+/// and must find main neither parked nor waiting for FOREGROUND, which the thread may hold.
+fn main_step() -> bool {
+    MAIN.get() == Some(&std::thread::current().id()) && !UNDO_MAIN.load(Ordering::SeqCst)
+}
+
+/// Main runs a trap's undo (trap::run_undos).
+pub static UNDO_MAIN: AtomicBool = AtomicBool::new(false);
+
+/// This thread is main's.
+pub fn on_main() -> bool {
+    MAIN.get() == Some(&std::thread::current().id())
+}
+
 /// A terminating signal's trap is on its way (shot --no-pointer's release); GATED: main holds the
 /// pointer's gate (ptr.rs), where it must not stop.
 pub static STOPPING: AtomicBool = AtomicBool::new(false);
@@ -86,7 +102,7 @@ pub fn run_child<T>(
         Ok(s) => crate::exec::status(s),
         Err(_) => (1, None),
     };
-    if MAIN.get() != Some(&std::thread::current().id()) {
+    if !main_step() {
         let spawned = c.spawn();
         drop(c);
         let mut ch = spawned?;
@@ -144,10 +160,17 @@ pub fn run_output(mut c: Command) -> std::io::Result<(i32, Vec<u8>)> {
     .map(|(out, (rc, _))| (rc, out))
 }
 
+/// run_output for a `$(...)` of bash's: a substitution's step (subst), so an INT to omabox alone
+/// during it ends this process of it once the step is over (bash: 130 at once; the subshell's child
+/// runs on), where a foreground child's lets main go on.
+pub fn run_subst(c: Command) -> std::io::Result<(i32, Vec<u8>)> {
+    subst(|| run_output(c))
+}
+
 /// Main waits here while a trap is on its way (it ends this process, or lets main go on); another
 /// thread (a trap's undo) never does.
 fn park_while_stopping() {
-    if MAIN.get() != Some(&std::thread::current().id()) {
+    if !main_step() {
         return;
     }
     while STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
@@ -174,13 +197,17 @@ pub static INT_DEFERRED: AtomicBool = AtomicBool::new(false);
 /// F as a step bash runs in a `$(...)`: its main waits for the substitution, so an INT to omabox
 /// alone meanwhile lets the step finish, then ends this process of it (int_deferred_end).
 pub fn subst<T>(f: impl FnOnce() -> T) -> T {
+    // (a trap's undo, on its thread or main's, runs it plainly: an undo's `$(...)` must neither
+    // judge main's INT nor end the process from inside the undos, whose lock it holds)
+    if !main_step() {
+        return f();
+    }
     let outer = DEFER_INT.swap(true, Ordering::SeqCst);
     // (entered with a trap already on its way: out again and parked first, or the trap's thread
     // would wait for a substitution that never ends)
     loop {
         SUBST_DEPTH.fetch_add(1, Ordering::SeqCst);
-        let main = MAIN.get() == Some(&std::thread::current().id());
-        if main && STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
+        if STOPPING.load(Ordering::SeqCst) && !GATED.load(Ordering::SeqCst) {
             SUBST_DEPTH.fetch_sub(1, Ordering::SeqCst);
             park_while_stopping();
             continue;
@@ -191,10 +218,7 @@ pub fn subst<T>(f: impl FnOnce() -> T) -> T {
     let depth = SUBST_DEPTH.fetch_sub(1, Ordering::SeqCst) - 1;
     // A code trap waited for the substitution (trap.rs): it ends this process now; nothing after
     // the substitution runs, as nothing after bash's does.
-    if depth == 0
-        && SUBST_STOP.load(Ordering::SeqCst)
-        && MAIN.get() == Some(&std::thread::current().id())
-    {
+    if depth == 0 && SUBST_STOP.load(Ordering::SeqCst) && main_step() {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
@@ -398,5 +422,195 @@ pub fn follower(pid: u32) {
         {
             break;
         }
+    }
+}
+
+/// Signal cases run in a process of their own (they end it): the test binary again, this one test
+/// alone, OMABOX_SIG_CASE naming it; its status and stderr, or None when it hung (KILLed at 15 s).
+#[cfg(test)]
+mod signal_cases {
+    use std::os::unix::process::ExitStatusExt;
+
+    const CASE: &str = "OMABOX_SIG_CASE";
+
+    /// Some((code or 128+signal, stderr)) from the parent; None in the child, which runs the case.
+    fn in_child(name: &str) -> Option<Option<(i32, String)>> {
+        if std::env::var(CASE).as_deref() == Ok(name) {
+            return None;
+        }
+        let exe = std::env::current_exe().ok()?;
+        let mut ch = std::process::Command::new(exe)
+            .args([
+                &format!("sig::signal_cases::{name}"),
+                "--exact",
+                "--nocapture",
+            ])
+            .args(["--test-threads=1"])
+            .env(CASE, name)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .ok()?;
+        let err = ch.stderr.take()?;
+        let reader = std::thread::spawn(move || {
+            let mut s = String::new();
+            let _ = std::io::Read::read_to_string(&mut { err }, &mut s);
+            s
+        });
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let st = loop {
+            if let Ok(Some(st)) = ch.try_wait() {
+                break Some(st);
+            }
+            if std::time::Instant::now() > end {
+                let _ = ch.kill();
+                let _ = ch.wait();
+                break None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let err = reader.join().unwrap_or_default();
+        Some(st.map(|s| {
+            (
+                s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
+                err,
+            )
+        }))
+    }
+
+    fn sleep_child(s: &str) -> std::io::Result<i32> {
+        let mut c = super::command("sleep");
+        c.arg(s);
+        super::run_status(c)
+    }
+
+    /// SIG to this process alone at each AT (ms from now).
+    fn kill_at(at: &[(u64, i32)]) {
+        let pid = i32::try_from(std::process::id()).unwrap_or(0);
+        let v = at.to_vec();
+        std::thread::spawn(move || {
+            let mut t = 0;
+            for (at, sig) in v {
+                std::thread::sleep(std::time::Duration::from_millis(at - t));
+                t = at;
+                // SAFETY: a signal to this test's own process.
+                unsafe { libc::kill(pid, sig) };
+            }
+        });
+    }
+
+    /// record stop's shape: a code trap and a `$(...)` of two children; a TERM to omabox alone
+    /// during the first, a second during the second: the substitution finishes, its undo runs, 143
+    /// (bash's second signal stays pending). It hung here (STOPPING set again by the second).
+    #[test]
+    fn code_trap_second_signal() {
+        let Some(r) = in_child("code_trap_second_signal") else {
+            super::set_main();
+            let _t = crate::trap::on_exit_code(|| eprintln!("CASE undo"));
+            kill_at(&[(200, libc::SIGTERM), (900, libc::SIGTERM)]);
+            super::subst(|| {
+                let _ = sleep_child("0.6");
+                let _ = sleep_child("0.6");
+                eprintln!("CASE second child over");
+            });
+            eprintln!("CASE after the substitution");
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE second child over"), "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE after"), "{err}");
+    }
+
+    /// monitor add's shape: a DEFER_INT step, an INT to omabox alone in it, int_deferred_end's undo
+    /// on main spawning, a TERM during that undo's first child: it ends (it deadlocked: main parked
+    /// in its undo, the thread waiting for that undo).
+    #[test]
+    fn undo_on_main_and_a_term() {
+        let Some(r) = in_child("undo_on_main_and_a_term") else {
+            super::set_main();
+            let _t = crate::trap::on_exit(|| {
+                let _ = sleep_child("0.6");
+                let _ = sleep_child("0.1");
+                eprintln!("CASE undo over");
+            });
+            kill_at(&[(200, libc::SIGINT), (800, libc::SIGTERM)]);
+            super::DEFER_INT.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = sleep_child("0.5");
+            super::DEFER_INT.store(false, std::sync::atomic::Ordering::SeqCst);
+            super::int_deferred_end();
+            eprintln!("CASE past int_deferred_end");
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        assert!(rc == 130 || rc == 143, "{rc} {err}");
+        assert!(err.contains("CASE undo over"), "{err}");
+        assert!(!err.contains("CASE past"), "{err}");
+    }
+
+    /// int_deferred_end's undo on main with a `$(...)` step in it (host_session's, a rule-off's):
+    /// it runs plainly, the undo ends, then 130 (subst's own int_deferred_end there would have
+    /// taken the undos' lock main already held).
+    #[test]
+    fn undo_on_main_with_a_subst() {
+        let Some(r) = in_child("undo_on_main_with_a_subst") else {
+            super::set_main();
+            let _t = crate::trap::on_exit(|| {
+                let mut c = super::command("sleep");
+                c.arg("0.1");
+                let _ = super::run_subst(c);
+                eprintln!("CASE undo over");
+            });
+            kill_at(&[(200, libc::SIGINT)]);
+            super::DEFER_INT.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = sleep_child("0.5");
+            super::DEFER_INT.store(false, std::sync::atomic::Ordering::SeqCst);
+            super::int_deferred_end();
+            eprintln!("CASE past int_deferred_end");
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 130, "{err}");
+        assert!(err.contains("CASE undo over"), "{err}");
+        assert!(!err.contains("CASE past"), "{err}");
+    }
+
+    /// A `$(...)` step (run_subst): an INT to omabox alone during it ends this process of it once
+    /// the step is over (130); run_child's foreground child lets main go on.
+    #[test]
+    fn subst_step_and_int_alone() {
+        let Some(r) = in_child("subst_step_and_int_alone") else {
+            super::set_main();
+            crate::trap::int_as_bash();
+            kill_at(&[(200, libc::SIGINT)]);
+            let mut c = super::command("sleep");
+            c.arg("0.5");
+            let _ = super::run_subst(c);
+            eprintln!("CASE past the substitution");
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 130, "{err}");
+        assert!(!err.contains("CASE past"), "{err}");
+        let Some(r) = in_child("foreground_step_and_int_alone") else {
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 0, "{err}");
+        assert!(err.contains("CASE past the step"), "{err}");
+    }
+
+    #[test]
+    fn foreground_step_and_int_alone() {
+        if std::env::var(CASE).as_deref() != Ok("foreground_step_and_int_alone") {
+            return;
+        }
+        super::set_main();
+        crate::trap::int_as_bash();
+        kill_at(&[(200, libc::SIGINT)]);
+        let _ = sleep_child("0.5");
+        eprintln!("CASE past the step");
     }
 }

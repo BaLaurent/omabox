@@ -68,8 +68,16 @@ pub fn run_undos() {
         .lock()
         .map(|mut t| std::mem::take(&mut *t))
         .unwrap_or_default();
+    // (main's undos run their children plainly, never parked: sig::UNDO_MAIN)
+    let main = crate::sig::on_main();
+    if main {
+        crate::sig::UNDO_MAIN.store(true, Ordering::SeqCst);
+    }
     for (_, u) in all.into_iter().rev() {
         u();
+    }
+    if main {
+        crate::sig::UNDO_MAIN.store(false, Ordering::SeqCst);
     }
 }
 
@@ -131,8 +139,12 @@ extern "C" fn on_signal(sig: libc::c_int) {
         Ordering::SeqCst,
     );
     // Nothing new starts from here (the thread lets main go on where bash would: an INT to omabox
-    // alone, a code trap's substitution to finish; it clears this then).
-    crate::sig::STOPPING.store(true, Ordering::SeqCst);
+    // alone, a code trap's substitution to finish; it clears this then). Not while a code trap
+    // waits for its substitution: a second signal stays pending there, as bash's does, and main
+    // finishes the substitution (it would park in it, and the trap wait for ever).
+    if !crate::sig::SUBST_STOP.load(Ordering::SeqCst) {
+        crate::sig::STOPPING.store(true, Ordering::SeqCst);
+    }
     let fd = SIG_W.load(Ordering::Relaxed);
     if fd >= 0 {
         let b = [u8::try_from(sig).unwrap_or(0)];
@@ -187,6 +199,8 @@ fn arm() {
                     crate::sig::STOPPING.store(false, Ordering::SeqCst);
                     drop(g);
                     while crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
+                        // (a second signal's handler that read SUBST_STOP before it was set)
+                        crate::sig::STOPPING.store(false, Ordering::SeqCst);
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
                 } else {

@@ -1445,7 +1445,8 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
             let tmp = shell::env("TMPDIR")
                 .filter(|t| !t.is_empty())
                 .unwrap_or(b"/tmp".to_vec());
-            let t = jq::tool("date", &["+%H%M%S"], None, jq::Err::Inherit).text();
+            let t =
+                crate::sig::subst(|| jq::tool("date", &["+%H%M%S"], None, jq::Err::Inherit)).text();
             file = cat!(tmp, "/omabox-", ctx.name, "-", t, ".mp4");
         }
         let dir = crate::shots::dirname(&file);

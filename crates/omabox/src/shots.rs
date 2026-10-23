@@ -153,7 +153,8 @@ pub fn fd_file(ctx: &Ctx, n: &[u8], write: bool, what: &str) -> Res<()> {
     c.args(["-f", "-c", "%T"])
         .arg(std::ffi::OsStr::from_bytes(&dev))
         .stderr(Stdio::null());
-    let t = crate::sig::run_output(c)
+    // (`t=$(stat ...)`)
+    let t = crate::sig::run_subst(c)
         .ok()
         .filter(|(rc, _)| *rc == 0)
         .map(|(_, out)| strip_nl(&out));

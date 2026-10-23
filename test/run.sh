@@ -6005,6 +6005,13 @@ while time.time() < end:
     rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/tiles-made")
     parity "record stop --sheet and $i to omabox alone while it takes the frames" record -b rc stop --sheet --frames 3
   done
+  # Twice (0.4 s apart, both in its ffmpeg): the second stays pending, bash still finishes the
+  # sheet and exits 143 (130) once. (The Rust half hung there: the second signal parked main inside
+  # the substitution the first one's trap waited for. A KILL at 40 s fails it rather than the suite.)
+  for i in TERM INT; do
+    rp_wrap=(timeout -s KILL 40 env RP_LINGER=3 RP_TWICE=0.4 "$r/rp-sig" "$i" "$st/tiles-made")
+    parity "record stop --sheet and $i twice to omabox alone while it takes the frames" record -b rc stop --sheet --frames 3
+  done
   rp_wrap=()
   # Group INT and TERM there: bash's subshell dies of it, bash ends at once (no sheet).
   for i in group-INT group-TERM; do
@@ -12801,35 +12808,51 @@ t_rust_parity() {
   rp_prep=rp_lay
   # (the figures are the window's: their numbers left out, the rows and what they are kept)
   rp_sed='s/[0-9]+\.[0-9]+(%|M|G)/N\1/g; s/: [0-9]+(\.[0-9]+)?(,?)$/: N\2/'
-  # (NVIDIA: pmon's figures through a stand-in nvidia-smi on PATH. The real one samples once a
-  # second, and whether the box's Hyprland, quickshell or labwc drew in a sampled second (a number,
-  # not "-": an engines entry then) is the moment's, not the half's: labwc's on one side at 500 ms and
-  # at 2 s, then Hyprland's or quickshell's with labwc's left out. The stand-in prints a fixed table
-  # for every process on the host named Hyprland, quickshell or omabox-labwc (gpu keeps the box's),
-  # and logs its words: the box found on NVIDIA, its PCI slot, its processes by pid namespace and the
-  # figures made from them are still compared. The real driver's table is t_main's (gpu --json on
-  # NVIDIA lists the box's Hyprland); both halves' parsing of a fixed one, t_unit_rust_parity4's.)
+  # (NVIDIA: pmon recorded once and replayed, through a stand-in nvidia-smi on PATH. The real one
+  # samples once a second and says "-" for a process that did not draw in that second, a number (an
+  # engines entry) when it did: which of the box's processes drew in which half's window was the
+  # moment's (labwc's on one side at 500 ms and at 2 s, then Hyprland's or quickshell's with labwc's
+  # left out). So bash's side runs the real `nvidia-smi pmon` and its bytes are kept, and the Rust
+  # side is given them, its words checked against the recorded ones: both halves read the real
+  # driver's table of the box's real processes, the box found on NVIDIA, its slot, the figures. Not
+  # compared: two live samplings (t_main's gpu --json on NVIDIA has the real one). Without a working
+  # nvidia-smi, a fixed table for every process named Hyprland, quickshell or omabox-labwc; a box
+  # not on NVIDIA never calls it.)
   local rpnv=$TMP/rp-nv; mkdir -p "$rpnv"
   cat > "$rpnv/nvidia-smi" <<EOF
 #!/bin/bash
 echo "nvidia-smi \$*" >> $rpnv/log
 [ "\${1:-}" = pmon ] || exec /usr/bin/nvidia-smi "\$@"
-n=1; while [ \$# -gt 0 ]; do [ "\$1" != -c ] || n=\$2; shift; done
-echo "# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command "
-echo "# Idx           #    C/G      %      %      %      %      %      %    name "
-for i in \$(seq "\$n"); do
-  for p in \$(pgrep -x 'Hyprland|quickshell|omabox-labwc' | sort -n); do
-    case \$(cat /proc/\$p/comm 2>/dev/null) in
-      Hyprland) v="     3      1      -      -      -      -";;
-      quickshell) v="     \$i      -      0      -      -      -";;
-      *) v="     -      -      -      -      -      -";;
-    esac
-    printf '    0 %10d     G %s    %s\\n' "\$p" "\$v" "\$(cat /proc/\$p/comm 2>/dev/null)"
-  done
-done
+if [ -f $rpnv/pmon.rec ]; then
+  [ "\$*" = "\$(cat $rpnv/pmon.args)" ] || { echo "stand-in: pmon replayed for other words: \$(cat $rpnv/pmon.args)"; exit 9; }
+  cat $rpnv/pmon.rec; exit "\$(cat $rpnv/pmon.rc)"
+fi
+echo "\$*" > $rpnv/pmon.args
+if [ -x /usr/bin/nvidia-smi ] && /usr/bin/nvidia-smi "\$@" > $rpnv/pmon.rec 2>&1; then
+  echo 0 > $rpnv/pmon.rc
+else
+  n=1 a=("\$@"); for ((k = 0; k < \${#a[@]}; k++)); do [ "\${a[k]}" != -c ] || n=\${a[k + 1]}; done
+  { echo "# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command "
+    echo "# Idx           #    C/G      %      %      %      %      %      %    name "
+    for i in \$(seq "\$n"); do
+      for p in \$(pgrep -x 'Hyprland|quickshell|omabox-labwc' | sort -n); do
+        case \$(cat /proc/\$p/comm 2>/dev/null) in
+          Hyprland) v="     3      1      -      -      -      -";;
+          quickshell) v="     \$i      -      0      -      -      -";;
+          *) v="     -      -      -      -      -      -";;
+        esac
+        printf '    0 %10d     G %s    %s\\n' "\$p" "\$v" "\$(cat /proc/\$p/comm 2>/dev/null)"
+      done
+    done; } > $rpnv/pmon.rec
+  echo 0 > $rpnv/pmon.rc
+fi
+cat $rpnv/pmon.rec; exit "\$(cat $rpnv/pmon.rc)"
 EOF
   chmod +x "$rpnv/nvidia-smi"
+  # (its words, compared both ways; the recording dropped before each gpu case)
   rp_gpu_also() { cat "$rpnv/log" 2>/dev/null; rm -f "$rpnv/log"; }
+  rp_gpu_fresh() { rm -f "$rpnv/pmon.rec" "$rpnv/pmon.args" "$rpnv/pmon.rc"; }
+  rp_gpu_fresh
   rp_env=(PATH="$rpnv:$PATH") rp_also=rp_gpu_also
   parity "gpu --json (both ways)" gpu -b "$B" 500ms --json
   rp_env=() rp_also=rp_lay_also
@@ -12838,6 +12861,7 @@ EOF
   # (--threads of a one-thread process of its own: PID 1's threads come in CPU order, which flakes)
   ob run -b "$B" -d -q -- sleep 600 >/dev/null 2>&1
   parity "cpu --app --threads --json (both ways)" cpu -b "$B" 300ms --app sleep --threads --json
+  rp_gpu_fresh
   rp_sed='s/^  [^ ]+ +[0-9]+\.[0-9]%$/  ROW/' rp_env=(PATH="$rpnv:$PATH") rp_also=rp_gpu_also
   parity "gpu (both ways): its rows" gpu -b "$B" 300ms
   rp_sed="" rp_env=() rp_also=rp_lay_also

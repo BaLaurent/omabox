@@ -77,7 +77,8 @@ fn magick(args: &[Vec<u8>]) -> jq::Ran {
 
 /// `$(magick identify -format FMT FILE 2>/dev/null)`.
 fn identify(fmt: &str, f: &[u8]) -> Option<Vec<u8>> {
-    let r = magick(&w(&[b"identify".as_slice(), b"-format", fmt.as_bytes(), f]));
+    let r =
+        crate::sig::subst(|| magick(&w(&[b"identify".as_slice(), b"-format", fmt.as_bytes(), f])));
     r.ok().then(|| r.text())
 }
 
@@ -324,6 +325,11 @@ fn tree_lines_to(src: &[u8], dst: &[u8]) {
 /// then "specks N PIXELS LARGEST"; each MASK ("X Y W H") painted black in both first. None when
 /// magick or check.py fails (never an empty answer read as "same").
 fn check_regions(fa: &[u8], fb: &[u8], speck: &[u8], masks: &[Vec<u8>]) -> Option<Vec<u8>> {
+    // (bash calls it as `$(check_regions ...)`: a substitution, sig::subst)
+    crate::sig::subst(|| check_regions_in(fa, fb, speck, masks))
+}
+
+fn check_regions_in(fa: &[u8], fb: &[u8], speck: &[u8], masks: &[Vec<u8>]) -> Option<Vec<u8>> {
     let mut draw: Vec<Vec<u8>> = Vec::new();
     for m in masks {
         let f = shell::read_fields(m, 4);
@@ -399,6 +405,11 @@ fn check_mark(new: &[u8], outp: &[u8], regions: &[Vec<u8>]) -> bool {
 /// check_report PLAN OUT.png [KIND]: the report of a plan (check.py's layout, magick's drawing);
 /// what was left out of it ("" when nothing). None when check.py or magick fails.
 fn check_report(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
+    // (bash calls it as `$(check_report ...)`: a substitution, sig::subst)
+    crate::sig::subst(|| check_report_in(plan, png, kind))
+}
+
+fn check_report_in(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
     let font = jq::tool(
         "fc-match",
         &["-f", "%{file}", "monospace"],
@@ -438,6 +449,11 @@ fn check_report(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
 
 /// check_holes SHOT KIND [REGION]: a shot's holes, "X,Y WxH PIXELS" a hole, then "corners N".
 fn check_holes(f: &[u8], kind: &str, within: &[u8]) -> Option<Vec<u8>> {
+    // (bash calls it as `$(check_holes ...)`: a substitution, sig::subst)
+    crate::sig::subst(|| check_holes_in(f, kind, within))
+}
+
+fn check_holes_in(f: &[u8], kind: &str, within: &[u8]) -> Option<Vec<u8>> {
     let sz = identify("%w %h", f)?;
     let mask: Vec<Vec<u8>> = if kind == "window" {
         w(&["-alpha", "extract", "-threshold", "0", "-negate"])
@@ -478,6 +494,11 @@ fn check_holes(f: &[u8], kind: &str, within: &[u8]) -> Option<Vec<u8>> {
 
 /// check_holes_off: why a box's screen cannot show holes, or nothing when it can.
 fn check_holes_off(ctx: &Ctx) -> Vec<u8> {
+    // (bash calls it as `$(check_holes_off)`: a substitution, sig::subst)
+    crate::sig::subst(|| check_holes_off_in(ctx))
+}
+
+fn check_holes_off_in(ctx: &Ctx) -> Vec<u8> {
     let bj = cat!(ctx.d, "/box.json");
     let clean = jq::tool(
         "jq",
@@ -565,6 +586,11 @@ fn check_new_holes(base: &[u8], new: &[u8]) -> Vec<Vec<u8>> {
 
 /// check_ids DIR: the IDs a run took, in the order taken (the .point files' times).
 fn check_ids(dir: &[u8]) -> Vec<Vec<u8>> {
+    // (bash calls it as `$(check_ids ...)`: a substitution, sig::subst)
+    crate::sig::subst(|| check_ids_in(dir))
+}
+
+fn check_ids_in(dir: &[u8]) -> Vec<Vec<u8>> {
     if !shell::path(dir).is_dir() {
         return Vec::new();
     }
@@ -669,7 +695,8 @@ fn check_one(base: &[u8], new: &[u8], id: &[u8], speck: i64, unstable: &[u8]) ->
         c.tmasks = tree_masks(&cat!(new, "/", id, ".point"), &sb);
         let mut a = w(&[b"tree".as_slice(), &bt, &nt, &ign]);
         a.extend(c.tmasks.iter().cloned());
-        let r = py(&a, None, false);
+        // (`CHK_TREE=$(python3 ... tree ...)`)
+        let r = crate::sig::subst(|| py(&a, None, false));
         c.tree = r.text();
         if !ign.is_empty() {
             rm(&ign);
@@ -681,6 +708,19 @@ fn check_one(base: &[u8], new: &[u8], id: &[u8], speck: i64, unstable: &[u8]) ->
 /// check_change_key BASE NEW ID BASE_TREE NEW_TREE [HOLE...]: what a changed checkpoint's change
 /// is, to tell one seen before (#257).
 fn change_key(
+    c: &Chk,
+    base: &[u8],
+    new: &[u8],
+    id: &[u8],
+    bt: &[u8],
+    nt: &[u8],
+    holes: &[Vec<u8>],
+) -> Vec<u8> {
+    // (bash calls it as `$(check_change_key ...)`: a substitution, sig::subst)
+    crate::sig::subst(|| change_key_in(c, base, new, id, bt, nt, holes))
+}
+
+fn change_key_in(
     c: &Chk,
     base: &[u8],
     new: &[u8],
@@ -1775,7 +1815,9 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let state = shell::env("XDG_STATE_HOME")
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| cat!(shell::env_or_empty("HOME"), "/.local/state"));
-        let date = jq::tool("date", &["+%Y%m%d-%H%M%S"], None, jq::Err::Inherit).text();
+        let date =
+            crate::sig::subst(|| jq::tool("date", &["+%Y%m%d-%H%M%S"], None, jq::Err::Inherit))
+                .text();
         outd = cat!(
             state,
             "/omabox/check/",
@@ -2581,16 +2623,19 @@ fn check_compare(
     // A baseline from another omabox, Hyprland, Omarchy or GPU: differences may be that.
     let cj = cat!(base, "/check.json");
     if shell::path(&cj).is_file() {
-        let r = jq::tool(
-            "jq",
-            &Args::new(&["-rn"])
-                .kv("--slurpfile", "a", &cj)
-                .kv("--slurpfile", "b", &cat!(outd, "/env.json"))
-                .arg(CHK_SETUP_JQ)
-                .into_words(),
-            None,
-            jq::Err::Null,
-        );
+        // (`e=$(jq -rn --slurpfile ...)`)
+        let r = crate::sig::subst(|| {
+            jq::tool(
+                "jq",
+                &Args::new(&["-rn"])
+                    .kv("--slurpfile", "a", &cj)
+                    .kv("--slurpfile", "b", &cat!(outd, "/env.json"))
+                    .arg(CHK_SETUP_JQ)
+                    .into_words(),
+                None,
+                jq::Err::Null,
+            )
+        });
         let e = if r.ok() { r.text() } else { Vec::new() };
         if !e.is_empty() {
             out(cat!(

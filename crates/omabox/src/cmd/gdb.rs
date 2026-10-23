@@ -274,7 +274,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     c.arg("-Is")
         .stdin(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
-    let date = crate::sig::run_output(c)
+    // (`head=$(printf ... "$(date -Is)")`)
+    let date = crate::sig::run_subst(c)
         .map(|(_, o)| shell::strip_nl(&o))
         .unwrap_or_default();
     let head = cat!(

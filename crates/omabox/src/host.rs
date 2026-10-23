@@ -31,7 +31,8 @@ pub fn host_session_wl(ctx: &Ctx) -> Result<(Vec<u8>, Vec<u8>), Vec<u8>> {
         .env("HYPRLAND_INSTANCE_SIGNATURE", GUARD)
         .stdin(Stdio::inherit())
         .stderr(Stdio::null());
-    let all = crate::sig::run_output(c)
+    // (`all=$(... hyprctl -j instances ...)`)
+    let all = crate::sig::run_subst(c)
         .ok()
         .filter(|(rc, _)| *rc == 0)
         .map(|(_, out)| shell::subst(&out))
