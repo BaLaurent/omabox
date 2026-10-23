@@ -231,9 +231,11 @@ pub fn dropped_set(ctx: &Ctx, lines: &[u8]) -> bool {
             .status()
             .is_ok_and(|s| s.success());
     }
+    // (gone on every return: bash left it when the write or the mv failed, finding 443)
     let tmp = cat!(ctx.d, "/output.dropped.tmp");
+    let _tmp = shell::Rm(tmp.clone());
     if let Err(e) = std::fs::write(shell::path(&tmp), cat!(lines, "\n")) {
-        say(cat!(tmp, ": ", crate::shots::why(&e)));
+        say(cat!(ctx.label(), crate::shots::cant_write(&tmp, &e)));
         return false;
     }
     crate::shots::mv_f(&tmp, shell::bytes(&f))

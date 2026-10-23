@@ -34,9 +34,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   --monitor`'s add, or while it waited for the box's shell. It now ends the box, as any other `up`
   that fails, with the signal's exit code (130, 143, 129); a Ctrl-C to `up` alone no longer lets it
   go on.
-- **`pixel` left a temporary file in $TMPDIR** when grim's frame was cut short, its size unreadable or
-  the point past its end, and a failed update of a box's `box.json` left `box.json.tmp` in the box's
-  folder.
+- **`pixel` left a temporary file in $TMPDIR** when grim's frame was cut short, its size unreadable,
+  the point past its end, or a signal ended it; a failed update of a box's `box.json` left
+  `box.json.tmp` in the box's folder, and `output` its `output.dropped.tmp`. Scripts: nothing to
+  change ([#357](https://github.com/diogochaves/omabox/issues/357)).
 
 ### Changes from the bash omabox
 

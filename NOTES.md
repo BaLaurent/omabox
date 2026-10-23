@@ -9284,9 +9284,12 @@ from them.
     commands). pixel's three set -e exits of finding 442 came after its `mktemp`, so each left the
     grabbed frame in $TMPDIR. jq_box_json (mode, monitor, output: `jq ... > box.json.tmp && mv`) left
     box.json.tmp in the box's dir when jq or the mv failed, and take_over (an agent resumed, finding
-    93) when its jq failed. **Fix**: the temporary files are removed on every way out (shell::Rm), and
-    take_over says when it could not record the agent. Tests: t_unit_rust_parity (pixel's cases list
-    a TMPDIR of their own: the frame left in bash, none in Rust, expected differences).
+    93) when its jq failed, and output's output.dropped.tmp when its write or mv failed. **Fix**: the
+    temporary files are removed on every return (shell::Rm), and take_over says when it could not
+    record the agent; pixel's frame also on INT, TERM or HUP (trap::on_exit: bash's pixel, with no
+    trap, left it to a signal too). Tests: t_unit_rust_parity (pixel's cases list
+    a TMPDIR of their own: the frame left in bash, none in Rust, expected differences; a TERM while
+    grim takes the frame too).
 
 444. **The Rust half ran `date` for names and stamps, and handed awk a glob that matched nothing**
     (2026-10-23, #324 wave 4c). run -d's log and exit file (`date +%s%N`), check run's out folder,

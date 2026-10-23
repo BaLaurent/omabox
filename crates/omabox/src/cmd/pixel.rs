@@ -204,11 +204,18 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         grim.extend([b"-g".to_vec(), format!("{x0},{y0} {bw}x{bh}").into_bytes()]);
     }
     grim.push(b"-".to_vec());
-    // (both removed on every way out: bash's set -e exits left the image in $TMPDIR, finding 443)
+    // (Both removed on every return, and on INT, TERM or HUP: bash's set -e exits left the image in
+    // $TMPDIR, and so did a signal, finding 443.)
     let (mut f, fp) = shell::mktemp()?;
-    let _fp = shell::Rm(fp);
+    let fp2 = fp.clone();
+    let _fp = crate::trap::on_exit(move || {
+        let _ = std::fs::remove_file(shell::path(&fp2));
+    });
     let (mut ef, ep) = shell::mktemp()?;
-    let _ep = shell::Rm(ep);
+    let ep2 = ep.clone();
+    let _ep = crate::trap::on_exit(move || {
+        let _ = std::fs::remove_file(shell::path(&ep2));
+    });
     // (A window's first frame off screen can be old: captured twice, as shot does.)
     if !id.is_empty() {
         on_box(ctx, &grim, false, Out::Null, ErrTo::Null).or_exit()?;

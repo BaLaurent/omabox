@@ -3815,7 +3815,14 @@ EOF
   rp_prep=rp_p5; parity "pixel: not a PPM it reads" pixel -b fk 1 1
   rp_p6() { rp_fk; rm -f "$fk/grim.ppm"; }
   rp_prep=rp_p6; parity "pixel: no frame, grim's words" pixel -b fk 1 1
-  rp_prep=rp_fk rp_also=rp_fk_also rp_env=()
+  # (a TERM to omabox while grim takes the frame: bash ends at once, the frame left; the Rust half's
+  # trap removes it, finding 443)
+  rp_sig_write "$r/rp-sig"
+  rp_pslow() { rp_fk; rm -f "$fk/seen"; echo 2 > "$fk/ppm.sleep"; }
+  rp_why=443 rp_bash=('state~^TMPFILE$') rp_rust=('state!~^TMPFILE$')
+  rp_prep=rp_pslow rp_wrap=("$r/rp-sig" TERM "$fk/seen")
+  parity "pixel and TERM while grim takes the frame: 143, the frame left in bash" pixel -b fk 1 1
+  rp_prep=rp_fk rp_also=rp_fk_also rp_env=() rp_wrap=()
   parity "pixel --in --json: a shot's pixels, on the screen" pixel -b fk --in "$r/fk-s.png" --json 100 100 10 10
   parity "pixel --in: a window crop's, in the window" pixel -b fk --in "$r/fk-w.png" 1 1
   parity "pixel --in: outside the image" pixel -b fk --in "$r/fk-w.png" 391 1
