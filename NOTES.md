@@ -9307,6 +9307,20 @@ from them.
     read only under the suite's OMABOX_SUITE) and by its stand-in `date` on PATH for bash's (which
     --installed runs). Tests: shell.rs's dates_as_coreutils_prints_them, t_replace.
 
+445. **omabox's own patterns took the locale's letters and digits** (2026-10-23, #324 wave 4c). Bash's
+    `=~` is glibc's regex in the caller's locale, where en_US.UTF-8 (and most named UTF-8 locales; not
+    C or C.UTF-8) has `[0-9]` take `²` and `١` and `[A-Za-z]` take `é`: a process whose OMABOX_BOX
+    was `é` was named box é by `which`, and a `²` passed every number check to be refused next by
+    bash's arithmetic in its own words ("10#: invalid integer constant", exit 1: `pixel 1 ²`, `click
+    ² 1`). The Rust half copied it (shell::Re in the process's locale). **Change** (Rust over bash):
+    omabox's own patterns (Re::new, re_match, re_group: box names, numbers, sizes, ids, every
+    validator) are compiled and matched in the C locale (uselocale around regcomp and regexec), so
+    they are ASCII, and `.` takes any byte; a caller's own (`events --grep`, `--until`: Re::from_bytes)
+    stay in the caller's locale, their syntax the contract (CHANGELOG). Tests: t_unit_rust_parity
+    ("which: OMABOX_BOX in the locale's letters", "pixel: a digit of the locale's", "click: a digit of
+    the locale's": expected differences under en_US.UTF-8, where the system has it), shell.rs's
+    own_patterns_ascii_in_any_locale.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

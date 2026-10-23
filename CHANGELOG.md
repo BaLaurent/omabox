@@ -75,6 +75,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   to its `box.json` is said and the command carries on (some commands ended with 1 there, unsaid, and
   others went on). Scripts that tested for exit 3 from gdb, or exit 1 from `check` for those: test
   for non-zero, or for 2.
+- **Box names, and every number and name omabox checks, are ASCII** in every locale: `é` or `²`
+  are refused with the usual message. The bash omabox checked them in the caller's locale, where
+  en_US.UTF-8 and most others take `é` for a letter and `²` for a digit: a process with
+  OMABOX_BOX=é was named box é by `which`, and `pixel 1 ²` ended in bash's own words ("invalid
+  integer constant", exit 1). `events --grep` and `--until` still read your pattern in your locale.
+  Scripts: nothing to change.
 
 ## 1.0.1 — unreleased
 

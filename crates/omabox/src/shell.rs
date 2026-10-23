@@ -1,6 +1,6 @@
 //! What bash and coreutils do to the words bin/omabox handles, done the same way here: `$(...)`'s
-//! trailing newlines, cut, basename, printf %q, glob order, word splitting, and `=~`
-//! (glibc's regex in the user's locale, where `[0-9]` and `[A-Za-z]` take more than ASCII).
+//! trailing newlines, cut, basename, printf %q, glob order, word splitting, and `=~` (glibc's regex;
+//! omabox's own patterns in the C locale, ASCII).
 
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -627,24 +627,65 @@ pub fn env_or_empty(name: &str) -> Vec<u8> {
     env(name).unwrap_or_default()
 }
 
-/// A POSIX extended regular expression, compiled by glibc in the user's locale: bash's `=~`.
-pub struct Re(Box<libc::regex_t>);
+/// A POSIX extended regular expression (glibc's, as bash's `=~`). omabox's own patterns (Re::new)
+/// are compiled and matched in the C locale, so `[0-9]` is the ten ASCII digits and `[A-Za-z]` the
+/// ASCII letters whatever the caller's locale (finding 445: in en_US.UTF-8 bash's took `²` and
+/// `é`), and `.` takes any byte; a caller's own (Re::from_bytes: `events --grep`) in the process's.
+pub struct Re {
+    re: Box<libc::regex_t>,
+    c: bool,
+}
+
+/// The C locale, for omabox's own patterns.
+fn c_locale() -> libc::locale_t {
+    static C: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    // SAFETY: "C" always exists; the locale is made once and kept for the process's life.
+    *C.get_or_init(|| unsafe {
+        libc::newlocale(libc::LC_ALL_MASK, c"C".as_ptr(), std::ptr::null_mut()) as usize
+    }) as libc::locale_t
+}
+
+/// This thread in the C locale while it lives (uselocale), when ON; its own given back on drop.
+struct InC(Option<libc::locale_t>);
+
+impl InC {
+    fn new(on: bool) -> InC {
+        let c = c_locale();
+        // SAFETY: c is a valid locale (or null: then nothing is switched).
+        InC((on && !c.is_null()).then(|| unsafe { libc::uselocale(c) }))
+    }
+}
+
+impl Drop for InC {
+    fn drop(&mut self) {
+        if let Some(old) = self.0 {
+            // SAFETY: the locale this thread had before new.
+            unsafe { libc::uselocale(old) };
+        }
+    }
+}
 
 impl Re {
+    /// One of omabox's own patterns, ASCII in every locale.
     pub fn new(pattern: &str) -> Option<Re> {
-        Re::from_bytes(pattern.as_bytes(), false)
+        Re::compile(pattern.as_bytes(), false, true)
     }
 
-    /// A pattern from bytes (a caller's `[[ x =~ $re ]]`); ICASE as under `shopt -s nocasematch`.
-    /// None where regcomp refuses it (bash's status 2).
+    /// A pattern from bytes (a caller's `[[ x =~ $re ]]`), in the caller's locale; ICASE as under
+    /// `shopt -s nocasematch`. None where regcomp refuses it (bash's status 2).
     pub fn from_bytes(pattern: &[u8], icase: bool) -> Option<Re> {
+        Re::compile(pattern, icase, false)
+    }
+
+    fn compile(pattern: &[u8], icase: bool, c: bool) -> Option<Re> {
         let pat = CString::new(pattern).ok()?;
         // SAFETY: regex_t is plain data that regcomp fills in; zeroed is a valid starting value.
         let mut re: Box<libc::regex_t> = Box::new(unsafe { std::mem::zeroed() });
         let flags = libc::REG_EXTENDED | if icase { libc::REG_ICASE } else { 0 };
+        let _in = InC::new(c);
         // SAFETY: re points to a regex_t we own; pat is a valid C string.
         let rc = unsafe { libc::regcomp(&mut *re, pat.as_ptr(), flags) };
-        (rc == 0).then_some(Re(re))
+        (rc == 0).then_some(Re { re, c })
     }
 
     /// The whole match and each group's, as byte ranges of `s` (None for a group that took no
@@ -657,8 +698,10 @@ impl Re {
         let flags = libc::REG_STARTEND | if notbol { libc::REG_NOTBOL } else { 0 };
         // A non-null pointer for an empty subject: REG_STARTEND reads nothing past rm_eo.
         let base: &[u8] = if s.is_empty() { b"\0" } else { s };
+        let _in = InC::new(self.c);
         // SAFETY: the regex is compiled; base is valid for rm_eo bytes; m has N entries.
-        let rc = unsafe { libc::regexec(&*self.0, base.as_ptr().cast(), N, m.as_mut_ptr(), flags) };
+        let rc =
+            unsafe { libc::regexec(&*self.re, base.as_ptr().cast(), N, m.as_mut_ptr(), flags) };
         if rc != 0 {
             return None;
         }
@@ -687,8 +730,8 @@ impl Re {
 
 impl Drop for Re {
     fn drop(&mut self) {
-        // SAFETY: compiled by regcomp in Re::new, freed once.
-        unsafe { libc::regfree(&mut *self.0) }
+        // SAFETY: compiled by regcomp in Re::compile, freed once.
+        unsafe { libc::regfree(&mut *self.re) }
     }
 }
 
@@ -1043,5 +1086,21 @@ mod tests {
         assert!(!re_match("^[0-9]+$", b"12a"));
         assert!(re_match("^[0-9]+$", b"12"));
         assert!(Re::new("x").is_some_and(|r| r.captures(b"a\0x", false).is_some()));
+    }
+
+    // In en_US.UTF-8 glibc's `[0-9]` takes `²` and `[A-Za-z]` `é` (bash's `=~`): omabox's own
+    // patterns are ASCII in every locale, and `.` takes any byte; a caller's follow the locale.
+    #[test]
+    fn own_patterns_ascii_in_any_locale() {
+        let _l = ThreadLocale::new(c"en_US.UTF-8");
+        assert!(!re_match("^[0-9]+$", "²".as_bytes()));
+        assert!(!re_match("^[0-9]+$", "١".as_bytes()));
+        assert!(!re_match(
+            "^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$",
+            "é".as_bytes()
+        ));
+        assert!(re_match("^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$", b"box-1.a"));
+        assert!(re_match("^x.y$", b"x\xffy"));
+        assert!(Re::from_bytes(b"^[A-Za-z]$", false).is_some_and(|r| r.is_match("é".as_bytes())));
     }
 }

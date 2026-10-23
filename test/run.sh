@@ -3143,6 +3143,9 @@ EOF
 t_unit_rust_parity() {
   [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity" "no build/bin/omabox (an install: every command runs in bash)"; return; }
   local r=$TMP/rp sid=0123456789abcdef s8=89abcdef
+  # (a locale whose `[0-9]` and `[A-Za-z]` take more than ASCII in glibc's regex, bash's `=~`: where
+  # the system has one, omabox's own ASCII patterns differ there, finding 445)
+  local rp_ul=""; ! locale -a 2>/dev/null | grep -qix 'en_US.utf-\{0,1\}8' || rp_ul=en_US.UTF-8
   rm -rf "$r"; mkdir -p "$r/rt" "$r/norepo" "$r/bin"
   # parity's expected differences (wave 4c) judged on files of the test's own: each side against its
   # own wants, the fields named by both, a named field the same both ways failed (no difference).
@@ -3310,7 +3313,12 @@ t_unit_rust_parity() {
   parity "which: by OMABOX_BOX" which "$e1"
   parity "which --json: by OMABOX_BOX" which --json "$e1"
   parity "which: an OMABOX_BOX no box can have" which "$e2"
+  # (en_US.UTF-8's [A-Za-z] takes é in bash's =~: omabox's own patterns are ASCII, finding 445)
+  [ -z "$rp_ul" ] || { rp_env=(LC_ALL=$rp_ul); rp_why=445 rp_bash=(rc=0 out=é 'err~^omabox: which: by its environment') rp_rust=(rc=1 'out=not in a box' err=); }
   parity "which: OMABOX_BOX in the locale's letters" which "$e3"
+  [ -z "$rp_ul" ] || { rp_env=(LC_ALL=$rp_ul); rp_why=445 rp_bash=(rc=0 'out={"pid":P,"box":"é","by":"env"}' 'err~^omabox: which: by its environment') rp_rust=(rc=1 'out={"pid":P,"box":null,"by":null}' err=); }
+  rp_sed='s/"pid":[0-9]+/"pid":P/'; parity "which --json: OMABOX_BOX in the locale's letters" which --json "$e3"
+  rp_env=() rp_sed=""
   kill "$e1" "$e2" "$e3" 2>/dev/null
   # Naming: OMABOX=, the repo's name, the agent session's suffix.
   rp_env=(OMABOX=dead1); parity "OMABOX=NAME" env
@@ -3589,6 +3597,12 @@ t_unit_rust_parity() {
   parity "pixel: three numbers" pixel 1 2 3
   parity "pixel: 33 points" pixel $(seq 66)
   parity "pixel: not a number" pixel 1 x
+  # (a digit of en_US.UTF-8's [0-9], ², passed bash's check for its arithmetic to refuse: finding 445)
+  [ -z "$rp_ul" ] || { rp_env=(LC_ALL=$rp_ul); rp_why=445 rp_bash=(rc=1 'err~/bin/omabox: line [0-9]+: 10#: invalid integer constant') rp_rust=(rc=2 'err~^omabox: pixel: '); }
+  parity "pixel: a digit of the locale's" pixel 1 ²
+  [ -z "$rp_ul" ] || { rp_env=(LC_ALL=$rp_ul); rp_why=445 rp_bash=(rc=1 'err~/bin/omabox: line [0-9]+: 10#: invalid integer constant') rp_rust=(rc=2 'err~^omabox: click: '); }
+  parity "click: a digit of the locale's" click -b dead1 ² 1
+  rp_env=()
   parity "pixel: six digits" pixel 1 123456
   parity "pixel: a negative one is an option" pixel 1 -2
   parity "pixel: --in and --window" pixel --in f --window w 1 1
