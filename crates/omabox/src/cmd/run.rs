@@ -387,9 +387,13 @@ fn detached(
         job_replace(ctx, quiet, cmd)?;
     }
     // (bash's `$(date +%s%N)`, with no `date` run; OMABOX_TEST_RUN_NS under the suite, which names
-    // a log by it)
+    // a log by it: digits only, anything else ignored)
     let ns = Some(shell::env_or_empty("OMABOX_TEST_RUN_NS"))
-        .filter(|v| !v.is_empty() && !shell::env_or_empty("OMABOX_SUITE").is_empty())
+        .filter(|v| {
+            !v.is_empty()
+                && v.iter().all(u8::is_ascii_digit)
+                && !shell::env_or_empty("OMABOX_SUITE").is_empty()
+        })
         .unwrap_or_else(shell::epoch_ns);
     let lname = cat!("run-", ns, ".log");
     let ex = cat!(

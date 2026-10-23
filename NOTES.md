@@ -9203,6 +9203,7 @@ from them.
     "Changes from the bash omabox"). Tests: t_unit_rust_parity ("group-INT during the create", alike
     now: removed both ways; "INT to omabox alone", each side's ending checked: 130 and kept in bash, 130
     and removed in Rust).
+
 438. **A box name made of echo's options was refused with no name** (2026-10-23, #324 wave 4c). Bash
     takes the default box name through `$(echo "$OMABOX")`, so a name of `-n`, `-e` or `-E`, alone or
     together (`OMABOX=-n`, OMABOX_RELAY_DEFAULT in a jail, a repo named so), printed nothing: "bad box
@@ -9210,6 +9211,7 @@ from them.
     (shell::echo_sub). **Change** (Rust over bash): the name as it is, "bad box name -n: ...", exit 2
     as before (CHANGELOG, "Changes from the bash omabox"). Tests: t_unit_rust_parity ("OMABOX=-n",
     an expected difference).
+
 439. **`--mod` words were matched against the current folder's files** (2026-10-23, #324 wave 4c).
     Bash splits `--mod`'s value unquoted under IFS=+, so each word was also pathname-expanded: `--mod
     '*'` in a folder holding a file `ctrl` held Ctrl, any other file name there became "'NAME' is not a
@@ -9218,16 +9220,7 @@ from them.
     written, so `*`, `?` or `[` are refused as modifiers, named as given (CHANGELOG). Tests:
     t_unit_rust_parity ("click --mod with a glob", "...a dotfile pattern", "...in a folder of a
     modifier's name", where bash held Ctrl and clicked: expected differences), input.rs's mod_words.
-444. **The Rust half ran `date` for names and stamps, and handed awk a glob that matched nothing**
-    (2026-10-23, #324 wave 4c). run -d's log and exit file (`date +%s%N`), check run's out folder,
-    record's file and record stop's video (`+%Y%m%d-%H%M%S`, `+%H%M%S`) and gdb --watch's header
-    (`date -Is`) each spawned the `date` on PATH, as bash's `$(date ...)` does, and the suite named a
-    log by a stand-in `date` (t_replace, finding 229's case); gpu's snapshot handed awk the literal
-    `/proc/PID/fdinfo/*` of a process with no fdinfo, for awk to fail on unsaid as it did on bash's
-    unmatched glob. **Change** (Rust over bash, no output changed): the clock read in-process
-    (shell::date, date_iso, epoch_ns: strftime in the local zone, as date prints it), and such a
-    process skipped. t_replace names the log by `OMABOX_TEST_RUN_NS`, read only under the suite's
-    OMABOX_SUITE. Tests: shell.rs's dates_as_coreutils_prints_them, t_replace.
+
 440. **A box command ended by TERM was said as bytes dropped, after a 2 s wait** (2026-10-23, #324
     wave 4c). Bash's own job line for a command killed by a signal lands in the nsenter stderr that
     ns_held keeps, so ns_said took it for nsenter's: `omabox run -- sh -c 'kill -TERM $$'` said
@@ -9245,6 +9238,7 @@ from them.
     cost let the closed window's last frames pass before the next case; the prep now waits for the
     screen to be still. Tests: t_rust_parity ("run: by SIGTERM", an expected difference), exec.rs's
     said_text_counts_what_was_held.
+
 441. **Errors were said in bash's or another tool's words** (2026-10-23, #324 wave 4c). What omabox
     met on its way came out as bash or a tool would have said it, which the Rust half copied word for
     word: `check run`'s scenario that could not run ("bash: X: /bin/sh^M: bad interpreter: No such file
@@ -9261,6 +9255,7 @@ from them.
     run jq: not found in PATH", "set for omabox, pid N" (CHANGELOG). Tests: t_rust_parity (the twelve
     scenario kinds and the one not there), t_unit_rust_parity (pixel's, shot's, clip's), t_clip:
     expected differences; check.rs's interpreters_as_the_kernel_reads_them, jq.rs's not_run_said.
+
 442. **Silent set -e exits, and helpers' statuses taken for omabox's** (2026-10-23, #324 wave 4c).
     Where a bash step failed under set -e the command ended with that step's status and often without
     a word, and the Rust half did the same: pixel on a frame whose header was cut short or whose size
@@ -9281,6 +9276,7 @@ from them.
     t_unit_rust_parity4b and t_rust_parity (check's folder that cannot be made): expected differences.
     gdb's unreadable namespace has no case: need_box refuses such a box first, so only a box changing
     under it reaches that step.
+
 443. **pixel left its frame in $TMPDIR, and a failed box.json update its box.json.tmp** (2026-10-23,
     #324 wave 4c; a bug in both halves, fixed in the Rust half only: bash's is no longer run for these
     commands). pixel's three set -e exits of finding 442 came after its `mktemp`, so each left the
@@ -9289,6 +9285,18 @@ from them.
     93) when its jq failed. **Fix**: the temporary files are removed on every way out (shell::Rm), and
     take_over says when it could not record the agent. Tests: t_unit_rust_parity (pixel's cases list
     a TMPDIR of their own: the frame left in bash, none in Rust, expected differences).
+
+444. **The Rust half ran `date` for names and stamps, and handed awk a glob that matched nothing**
+    (2026-10-23, #324 wave 4c). run -d's log and exit file (`date +%s%N`), check run's out folder,
+    record's file and record stop's video (`+%Y%m%d-%H%M%S`, `+%H%M%S`) and gdb --watch's header
+    (`date -Is`) each spawned the `date` on PATH, as bash's `$(date ...)` does, and the suite named a
+    log by a stand-in `date` (t_replace, finding 229's case); gpu's snapshot handed awk the literal
+    `/proc/PID/fdinfo/*` of a process with no fdinfo, for awk to fail on unsaid as it did on bash's
+    unmatched glob. **Change** (Rust over bash, no output changed): the clock read in-process
+    (shell::date, date_iso, epoch_ns: strftime in the local zone, as date prints it), and such a
+    process skipped. t_replace names the log by `OMABOX_TEST_RUN_NS` for the Rust half (digits only,
+    read only under the suite's OMABOX_SUITE) and by its stand-in `date` on PATH for bash's (which
+    --installed runs). Tests: shell.rs's dates_as_coreutils_prints_them, t_replace.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

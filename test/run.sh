@@ -18680,12 +18680,14 @@ t_replace() {
   # A missing command still says so in its log
   out=$(ob run -b "$B" -d -q --print-log -- omabox-no-such-command)
   check "a missing command: said in its log" until_ok 5 grep -q 'setsid: failed to execute omabox-no-such-command' "$out"
-  # finding 229: the log is opened in the box. A box that knows the name (the suite's
-  # OMABOX_TEST_RUN_NS says it here, under OMABOX_SUITE only) and links it to a host file: that file
-  # untouched, the log a file of the box's.
-  echo keep > "$TMP/rep-victim"
+  # finding 229: the log is opened in the box. A box that knows the name and links it to a host file:
+  # that file untouched, the log a file of the box's. The name is the suite's: a stand-in `date` on
+  # PATH for bash's half (--installed runs it), OMABOX_TEST_RUN_NS for the Rust half, which reads it
+  # under OMABOX_SUITE only (finding 444).
+  mkdir -p "$TMP/rep-bin"; echo keep > "$TMP/rep-victim"
+  printf '#!/bin/sh\n[ "$1" = +%%s%%N ] && { echo 1229; exit; }\nexec /usr/bin/date "$@"\n' > "$TMP/rep-bin/date"; chmod +x "$TMP/rep-bin/date"
   ob run -b "$B" -- ln -sf "$TMP/rep-victim" /home/sbx/run-1229.log
-  out=$(OMABOX_TEST_RUN_NS=1229 ob run -b "$B" -d -q --print-log -- echo omabox-t229 2>&1)
+  out=$(PATH=$TMP/rep-bin:$PATH OMABOX_TEST_RUN_NS=1229 ob run -b "$B" -d -q --print-log -- echo omabox-t229 2>&1)
   check_eq "run -d over a link the box put at its log's name: the path" "$D/home/run-1229.log" "$out"
   check "...the log is the box's, with the output" until_ok 5 bash -c "[ -f '$D/home/run-1229.log' ] && [ ! -L '$D/home/run-1229.log' ] && grep -qx omabox-t229 '$D/home/run-1229.log'"
   check_eq "...the link's target untouched" keep "$(cat "$TMP/rep-victim")"
