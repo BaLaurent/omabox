@@ -18,7 +18,7 @@ use crate::mon::{
 use crate::num::{ms_duration, ms_s};
 use crate::screen::{box_screen, main_screen};
 use crate::select::select_box;
-use crate::settle::secs;
+use crate::settle::{after, past};
 use crate::shell::{self, strip_nl};
 use crate::shellnote::{shell_crash_dirs, shell_crashes, shell_seen, shell_state};
 use std::time::Duration;
@@ -416,7 +416,7 @@ pub fn output_drop(ctx: &Ctx, given: &[u8]) -> Res<Vec<u8>> {
         dropped_set(ctx, &before);
         return Err(ctx.die(cat!("output: removing ", outn, " failed: ", res)));
     }
-    let end = secs() + 5;
+    let end = after(5);
     loop {
         if let Ok(x) = hypr_json(ctx, &["monitors"]) {
             m = strip_nl(&x);
@@ -424,7 +424,7 @@ pub fn output_drop(ctx: &Ctx, given: &[u8]) -> Res<Vec<u8>> {
                 break;
             }
         }
-        if secs() >= end {
+        if past(end) {
             return Err(ctx.die(cat!(
                 "output: ",
                 outn,
@@ -575,7 +575,7 @@ fn output_back_one(ctx: &Ctx, rec: &[u8]) -> Res<Vec<u8>> {
             res
         )));
     }
-    let (end, mut again) = (secs() + 10, secs() + 1);
+    let (end, mut again) = (after(10), after(1));
     let want = cat!(o, " ", mode);
     let mut line = Vec::new();
     loop {
@@ -590,7 +590,7 @@ fn output_back_one(ctx: &Ctx, rec: &[u8]) -> Res<Vec<u8>> {
                 break;
             }
         }
-        if secs() >= end {
+        if past(end) {
             let l = if line.is_empty() {
                 b"nothing".to_vec()
             } else {
@@ -608,9 +608,9 @@ fn output_back_one(ctx: &Ctx, rec: &[u8]) -> Res<Vec<u8>> {
                 ")"
             )));
         }
-        if kind == b"wayland" && secs() >= again {
+        if kind == b"wayland" && past(again) {
             output_place_one(ctx, o, mode, pos, scale, &mut res);
-            again = secs() + 1;
+            again = after(1);
         }
         std::thread::sleep(Duration::from_millis(50));
     }

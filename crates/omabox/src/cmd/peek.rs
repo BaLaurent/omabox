@@ -251,8 +251,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !focus {
         return Ok(());
     }
-    // (bash's `$SECONDS + 5`: whole seconds)
-    let deadline = crate::settle::secs() + 5;
+    // (5 s on the monotonic clock: settle::after)
+    let deadline = crate::settle::after(5);
     let pid = loop {
         if let Some(pid) = crate::sig::subst(|| peek_pid(ctx, Some(&output))) {
             let (rc, cl) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
@@ -265,7 +265,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 break pid;
             }
         }
-        if crate::settle::secs() >= deadline {
+        if crate::settle::past(deadline) {
             return Err(ctx.die(cat!(
                 "peek: its window did not come up on your desktop in 5 s, so nothing was focused (omabox peek -b ",
                 ctx.name,

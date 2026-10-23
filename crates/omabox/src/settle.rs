@@ -34,12 +34,16 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// bash's SECONDS, as its deadlines read it: whole seconds of the wall clock (`end=$((SECONDS + N))`
-/// then `[ $SECONDS -lt $end ]` is `time() < start + N`), so a deadline here ends where bash's does,
-/// 0 to 1 s short of N.
-pub fn secs() -> i64 {
-    // SAFETY: time with a null pointer only returns the time.
-    unsafe { libc::time(std::ptr::null_mut()) }
+/// A deadline N seconds from now, on the monotonic clock (finding 450: bash's `end=$((SECONDS + N))`
+/// then `[ $SECONDS -lt $end ]` counted whole seconds of the wall clock, so a wait ended 0 to 1 s
+/// short of N, and a clock step moved it).
+pub fn after(n: u64) -> std::time::Instant {
+    std::time::Instant::now() + std::time::Duration::from_secs(n)
+}
+
+/// Whether deadline D has come.
+pub fn past(d: std::time::Instant) -> bool {
+    std::time::Instant::now() >= d
 }
 
 /// geom_parse: a -g value as its X Y W H, from grim's "X,Y WxH" or X,Y,W,H and X,Y W,H (#27); each a
@@ -487,7 +491,7 @@ impl Settle {
             pid,
         });
         self.err.clear();
-        let end = secs() + 12;
+        let end = after(12);
         let (mut line, mut part) = (Vec::new(), Vec::new());
         let answer = shell::Re::new(r"^(satisfied|unsatisfied|unknown)\ ");
         let is_answer = |l: &[u8]| answer.as_ref().is_some_and(|r| r.is_match(l));
@@ -509,7 +513,7 @@ impl Settle {
                     Got::Timeout(p) => {
                         part.extend(p);
                         line.clear();
-                        if secs() >= end {
+                        if past(end) {
                             break;
                         }
                     }
@@ -575,7 +579,7 @@ impl Settle {
         if line.starts_with(b"ready") {
             line.clear();
             let mut part = Vec::new();
-            let mut used = secs();
+            let mut used = std::time::Instant::now();
             if let Some(tool) = self.tool.as_mut() {
                 loop {
                     match tool.lines.read(Duration::from_secs(1)) {
@@ -601,9 +605,9 @@ impl Settle {
                         }
                     }
                     // Waiting is using the box (idle expiry, finding 59).
-                    if secs() - used >= 30 {
+                    if used.elapsed() >= std::time::Duration::from_secs(30) {
                         touch(&ctx.at("used"));
-                        used = secs();
+                        used = std::time::Instant::now();
                     }
                 }
             }
@@ -687,8 +691,8 @@ impl Settle {
                 _ => {
                     // Its compositor gone: the box is (being) taken down.
                     let gone = now_ms() - self.t0;
-                    let end = secs() + 2;
-                    while box_alive(ctx)? && secs() < end {
+                    let end = after(2);
+                    while box_alive(ctx)? && !past(end) {
                         std::thread::sleep(Duration::from_millis(200));
                     }
                     if !box_alive(ctx)? {

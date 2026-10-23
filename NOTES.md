@@ -9389,6 +9389,18 @@ from them.
     t_unit_rust_parity ("a resumed session takes its box over": its box.json), t_rust_parity
     ("lua --json: its values"): expected differences; json.rs's numbers_in_standard_form.
 
+450. **Built-in waits ended up to a second early, on the wall clock** (2026-10-23, #324 wave 4c;
+    wave 3a's choice reversed). Bash's deadlines are `end=$((SECONDS + N))` then `[ $SECONDS -lt
+    $end ]`: whole seconds of the wall clock, so a wait of N seconds ended anywhere from N-1 to N
+    seconds in, and a clock step (NTP, a suspend) moved it. The Rust half copied that on purpose
+    (settle::secs, time(2)) at ~20 waits: a window to appear (3 s), a mode or output to apply (5 s,
+    10 s), the still tool's start (12 s) and a gone box's 2 s, peek's focus (5 s), gdb's attach
+    (10 s), record's start (5 s) and wf-recorder's end (15 s), the monitors' moves (5 s), wait's
+    and settle's 30 s notes. **Change** (Rust over bash): Instant deadlines (settle::after, past),
+    exact and monotonic; `check run`'s "box up in N s" is the whole seconds of an Instant's elapsed
+    time. The sleeps between the polls are unchanged (CHANGELOG). Tests: none pins a sub-N wait;
+    the box tests of those commands run as before.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -99,6 +99,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **JSON numbers are written in standard form**: `1000`, not jq's `1E+3`; `1e+300`, not `1E+300`
   (`lua --json`, a box's `box.json`). A number written without an exponent stays as it was. Scripts
   that read the JSON with a JSON reader: nothing to change.
+- **Built-in waits last their full time** (a window to appear, a mode to apply, peek's focus,
+  gdb's attach, `wait`'s 30 s notes), on a clock that a time change does not move. The bash omabox
+  counted whole seconds of the wall clock, so they could end up to a second early. Scripts: nothing
+  to change.
 
 ## 1.0.1 — unreleased
 

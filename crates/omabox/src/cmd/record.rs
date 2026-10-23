@@ -1211,12 +1211,12 @@ fn record_hold(ctx: &mut Ctx, rec: &mut Rec, dur: i64, from: i64, quiet: bool) -
         )));
     }
     // Its first frame (start waits only 0.5 s for wf-recorder): 5 s at most.
-    let end5 = crate::settle::secs() + 5;
+    let end5 = crate::settle::after(5);
     let first = loop {
         if let Some(f) = record_first_us(ctx, rec) {
             break f;
         }
-        if crate::settle::secs() >= end5 {
+        if crate::settle::past(end5) {
             say(cat!(
                 "record hold: no frame came from box '",
                 ctx.name,

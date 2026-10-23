@@ -8,7 +8,7 @@ use crate::exit::{Ctx, Exit, Res, say};
 use crate::hypr::{HYPR_LIMIT, hypr_json};
 use crate::jq::{self, Args};
 use crate::jqprog::{WIN_JQ, WIN_SEL_JQ};
-use crate::settle::secs;
+use crate::settle::{after, past};
 use crate::shell::{self, strip_nl};
 use std::io::Write;
 
@@ -219,13 +219,13 @@ pub fn win_raise(ctx: &Ctx, w: &[u8]) -> Res<()> {
             )));
         }
     }
-    let deadline = secs() + 3;
+    let deadline = after(3);
     loop {
         let a = strip_nl(&hypr_json(ctx, &["activewindow"])?);
         if jq_r(crate::jqprog::ACTIVE_ADDR_JQ, &a) == addr {
             return Ok(());
         }
-        if secs() >= deadline {
+        if past(deadline) {
             return Err(ctx.die(cat!(
                 ctx.label(),
                 "window ",

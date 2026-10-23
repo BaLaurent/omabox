@@ -17,7 +17,7 @@ use crate::mon::{
 use crate::num::awk_num;
 use crate::screen::box_screen;
 use crate::select::select_box;
-use crate::settle::secs;
+use crate::settle::{after, past};
 use crate::shell;
 use std::time::Duration;
 
@@ -173,7 +173,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             " hyprland)"
         )));
     }
-    let deadline = secs() + 5;
+    let deadline = after(5);
     let mut live: Vec<u8> = Vec::new();
     loop {
         screen = box_screen(ctx)?;
@@ -184,7 +184,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 break;
             }
         }
-        if secs() >= deadline {
+        if past(deadline) {
             let l = if live.is_empty() {
                 b"?".to_vec()
             } else {

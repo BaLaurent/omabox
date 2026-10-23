@@ -13,7 +13,7 @@ use crate::jqprog::WIN_DESC_JQ;
 use crate::num::{fixed, ms_duration, ms_s, xywh_less};
 use crate::select::select_box;
 use crate::settle::{
-    Settle, WAIT_MAX_MS, cursor_now, cursor_rect, geom_csv, geom_parse, now_ms, rects_meet, secs,
+    Settle, WAIT_MAX_MS, cursor_now, cursor_rect, geom_csv, geom_parse, now_ms, rects_meet,
 };
 use crate::shell::{dec, strip_nl};
 use crate::shellnote::shell_note;
@@ -162,8 +162,8 @@ fn poll_until(
     probe: Probe,
 ) -> Res<()> {
     let t0 = now_ms();
-    // (bash's SECONDS: settle::secs)
-    let mut used = secs();
+    // (the monotonic clock: finding 450)
+    let mut used = std::time::Instant::now();
     let (mut yes, mut detail) = (0u32, Vec::new());
     let mut now: i64;
     let (res, msg): (&str, Vec<u8>);
@@ -220,9 +220,9 @@ fn poll_until(
             msg = cat!(no_text, " after ", ms_s(now.to_string()), d);
             break;
         }
-        if secs() - used >= 30 {
+        if used.elapsed() >= std::time::Duration::from_secs(30) {
             touch(&ctx.at("used"));
-            used = secs();
+            used = std::time::Instant::now();
         }
         std::thread::sleep(Duration::from_millis(100));
     }

@@ -330,12 +330,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ")"
         )));
     }
-    let end = crate::settle::secs() + 10;
+    let end = crate::settle::after(10);
     loop {
         if traced(&tracer_of()) {
             break;
         }
-        if crate::settle::secs() >= end {
+        if crate::settle::past(end) {
             return Err(ctx.die(cat!(
                 "gdb: did not attach to ",
                 what,

@@ -1873,7 +1873,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if let Ok(mut b) = boxes.lock() {
             b.push(bname.clone());
         }
-        let t0 = crate::settle::secs();
+        let t0 = std::time::Instant::now();
         let uplog = cat!(outd, "/run", k.to_string(), ".up.log");
         let mut c = crate::sig::omabox_cmd();
         c.env("OMABOX_SESSION", "")
@@ -1909,7 +1909,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             " of ",
             nruns.to_string(),
             ": box up in ",
-            (crate::settle::secs() - t0).to_string(),
+            t0.elapsed().as_secs().to_string(),
             " s"
         ));
         if k == 1 {

@@ -379,7 +379,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 .map(|&c| if c == b',' { b' ' } else { c })
                 .collect::<Vec<u8>>(),
         );
-        let end = crate::settle::secs() + 15;
+        let end = crate::settle::after(15);
         let still = |ctx: &mut Ctx, s: &str| {
             let mut a = w(&[
                 "/usr/bin/env",
@@ -395,7 +395,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         still(ctx, "INT")?;
         audio_end(ctx, &apid)?;
         while still(ctx, "")? == 0 {
-            if crate::settle::secs() >= end {
+            if crate::settle::past(end) {
                 still(ctx, "KILL")?;
                 say(
                     "record: wf-recorder did not finish in 15 s: killed (its file may lack its last frames)",

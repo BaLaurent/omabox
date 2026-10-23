@@ -19,7 +19,7 @@ use crate::mon::{
 };
 use crate::screen::main_screen;
 use crate::select::select_box;
-use crate::settle::secs;
+use crate::settle::{after, past};
 use crate::shell::{self, strip_nl};
 use std::time::Duration;
 
@@ -329,7 +329,7 @@ fn remove(ctx: &mut Ctx, o: &[u8], interactive: bool) -> Res<()> {
     if res != b"ok" {
         return Err(ctx.die(cat!("monitor remove: removing ", o, " failed: ", res)));
     }
-    let end = secs() + 5;
+    let end = after(5);
     loop {
         if let Ok(x) = hypr_json(ctx, &["monitors"]) {
             m = strip_nl(&x);
@@ -337,7 +337,7 @@ fn remove(ctx: &mut Ctx, o: &[u8], interactive: bool) -> Res<()> {
                 break;
             }
         }
-        if secs() >= end {
+        if past(end) {
             return Err(ctx.die(cat!(
                 "monitor remove: ",
                 o,
@@ -502,7 +502,7 @@ fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u8>> {
             " was made, but setting its mode failed"
         )));
     }
-    let end = secs() + 5;
+    let end = after(5);
     let wmode = mode
         .split(|&c| c == b'@')
         .next()
@@ -522,7 +522,7 @@ fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u8>> {
                 break;
             }
         }
-        if secs() >= end {
+        if past(end) {
             return Err(ctx.die(cat!(
                 "monitor add: ",
                 name,

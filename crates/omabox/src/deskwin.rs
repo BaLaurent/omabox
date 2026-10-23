@@ -19,7 +19,7 @@ use crate::mon::{
     monitors_record, monitors_write, records, w, with_line,
 };
 use crate::screen::main_screen;
-use crate::settle::secs;
+use crate::settle::{after, past};
 use crate::shell::{self, dec, strip_nl};
 
 /// ws_check WS: where interactive and peek windows open (a workspace 1-99, `special`, or
@@ -445,7 +445,7 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
     }
     // The box's monitors follow their windows' new sizes: wait for the main one, at most 3 s.
     if !main.is_empty() {
-        let end = secs() + 3;
+        let end = after(3);
         let want = rows
             .iter()
             .filter(|l| field1(l) == b"main")
@@ -470,7 +470,7 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
                 .text(),
                 Err(_) => Vec::new(),
             };
-            if now == want || secs() >= end {
+            if now == want || past(end) {
                 break;
             }
             crate::trap::sleep(b"0.05");
@@ -747,7 +747,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
         )));
     }
     // Its window, by its class: this add's alone, whatever else opens meanwhile.
-    let end = secs() + 5;
+    let end = after(5);
     let addr;
     loop {
         let (rc, c) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
@@ -762,7 +762,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
                 break;
             }
         }
-        if secs() >= end {
+        if past(end) {
             // (MON_CREATING kept: the trap removes the output, whose window may still come; and
             // its line)
             monitors_write(ctx, &rest);
@@ -777,14 +777,14 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     // (made: the box read its token)
     undo.done();
     let _ = std::fs::remove_file(&appid);
-    let end = secs() + 5;
+    let end = after(5);
     loop {
         if let Ok(m) = hypr_json(ctx, &["monitors"]) {
             if crate::cmd::output::listed(&strip_nl(&m), &name) {
                 break;
             }
         }
-        if secs() >= end {
+        if past(end) {
             return Err(ctx.die(cat!("monitor add: the box lists no monitor ", name)));
         }
         crate::trap::sleep(b"0.05");
