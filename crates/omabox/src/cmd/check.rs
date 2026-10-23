@@ -1815,9 +1815,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let state = shell::env("XDG_STATE_HOME")
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| cat!(shell::env_or_empty("HOME"), "/.local/state"));
-        let date =
-            crate::sig::subst(|| jq::tool("date", &["+%Y%m%d-%H%M%S"], None, jq::Err::Inherit))
-                .text();
+        let date = shell::date("%Y%m%d-%H%M%S");
         outd = cat!(
             state,
             "/omabox/check/",

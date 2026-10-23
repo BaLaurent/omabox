@@ -386,13 +386,11 @@ fn detached(
     if replace {
         job_replace(ctx, quiet, cmd)?;
     }
-    // `$(date +%s%N)`, by the date on PATH (as bash's; the suite's stand-in names a log by it).
-    let ns = crate::sig::command("date")
-        .arg("+%s%N")
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .map(|o| shell::subst(&o.stdout))
-        .unwrap_or_default();
+    // (bash's `$(date +%s%N)`, with no `date` run; OMABOX_TEST_RUN_NS under the suite, which names
+    // a log by it)
+    let ns = Some(shell::env_or_empty("OMABOX_TEST_RUN_NS"))
+        .filter(|v| !v.is_empty() && !shell::env_or_empty("OMABOX_SUITE").is_empty())
+        .unwrap_or_else(shell::epoch_ns);
     let lname = cat!("run-", ns, ".log");
     let ex = cat!(
         format!("/run/user/{}/omabox.run-", crate::procfs::uid()),
@@ -618,7 +616,7 @@ fn keep_run_logs(ctx: &Ctx) -> Option<Vec<u8>> {
     if !ctx.at("box.json").is_file() {
         return None;
     }
-    let date = date_stamp();
+    let date = shell::date("%Y%m%d-%H%M%S");
     let keep = cat!(base, "/", ctx.name, "-", date);
     std::fs::create_dir_all(shell::path(&base)).ok()?;
     std::fs::create_dir(shell::path(&keep)).ok()?;
@@ -691,24 +689,6 @@ fn keep_run_logs(ctx: &Ctx) -> Option<Vec<u8>> {
 }
 
 /// `date +%Y%m%d-%H%M%S`, local time.
-fn date_stamp() -> String {
-    // SAFETY: time and localtime_r fill plain data of ours.
-    unsafe {
-        let t = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        format!(
-            "{:04}{:02}{:02}-{:02}{:02}{:02}",
-            tm.tm_year + 1900,
-            tm.tm_mon + 1,
-            tm.tm_mday,
-            tm.tm_hour,
-            tm.tm_min,
-            tm.tm_sec
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

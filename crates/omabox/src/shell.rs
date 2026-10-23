@@ -15,6 +15,40 @@ pub fn strip_nl(v: &[u8]) -> Vec<u8> {
     v[..n].to_vec()
 }
 
+/// `date +FMT`: the local time by strftime, with no `date` run (names and stamps).
+pub fn date(fmt: &str) -> Vec<u8> {
+    let Ok(f) = CString::new(fmt) else {
+        return Vec::new();
+    };
+    let mut buf = [0u8; 128];
+    // SAFETY: time and localtime_r (which reads TZ the first time) fill plain data of ours; strftime writes at most the
+    // buffer's length and returns how much it wrote.
+    let n = unsafe {
+        let t = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        libc::strftime(buf.as_mut_ptr().cast(), buf.len(), f.as_ptr(), &tm)
+    };
+    buf[..n].to_vec()
+}
+
+/// `date -Is`: 2026-10-23T15:04:05+01:00.
+pub fn date_iso() -> Vec<u8> {
+    let mut d = date("%Y-%m-%dT%H:%M:%S%z");
+    if d.len() >= 5 {
+        d.insert(d.len() - 2, b':');
+    }
+    d
+}
+
+/// `date +%s%N`: nanoseconds since the epoch.
+pub fn epoch_ns() -> Vec<u8> {
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}{:09}", t.as_secs(), t.subsec_nanos()).into_bytes()
+}
+
 /// `$(printf '%s' "$V" | cut -c1-N)`: each line's first N characters. coreutils 9.12's cut counts
 /// characters in a multibyte locale (#324: 9.x stopped counting bytes there), as mbrtowc reads them
 /// in the caller's locale, a byte that starts none (invalid, cut short) counted as one; in a
@@ -715,6 +749,27 @@ pub fn test_int(v: &[u8]) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dates_as_coreutils_prints_them() {
+        let o = std::process::Command::new("date")
+            .arg("+%Y%m%d")
+            .output()
+            .unwrap();
+        assert_eq!(date("%Y%m%d"), strip_nl(&o.stdout));
+        let iso = String::from_utf8(date_iso()).unwrap();
+        let o = std::process::Command::new("date")
+            .arg("-Is")
+            .output()
+            .unwrap();
+        assert_eq!(iso[..10], String::from_utf8_lossy(&o.stdout)[..10]);
+        assert!(re_match(
+            r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[-+][0-9]{2}:[0-9]{2}$",
+            iso.as_bytes()
+        ));
+        let ns = epoch_ns();
+        assert!(ns.len() >= 19 && ns.iter().all(u8::is_ascii_digit));
+    }
 
     // What coreutils 9.12's `cut -c` gave for each, in en_US.UTF-8 and in C.
     #[test]

@@ -9217,6 +9217,16 @@ from them.
     written, so `*`, `?` or `[` are refused as modifiers, named as given (CHANGELOG). Tests:
     t_unit_rust_parity ("click --mod with a glob", "...a dotfile pattern", "...in a folder of a
     modifier's name", where bash held Ctrl and clicked: expected differences), input.rs's mod_words.
+444. **The Rust half ran `date` for names and stamps, and handed awk a glob that matched nothing**
+    (2026-10-23, #324 wave 4c). run -d's log and exit file (`date +%s%N`), check run's out folder,
+    record's file and record stop's video (`+%Y%m%d-%H%M%S`, `+%H%M%S`) and gdb --watch's header
+    (`date -Is`) each spawned the `date` on PATH, as bash's `$(date ...)` does, and the suite named a
+    log by a stand-in `date` (t_replace, finding 229's case); gpu's snapshot handed awk the literal
+    `/proc/PID/fdinfo/*` of a process with no fdinfo, for awk to fail on unsaid as it did on bash's
+    unmatched glob. **Change** (Rust over bash, no output changed): the clock read in-process
+    (shell::date, date_iso, epoch_ns: strftime in the local zone, as date prints it), and such a
+    process skipped. t_replace names the log by `OMABOX_TEST_RUN_NS`, read only under the suite's
+    OMABOX_SUITE. Tests: shell.rs's dates_as_coreutils_prints_them, t_replace.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

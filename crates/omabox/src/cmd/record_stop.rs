@@ -369,8 +369,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         if !crate::shots::mkdir_p(&cache) {
             return Err(ctx.die(cat!("record stop: cannot make ", cache)));
         }
-        let t = crate::sig::subst(|| jq::tool("date", &["+%Y%m%d-%H%M%S"], None, jq::Err::Inherit))
-            .text();
+        let t = shell::date("%Y%m%d-%H%M%S");
         rec.file = cat!(cache, "/omabox-", ctx.name, "-", t, ".mp4");
         say(cat!(
             "record: a jailed agent started this recording, to its file ",
