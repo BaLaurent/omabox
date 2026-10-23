@@ -7618,10 +7618,11 @@ record_stop() {
   local input="" geo=""
   # (Gone however this ends from here, a refusal too: it was left in $TMPDIR, finding 432.)
   if [ -f "$D/record.input" ]; then input=$(mktemp) && { mv -f "$D/record.input" "$input" || { rm -f -- "$input"; false; }; } || input=""; fi
+  [ -z "$input" ] || { REC_TMPS+=("$input"); rec_traps; }
   [ ! -f "$D/record.geo" ] || read -r geo < "$D/record.geo" || geo=""
   rm -f "$D/record.input" "$D/record.geo"
   # Its --no-pointer's hold given back (#228): the pointer as it was before.
-  ! grep -qs '^hold record ' "$D/pointer" || ptr_change release record || { [ -z "$input" ] || rm -f -- "$input"; ptr_fail "record stop"; }
+  ! grep -qs '^hold record ' "$D/pointer" || ptr_change release record || ptr_fail "record stop"
   # The video's clock: its first frame's wall-clock time.
   local first=""
   if [ -n "$marks" ] || [ "$show$caps" != 00 ] || [ -n "$cut" ]; then
@@ -7639,8 +7640,7 @@ record_stop() {
     fi
   fi
   if [ "$REC_N" -gt 1 ]; then
-    REC_CUT=$cut record_compose ||
-      { [ -z "$input" ] || rm -f -- "$input"; die "record: ffmpeg could not make the video (the monitors' raw.mkv in $REC_DIR/m1 to m$REC_N in box '$NAME' are kept)"; }
+    REC_CUT=$cut record_compose || die "record: ffmpeg could not make the video (the monitors' raw.mkv in $REC_DIR/m1 to m$REC_N in box '$NAME' are kept)"
     rm -f "$D/record.layout"
   else
     # A steady REC_FPS (wf-recorder's frames come as the screen gives them), for any player and editor.
@@ -7650,7 +7650,7 @@ record_stop() {
     [ -z "$REC_AFILT" ] || { ain=(-i "$REC_DIR/audio.mka"); aout=(-map 0:v:0 -map 1:a:0 -af "$REC_AFILT" "${REC_AAC[@]}" -shortest); }
     rec_ff /usr/bin/ffmpeg -v error -y -i "$REC_DIR/raw.mkv" "${ain[@]}" -vf "fps=$REC_FPS,$REC_YUV$REC_VASS" -c:v libx264 -preset medium -crf "$(rec_crf "$cut")" \
       "${REC_TAGS[@]}" "${aout[@]}" -movflags +faststart "$REC_DIR/out.mp4" >&2 ||
-      { [ -z "$input" ] || rm -f -- "$input"; die "record: ffmpeg could not make the video ($REC_DIR/raw.mkv in box '$NAME' is kept)"; }
+      die "record: ffmpeg could not make the video ($REC_DIR/raw.mkv in box '$NAME' is kept)"
   fi
   # --cut-idle (#176): its still stretches cut short, REC_CUTS the frames taken out.
   REC_CUTS=""
@@ -9780,6 +9780,9 @@ check_compare() {
   local out=$1 base=$2 speck=$3 id fail=0 same=0 n=0 r regs=() e holes=() nh old what m changed=0 left bt nt
   local plan=$out/report.plan ps nholed=0 new=0 missing=0 sp spa=() key first alike=0 setup=""
   local -A firsts=()
+  # (a first checkpoint with no baseline is said with these, before check_one sets them: unset,
+  # set -u ended check run --json there, finding 433)
+  CHK_REGIONS="" CHK_SPECKS="0 0 0" CHK_SIZE="" CHK_TREE=""
   : > "$plan.body"
   for id in $(check_ids "$out/run1"); do
     n=$((n + 1))

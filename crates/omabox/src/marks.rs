@@ -54,8 +54,9 @@ pub fn peek_pid(ctx: &Ctx, output: Option<&[u8]>) -> Option<Vec<u8>> {
         ctx.d,
         "/run/"
     );
-    // (bash's pgrep is a child of its: an INT to omabox alone meanwhile is let pass, trap.rs)
-    crate::sig::foreground(|| scan(&want, output))
+    // (in this process, not a foreground step: an INT here ends omabox, as one during bash's
+    // pgrep ends that and bash with it when it is the group's)
+    scan(&want, output)
 }
 
 fn scan(want: &[u8], output: Option<&[u8]>) -> Option<Vec<u8>> {

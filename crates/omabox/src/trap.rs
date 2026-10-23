@@ -56,6 +56,11 @@ pub fn on_exit_code(f: impl FnOnce() + Send + 'static) -> Trap {
     })
 }
 
+/// Whether an on_exit_code trap is on (a `trap 'exit 143' TERM` of bash's is set).
+pub fn code_active() -> bool {
+    CODE_TRAPS.load(Ordering::SeqCst) > 0
+}
+
 /// CODE_TRAPS' share of one on_exit_code trap.
 struct CodeCount;
 
@@ -136,8 +141,10 @@ fn arm() {
                 return;
             }
             let sig = libc::c_int::from(b[0]);
+            // (a `$(...)`'s step, sig::subst: bash's main waits there all along)
             let busy = crate::sig::FG_ACTIVE.load(Ordering::SeqCst)
-                || (sig == libc::SIGINT && INT_BUSY.swap(false, Ordering::SeqCst));
+                || (sig == libc::SIGINT && INT_BUSY.swap(false, Ordering::SeqCst))
+                || crate::sig::DEFER_INT.load(Ordering::SeqCst);
             let code = CODE_TRAPS.load(Ordering::SeqCst) > 0;
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
             let wait_fg = sig == libc::SIGINT || FG_TRAPS.load(Ordering::SeqCst) > 0;

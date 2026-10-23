@@ -112,8 +112,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !crate::exec::executable(b"/usr/bin/gdb") {
         return Err(ctx.die("gdb: no /usr/bin/gdb (package gdb); a box runs the host's"));
     }
-    let BoxPid::Pid(bp) = box_pid(&ctx.d) else {
-        return Err(ctx.die(cat!("box '", ctx.name, "' is not up")));
+    // (`bp=$(box_pid)` under set -e: its status 3, a box this user namespace cannot read, ends
+    // the command there, unsaid)
+    let bp = match box_pid(&ctx.d) {
+        BoxPid::Pid(p) => p,
+        BoxPid::Unknown => return Err(Exit(3)),
+        BoxPid::None => return Err(ctx.die(cat!("box '", ctx.name, "' is not up"))),
     };
     covers_held(ctx)?;
     // Every namespace of the box, its network too (finding 229). A box started before finding 89

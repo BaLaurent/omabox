@@ -146,6 +146,13 @@ fn main() -> ExitCode {
             ExitCode::from(ptr::release_main(&words))
         }
         // The suite's check that the jq programs here are bash's, byte for byte.
+        // record's programs (recprog.rs), each as it stands quoted in bin/omabox.
+        Some("_rust-jq") if rest.first().is_some_and(|a| a == "--recprog") => {
+            for p in recprog::ALL {
+                print!("{p}\0");
+            }
+            ExitCode::SUCCESS
+        }
         Some("_rust-jq") if rest.first().is_some_and(|a| a == "--inline") => {
             for p in jqprog::INLINE
                 .iter()

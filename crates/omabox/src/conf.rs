@@ -11,7 +11,23 @@ pub fn conf_raw(key: &str) -> (Vec<u8>, Vec<u8>) {
     let p = shell::path(&config);
     let mut v = Vec::new();
     if p.is_file() {
-        let data = std::fs::read(&p).unwrap_or_default();
+        // (sed's own words for a config it cannot read)
+        let data = match std::fs::read(&p) {
+            Ok(d) => d,
+            Err(e) => {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    &cat!(
+                        "sed: can't read ",
+                        config,
+                        ": ",
+                        crate::shots::why(&e),
+                        "\n"
+                    ),
+                );
+                Vec::new()
+            }
+        };
         let blank = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
         for l in data.split(|&c| c == b'\n') {
             let s = &l[l.iter().position(|&c| !blank(c)).unwrap_or(l.len())..];

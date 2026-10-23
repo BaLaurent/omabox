@@ -8894,14 +8894,26 @@ from them.
     the test's own: compared both ways, nothing left after).
 
 432. **`record stop` left the recording's input behind when it could not make the video**
-    (2026-10-22, #324 wave 4b). The input the recording saw (`$D/record.input`, what --show-input
-    draws and --cut-idle keeps) is moved into a `mktemp` file at stop, removed once the video is made;
-    ffmpeg failing to make it (the single recording's pass, or the layout's compose), or the pointer's
-    hold not given back, ended the command with that file still in $TMPDIR, and an `mv` that failed
-    left the empty one mktemp made. **Fix**: those refusals remove it first, and a failed `mv` its
-    file, in bash and in the Rust half alike (the Rust half removes it however the stop ends past
-    its making). Tests: t_unit_rust_parity4b (an ffmpeg that fails at stop with input recorded,
-    TMPDIR a dir of the test's own: compared both ways, nothing left after).
+    (2026-10-22, #324 wave 4b and its review). The input the recording saw (`$D/record.input`, what
+    --show-input draws and --cut-idle keeps) is moved into a `mktemp` file at stop, removed once the
+    video is made; ffmpeg failing to make it (the single recording's pass, or the layout's compose),
+    the pointer's hold not given back (its lock busy, too), the box gone under a step, or a signal
+    meanwhile ended the command with that file still in $TMPDIR, and an `mv` that failed left the
+    empty one mktemp made. **Fix**: the file joins REC_TMPS as soon as it is made and rec_traps is
+    set then (its EXIT trap removes it however the stop ends; a signal from there exits 130, 143 or
+    129 once the step in the foreground is over, as from the copy on before), and a failed `mv`
+    removes its file, in bash and in the Rust half alike. Tests: t_unit_rust_parity4b (an ffmpeg
+    that fails at stop, INT, TERM, HUP and a group INT during the encode, the pointer's lock held,
+    each with input recorded and TMPDIR a dir of the test's own: compared both ways, nothing left
+    after).
+
+433. **`check run --json` ended when a run's first checkpoint had no baseline** (2026-10-22, #324
+    wave 4b's review). check_compare says each checkpoint with check_one's CHK_SIZE, CHK_REGIONS,
+    CHK_TREE and CHK_SPECKS, which check_one sets; a new checkpoint (no baseline) is said before any
+    check_one ran, and with --json chk_point_json read them unset: set -u ended the command with
+    "CHK_SIZE: unbound variable", no JSON, its .check.jsonl and report.plan.body left in the run's
+    folder. **Fix**: check_compare sets them empty first (bash; the Rust half had them so). Tests:
+    t_rust_parity (a scenario whose first checkpoint is new, --json, compared both ways).
 
 435. **An interactive `monitor add` whose box answered late opened its window on the user's
     workspace, focused** (2026-10-22, #349; the 1.0.x stopgap). `hyprctl` stops reading after 5 s of

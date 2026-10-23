@@ -116,6 +116,18 @@ pub static FG_INT: AtomicBool = AtomicBool::new(false);
 pub static DEFER_INT: AtomicBool = AtomicBool::new(false);
 pub static INT_DEFERRED: AtomicBool = AtomicBool::new(false);
 
+/// F as a step bash runs in a `$(...)`: its main waits for the substitution, so an INT to omabox
+/// alone meanwhile lets the step finish, then ends this process of it (int_deferred_end).
+pub fn subst<T>(f: impl FnOnce() -> T) -> T {
+    let outer = DEFER_INT.swap(true, Ordering::SeqCst);
+    let r = f();
+    if !outer {
+        DEFER_INT.store(false, Ordering::SeqCst);
+        int_deferred_end();
+    }
+    r
+}
+
 /// An INT deferred (INT_DEFERRED) ends this process now, of SIGINT, as bash's main did.
 pub fn int_deferred_end() {
     if INT_DEFERRED.load(Ordering::SeqCst) {

@@ -371,10 +371,11 @@ fn release_quiet(ctx: &Ctx, tag: &[u8]) {
 /// `record stop` gives it back; no release at this omabox's end, nor on a signal (bash's way with
 /// one from here, trap.rs).
 pub fn hold_keep() {
+    // (bash's handlers back first: a signal from here is no release's)
+    crate::trap::int_as_bash();
     if let Ok(mut g) = HOLD.lock() {
         *g = None;
     }
-    crate::trap::int_as_bash();
 }
 
 /// At this process's end (main's, after the command): the hold given back, once (bash's EXIT trap).

@@ -878,6 +878,8 @@ pub struct ExecOpts {
     pub sys: bool,
     /// Started as bash starts what it backgrounds (a `<(...)`): SIGINT and SIGQUIT ignored in it.
     pub bg: bool,
+    /// Its stdin this fd (`< FILE`, a pipe fed here) rather than this process's.
+    pub stdin: Option<RawFd>,
 }
 
 /// box_sys's environment: HOME, LANG, the runtime dir, then the first WAYLAND_DISPLAY,
@@ -1019,7 +1021,8 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
         None
     };
     let src = [
-        null_in.as_ref().map_or(0, AsRawFd::as_raw_fd),
+        o.stdin
+            .unwrap_or_else(|| null_in.as_ref().map_or(0, AsRawFd::as_raw_fd)),
         match (o.stdout, o.stdout_to_stderr) {
             (Some(fd), _) => fd,
             (None, true) => 2,

@@ -6,7 +6,7 @@
 use super::record::{
     Err2, REC_AAC, REC_DIR, REC_FF_FLOOR, REC_TAGS, REC_TAGS_F, REC_YUV_ARGS, Rec, SheetOpts,
     StopOpts, audio_end, now_us, num, rec_dirs, rec_max, rec_yuv, record_first_us, record_firsts,
-    record_running, record_size, rm, sys_cap, sys_run, w,
+    record_running, record_size, rm, sys_cap, sys_q, sys_run, w,
 };
 use crate::cat;
 use crate::exec::{ExecOpts, box_exec, dup_hi, pipe};
@@ -18,6 +18,7 @@ use crate::recprog as P;
 use crate::shell::{self, strip_nl};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -97,9 +98,25 @@ fn rec_ff(ctx: &mut Ctx, mode: Ff, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
     Ok((rc, printed))
 }
 
+/// `$(rec_ff -o ARGV...)`, a substitution's step.
+fn rec_ff_subst(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
+    crate::sig::subst(|| rec_ff(ctx, Ff::Out, argv))
+}
+
+/// Bash's words for a number its arithmetic cannot read (a leading 0 that is no octal: 08), less
+/// its "SCRIPT: line N: ".
+fn arith_said(v: &[u8]) {
+    let _ = std::io::stderr().write_all(&cat!(
+        v,
+        ": value too great for base (error token is \"",
+        v,
+        "\")\n"
+    ));
+}
+
 /// `$(rec_ff -o ... | head -c N | head -n 1) || V=""`.
 fn ff_line(ctx: &mut Ctx, argv: &[Vec<u8>], n: usize) -> Res<Vec<u8>> {
-    let (rc, o) = rec_ff(ctx, Ff::Out, argv)?;
+    let (rc, o) = crate::sig::subst(|| rec_ff(ctx, Ff::Out, argv))?;
     if rc != 0 {
         return Ok(Vec::new());
     }
@@ -258,8 +275,12 @@ impl Tmps {
         }
         let (v, p) = (self.v.clone(), self.part.clone());
         self.trap = Some(crate::trap::on_exit_code(move || {
+            // (`rm -rf --`: a folder, or the input's file)
             for d in v.lock().map(|x| x.clone()).unwrap_or_default() {
-                let _ = std::fs::remove_dir_all(shell::path(&d));
+                let p = shell::path(&d);
+                if std::fs::remove_dir_all(&p).is_err() {
+                    rm(&p);
+                }
             }
             let part = p.lock().map(|x| x.clone()).unwrap_or_default();
             if !part.is_empty() {
@@ -362,13 +383,13 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 "omabox-record",
             ]);
             a.extend(rpids.iter().cloned());
-            sys_cap(ctx, &a, None, Err2::Null, false).0
+            sys_q(ctx, &a)
         };
-        still(ctx, "INT");
-        audio_end(ctx, &apid);
-        while still(ctx, "") == 0 {
+        still(ctx, "INT")?;
+        audio_end(ctx, &apid)?;
+        while still(ctx, "")? == 0 {
             if crate::settle::secs() >= end {
-                still(ctx, "KILL");
+                still(ctx, "KILL")?;
                 say(
                     "record: wf-recorder did not finish in 15 s: killed (its file may lack its last frames)",
                 );
@@ -379,7 +400,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     }
     // A recording that stopped by itself still has its sound's ffmpeg to end.
     if !alive && rec.n <= 1 {
-        audio_end(ctx, &apid);
+        audio_end(ctx, &apid)?;
     }
     for f in ["record", "record.audio", "record.as"] {
         rm(&ctx.at(f));
@@ -422,7 +443,17 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     };
     let mut fr = 0;
     if shell::re_match("^[0-9]{1,17} [0-9]{1,3}$", &cat!(rec.start, " ", rec.fps)) {
-        fr = (now_us() - num(&rec.start)) * num(&rec.fps) / 1_000_000;
+        // (`$(( ... * REC_FPS ... ))`: an fps bash's arithmetic cannot read, 08, ends the command
+        // there, 1)
+        let (Some(st), Some(f)) = (shell::bash_int(&rec.start), shell::bash_int(&rec.fps)) else {
+            arith_said(if shell::bash_int(&rec.start).is_none() {
+                &rec.start
+            } else {
+                &rec.fps
+            });
+            return Err(Exit(1));
+        };
+        fr = (now_us() - st) * f / 1_000_000;
     }
     let fr = fr.max(0);
     FF_SECS.store(ff_bound(fr, px), Ordering::SeqCst);
@@ -430,9 +461,8 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     // Its sound (#226), put in the video's clock: AFILT, the filter for its input.
     let mut afilt = Vec::new();
     if !apid.is_empty() {
-        let (rc, o) = rec_ff(
+        let (rc, o) = rec_ff_subst(
             ctx,
-            Ff::Out,
             &w(&[
                 "/usr/bin/ffprobe",
                 "-v",
@@ -449,7 +479,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         let o = &o[..o.len().min(4096)];
         if rc == 0 && o.split(|&c| c == b'\n').any(shell::grep_dot) {
             let vfirst = record_first_us(ctx, rec).unwrap_or_else(|| num(&rec.start));
-            match audio_filter(ctx, vfirst) {
+            match crate::sig::subst(|| audio_filter(ctx, vfirst)) {
                 Some(f) => afilt = f,
                 None => {
                     afilt = b"asetpts=N/SR/TB,apad".to_vec();
@@ -488,7 +518,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             }
         }
     }
-    let input_g = InputGuard(input.clone());
+    // (gone however the stop ends from here, as rec_traps has it: finding 432)
+    if !input.is_empty() {
+        tmps.add(input.clone());
+    }
     let geo = if ctx.at("record.geo").is_file() {
         let d = std::fs::read(ctx.at("record.geo")).unwrap_or_default();
         if d.contains(&b'\n') {
@@ -613,10 +646,11 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             None => say("record --cut-idle: could not cut it: the video as it was recorded"),
         }
     }
-    drop(input_g);
-    let (irc, info) = rec_ff(
+    if !input.is_empty() {
+        rm(&shell::path(&input));
+    }
+    let (irc, info) = rec_ff_subst(
         ctx,
-        Ff::Out,
         &w(&[
             "/usr/bin/ffprobe",
             "-v",
@@ -707,7 +741,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 "/out.mp4 there is kept)"
             )));
         }
-        crate::shots::mv_f(&part, &rec.file);
+        // (set -e: mv's failure ends it, 1, the .part gone with rec_traps)
+        if !crate::shots::mv_f(&part, &rec.file) {
+            return Err(Exit(1));
+        }
         tmps.set_part(b"");
     }
     if !so.tofd.is_empty() {
@@ -728,18 +765,16 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         )?;
         let tsv = cat!(tmpd, "/v.marks.tsv");
         if shell::path(&tsv).is_file() {
+            // (`cat -- FILE >&FD`: a foreground child, as bash's)
             let put = |src: &[u8], fd: &[u8]| -> bool {
-                let Ok(d) = std::fs::read(shell::path(src)) else {
+                let Ok(o) = dup_hi(num(fd) as i32) else {
                     return false;
                 };
-                // SAFETY: the caller's fd (fd_file checked it), duplicated, written, closed.
-                match dup_hi(num(fd) as i32) {
-                    Ok(o) => {
-                        let mut f = std::fs::File::from(o);
-                        f.write_all(&d).is_ok()
-                    }
-                    Err(_) => false,
-                }
+                let mut c = crate::sig::command("cat");
+                c.arg("--")
+                    .arg(std::ffi::OsStr::from_bytes(src))
+                    .stdout(std::process::Stdio::from(o));
+                crate::sig::foreground(|| c.status().is_ok_and(|s| s.success()))
             };
             if !put(&tsv, &so.mfd) || !put(&cat!(tmpd, "/v.vtt"), &so.vfd) {
                 let _ = std::fs::remove_dir_all(shell::path(&tmpd));
@@ -753,16 +788,18 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     let mut sp = Vec::new();
     if so.sheet {
         // (`sp=$(record_sheet ...) || sp=""`: a refusal in it ends only the substitution)
-        sp = record_sheet(
-            ctx,
-            &outmp4,
-            &cat!(base, ".marks.tsv"),
-            &cat!(base, ".sheet.png"),
-            &so.frames,
-            so.every,
-            &so.fit,
-            b"",
-        )
+        sp = crate::sig::subst(|| {
+            record_sheet(
+                ctx,
+                &outmp4,
+                &cat!(base, ".marks.tsv"),
+                &cat!(base, ".sheet.png"),
+                &so.frames,
+                so.every,
+                &so.fit,
+                b"",
+            )
+        })
         .ok()
         .flatten()
         .unwrap_or_default();
@@ -786,7 +823,7 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     }
     let mut a = w(&["/usr/bin/rm", "-rf", "--"]);
     a.extend(rmd);
-    let _ = sys_cap(ctx, &a, None, Err2::Null, false);
+    sys_q(ctx, &a)?;
     if let Some(c) = shell::Re::new("^([0-9]+),([0-9]+) ").and_then(|r| r.captures(&info, false)) {
         let g = |i: usize| {
             c.get(i)
@@ -821,18 +858,6 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
         return Err(Exit(1));
     }
     Ok(())
-}
-
-/// The input's temp file (record stop), removed however the stop ends past its making (finding 432:
-/// bash's was left in $TMPDIR when ffmpeg could not make the video).
-struct InputGuard(Vec<u8>);
-
-impl Drop for InputGuard {
-    fn drop(&mut self) {
-        if !self.0.is_empty() {
-            rm(&shell::path(&self.0));
-        }
-    }
 }
 
 /// record_audio_filter FIRST_US: the filter putting the sound in the video's clock (#226), from the
@@ -1274,7 +1299,7 @@ fn record_ass(
                     "/usr/bin/sh",
                     &format!("{REC_DIR}/overlay.ass"),
                     fd,
-                ) == 0
+                )? == 0
             }
             None => false,
         };
@@ -1287,32 +1312,18 @@ fn record_ass(
 }
 
 /// `box_sys SHELL -c SCRIPT omabox-record PATH < FD`: its status.
-fn write_in_box(ctx: &mut Ctx, script: &str, sh: &str, path: &str, fd: OwnedFd) -> i32 {
+fn write_in_box(ctx: &mut Ctx, script: &str, sh: &str, path: &str, fd: OwnedFd) -> Res<i32> {
     let a = w(&[sh, "-c", script, "omabox-record", path]);
-    // (its stdin the file: fd 0 for the call, as `< FILE` makes it)
-    let saved = dup_hi(0).ok();
-    // SAFETY: both fds are open; dup2 only changes this process's descriptor table, put back below.
-    unsafe {
-        libc::dup2(fd.as_raw_fd(), 0);
-    }
-    let rc = box_exec(
+    // (`< FILE`: the file the command's stdin; box_exec's refusal ends the command, its die)
+    box_exec(
         ctx,
         &a,
         ExecOpts {
             sys: true,
+            stdin: Some(fd.as_raw_fd()),
             ..ExecOpts::default()
         },
-    );
-    if let Some(s) = saved {
-        // SAFETY: as above, the caller's stdin back.
-        unsafe {
-            libc::dup2(s.as_raw_fd(), 0);
-        }
-    }
-    match rc {
-        Ok(r) => r,
-        Err(Exit(c)) => i32::from(c),
-    }
+    )
 }
 
 /// record_overlay: the ASS script drawing peek's marks at the times the input happened (bin/omabox's
@@ -1430,7 +1441,7 @@ fn record_cut(
     let d = awk_begin(&[("m", &cut_b)], r#"BEGIN { printf "%.3f", m / 1000 }"#);
     // What ffmpeg says, a value a line at most: the host reads no more than that, and checks each.
     let grep_o = |ctx: &mut Ctx, a: &[Vec<u8>], re: &str| -> Res<Vec<u8>> {
-        let (rc, o) = rec_ff(ctx, Ff::Err, a)?;
+        let (rc, o) = crate::sig::subst(|| rec_ff(ctx, Ff::Err, a))?;
         let g = jq::tool("grep", &["-oE", re], Some(&o), jq::Err::Inherit);
         if rc != 0 || !g.ok() {
             return Ok(Vec::new());
@@ -1725,15 +1736,9 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
         }
         // Read from the fd as it is, never reopened; no more than its size said.
         let fd = dup_hi(num(&so.fromfd) as i32).map_err(|_| Exit(1))?;
-        let ok = copy_in(ctx, &bv, InFrom::Fd(fd, size)) == 0;
+        let ok = copy_in(ctx, &bv, InFrom::Fd(fd, size))? == 0;
         if !ok {
-            let _ = sys_cap(
-                ctx,
-                &w(&[b"/usr/bin/rm".as_slice(), b"-f", b"--", &bv]),
-                None,
-                Err2::Null,
-                false,
-            );
+            sys_q(ctx, &w(&[b"/usr/bin/rm".as_slice(), b"-f", b"--", &bv]))?;
             let _ = std::fs::remove_dir_all(shell::path(&tmpd));
             return Err(ctx.die(cat!(
                 "record sheet: could not copy the video into box '",
@@ -1751,20 +1756,14 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
         tsv = cat!(base, ".marks.tsv");
         let f = std::fs::File::open(shell::path(&so.video));
         let ok = match f {
-            Ok(f) => copy_in(ctx, &bv, InFrom::File(f)) == 0,
+            Ok(f) => copy_in(ctx, &bv, InFrom::File(f))? == 0,
             Err(e) => {
                 say(cat!(so.video, ": ", crate::shots::why(&e)));
                 false
             }
         };
         if !ok {
-            let _ = sys_cap(
-                ctx,
-                &w(&[b"/usr/bin/rm".as_slice(), b"-f", b"--", &bv]),
-                None,
-                Err2::Null,
-                false,
-            );
+            sys_q(ctx, &w(&[b"/usr/bin/rm".as_slice(), b"-f", b"--", &bv]))?;
             return Err(ctx.die(cat!(
                 "record sheet: could not copy ",
                 so.video,
@@ -1780,16 +1779,12 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
         size = 0;
     }
     FF_SECS.store(REC_FF_FLOOR + size / 10_485_760, Ordering::SeqCst);
-    let sp = record_sheet(
-        ctx, &bv, &tsv, &outp, &so.frames, so.every, &so.fit, &so.as_,
-    );
-    let _ = sys_cap(
-        ctx,
-        &w(&[b"/usr/bin/rm".as_slice(), b"-f", b"--", &bv]),
-        None,
-        Err2::Null,
-        false,
-    );
+    let sp = crate::sig::subst(|| {
+        record_sheet(
+            ctx, &bv, &tsv, &outp, &so.frames, so.every, &so.fit, &so.as_,
+        )
+    });
+    sys_q(ctx, &w(&[b"/usr/bin/rm".as_slice(), b"-f", b"--", &bv]))?;
     let sp = sp.ok().flatten();
     let mut rc_ok = sp.is_some();
     if !tmpd.is_empty() {
@@ -1819,7 +1814,7 @@ enum InFrom {
 
 /// `box_sys /usr/bin/bash -c 'mkdir -p "${1%/*}" && cat > "$1"' omabox-record PATH` fed the video
 /// (`< VIDEO`, or `head -c SIZE <&FD |`): its status (pipefail's).
-fn copy_in(ctx: &mut Ctx, bv: &[u8], from: InFrom) -> i32 {
+fn copy_in(ctx: &mut Ctx, bv: &[u8], from: InFrom) -> Res<i32> {
     match from {
         InFrom::File(f) => write_in_box(
             ctx,
@@ -1829,7 +1824,7 @@ fn copy_in(ctx: &mut Ctx, bv: &[u8], from: InFrom) -> i32 {
             OwnedFd::from(f),
         ),
         InFrom::Fd(fd, size) => {
-            let Ok((r, wr)) = pipe() else { return 1 };
+            let Ok((r, wr)) = pipe() else { return Ok(1) };
             let lim = u64::try_from(size).unwrap_or(0);
             let feeder = std::thread::spawn(move || {
                 let mut src = std::fs::File::from(fd).take(lim);
@@ -1863,7 +1858,11 @@ fn record_sheet(
     fit: &[u8],
     shown: &[u8],
 ) -> Res<Option<Vec<u8>>> {
-    let mut n = if frames.is_empty() { 15 } else { num(frames) };
+    let nstr = if frames.is_empty() {
+        b"15".to_vec()
+    } else {
+        frames.to_vec()
+    };
     let (rc, j) = rec_ff(
         ctx,
         Ff::Out,
@@ -1923,14 +1922,29 @@ fn record_sheet(
             i += 1;
         }
     } else {
-        if n > nb {
-            n = nb;
+        // (`[ "$n" -le "$nb" ]` reads decimal, `[ "$n" = 1 ]` the word, the loop bash's arithmetic:
+        // an 08 there fails the loop alone, no frame picked; a 01 divides by 0 and ends the sheet)
+        let mut nstr = nstr;
+        if shell::test_int(&nstr).is_some_and(|v| v > nb) {
+            nstr = nb.to_string().into_bytes();
         }
-        if n == 1 {
+        if nstr == b"1" {
             ks = vec![0];
         } else {
-            for i in 0..n {
-                ks.push((2 * i * (nb - 1) + n - 1) / (2 * (n - 1)));
+            match shell::bash_int(&nstr) {
+                None => {
+                    let _ = std::io::stderr().write_all(&cat!("((: "));
+                    arith_said(&nstr);
+                }
+                Some(n) => {
+                    for i in 0..n {
+                        if n == 1 {
+                            let _ = std::io::stderr().write_all(b"(2 * i * (nb - 1) + n - 1) / (2 * (n - 1)) : division by 0 (error token is \"(2 * (n - 1)) \")\n");
+                            return Ok(None);
+                        }
+                        ks.push((2 * i * (nb - 1) + n - 1) / (2 * (n - 1)));
+                    }
+                }
             }
         }
     }
@@ -1938,6 +1952,12 @@ fn record_sheet(
     let cols = cnt.min(5);
     let mut tw = 320;
     if !fit.is_empty() {
+        // (no frame picked: `$((fit / cols - 6))` divides by 0 and ends the sheet)
+        if cols == 0 {
+            let _ = std::io::stderr()
+                .write_all(b"fit / cols - 6: division by 0 (error token is \"cols - 6\")\n");
+            return Ok(None);
+        }
         tw = num(fit) / cols - 6;
     }
     if tw > vw {
@@ -1993,11 +2013,18 @@ fn record_sheet(
     let Ok((_, tmp)) = shell::mktemp_args(&[b"-d", &cat!(ctx.d, "/.record-XXXXXX")]) else {
         return Ok(None);
     };
+    // (its own trap, in its subshell: the main shell's ends with the signal unless a code trap of
+    // its own, rec_traps, is on)
     let tmp_g = {
         let t = tmp.clone();
-        crate::trap::on_exit_code(move || {
+        let undo = move || {
             let _ = std::fs::remove_dir_all(shell::path(&t));
-        })
+        };
+        if crate::trap::code_active() {
+            crate::trap::on_exit_code(undo)
+        } else {
+            crate::trap::on_exit(undo)
+        }
     };
     let mut total = 0i64;
     let mut ms: Vec<i64> = Vec::new();
@@ -2055,6 +2082,10 @@ fn record_sheet(
             if shell::char_count(&line) > 40 {
                 line = cat!(shell::head_chars(&line, 37), "...");
             }
+            // (bash's `lab[i]+=`: one made where there is none, no frame picked)
+            if lab.len() <= i {
+                lab.resize(i + 1, Vec::new());
+            }
             lab[i].extend_from_slice(&cat!(
                 "\n> ",
                 format!("{}.{:02}s ", m / 1000, m % 1000 / 10),
@@ -2064,7 +2095,11 @@ fn record_sheet(
     }
     // magick reads % and \ in a label as escapes.
     let mut args: Vec<Vec<u8>> = vec![b"montage".to_vec()];
-    for (i, l) in lab.iter().enumerate() {
+    for (i, l) in lab
+        .iter()
+        .take(usize::try_from(cnt).unwrap_or(0))
+        .enumerate()
+    {
         let l = replace_all(&replace_all(l, b"\\", b"\\\\"), b"%", b"%%");
         args.push(b"-label".to_vec());
         args.push(l);

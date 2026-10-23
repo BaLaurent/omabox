@@ -106,6 +106,18 @@ pub(crate) fn sys_cap(
     err: Err2,
     null_in: bool,
 ) -> (i32, Vec<u8>) {
+    sys_cap_bg(ctx, argv, limit, err, null_in, false)
+}
+
+/// sys_cap, BG: inside a `<(...)` (SIGINT and SIGQUIT ignored in it).
+pub(crate) fn sys_cap_bg(
+    ctx: &mut Ctx,
+    argv: &[Vec<u8>],
+    limit: Option<usize>,
+    err: Err2,
+    null_in: bool,
+    bg: bool,
+) -> (i32, Vec<u8>) {
     let Ok((r, w0)) = pipe() else {
         return (1, Vec::new());
     };
@@ -128,6 +140,7 @@ pub(crate) fn sys_cap(
                 sys: true,
                 stdin_null: null_in,
                 stdout: Some(wr.as_raw_fd()),
+                bg,
                 ..ExecOpts::default()
             },
         )
@@ -164,11 +177,17 @@ pub(crate) fn sys_run(
     )
 }
 
-/// `box_sys /usr/bin/sh -c SCRIPT omabox-record ARGS... 2>/dev/null`: its status (refusals unsaid).
-pub(crate) fn sh_quiet(ctx: &mut Ctx, shell_: &str, script: &str, args: &[Vec<u8>]) -> i32 {
+/// `box_sys ARGV... 2>/dev/null` as a step of its own (not in a `$(...)`): its status; box_exec's
+/// refusal (the box gone) ends the command, unsaid, as its die does whatever `|| true` follows.
+pub(crate) fn sys_q(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Res<i32> {
+    sys_run(ctx, argv, false, Err2::Null, false)
+}
+
+/// `box_sys /usr/bin/sh -c SCRIPT omabox-record ARGS... 2>/dev/null`, a step of its own.
+pub(crate) fn sh_quiet(ctx: &mut Ctx, shell_: &str, script: &str, args: &[Vec<u8>]) -> Res<i32> {
     let mut a = w(&[shell_, "-c", script, "omabox-record"]);
     a.extend(args.iter().cloned());
-    sys_cap(ctx, &a, None, Err2::Null, false).0
+    sys_q(ctx, &a)
 }
 
 // --- the recording's state ----------------------------------------------------------------------
@@ -273,7 +292,8 @@ fn record_how(ctx: &Ctx) -> Vec<u8> {
 pub(crate) fn record_firsts(ctx: &mut Ctx, rec: &Rec) -> Vec<Option<(i64, i64)>> {
     let mut a = w(&["/usr/bin/sh", "-c", P::FIRSTS_SH, "omabox-record"]);
     a.extend(rec_dirs(rec));
-    let (_, o) = sys_cap(ctx, &a, Some(4096), Err2::Null, false);
+    // (`< <(box_sys ...)`: SIGINT and SIGQUIT ignored in it)
+    let (_, o) = sys_cap_bg(ctx, &a, Some(4096), Err2::Null, false, true);
     let re = shell::Re::new(r"^([0-9]{1,17}) ([0-9]{1,17}) ([0-9]{1,17}) ([0-9]{1,17})$");
     let mut lines: Vec<&[u8]> = o.split(|&c| c == b'\n').collect();
     // (`while read`: a last line with no newline is not read)
@@ -295,11 +315,14 @@ pub(crate) fn record_firsts(ctx: &mut Ctx, rec: &Rec) -> Vec<Option<(i64, i64)>>
 
 /// record_first_us: the video's first frame's wall-clock time (the latest of the layout's firsts).
 pub(crate) fn record_first_us(ctx: &mut Ctx, rec: &Rec) -> Option<i64> {
-    record_firsts(ctx, rec)
-        .into_iter()
-        .flatten()
-        .map(|(_, wl)| wl)
-        .max()
+    // (always `first=$(record_first_us)`: a substitution's step)
+    crate::sig::subst(|| {
+        record_firsts(ctx, rec)
+            .into_iter()
+            .flatten()
+            .map(|(_, wl)| wl)
+            .max()
+    })
 }
 
 /// The words a stopped-by-itself recording is said with.
@@ -1246,7 +1269,7 @@ fn record_hold(ctx: &mut Ctx, rec: &mut Rec, dur: i64, from: i64, quiet: bool) -
         &(end + 5_000_000).to_string(),
     ]);
     a.extend(args);
-    let rc = sys_cap(ctx, &a, None, Err2::Null, false).0;
+    let rc = sys_q(ctx, &a)?;
     if rc != 0 {
         if !record_running(ctx, rec)? {
             say(stopped_text(ctx, "record hold"));
@@ -1453,7 +1476,8 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     }
     // The sound first (#226), so it is there from the first frame on.
     let apid = if o.audio {
-        match audio_start(ctx) {
+        // (`apid=$(record_audio_start) || exit 1`)
+        match crate::sig::subst(|| audio_start(ctx)) {
             Ok(p) => p,
             Err(_) => return Err(Exit(1)),
         }
@@ -1499,7 +1523,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         v
     };
     if pids.len() != names.len() {
-        audio_end(ctx, &apid);
+        audio_end(ctx, &apid)?;
         return Err(ctx.die(cat!(
             "record: could not start wf-recorder in box '",
             ctx.name,
@@ -1508,7 +1532,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     }
     for p in &pids {
         if !shell::re_match("^[0-9]+$", p) {
-            audio_end(ctx, &apid);
+            audio_end(ctx, &apid)?;
             return Err(ctx.die(cat!(
                 "record: could not start wf-recorder in box '",
                 ctx.name,
@@ -1522,12 +1546,19 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
     if asname && std::fs::write(ctx.at("record.as"), b"").is_err() {
         let mut a = w(&["/usr/bin/kill", "-KILL"]);
         a.extend(pids.iter().cloned());
-        let _ = sys_cap(ctx, &a, None, Err2::Null, false);
-        audio_end(ctx, &apid);
+        sys_q(ctx, &a)?;
+        audio_end(ctx, &apid)?;
         return Err(ctx.die(cat!("record: cannot write in ", ctx.d)));
     }
-    let _ = std::fs::write(
-        ctx.at("record"),
+    let put = |f: &str, v: Vec<u8>| -> Res<()> {
+        // (`echo ... > FILE` under set -e: its failure ends the command, 1)
+        std::fs::write(ctx.at(f), v).map_err(|e| {
+            say(cat!(shell::bytes(&ctx.at(f)), ": ", crate::shots::why(&e)));
+            Exit(1)
+        })
+    };
+    put(
+        "record",
         cat!(
             pids.join(&b','),
             " ",
@@ -1540,19 +1571,19 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
             file,
             "\n"
         ),
-    );
+    )?;
     if !apid.is_empty() {
-        let _ = std::fs::write(ctx.at("record.audio"), cat!(apid, "\n"));
+        put("record.audio", cat!(apid, "\n"))?;
     }
     if !layout.is_empty() {
-        let _ = std::fs::write(ctx.at("record.layout"), cat!(layout, "\n"));
+        put("record.layout", cat!(layout, "\n"))?;
     }
-    let _ = std::fs::write(ctx.at("record.geo"), cat!(geo, "\n"));
+    put("record.geo", cat!(geo, "\n"))?;
     if let Some(g) = o.glide {
-        let _ = std::fs::write(ctx.at("record.glide"), format!("{g}\n"));
+        put("record.glide", format!("{g}\n").into_bytes())?;
     }
     // Still running half a second on: not ended at once (a bad output or codec).
-    if sh_quiet(ctx, "/usr/bin/sh", P::ALIVE_SH, &pids) != 0 {
+    if sh_quiet(ctx, "/usr/bin/sh", P::ALIVE_SH, &pids)? != 0 {
         for f in [
             "record",
             "record.layout",
@@ -1563,11 +1594,11 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         ] {
             rm(&ctx.at(f));
         }
-        audio_end(ctx, &apid);
+        audio_end(ctx, &apid)?;
         if pids.len() != 1 {
             let mut a = w(&["/usr/bin/kill", "-KILL"]);
             a.extend(pids.iter().cloned());
-            let _ = sys_cap(ctx, &a, None, Err2::Null, false);
+            sys_q(ctx, &a)?;
         }
         let dirs: Vec<Vec<u8>> = pairs.iter().step_by(2).cloned().collect();
         let mut a = w(&["/usr/bin/sh", "-c", P::TAILS_SH, "omabox-record"]);
@@ -1659,9 +1690,10 @@ fn audio_start(ctx: &mut Ctx) -> Res<Vec<u8>> {
         "/usr/bin/sh",
         P::AUDIO_WAIT_SH,
         &[cat!(REC_DIR, "/audio.log"), apid.clone()],
-    );
+    )
+    .unwrap_or_else(|Exit(c)| i32::from(c));
     if t != 0 {
-        audio_end(ctx, &apid);
+        audio_end(ctx, &apid)?;
         let (_, l) = sys_cap(
             ctx,
             &w(&[
@@ -1690,11 +1722,12 @@ fn audio_start(ctx: &mut Ctx) -> Res<Vec<u8>> {
 
 /// record_audio_end PID: the recording's ffmpeg told to finish (INT), then waited for (5 s, then
 /// KILL), in the box. Nothing for no pid.
-pub fn audio_end(ctx: &mut Ctx, pid: &[u8]) {
+pub fn audio_end(ctx: &mut Ctx, pid: &[u8]) -> Res<()> {
     if !shell::re_match("^[0-9]+$", pid) {
-        return;
+        return Ok(());
     }
-    let _ = sh_quiet(ctx, "/usr/bin/sh", P::AUDIO_END_SH, &[pid.to_vec()]);
+    sh_quiet(ctx, "/usr/bin/sh", P::AUDIO_END_SH, &[pid.to_vec()])?;
+    Ok(())
 }
 
 #[cfg(test)]

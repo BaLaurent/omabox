@@ -188,6 +188,27 @@ fn count_starting(p: &[u8], lead: &[u8]) -> usize {
     file_lines(p).iter().filter(|l| l.starts_with(lead)).count()
 }
 
+/// The sum of WORDS as bash's `$((A + B))` has it: None (its error said, less its "SCRIPT: line
+/// N: ") at the first it cannot read, 08.
+fn arith(words: &[&[u8]]) -> Option<i64> {
+    let mut t = 0i64;
+    for v in words {
+        match bash_int(v) {
+            Some(n) => t = t.wrapping_add(n),
+            None => {
+                let _ = std::io::stderr().write_all(&cat!(
+                    v,
+                    ": value too great for base (error token is \"",
+                    v,
+                    "\")\n"
+                ));
+                return None;
+            }
+        }
+    }
+    Some(t)
+}
+
 /// Bash arithmetic on a word (an arithmetic error is 0 here: the callers' numbers are decimal).
 fn ai(v: &[u8]) -> i64 {
     bash_int(v).unwrap_or(0)
@@ -235,6 +256,28 @@ fn rm(p: &[u8]) {
 }
 
 /// `cmd ARGS` with this process's stdio (cp, mkdir -p, sort -o): its status.
+/// A step under set -e: its failure ends the command with its status.
+fn must(rc: i32) -> Res<()> {
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(Exit(u8::try_from(rc & 0xff).unwrap_or(1)))
+    }
+}
+
+/// `: > FILE` / `CMD > FILE` under set -e: the file written, or its failure said (bash's line, less
+/// its "SCRIPT: line N: ") and the command ended, 1.
+fn put(p: &[u8], data: &[u8]) -> Res<()> {
+    std::fs::write(shell::path(p), data).map_err(|e| {
+        say_raw(&cat!(p, ": ", crate::shots::why(&e), "\n"));
+        Exit(1)
+    })
+}
+
+fn say_raw(v: &[u8]) {
+    let _ = std::io::stderr().write_all(v);
+}
+
 fn run_tool(name: &str, args: &[Vec<u8>]) -> i32 {
     crate::sig::foreground(|| {
         crate::sig::command(name)
@@ -282,9 +325,21 @@ fn check_regions(fa: &[u8], fb: &[u8], speck: &[u8], masks: &[Vec<u8>]) -> Optio
     let mut draw: Vec<Vec<u8>> = Vec::new();
     for m in masks {
         let f = shell::read_fields(m, 4);
-        let (x, y, ww, h) = (ai(&f[0]), ai(&f[1]), ai(&f[2]), ai(&f[3]));
+        // (`$((x + w - 1))` in its substitution: a word bash's arithmetic cannot read, 08, ends
+        // it, said; the first point is the words as they are)
+        let x2 = arith(&[&f[0], &f[2]])?;
+        let y2 = arith(&[&f[1], &f[3]])?;
         draw.push(b"-draw".to_vec());
-        draw.push(format!("rectangle {x},{y} {},{}", x + ww - 1, y + h - 1).into_bytes());
+        draw.push(cat!(
+            "rectangle ",
+            f[0],
+            ",",
+            f[1],
+            " ",
+            (x2 - 1).to_string(),
+            ",",
+            (y2 - 1).to_string()
+        ));
     }
     let mut a = w(&[fa, fb, b"-alpha", b"off", b"-fill", b"black"]);
     a.extend(draw);
@@ -511,14 +566,16 @@ fn check_ids(dir: &[u8]) -> Vec<Vec<u8>> {
     if !shell::path(dir).is_dir() {
         return Vec::new();
     }
-    let find = crate::sig::command("find")
-        .arg(OsStr::from_bytes(dir))
-        .args(["-maxdepth", "1", "-name", "*.point", "-printf", "%T@ %f\n"])
-        .stdin(Stdio::inherit())
-        .stderr(Stdio::null())
-        .output()
-        .map(|o| o.stdout)
-        .unwrap_or_default();
+    let find = crate::sig::foreground(|| {
+        crate::sig::command("find")
+            .arg(OsStr::from_bytes(dir))
+            .args(["-maxdepth", "1", "-name", "*.point", "-printf", "%T@ %f\n"])
+            .stdin(Stdio::inherit())
+            .stderr(Stdio::null())
+            .output()
+            .map(|o| o.stdout)
+            .unwrap_or_default()
+    });
     let sorted = jq::tool("sort", &["-n"], Some(&find), jq::Err::Inherit).out;
     let sed = jq::tool(
         "sed",
@@ -843,9 +900,9 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if pid.ends_with(b".png") {
             pid.truncate(pid.len() - 4);
         }
-        let _ = std::fs::write(
-            shell::path(&plan),
-            cat!(
+        put(
+            &plan,
+            &cat!(
                 "title\tcheck diff: ",
                 shell::basename(&files[0]),
                 ", then ",
@@ -858,7 +915,7 @@ fn check_diff(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 files[1],
                 "\t\t\t\n"
             ),
-        );
+        )?;
     }
     // A refusal past here takes the plan with it (finding 431: bash's left it in $TMPDIR).
     let plan_g = PlanGuard(plan.clone());
@@ -1129,7 +1186,8 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     let f = |ext: &str| cat!(outd, "/", id, ext);
     let png = f(".png");
-    if std::fs::symlink_metadata(shell::path(&png)).is_ok() || shell::path(&png).exists() {
+    // (`[ ! -e ]`: a link to nothing is no shot taken)
+    if shell::path(&png).exists() {
         return Err(ctx.die(cat!(
             "check point: ",
             id,
@@ -1253,6 +1311,9 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         let mut px = Vec::new();
         for g in &masks {
             let gw = shell::read_fields(g, 4);
+            // (`local ... x2=$(($7 + $9)) y2=$(($8 + ${10}))` in its substitution: an 08 ends it,
+            // said, and the region is left out)
+            let ok = arith(&[&gw[0], &gw[2]]).is_some() && arith(&[&gw[1], &gw[3]]).is_some();
             let v = [
                 ai(&ox),
                 ai(&oy),
@@ -1265,7 +1326,7 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 ai(&gw[2]),
                 ai(&gw[3]),
             ];
-            match ignore_px(v) {
+            match ignore_px(v).filter(|_| ok) {
                 Some(m) => px.push(m),
                 None => say(cat!(
                     "check point ",
@@ -1339,17 +1400,32 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
         } else if hoff.is_empty() {
             let g = geom_parse(&geom).unwrap_or_default();
-            let (x, y, gw, h) = (ai(&g[0]), ai(&g[1]), ai(&g[2]), ai(&g[3]));
-            let iw = crate::shots::png_size(&png).map_or(gw, |(a, _)| a);
+            let iws = crate::shots::png_size(&png)
+                .map_or(g[2].clone(), |(a, _)| a.to_string().into_bytes());
             let sp = f(".screen.png");
             let sa = w(&[b"shot".as_slice(), b"--fit", b"0", b"-o", &sp]);
             if self_cmd(ctx, &sa, None, &[("OMABOX_SHOT_NO_BASELINE", "1")]) == 0 {
-                let within = if gw == 0 {
-                    Vec::new()
-                } else {
-                    format!("{} {} {iw} {}", x * iw / gw, y * iw / gw, h * iw / gw).into_bytes()
-                };
-                match check_holes(&sp, "screen", &within) {
+                // (`$((x * iw / w))` ... in check_holes' substitution: an 08 ends it, its holes
+                // unread)
+                let mut vals = Vec::new();
+                for v in [&g[0], &iws, &g[2], &g[1], &g[3]] {
+                    match arith(&[v]) {
+                        Some(n) => vals.push(n),
+                        None => break,
+                    }
+                }
+                let within = (vals.len() == 5 && vals[2] != 0).then(|| {
+                    let (x, iw, gw, y, h) = (vals[0], vals[1], vals[2], vals[3], vals[4]);
+                    format!(
+                        "{} {} {} {}",
+                        x * iw / gw,
+                        y * iw / gw,
+                        String::from_utf8_lossy(&iws),
+                        h * iw / gw
+                    )
+                    .into_bytes()
+                });
+                match within.and_then(|wn| check_holes(&sp, "screen", &wn)) {
                     Some(hh) => hres = hh,
                     None => hoff = unreadable,
                 }
@@ -1454,11 +1530,13 @@ fn self_out(ctx: &Ctx, args: &[Vec<u8>], file: &[u8]) -> i32 {
 
 /// check_env BOX: what the box of a run was (`ls --json` | jq), `{}` when that fails.
 fn check_env(box_name: &[u8]) -> Vec<u8> {
-    let ls = crate::sig::omabox_cmd()
-        .args(["ls", "--json"])
-        .stdin(Stdio::inherit())
-        .stderr(Stdio::null())
-        .output();
+    let ls = crate::sig::foreground(|| {
+        crate::sig::omabox_cmd()
+            .args(["ls", "--json"])
+            .stdin(Stdio::inherit())
+            .stderr(Stdio::null())
+            .output()
+    });
     let (lrc, lout) = match ls {
         Ok(o) => (crate::exec::status(o.status).0, o.stdout),
         Err(_) => (127, Vec::new()),
@@ -1809,21 +1887,23 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         ));
         if k == 1 {
             let e = check_env(&bname);
-            let _ = std::fs::write(shell::path(&cat!(outd, "/env.json")), e);
+            put(&cat!(outd, "/env.json"), &e)?;
         }
         let rund = cat!(outd, "/run", k.to_string());
-        let _ = run_tool("mkdir", &[b"-p".to_vec(), rund.clone()]);
+        must(run_tool("mkdir", &[b"-p".to_vec(), rund.clone()]))?;
         // The scenario's `omabox` is this one (its bin first), driving this run's box ($OMABOX).
         let path = cat!(root_bin, ":", shell::env_or_empty("PATH"));
         let runlog = cat!(outd, "/run", k.to_string(), ".log");
         let rc = scenario(&scen, &path, &bname, &rund, &runlog);
-        let _ = crate::sig::omabox_cmd()
-            .arg("down")
-            .arg(OsStr::from_bytes(&bname))
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let _ = crate::sig::foreground(|| {
+            crate::sig::omabox_cmd()
+                .arg("down")
+                .arg(OsStr::from_bytes(&bname))
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+        });
         if rc != 0 {
             say(cat!(
                 "check: the scenario failed in run ",
@@ -1896,42 +1976,87 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
         }
     };
     let Ok(f2) = f.try_clone() else { return 1 };
-    let prog = &scen[0];
-    // (bash looks the scenario up in the PATH it is given)
-    let found: Option<Vec<u8>> = if prog.contains(&b'/') {
-        Some(prog.clone())
-    } else {
-        path.split(|&c| c == b':')
-            .map(|d| cat!(if d.is_empty() { b".".as_slice() } else { d }, "/", prog))
-            .find(|p| crate::exec::executable(p) && shell::path(p).is_file())
-    };
-    let Some(exe) = found else {
+    // (bash's own words for a command it cannot run go where its stderr goes: the run's log)
+    let said = |m: Vec<u8>, rc: i32| -> i32 {
         let mut e = &f2;
-        let _ = e.write_all(&cat!("bash: ", prog, ": command not found\n"));
-        return 127;
+        let _ = e.write_all(&cat!("bash: ", m, "\n"));
+        rc
     };
-    let mut c = crate::sig::command(OsStr::from_bytes(&exe));
-    c.arg0(OsStr::from_bytes(prog));
+    let prog = &scen[0];
+    // (bash looks the scenario up in the PATH it is given: the first executable file, else the
+    // first file there, which it then cannot run)
+    let exe: Vec<u8> = if prog.contains(&b'/') {
+        prog.clone()
+    } else {
+        let cands: Vec<Vec<u8>> = path
+            .split(|&c| c == b':')
+            .map(|d| cat!(if d.is_empty() { b".".as_slice() } else { d }, "/", prog))
+            .filter(|p| shell::path(p).is_file())
+            .collect();
+        match cands
+            .iter()
+            .find(|p| crate::exec::executable(p))
+            .or(cands.first())
+        {
+            Some(p) => p.clone(),
+            None => return said(cat!(prog, ": command not found"), 127),
+        }
+    };
+    let pth = shell::path(&exe);
+    match std::fs::metadata(&pth) {
+        Err(_) => return said(cat!(exe, ": No such file or directory"), 127),
+        Ok(m) if m.is_dir() => return said(cat!(exe, ": Is a directory"), 126),
+        Ok(_) if !crate::exec::executable(&exe) => {
+            return said(cat!(exe, ": Permission denied"), 126);
+        }
+        Ok(_) => {}
+    }
+    // A file the kernel will not run (no #!, no ELF): bash reads it as a script of its own, or says
+    // it is binary (a NUL in its first line); never /bin/sh's fallback.
+    let mut head = [0u8; 80];
+    let n = std::fs::File::open(&pth)
+        .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
+        .unwrap_or(0);
+    let head = &head[..n];
+    let runnable = head.starts_with(b"#!") || head.starts_with(b"\x7fELF");
+    let mut c = if runnable {
+        let mut c = crate::sig::command(OsStr::from_bytes(&exe));
+        c.arg0(OsStr::from_bytes(prog));
+        c
+    } else {
+        let line = head.split(|&b| b == b'\n').next().unwrap_or_default();
+        if line.contains(&0) {
+            return said(
+                cat!(exe, ": cannot execute binary file: Exec format error"),
+                126,
+            );
+        }
+        let mut c = crate::sig::command("/usr/bin/bash");
+        c.arg(OsStr::from_bytes(&exe));
+        c
+    };
     c.args(scen[1..].iter().map(|a| OsStr::from_bytes(a)));
     c.env("PATH", OsStr::from_bytes(path))
         .env("OMABOX", OsStr::from_bytes(bname))
         .env("OMABOX_SESSION", "")
         .env("OMABOX_CHECK_OUT", OsStr::from_bytes(rund))
-        .stdout(Stdio::from(f))
-        .stderr(Stdio::from(f2));
-    crate::sig::foreground(|| match c.status() {
+        .stdout(Stdio::from(f));
+    match f2.try_clone() {
+        Ok(e) => c.stderr(Stdio::from(e)),
+        Err(_) => c.stderr(Stdio::inherit()),
+    };
+    let r = crate::sig::foreground(|| c.status());
+    match r {
         Ok(s) => crate::exec::status(s).0,
         Err(e) => {
-            let _ = std::io::stderr().write_all(&cat!(
-                "bash: ",
-                exe,
-                ": ",
-                crate::shots::why(&e),
-                "\n"
-            ));
-            126
+            let rc = if e.raw_os_error() == Some(libc::ENOENT) {
+                127
+            } else {
+                126
+            };
+            said(cat!(exe, ": ", crate::shots::why(&e)), rc)
         }
-    })
+    }
 }
 
 use std::os::unix::process::CommandExt;
@@ -2010,7 +2135,7 @@ fn chk_still(p: &[u8]) -> &'static str {
 
 fn check_compare_json(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>) -> Res<()> {
     let jsonl = cat!(outd, "/.check.jsonl");
-    let _ = std::fs::write(shell::path(&jsonl), b"");
+    put(&jsonl, b"")?;
     let (crc, sum) = {
         let _o = crate::exec::Redir::null(1);
         match check_compare(ctx, outd, base, speck, Some(&jsonl)) {
@@ -2048,7 +2173,7 @@ fn check_compare(
     let run1 = cat!(outd, "/run1");
     let plan = cat!(outd, "/report.plan");
     let body = cat!(plan, ".body");
-    let _ = std::fs::write(shell::path(&body), b"");
+    put(&body, b"")?;
     let (mut fail, mut same, mut n, mut changed, mut nholed, mut new, mut missing, mut alike) = (
         false, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize, 0usize,
     );
@@ -2343,7 +2468,7 @@ fn check_compare(
         )
         .into_bytes();
         p.extend(std::fs::read(shell::path(&body)).unwrap_or_default());
-        let _ = std::fs::write(shell::path(&plan), p);
+        put(&plan, &p)?;
         let rp = cat!(outd, "/report.png");
         match check_report(&plan, &rp, "sheet") {
             Some(left) => {
@@ -2444,8 +2569,8 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
     let plan = cat!(outd, "/baseline.plan");
     let body = cat!(plan, ".body");
     let run = |k: usize| cat!(outd, "/run", k.to_string());
-    let _ = run_tool("mkdir", &[b"-p".to_vec(), base.to_vec()]);
-    let _ = std::fs::write(shell::path(&body), b"");
+    must(run_tool("mkdir", &[b"-p".to_vec(), base.to_vec()]))?;
+    put(&body, b"")?;
     let ids1 = check_ids(&run(1));
     for k in 2..=runs {
         for id in &ids1 {
@@ -2514,7 +2639,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             }
         }
         let uf = cat!(outd, "/", id, ".unstable");
-        let _ = std::fs::write(shell::path(&uf), b"");
+        put(&uf, b"")?;
         let mut odd: Vec<usize> = Vec::new();
         for j in 1..=runs {
             if j == best {
@@ -2565,10 +2690,10 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             }
             append(&uf, &add);
         }
-        let _ = run_tool(
+        must(run_tool(
             "sort",
             &[b"-u".to_vec(), b"-o".to_vec(), uf.clone(), uf.clone()],
-        );
+        ))?;
         // The noise: what is left between the runs outside the unstable regions, all specks.
         let mut big = 0i64;
         for j in 1..=runs {
@@ -2594,7 +2719,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             }
         };
         let rb = run(best);
-        let _ = run_tool(
+        must(run_tool(
             "cp",
             &[
                 b"--".to_vec(),
@@ -2602,7 +2727,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
                 cat!(rb, "/", id, ".point"),
                 cat!(base, "/"),
             ],
-        );
+        ))?;
         pspeck.insert(id.clone(), ps);
         let bpoint = cat!(base, "/", id, ".point");
         let first = file_lines(&bpoint).first().cloned().unwrap_or_default();
@@ -2615,7 +2740,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
         }
         let rbt = cat!(rb, "/", id, ".tree.json");
         if shell::path(&rbt).is_file() {
-            let _ = run_tool("cp", &[b"--".to_vec(), rbt, cat!(base, "/")]);
+            must(run_tool("cp", &[b"--".to_vec(), rbt, cat!(base, "/")]))?;
         } else {
             rm(&cat!(base, "/", id, ".tree.json"));
         }
@@ -2623,7 +2748,10 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
         let unst_data = std::fs::read(shell::path(&uf)).unwrap_or_default();
         if !unst_data.is_empty() {
             unst += 1;
-            let _ = run_tool("cp", &[b"--".to_vec(), uf.clone(), cat!(base, "/")]);
+            must(run_tool(
+                "cp",
+                &[b"--".to_vec(), uf.clone(), cat!(base, "/")],
+            ))?;
             if odd.len() + 1 < runs {
                 let odds: Vec<String> = odd.iter().map(ToString::to_string).collect();
                 out(cat!(
@@ -2636,7 +2764,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
                     " differed from the others: an app that is not the same from one start to the next, or a time that changed between runs (left out from now on; that run: ",
                     outd,
                     "/run",
-                    odd[0].to_string(),
+                    odd.first().map(ToString::to_string).unwrap_or_default(),
                     "/",
                     id,
                     ".png):\n"
@@ -2766,14 +2894,14 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             format!("speck {ps}\n").as_bytes(),
         );
     }
-    let _ = run_tool(
+    must(run_tool(
         "cp",
         &[
             b"--".to_vec(),
             cat!(outd, "/env.json"),
             cat!(base, "/check.json"),
         ],
-    );
+    ))?;
     out(cat!(
         "check: baseline of ",
         n.to_string(),
@@ -2792,7 +2920,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
         ", each checkpoint as a check will compare it; amber: unstable, left out; red: holes\n"
     );
     p.extend(std::fs::read(shell::path(&body)).unwrap_or_default());
-    let _ = std::fs::write(shell::path(&plan), p);
+    put(&plan, &p)?;
     let bpng = cat!(outd, "/baseline.png");
     match check_report(&plan, &bpng, "overview") {
         Some(pages) if pages.is_empty() => {
