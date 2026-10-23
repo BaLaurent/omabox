@@ -3068,7 +3068,8 @@ set -m
   kill -KILL -- -"$p"
 } >/dev/null 2>&1 &
 for i in $(seq 200); do [ -e "$mark" ] && break; sleep 0.05; done
-sleep 0.2
+# (RP_WAIT: how long after MARK, 0.2 s by default)
+sleep "${RP_WAIT:-0.2}"
 case $sig in group-*) kill -"${sig#group-}" -- -"$p" ;; *) kill -"$sig" "$p" ;; esac
 # (RP_TWICE: the same signal again so many seconds on)
 [ -z "${RP_TWICE:-}" ] || { sleep "$RP_TWICE"; case $sig in group-*) kill -"${sig#group-}" -- -"$p" ;; *) kill -"$sig" "$p" ;; esac; } 2>/dev/null
@@ -10672,6 +10673,71 @@ t_up_aborted() {
   chmod 700 "$TMP/data/omabox/saves/$S/home/locked"
   check_fails "...and leaves no box dir" test -e "$XDG_RUNTIME_DIR/omabox/$B"
   check_fails "...nor a box HOME" test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$B"
+}
+
+# An up cut short by INT, TERM or HUP after its box started takes the box down (finding 434): bash
+# 5.3 runs the EXIT trap of a shell a signal ends with $? 0, so up's `[ $? = 0 ] ||` left the box
+# running, unseen, its `starting` file kept. Here while up waits for the box's shell (wait_ready),
+# each signal to up's group and to up alone (an INT to up alone used to let it go on), INT, TERM and
+# HUP at their defaults (a test run in the background ignores INT): bash's code, the box not up, no
+# `starting` left.
+t_up_signals() {
+  local r=$TMP/upsig B i=0 sig how rc bd st
+  mkdir -p "$r"; rp_sig_write "$r/rp-sig"
+  for sig in TERM HUP INT; do
+    for how in group alone; do
+      i=$((i + 1)) B=$P-usig$i
+      bd=$(ob path "$B")
+      local s=$sig; [ "$how" = alone ] || s=group-$sig
+      rc=0; RP_DEADLINE=90 "$r/rp-sig" "$s" "$bd/run/omabox.env" env --default-signal=INT,TERM,HUP "$CLI" up "$B" --net isolated >/dev/null 2>"$r/err.$i" || rc=$?
+      if grep -q "box '$B' up (" "$r/err.$i"; then
+        skip "up and $how $sig while it waits for the shell" "up was done before the signal (load)"; ob down "$B" >/dev/null 2>&1; continue
+      fi
+      check_eq "up and $how $sig while it waits for the shell: bash's code" "$(( 128 + $(kill -l "$sig") ))" "$rc"
+      st=$(ob ls --json 2>/dev/null | jq -r --arg n "$B" 'first(.[] | select(.name == $n) | .state) // "gone"')
+      check "...the box not up ($st)" test "$st" != up
+      check_fails "...no starting file left" test -e "$bd/starting"
+      ob down "$B" >/dev/null 2>&1
+    done
+  done
+}
+
+# The same during `up --interactive --monitor`'s add (finding 434; finding 435's stopgap held it on
+# the 1.0.1 line): in a box standing in for the host (finding 26), each signal once the add has
+# recorded its monitor (omabox.monitors), to up's group (the add's subshell gets it too, and removes its output) and to up
+# alone (the add finishes first): bash's code, the box not up, none of its windows left on the
+# stand-in, no `starting` left.
+t_up_signals_window() {
+  local S=$P-usw
+  up_ok "$S" --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
+  local in=("$CLI" run -b "$S" -- "${GUARDED[@]}" "$CLI")
+  if aq_unfixed "${in[@]}"; then skip "up -i --monitor and a signal" "the stand-in's aquamarine lacks the fix"; ob down "$S" >/dev/null; return; fi
+  if ! "${in[@]}" --version 2>/dev/null | grep -q '^aquamarine: a private build, .*+appid'; then
+    skip "up -i --monitor and a signal" "not omabox's aquamarine build with +appid (omabox setup --aquamarine)"; ob down "$S" >/dev/null; return
+  fi
+  local r=$TMP/upsigw sig how i=0 B bd rc out st
+  mkdir -p "$r"; rp_sig_write "$r/rp-sig"
+  # shellcheck disable=SC2329 # called through until_ok
+  nowins() { [ "$(ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class | startswith("aquamarine"))] | length')" = 0 ]; }
+  for sig in TERM HUP INT; do
+    for how in group alone; do
+      i=$((i + 1)) B=usw$i
+      bd=$("${in[@]}" path "$B")
+      local s=$sig; [ "$how" = alone ] || s=group-$sig
+      rc=0; out=$("$CLI" run -b "$S" -- "${GUARDED[@]}" env RP_DEADLINE=90 RP_WAIT=0.05 bash -c "$(cat "$r/rp-sig")" rp-sig "$s" "$bd/run/omabox.monitors" \
+        env --default-signal=INT,TERM,HUP "$CLI" up "$B" --interactive --no-shell --monitor 800x600 2>&1 >/dev/null) || rc=$?
+      if grep -q "box '$B' up (" <<<"$out"; then
+        skip "up -i --monitor and $how $sig during its add" "up was done before the signal (load)"; "${in[@]}" down "$B" >/dev/null 2>&1; continue
+      fi
+      check_eq "up -i --monitor and $how $sig during its add: bash's code" "$(( 128 + $(kill -l "$sig") ))" "$rc"
+      st=$("${in[@]}" ls --json 2>/dev/null | jq -r --arg n "$B" 'first(.[] | select(.name == $n) | .state) // "gone"')
+      check "...the box not up ($st)" test "$st" != up
+      check "...none of its windows left on the stand-in" until_ok 5 nowins
+      check_fails "...no starting file left" "$CLI" run -b "$S" -- test -e "$bd/starting"
+      "${in[@]}" down "$B" >/dev/null 2>&1
+    done
+  done
+  ob down "$S" >/dev/null
 }
 
 # A box whose Hyprland died reads dead, not up (finding 63).
@@ -18797,7 +18863,7 @@ t_run_cwd() {
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full

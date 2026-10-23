@@ -9055,6 +9055,25 @@ from them.
     folder. **Fix**: check_compare sets them empty first (bash; the Rust half had them so). Tests:
     t_rust_parity (a scenario whose first checkpoint is new, --json, compared both ways).
 
+434. **A signal that cut `up` short after its box started left the box running** (2026-10-23, #324
+    integration review; a regression on port-rust, where finding 429's design C dropped the 1.0.1
+    stopgap's `monitor_add_held`). up's EXIT trap was `[ $? = 0 ] || kill_box ...`, and bash 5.3 runs
+    the EXIT trap of a shell that dies of a signal with `$?` 0 (probed: `trap 'echo $?' EXIT` and a
+    TERM, HUP or INT to the shell or its group, during a foreground child or a subshell: 0 each time).
+    So an INT, TERM or HUP once the box had started (its Hyprland or shell still coming, or `up -i
+    --monitor`'s add) left the box up, unseen, its `starting` file kept; an interactive box has no
+    idle limit, so nothing took it down, its window left on the box's workspace. And an INT to up
+    alone while it waited on a child that does not die of it (the add's subshell) was swallowed:
+    bash takes such a child to have handled it, trap or not, and the up went on. **Fix** (bash: up is
+    not ported yet): the EXIT trap ends the box whatever `$?` is (every way out before up's `trap -
+    EXIT` is a failure) and removes `starting`; INT, TERM and HUP are trapped (`exit 130/143/129`, so
+    the codes are bash's own); `up -i --monitor`'s add runs in the background and is waited for with
+    `wait`, which a trapped signal cuts short, its subshell then sent a TERM (its own trap removes the
+    output) before the box goes. A successful up is unchanged. Tests: t_up_signals (TERM, HUP and INT
+    to up's group and to up alone while it waits for the shell: the code, the box not up, no
+    `starting`), t_up_signals_window (the same during `up -i --monitor`'s add, in a stand-in host: and
+    none of the box's windows left on it). On the version before, both fail every case but the code.
+
 435. **An interactive `monitor add` whose box answered late opened its window on the user's
     workspace, focused** (2026-10-22, #349; the 1.0.x stopgap). `hyprctl` stops reading after 5 s of
     its own (`SO_RCVTIMEO`, Hyprland 0.56.2's `hyprctl/src/main.cpp`): it prints "Hyprland IPC
@@ -9169,6 +9188,7 @@ from them.
     and a rule of its own, no rule turned off): mon_cleanup, mon_drain, mon_unrecord,
     monitor_add_held, the global `omabox_monitor_rule` and their tests went with the merge, 429's
     `mon_answer` replaced this one's; host_hyprctl's HOST_LIMIT stays (t_unit_monitors).
+
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

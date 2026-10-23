@@ -29,6 +29,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   rule and the window's first map (a theme change, a saved config: the reload drops the rule). An
   add cut short removes its half-made monitor, and a second Ctrl-C ends that at once
   ([#349](https://github.com/diogochaves/omabox/issues/349)).
+- **An `up` interrupted after its box started (Ctrl-C, TERM, HUP) left the box running**, unseen
+  and, for an interactive one, with no idle limit to take it down: during `up --interactive
+  --monitor`'s add, or while it waited for the box's shell. It now ends the box, as any other `up`
+  that fails, with the signal's exit code (130, 143, 129); a Ctrl-C to `up` alone no longer lets it
+  go on.
 
 ## 1.0.1 — unreleased
 

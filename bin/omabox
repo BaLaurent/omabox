@@ -4267,7 +4267,14 @@ cmd_up() {
   # so the logs `die` points at can be read; `ls` shows it dead, `down` clears it. Before that it goes:
   # a half-made dir (no box.json) that only `down NAME` cleared (finding 163).
   # (A throwaway's up whose run is gone ends its box whole: up_owner_check.)
-  trap '[ $? = 0 ] || { up_owner_check; kill_box || true; [ -f "$D/box.json" ] || rm_box; }' EXIT
+  # Whatever $? is (finding 434): bash 5.3 runs the EXIT trap of a shell that dies of a signal with
+  # $? 0, so `[ $? = 0 ] ||` left a box an INT, TERM or HUP cut short running, unseen. Every way out
+  # before `trap - EXIT` below is a failure. INT, TERM and HUP are trapped too (once the foreground
+  # child is over, as bash runs a trap), so an INT to up alone ends it as well, with bash's codes.
+  UP_ADD=""   # an interactive --monitor's add, while up waits for it
+  trap '[ -z "$UP_ADD" ] || kill -TERM "$UP_ADD" 2>/dev/null; up_owner_check; kill_box || true; rm -f "$D/starting"
+    [ -f "$D/box.json" ] || rm_box' EXIT
+  trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
   rm_box; rm -f "$BOXES/.expired-$NAME"; mkdir -p "$D/run" "$HOMES/$NAME/home"; ln -s "$HOMES/$NAME/home" "$D/home"
   : > "$D/jobs-noted"   # no run -d job has ended yet (job_note)
   # The box's XDG_RUNTIME_DIR, 0700 as a session's (#153): a helper that checks its session bus
@@ -4694,8 +4701,17 @@ cmd_up() {
   wait_ready "$shell"
   # More monitors (#122), as `monitor add` makes them: one at a time, each placed by what the last one
   # really became (Hyprland may round a scale), the shell giving each its bar as it comes.
+  # An interactive one is waited for with `wait`, which a trapped signal cuts short (finding 434): a
+  # child that bash waits on in the foreground and that does not die of an INT (an INT to up alone)
+  # swallows it, trap and all, and the up went on. Its subshell is ended by up's EXIT trap then (its
+  # own trap removes the output), before the box.
   for spec in "${monitors[@]}"; do
-    if [ $interactive = 1 ]; then UP_LOCKED=1 monitor_add_window "$spec" >/dev/null
+    if [ $interactive = 1 ]; then
+      local arc=0
+      UP_LOCKED=1 monitor_add_window "$spec" >/dev/null & UP_ADD=$!
+      wait "$UP_ADD" || arc=$?
+      UP_ADD=""
+      [ "$arc" = 0 ] || exit "$arc"
     else UP_LOCKED=1 monitor_add "$spec" "" >/dev/null; fi
   done
   # The shell crashing just after its bar came (#126): the box stays up, and up says so, exit 1.
@@ -4708,7 +4724,7 @@ cmd_up() {
   # after has somewhere to go. One that never comes ends the box, as any other up that fails.
   [ $audio = 0 ] || audio_ready || die "up --audio: the box's PipeWire did not come up in 10 s (omabox log -b $NAME audio)"
   up_owner_check
-  trap - EXIT
+  trap - EXIT INT TERM HUP
   [ $interactive = 1 ] && say "box '$NAME' is a window on $(ws_text "$ws"); $PASS_KEY passes SUPER keys to it (again to stop;" \
     "omabox keys-to-box -b $NAME on: whenever its window has focus and the pointer)"
   rm -f "$D/starting"; touch "$D/used"
