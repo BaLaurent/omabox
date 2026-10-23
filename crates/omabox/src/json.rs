@@ -1,6 +1,6 @@
 //! The JSON files bin/omabox reads and writes with jq (box.json, info.json, the jobs' records), read
-//! and written as jq 1.8 does: numbers as jq prints them (its decNumber form: `1e3` is `1E+3`),
-//! strings escaped as jq escapes them, keys in their order.
+//! and written as jq 1.8 does, strings escaped as jq escapes them, keys in their order; but numbers
+//! in standard form (`1e3` is `1000`, where jq wrote decNumber's `1E+3`: finding 449).
 
 use serde_json::{Map, Value};
 
@@ -147,31 +147,46 @@ fn string(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// A JSON number literal as jq 1.8 prints it: decNumber's scientific string (plain while the
-/// exponent is not positive and the number not below 1E-6).
+/// A JSON number literal in standard form (finding 449): as read when it has no exponent (`1.50`,
+/// `-0`, `100000000000000000000`; zeros in front of the point dropped); with one, its digits written out plain while the point stays
+/// within 21 places of them (`1e3` is `1000`, `1.5e-7` `0.00000015`), else in exponent form (`1e+21`,
+/// `1.5e-8`), as JavaScript writes a number. jq 1.8 wrote decNumber's (`1E+3`, `1.5E-7`).
 pub fn number(lit: &str) -> String {
     let (neg, rest) = match lit.strip_prefix('-') {
         Some(r) => (true, r),
         None => (false, lit),
     };
-    let (mant, exp) = match rest.find(['e', 'E']) {
-        Some(i) => (&rest[..i], rest[i + 1..].parse::<i64>().unwrap_or(0)),
-        None => (rest, 0),
+    let Some(e) = rest.find(['e', 'E']) else {
+        // (zeros in front of the point dropped: a time as events.log has it, 0001.500, is 1.500)
+        let (int, frac) = rest
+            .split_once('.')
+            .map_or((rest, None), |(i, f)| (i, Some(f)));
+        let int = match int.trim_start_matches('0') {
+            "" => "0",
+            i => i,
+        };
+        let sign = if neg { "-" } else { "" };
+        return match frac {
+            Some(f) => format!("{sign}{int}.{f}"),
+            None => format!("{sign}{int}"),
+        };
     };
+    let (mant, exp) = (&rest[..e], rest[e + 1..].parse::<i64>().unwrap_or(0));
     let (int, frac) = mant.split_once('.').unwrap_or((mant, ""));
     let mut digits: String = format!("{int}{frac}");
-    let exp = exp - i64::try_from(frac.len()).unwrap_or(0);
+    let exp = exp.saturating_sub(i64::try_from(frac.len()).unwrap_or(0));
     let lead = digits.len() - digits.trim_start_matches('0').len();
     digits.drain(..lead.min(digits.len().saturating_sub(1)));
+    let sign = if neg { "-" } else { "" };
     if digits.chars().all(|c| c == '0') {
-        digits = "0".to_string();
+        return format!("{sign}0");
     }
     let n = i64::try_from(digits.len()).unwrap_or(0);
-    let adjusted = exp + n - 1;
-    let sign = if neg { "-" } else { "" };
-    if exp <= 0 && adjusted >= -6 {
-        if exp == 0 {
-            return format!("{sign}{digits}");
+    let adjusted = exp.saturating_add(n - 1);
+    if (-7..21).contains(&adjusted) {
+        if exp >= 0 {
+            let zeros = "0".repeat(usize::try_from(exp).unwrap_or(0));
+            return format!("{sign}{digits}{zeros}");
         }
         let point = n + exp;
         if point > 0 {
@@ -184,7 +199,10 @@ pub fn number(lit: &str) -> String {
     let (first, tail) = digits.split_at(1);
     let dot = if tail.is_empty() { "" } else { "." };
     let esign = if adjusted >= 0 { "+" } else { "-" };
-    format!("{sign}{first}{dot}{tail}E{esign}{}", adjusted.abs())
+    format!(
+        "{sign}{first}{dot}{tail}e{esign}{}",
+        adjusted.unsigned_abs()
+    )
 }
 
 /// `jq '.K1 = V1 | .K2 = V2'` on one value: an object gets the keys (in place when it has them, at
@@ -206,14 +224,25 @@ pub fn set(v: &mut Value, pairs: Vec<(&str, Value)>) -> bool {
 mod tests {
     use super::*;
 
-    // What jq 1.8.2 printed for each.
+    // Standard forms (finding 449); jq 1.8.2 printed 1E+3, 1.0E-5 as 0.000010, 1E+21, 1.5E-8.
     #[test]
-    fn numbers_as_jq() {
+    fn numbers_in_standard_form() {
         for (lit, want) in [
             ("1.50", "1.50"),
-            ("1e3", "1E+3"),
+            ("1e3", "1000"),
+            ("1E+3", "1000"),
+            ("-2.5e2", "-250"),
             ("1.0E-5", "0.000010"),
+            ("1.5e-7", "0.00000015"),
+            ("1.5e-8", "1.5e-8"),
+            ("1e20", "100000000000000000000"),
+            ("1e21", "1e+21"),
+            ("1e300", "1e+300"),
             ("100000000000000000000", "100000000000000000000"),
+            ("0.0000001", "0.0000001"),
+            ("0001.500", "1.500"),
+            ("000", "0"),
+            ("0e5", "0"),
             ("-0", "-0"),
             ("12345", "12345"),
             ("0.5", "0.5"),

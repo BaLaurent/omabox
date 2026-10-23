@@ -9377,6 +9377,18 @@ from them.
     "record --fps" 08 and 010): expected differences; shell.rs's numbers_are_decimal, shot.rs's
     clip_as_bash, settle.rs's geometry.
 
+449. **JSON numbers came in jq's decNumber forms** (2026-10-23, #324 wave 4c; decided by Diogo
+    2026-10-22). jq 1.8 writes a number with an exponent as decNumber's scientific string, `1e3` as
+    `1E+3`, `1e300` as `1E+300`, and one below 1E-6 the same way, so what omabox passed through jq
+    (a box.json rewritten for a resumed agent, `lua --json`'s values, a job record's numbers) came
+    in a form many JSON readers accept but few write. The Rust half copied it (json::number).
+    **Change** (Rust over bash): a number with no exponent is written as read (`1.50`, `-0`); one
+    with an exponent in standard form, its digits written out while the point stays within 21
+    places of them (`1e3` is `1000`, `1.5e-7` `0.00000015`), else as JavaScript writes it (`1e+300`,
+    `1.5e-8`). What the jq programs omabox still runs print is jq's, as before (CHANGELOG). Tests:
+    t_unit_rust_parity ("a resumed session takes its box over": its box.json), t_rust_parity
+    ("lua --json: its values"): expected differences; json.rs's numbers_in_standard_form.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

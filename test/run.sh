@@ -3369,9 +3369,13 @@ t_unit_rust_parity() {
   # A resumed session (finding 93): the box records an agent gone; this command's agent takes it.
   rp_resumed() { rp_fixture; rp_live "rp-repo-$s8" ',"agent":999999999,"agent_start":"1","n":1.50,"e":1e3'; }
   rp_prep=rp_resumed rp_dir=$repo rp_env=(CLAUDE_CODE_SESSION_ID="$sid" CLAUDE_PID="$$")
-  parity "a resumed session takes its box over (box.json rewritten)" env
+  # (its numbers as written: 1.50 kept, 1e3 in standard form, where bash's jq wrote 1E+3: finding 449)
+  rp_numbers() { grep -E '^  "(n|e)":' "$r/rt/omabox/rp-repo-$s8/box.json"; }
+  rp_why=449 rp_bash=('state~^  "e": 1E\+3$' "state~ \./omabox/rp-repo-$s8/box\.json$") rp_rust=('state~^  "e": 1000$' "state~ \./omabox/rp-repo-$s8/box\.json$")
+  rp_also=rp_numbers; parity "a resumed session takes its box over (box.json rewritten)" env
   check_eq "...to this command's agent" "$$ $(lib proc_start $$)" "$(jq -r '"\(.agent) \(.agent_start)"' "$r/rt/omabox/rp-repo-$s8/box.json")"
-  parity "...path too" path
+  rp_why=449 rp_bash=('state~^  "e": 1E\+3$' "state~ \./omabox/rp-repo-$s8/box\.json$") rp_rust=('state~^  "e": 1000$' "state~ \./omabox/rp-repo-$s8/box\.json$")
+  parity "...path too" path; rp_also=""
   rp_env=(CLAUDE_CODE_SESSION_ID="$sid" CLAUDE_PID=1); parity "...not for an agent it does not run under" env
   # ai-jail's (finding 99): a jail's boxes only.
   rp_prep=rp_fixture rp_dir=$r/norepo rp_env=(OMABOX_JAIL='{"id":"j1"}')
@@ -13093,6 +13097,8 @@ t_rust_parity() {
   parity "hyprctl reload: its config errors (none)" hyprctl -b "$B" reload
   parity "hyprctl alone: its usage, its status" hyprctl -b "$B"
   parity "lua" lua -b "$B" 1+1
+  # (a number in standard form, where bash's jq wrote decNumber's 1E+300: finding 449)
+  rp_why=449 rp_bash=('out~^1E\+300$') rp_rust=('out~^1e\+300$')
   parity "lua --json: its values" lua -b "$B" --json 'return "a", nil, {x = 1.5}, 960.0, 1e300'
   parity "lua: values as text" lua -b "$B" 'return "a", nil, {1, 2}, true, "\255x"'
   parity "lua: an error" lua -b "$B" 'error("boom")'

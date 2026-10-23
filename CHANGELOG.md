@@ -96,6 +96,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   x=10, `--frames 08` is 8 frames. The bash omabox read them as octal (8), and `08` or `09` ended
   the command with bash's "value too great for base", exit 1. A number too big for 64 bits gets the
   option's usual refusal (it wrapped). Scripts that padded numbers with zeros get what they wrote.
+- **JSON numbers are written in standard form**: `1000`, not jq's `1E+3`; `1e+300`, not `1E+300`
+  (`lua --json`, a box's `box.json`). A number written without an exponent stays as it was. Scripts
+  that read the JSON with a JSON reader: nothing to change.
 
 ## 1.0.1 — unreleased
 
