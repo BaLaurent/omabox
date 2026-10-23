@@ -9202,6 +9202,13 @@ from them.
     "Changes from the bash omabox"). Tests: t_unit_rust_parity ("group-INT during the create", alike
     now: removed both ways; "INT to omabox alone", each side's ending checked: 130 and kept in bash, 130
     and removed in Rust).
+438. **A box name made of echo's options was refused with no name** (2026-10-23, #324 wave 4c). Bash
+    takes the default box name through `$(echo "$OMABOX")`, so a name of `-n`, `-e` or `-E`, alone or
+    together (`OMABOX=-n`, OMABOX_RELAY_DEFAULT in a jail, a repo named so), printed nothing: "bad box
+    name : a box name starts with a letter or digit...", the name missing. The Rust half copied it
+    (shell::echo_sub). **Change** (Rust over bash): the name as it is, "bad box name -n: ...", exit 2
+    as before (CHANGELOG, "Changes from the bash omabox"). Tests: t_unit_rust_parity ("OMABOX=-n",
+    an expected difference).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

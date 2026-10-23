@@ -41,6 +41,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   The bash omabox did so for a Ctrl-C to its terminal, but an INT sent to omabox alone (`kill -INT
   PID`) ended it with 130 while the add went on and kept the monitor. A script that sent omabox an
   INT and counted on the monitor being made should let the add finish instead.
+- **A box name such as `-n` is named in its refusal** (`OMABOX=-n`, a repo of that name): "bad box
+  name -n: ...". The bash omabox read the name through `echo`, which took `-n`, `-e` or `-E` for its
+  own options, so its message showed an empty name. Exit code unchanged.
 
 ## 1.0.1 — unreleased
 

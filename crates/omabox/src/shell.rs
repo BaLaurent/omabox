@@ -1,5 +1,5 @@
 //! What bash and coreutils do to the words bin/omabox handles, done the same way here: `$(...)`'s
-//! trailing newlines, echo's options, cut, basename, printf %q, glob order, word splitting, and `=~`
+//! trailing newlines, cut, basename, printf %q, glob order, word splitting, and `=~`
 //! (glibc's regex in the user's locale, where `[0-9]` and `[A-Za-z]` take more than ASCII).
 
 use std::ffi::{CString, OsStr, OsString};
@@ -13,14 +13,6 @@ pub fn strip_nl(v: &[u8]) -> Vec<u8> {
         n -= 1;
     }
     v[..n].to_vec()
-}
-
-/// `$(echo "$V")`: echo takes a word of -n, -e and -E alone as its options, and prints nothing.
-pub fn echo_sub(v: &[u8]) -> Vec<u8> {
-    if v.len() > 1 && v[0] == b'-' && v[1..].iter().all(|c| matches!(c, b'n' | b'e' | b'E')) {
-        return Vec::new();
-    }
-    strip_nl(v)
 }
 
 /// `$(printf '%s' "$V" | cut -c1-N)`: each line's first N characters. coreutils 9.12's cut counts
@@ -723,15 +715,6 @@ pub fn test_int(v: &[u8]) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn echo_takes_its_options() {
-        assert_eq!(echo_sub(b"-n"), b"");
-        assert_eq!(echo_sub(b"-neE"), b"");
-        assert_eq!(echo_sub(b"-"), b"-");
-        assert_eq!(echo_sub(b"-x"), b"-x");
-        assert_eq!(echo_sub(b"a\n\n"), b"a");
-    }
 
     // What coreutils 9.12's `cut -c` gave for each, in en_US.UTF-8 and in C.
     #[test]

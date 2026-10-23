@@ -3294,6 +3294,8 @@ t_unit_rust_parity() {
   rp_env=(OMABOX=dead1); parity "OMABOX=NAME" env
   rp_env=(OMABOX=1 OMABOX_NAME=x); parity "OMABOX=1 under run: no name" env
   rp_env=(OMABOX=1); parity "OMABOX=1 alone: box 1" env
+  # (bash's `$(echo "$OMABOX")` took -n for echo's option: its refusal named no box)
+  rp_why=438 rp_bash=('err~^omabox: env: bad box name : ') rp_rust=('err~^omabox: env: bad box name -n: ')
   rp_env=(OMABOX=-n); parity "OMABOX=-n (echo's option)" env
   rp_env=(OMABOX='a b'); parity "OMABOX with other characters: made to fit" env
   rp_env=(OMABOX=dead1); parity "...-b wins" env -b dead2

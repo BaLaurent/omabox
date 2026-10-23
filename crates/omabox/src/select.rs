@@ -45,14 +45,16 @@ pub fn agent_session() -> Option<Vec<u8>> {
     (id.len() >= 8).then(|| id[id.len() - 8..].to_ascii_lowercase())
 }
 
+/// The name as it is (bash's `$(echo "$V")` took a name of -n, -e or -E alone for echo's options
+/// and printed nothing, so its refusal named no box: finding 438).
 pub fn default_name() -> Vec<u8> {
     // A jailed caller's omabox worked its default out where it runs, in the jail (relay_call).
     if in_jail() {
         let d = env_or_empty("OMABOX_RELAY_DEFAULT");
-        return shell::echo_sub(if d.is_empty() { b"default" } else { &d });
+        return shell::strip_nl(if d.is_empty() { b"default" } else { &d });
     }
     if env_names_box() {
-        return shell::echo_sub(&env_or_empty("OMABOX"));
+        return shell::strip_nl(&env_or_empty("OMABOX"));
     }
     let top = crate::sig::command("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -67,8 +69,8 @@ pub fn default_name() -> Vec<u8> {
     // An agent session gets a box of its own (finding 88): two agents in one repo would otherwise
     // share one, and one's `down` would end the other's work. The suffix survives the 40-char cut.
     match agent_session() {
-        Some(sid) => shell::echo_sub(&cat!(shell::cut_c(&base, 31), "-", sid)),
-        None => shell::echo_sub(&base),
+        Some(sid) => shell::strip_nl(&cat!(shell::cut_c(&base, 31), "-", sid)),
+        None => shell::strip_nl(&base),
     }
 }
 
