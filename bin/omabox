@@ -1942,11 +1942,10 @@ host_session() {
   HOST_SIG=$sig HOST_WL=$XDG_RUNTIME_DIR/$wl
 }
 
-# hyprctl on the user's session (host_session), wherever this shell's display points. HOST_LIMIT=S
-# ends it after S s (exit 124).
+# hyprctl on the user's session (host_session), wherever this shell's display points.
 host_hyprctl() {
   host_session
-  HYPRLAND_INSTANCE_SIGNATURE=$HOST_SIG ${HOST_LIMIT:+timeout "$HOST_LIMIT"} hyprctl "$@"
+  HYPRLAND_INSTANCE_SIGNATURE=$HOST_SIG hyprctl "$@"
 }
 
 # A screen mode for a headless box: WxH (@60), WxH@HZ, or `host` for the user's focused monitor

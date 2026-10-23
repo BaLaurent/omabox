@@ -9187,7 +9187,8 @@ from them.
     **On the port-rust branch finding 429's design C replaces this** (each monitor window a class
     and a rule of its own, no rule turned off): mon_cleanup, mon_drain, mon_unrecord,
     monitor_add_held, the global `omabox_monitor_rule` and their tests went with the merge, 429's
-    `mon_answer` replaced this one's; host_hyprctl's HOST_LIMIT stays (t_unit_monitors).
+    `mon_answer` replaced this one's. host_hyprctl's HOST_LIMIT, which then nothing set, went in
+    wave 4c.
 
 437. **A group Ctrl-C during the Rust half's interactive `monitor add` finished the add** (2026-10-23,
     #324 integration review). The create's foreground child outlives a group INT (`timeout` puts the

@@ -16760,13 +16760,6 @@ t_unit_monitors() {
     monitor_add_window 800x600; echo "went on"' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
   check_match "a monitor add failing in up: up's own EXIT trap runs (it takes the box down)" "a stub.*up-trap" "$(tr '\n' ' ' <<<"$out")"
   check_fails "...and up stops there" grep -q "went on" <<<"$out"
-  # host_hyprctl's HOST_LIMIT=S (finding 435's, kept on this branch): a host Hyprland that takes no
-  # connection is given up on at S s, exit 124.
-  mkdir -p "$d/hbin"; printf '#!/bin/sh\nexec sleep 30\n' > "$d/hbin/hyprctl"; chmod +x "$d/hbin/hyprctl"
-  out=$(PATH="$d/hbin:$PATH" bash -c 'source "$1"; HOST_SIG=x; t=${EPOCHREALTIME//[!0-9]/}
-    HOST_LIMIT=1 host_hyprctl -j version && rc=0 || rc=$?; echo "rc=$rc took $(( (${EPOCHREALTIME//[!0-9]/} - t) / 1000 )) ms"' _ "$TMP/lib/bin/omabox" 2>&1)
-  check_match "host_hyprctl with HOST_LIMIT (1 s here): a silent host given up on, exit 124" "^rc=124 took (9[0-9][0-9]|1[0-9]{3}|2[0-4][0-9]{2}) ms$" "$out"
-  rm -rf "$d/hbin"
   # An output listed 0x0 in an NVIDIA box (#213): one a program made with `output create headless`.
   local zm='[{"name":"WAYLAND-1","width":1920,"height":1080,"disabled":false},{"name":"MINE","width":0,"height":0,"disabled":false},{"name":"OFF","width":0,"height":0,"disabled":true}]'
   out=$(lib zero_note "$zm" true "renderD128 amdgpu")
