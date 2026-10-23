@@ -8829,11 +8829,17 @@ from them.
     3b's scroll and keys-to-box too), and
     `run -d --wait` is the Rust half's, on the settle machinery `wait` shares (settle.rs). Tests:
     t_unit_rust_handoff, t_unit_rust_parity, t_rust_parity.
-    Where the halves still differ on signals (wave 4b, each on the safe side): an INT to omabox alone
-    while it works in-process ends the Rust half at once, where bash would finish the step it is in;
-    a TERM to omabox alone while `record sheet` takes its frames ends the Rust half 143 with no sheet
-    (bash's main dies at once, its subshell finishes the sheet); a TERM during the EXIT trap that an
-    INT began ends bash at once, 143, its undo cut short, where the Rust half finishes the undo first.
+    Where the halves still differ on signals (wave 4b): (a) an INT to omabox alone while it works
+    in-process ends the Rust half at once, where bash would finish the step it is in (the safe side);
+    (b) a TERM to omabox alone while `record sheet` takes its frames ends both 143, but bash's
+    subshell finishes the sheet after its main is gone, where the Rust half makes none (the safe
+    side: nothing left behind); (c) a TERM during the EXIT trap an INT began ends bash at once, 143,
+    its undo cut short, where the Rust half finishes the undo first (the safe side); (d) a group
+    signal while a code trap waits for its `$(...)` that kills no child there (the child traps it, or
+    the substitution is between children) ends bash's subshell, and nothing more of it runs, where the
+    Rust half runs the substitution's remaining steps before the trap's exit (not the safe side).
+    The Rust half runs the subshell's steps in-process, so it tells a group signal from one to omabox
+    alone only by a child that dies of it (sig::group_cut).
 
 426. **A refused OMABOX_STILL_DUMP left a temporary dir behind** (2026-10-22, #324 wave 3a's review).
     settle_begin made its `mktemp -d` dir for the tool's two fifos, and an action's before snapshot

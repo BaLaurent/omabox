@@ -10,7 +10,7 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// bin/omabox, for a command this half leaves to it, with this process's environment.
@@ -132,10 +132,11 @@ pub fn run_child<T>(
             }
         };
         FG_ACTIVE.store(!int_ignored, Ordering::SeqCst);
+        let spawned_at = now_ms();
         let t = with(&mut ch);
         let st = end(&mut ch);
         FG_ACTIVE.store(false, Ordering::SeqCst);
-        if group_cut(st.1) {
+        if group_cut(st.1, spawned_at, now_ms()) {
             // (the substitution's subshell gone: main stops here, the trap's thread ends it)
             drop(g);
             SUBST_CUT.store(true, Ordering::SeqCst);
@@ -241,24 +242,51 @@ pub fn subst<T>(f: impl FnOnce() -> T) -> T {
 /// How many `$(...)` steps main is inside (subst), and whether a code trap waits for their end.
 pub static SUBST_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static SUBST_STOP: AtomicBool = AtomicBool::new(false);
-/// While a code trap waits (SUBST_STOP): the signals that came since, as bits (1 << N, the trap's
-/// thread reads them from its pipe), and SUBST_CUT, main's word that a group one killed the
+/// While a code trap waits (SUBST_STOP): when the trap's thread last read each signal from its pipe
+/// (now_ms; 0: not since the wait began), and SUBST_CUT, main's word that a group one killed the
 /// substitution's child: bash's subshell died of it, so nothing more of the substitution runs.
-pub static SECOND: AtomicI32 = AtomicI32::new(0);
+static SEEN: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
 pub static SUBST_CUT: AtomicBool = AtomicBool::new(false);
 
+/// Milliseconds since this process's first ask, from 1 (0 is never).
+fn now_ms() -> u64 {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let ms = T0
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis();
+    u64::try_from(ms).unwrap_or(u64::MAX - 1) + 1
+}
+
+/// The trap's thread read SIG now (Some), or the wait begins and none counts yet (None).
+pub fn seen(sig: Option<i32>) {
+    match sig
+        .and_then(|s| usize::try_from(s).ok())
+        .filter(|&s| s < 32)
+    {
+        Some(s) => SEEN[s].store(now_ms(), Ordering::SeqCst),
+        None => SEEN.iter().for_each(|a| a.store(0, Ordering::SeqCst)),
+    }
+}
+
 /// While a code trap waits for the substitution: a child that died of INT, TERM or HUP when this
-/// process got the same one too (within 300 ms: the trap's thread reads it) was killed by a group
-/// signal, as bash's subshell was.
-fn group_cut(sig: Option<i32>) -> bool {
+/// process got the same one too was killed by a group signal, as bash's subshell was. "Too": read
+/// while that child ran and no more than 100 ms before its end was seen (a group signal reaches
+/// both at once; the thread reads it within 300 ms), so a lone one earlier in the child's run and
+/// the child's own death of that signal later are not taken for one.
+fn group_cut(sig: Option<i32>, spawned: u64, ended: u64) -> bool {
     let Some(s) = sig else { return false };
     if !SUBST_STOP.load(Ordering::SeqCst)
         || ![libc::SIGINT, libc::SIGTERM, libc::SIGHUP].contains(&s)
     {
         return false;
     }
+    let Some(at) = usize::try_from(s).ok().and_then(|i| SEEN.get(i)) else {
+        return false;
+    };
+    let from = spawned.max(ended.saturating_sub(100));
     for _ in 0..30 {
-        if SECOND.load(Ordering::SeqCst) & (1 << s) != 0 {
+        if at.load(Ordering::SeqCst) >= from {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -565,7 +593,7 @@ mod signal_cases {
 
     /// A code trap's substitution, a TERM to omabox alone in its first step, then SECOND (to
     /// omabox alone, or with GROUP to its child too, which dies of it) in its second: bash's
-    /// answer and whether its third step ran.
+    /// answer and whether its third step ran (None in the child alone).
     fn two_signals(name: &str, second: i32, group: bool) -> Option<(i32, String)> {
         let Some(r) = in_child(name) else {
             super::set_main();
@@ -585,7 +613,32 @@ mod signal_cases {
             eprintln!("CASE after the substitution");
             return None;
         };
-        r
+        // (None in the child alone: a case that hung fails here)
+        Some(r.expect("it hung"))
+    }
+
+    /// TERM, TERM to omabox alone (at 900 ms); the substitution's child dies of a TERM of its own
+    /// 500 ms later: no group signal, so bash's subshell runs on ("third"), then 143 (probed).
+    #[test]
+    fn term_then_term_and_a_child_dying_of_its_own() {
+        let Some(r) = in_child("term_then_term_and_a_child_dying_of_its_own") else {
+            super::set_main();
+            let _t = crate::trap::on_exit_code(|| eprintln!("CASE undo"));
+            kill_at(&[(200, libc::SIGTERM), (900, libc::SIGTERM)]);
+            super::subst(|| {
+                sh("sleep 0.6");
+                sh("sleep 0.8; kill -TERM $$");
+                eprintln!("CASE third step");
+                sh("sleep 0.3");
+            });
+            eprintln!("CASE after the substitution");
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE third"), "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE after"), "{err}");
     }
 
     /// A group signal second: bash's subshell dies of it, nothing more of the substitution runs,

@@ -1930,8 +1930,9 @@ fn record_sheet(
     } else {
         Vec::new()
     };
-    // (`read ... < <(jq -r ...)`: its read cut short by an INT as a substitution's)
-    let r = crate::sig::subst(|| jq::jq(&["-r", P::SHEET_JQ], Some(&strip_nl(&j)), jq::Err::Null));
+    // (`read ... < <(jq -r ...)`, a process substitution: a plain step here, inside the `$(...)` both
+    // callers run record_sheet in, which an INT to omabox alone already ends at)
+    let r = jq::jq(&["-r", P::SHEET_JQ], Some(&strip_nl(&j)), jq::Err::Null);
     let f = shell::read_fields(&r.out, 5);
     let ok = r.ok()
         && shell::re_match(

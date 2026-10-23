@@ -224,7 +224,7 @@ fn arm() {
                 let g = busy_at.then(lock_fg);
                 if g.is_some() && crate::sig::FG_SIG.load(Ordering::SeqCst) != sig {
                     // (main goes on to the substitution's end, where it parks: sig::subst)
-                    crate::sig::SECOND.store(0, Ordering::SeqCst);
+                    crate::sig::seen(None);
                     crate::sig::SUBST_STOP.store(true, Ordering::SeqCst);
                     crate::sig::STOPPING.store(false, Ordering::SeqCst);
                     drop(g);
@@ -236,7 +236,7 @@ fn arm() {
                         crate::sig::STOPPING.store(false, Ordering::SeqCst);
                         for s in drain(&f) {
                             pending.push(s);
-                            crate::sig::SECOND.fetch_or(1 << s, Ordering::SeqCst);
+                            crate::sig::seen(Some(s));
                         }
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
