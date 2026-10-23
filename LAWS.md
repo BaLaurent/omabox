@@ -96,8 +96,11 @@ With `--net isolated --allow PORTS`, a box reaches those host ports and no other
 beyond the host.
 
 Not a law for a connected box (the default): pasta forwards every host loopback port into it on
-purpose (`-T auto`, so an app in the box reaches a dev server on the host), so it can reach the
-user's own local services. What keeps agents off those is `AGENTS.md`'s rule, not the program.
+purpose (`-T auto`, so an app in the box reaches a dev server on the host), and a host service that
+listens on every address is also reached through the host's other addresses (a docker bridge, a VPN
+address), which no forwarding rule covers. So a connected box can reach the user's own local
+services; what keeps agents off them is `AGENTS.md`'s rule, not the program. Planned (#355): ports
+the user protects, which no box reaches by any of the host's addresses.
 
 - live: `t_isolated`, `t_run_options`.
 - Rust (wave 5+), type: the isolated net mode carries its allow list; property: pasta's arguments
