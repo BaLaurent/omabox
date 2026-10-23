@@ -3007,7 +3007,16 @@ t_unit_rust_handoff() {
 # stderr files before the sed, to check what the sed then evens out.
 # Since finding 429: $rp_mask, a sed -E script, is run over each file's contents before its sum (a
 # random token written there).
+# Since wave 4c, expected differences (where the Rust half does better than bash on purpose, "Rust over
+# bash"): before the call, rp_why=N (the finding that says so) and rp_bash, rp_rust, arrays of what each
+# half gives in the fields that differ: FIELD=TEXT (that side's whole file after the sed, trailing
+# newlines aside), FIELD~ERE (a line of it matches), FIELD!~ERE (no line does); FIELD is rc, out, err
+# or state. Both name the same fields, which must differ between the sides (or it is no difference)
+# and are checked against each side's own; the other fields are compared as ever. The case is said
+# as "LABEL (expected difference: finding N)", and the three are reset after it. Under --installed
+# (no binary: both sides bash) both are checked against rp_bash.
 rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1 rp_wrap=() rp_in=/dev/null rp_sed="" rp_also="" rp_check="" rp_mask=""
+rp_why="" rp_bash=() rp_rust=() rp_fields="" rp_bad=""
 rp_state() {
   if [ "$rp_snap" = 1 ]; then
     # (run's marks, $D/runs, are named by pid and time: by kind here)
@@ -3017,11 +3026,38 @@ rp_state() {
   fi
   [ -z "$rp_also" ] || "$rp_also"
 }
+# rp_differs DIR: the expected difference's checks over DIR's bash.* and rust.* (see above): the fields
+# named into rp_fields, what failed into rp_bad.
+rp_differs() {
+  local d=$1 side w f op want re='^(rc|out|err|state)(=|~|!~)(.*)$' fb="" fr=""
+  local -a ws
+  rp_bad="" rp_fields=""
+  for w in "${rp_bash[@]}"; do [[ $w =~ $re ]] && fb+="${BASH_REMATCH[1]}"$'\n'; done
+  for w in "${rp_rust[@]}"; do [[ $w =~ $re ]] && fr+="${BASH_REMATCH[1]}"$'\n'; done
+  fb=$(LC_ALL=C sort -u <<<"$fb" | xargs) fr=$(LC_ALL=C sort -u <<<"$fr" | xargs)
+  [ -n "$fb" ] && [ "$fb" = "$fr" ] || rp_bad+="the expected difference names fields [$fb] for bash, [$fr] for Rust: one set, both sides; "
+  rp_fields=$fb
+  for side in bash rust; do
+    ws=("${rp_bash[@]}"); [ "$side" = bash ] || [ ! -x "$ROOT/build/bin/omabox" ] || ws=("${rp_rust[@]}")
+    for w in "${ws[@]}"; do
+      [[ $w =~ $re ]] || { rp_bad+="$side: '$w' is not FIELD=TEXT, FIELD~ERE or FIELD!~ERE; "; continue; }
+      f=$d/$side.${BASH_REMATCH[1]} op=${BASH_REMATCH[2]} want=${BASH_REMATCH[3]}
+      case $op in
+        =) [ "$(cat "$f")" = "$want" ] || rp_bad+="$side ${BASH_REMATCH[1]}: [$(head -c 400 "$f")], not [$want]; " ;;
+        '~') grep -qE -- "$want" "$f" || rp_bad+="$side ${BASH_REMATCH[1]}: no line matches /$want/ in [$(head -c 400 "$f")]; " ;;
+        '!~') ! grep -qE -- "$want" "$f" || rp_bad+="$side ${BASH_REMATCH[1]}: a line matches /$want/: [$(grep -m1 -E -- "$want" "$f" | head -c 400)]; " ;;
+      esac
+    done
+  done
+  [ -x "$ROOT/build/bin/omabox" ] || return 0
+  for f in $rp_fields; do cmp -s "$d/bash.$f" "$d/rust.$f" && rp_bad+="$f: the same both ways, so no difference; "; done
+  return 0
+}
 parity() {
   local label=$1 side d=$TMP/rp-out.$BASHPID; shift
   # (RP_ONLY=RE: only the cases whose label matches, to work on a few; RP_DIFF=FILE: a failing case's
   # whole difference appended there)
-  [ -z "${RP_ONLY:-}" ] || [[ $label =~ $RP_ONLY ]] || return 0
+  [ -z "${RP_ONLY:-}" ] || [[ $label =~ $RP_ONLY ]] || { rp_why="" rp_bash=() rp_rust=(); return 0; }
   mkdir -p "$d"
   for side in bash rust; do
     [ -z "$rp_prep" ] || "$rp_prep"
@@ -3034,8 +3070,11 @@ parity() {
     if [ -n "$rp_sed" ]; then local f; for f in out err; do sed -i -E "$rp_sed" "$d/$side.$f"; done; fi
   done
   [ -z "${RP_SHOW:-}" ] || { echo "== $label: rc $(cat "$d/bash.rc")"; cat "$d/bash.out" "$d/bash.err"; } >> "$RP_SHOW"
-  local f diffs=""
+  local f diffs="" differ=" "
+  [ -z "$rp_why" ] || { rp_differs "$d"; differ=" $rp_fields "; diffs=$rp_bad; label+=" (expected difference: finding $rp_why)"; }
+  rp_why="" rp_bash=() rp_rust=()
   for f in rc out err state; do
+    [[ $differ != *" $f "* ]] || continue
     cmp -s "$d/bash.$f" "$d/rust.$f" || diffs+="$f: bash [$(head -c 400 "$d/bash.$f")] rust [$(head -c 400 "$d/rust.$f")]; "
   done
   if [ -z "$diffs" ]; then ok "$label"; else
@@ -3093,6 +3132,20 @@ t_unit_rust_parity() {
   [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity" "no build/bin/omabox (an install: every command runs in bash)"; return; }
   local r=$TMP/rp sid=0123456789abcdef s8=89abcdef
   rm -rf "$r"; mkdir -p "$r/rt" "$r/norepo" "$r/bin"
+  # parity's expected differences (wave 4c) judged on files of the test's own: each side against its
+  # own wants, the fields named by both, a named field the same both ways failed (no difference).
+  mkdir -p "$r/ed"; printf '1\n' > "$r/ed/bash.rc"; printf '1\n' > "$r/ed/rust.rc"
+  printf 'omabox: bad : x\n' > "$r/ed/bash.err"; printf 'omabox: bad -n: x\nmore\n' > "$r/ed/rust.err"
+  printf './a f\n./tmp.x f\n' > "$r/ed/bash.state"; printf './a f\n' > "$r/ed/rust.state"
+  rp_bash=('err=omabox: bad : x' 'state~tmp\.') rp_rust=('err~^omabox: bad -n:' 'state!~tmp\.'); rp_differs "$r/ed"
+  check_eq "expected difference: each side as it is stated" "err state|" "$rp_fields|$rp_bad"
+  rp_bash=('err=omabox: bad -n: x') rp_rust=('err!~^more'); rp_differs "$r/ed"
+  check_match "...a side not as stated, each said" "^bash err: .*rust err: a line matches /\^more/" "$rp_bad"
+  rp_bash=('rc=1') rp_rust=('rc=1'); rp_differs "$r/ed"
+  check_eq "...a field the same both ways: no difference" "rc: the same both ways, so no difference; " "$rp_bad"
+  rp_bash=('err~bad' 'state~a') rp_rust=('err~bad'); rp_differs "$r/ed"
+  check_match "...fields named for one side only" "^the expected difference names fields \[err state\] for bash, \[err\] for Rust" "$rp_bad"
+  rp_bash=() rp_rust=() rp_fields="" rp_bad=""
   local repo; repo=$r/rp-repo; mkdir -p "$repo" && git -C "$repo" init -q
   local long; long=$r/$(printf 'l%.0s' {1..45}); mkdir -p "$long" && git -C "$long" init -q
   # (31 characters cut where the bytes differ: é is 2 bytes; \xe2\x82 is € cut short, \xf4\x90... past U+10FFFF)
