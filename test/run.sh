@@ -1875,7 +1875,8 @@ t_unit_calibrate() {
   out=$(cal "$d/card.png" --answer "$(tr '\n' ' ' <<<"$m")" 2>&1); rc=$?
   check_match "--answer 1:1: says so, exit 0" "^read 1:1: .*no --fit needed" "$out $rc"
   out=$(cal "$d/card.png" --answer "$(cal_reads "$m" 0.7583 | tr '\n' ' ')" 2>&1); rc=$?
-  check_match "--answer 0.758x: the --fit, exit 0" "^read at 0.758x.*shot --fit 1456 .*click --in.* 0$" "${out//$'\n'/ } $rc"
+  # (the card's marks fall at random: their reads, rounded to pixels, put 0.7583 at 0.758 or 0.759)
+  check_match "--answer 0.758x: the --fit, exit 0" "^read at 0.75[89]x.*shot --fit 1456 .*click --in.* 0$" "${out//$'\n'/ } $rc"
   check_match "...and the setting to suggest, the user's" "the user can run: omabox config shot-fit 1456 .*never set it" "$out"
   check_match "...and how to check it" "omabox calibrate --size 1456x819 should read 1:1" "$out"
   check "...nothing set" bash -c "! grep -qs shot-fit '$h2/.config/omabox/config'"
@@ -5269,7 +5270,7 @@ t_unit_rust_parity4b() {
 #!/bin/sh
 case "\$*" in
   version) echo "Hyprland 0.56.2" ;;
-  "-j monitors") cat $st/mons.json ;;
+  "-j monitors") [ ! -f $st/mons.sleep ] || { : > $st/mons-asked; sleep 2; }; cat $st/mons.json ;;
   -j\ *) echo '[]' ;;
   *) echo ok ;;
 esac
@@ -5289,7 +5290,12 @@ if "continue" in a:
         os.execvp("sleep", ["sleep", "3600", "rp4b-watch-" + ST])
     lib = ctypes.CDLL(None, use_errno=True)
     lib.ptrace.argtypes = [ctypes.c_long, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p]
-    rc = lib.ptrace(0x4206, pid, None, None)
+    # (a seize refused a moment, EPERM while another tracer lets go: tried for 5 s)
+    for _ in range(50):
+        rc = lib.ptrace(0x4206, pid, None, None)
+        if rc == 0:
+            break
+        time.sleep(0.1)
     print("seized" if rc == 0 else "no seize: %d" % ctypes.get_errno(), flush=True)
     os.execvp("sleep", ["sleep", "3600", "rp4b-watch-" + ST])
 print("Thread 1 (LWP %d):\n#0  0x0 in poll ()" % pid, flush=True)
@@ -5372,6 +5378,10 @@ while True:
         out = rd("host/clients.json", "[]")
     elif d.startswith("/eval"):
         out = rd("host/eval.out", "ok").strip()
+        if "exec_cmd" in d and os.path.exists(os.path.join(ST, "host/eval.sleep")):
+            open(os.path.join(ST, "eval-asked"), "w").close()
+            import time
+            time.sleep(2)
         m = re.search(r"hl\.exec_cmd\('(.*)', \{", d)
         if m and out == "ok":
             words = m.group(1).split(" ")
@@ -5519,6 +5529,14 @@ PYEOF
   rp4b_slowcl() { : > "$st/host/peek.shows"; echo 2 > "$st/host/clients.sleep"; }; rp4b_pre=(rp4b_slowcl)
   rp_wrap=(env RP_LINGER=3 "$r/rp-sig" INT "$st/clients-asked") rp_sed='s/pid:[0-9]+/pid:P/'
   parity "peek --focus and INT to omabox alone during hyprctl: it carries on and focuses" peek -b fk --focus
+  # An INT to omabox alone during a step bash runs in a `$(...)`: the step finishes, then 130,
+  # nothing focused (the box's monitors, the host's exec of the window).
+  rp4b_slowmon() { : > "$st/host/peek.shows"; : > "$st/mons.sleep"; }; rp4b_pre=(rp4b_slowmon)
+  rp_wrap=(env RP_LINGER=3 "$r/rp-sig" INT "$st/mons-asked")
+  parity "peek --focus and INT to omabox alone while the box says its monitors: 130, no focus" peek -b fk --focus
+  rp4b_sloweval() { : > "$st/host/peek.shows"; : > "$st/host/eval.sleep"; }; rp4b_pre=(rp4b_sloweval)
+  rp_wrap=(env RP_LINGER=3 "$r/rp-sig" INT "$st/eval-asked")
+  parity "peek --focus and INT to omabox alone while the host execs its window: 130, no focus" peek -b fk --focus
   rp_sed="" rp4b_pre=()
   rp_wrap=("$r/rp-sig" TERM "$st/spawned")
   parity "peek --focus and TERM" peek -b fk --focus
@@ -5786,19 +5804,32 @@ o = a[-1]
 m = re.search(r"select='([^']*)'", j)
 if "%03d" in o and m:
     for i in range(1, m.group(1).count("eq(") + 1):
-        shutil.copy(ST + "/tile.png", o.replace("%03d", "%03d" % i))
+        shutil.copy(ST + "/../tile.png", o.replace("%03d", "%03d" % i))
+    if os.path.exists(ST + "/tiles.sleep"):
+        open(ST + "/tiles-made", "w").close()
+        time.sleep(2)
     sys.exit(0)
 with open(o, "w") as h:
     h.write("MP4 " + os.path.basename(o) + "\n")
 PYEOF
   sed -i "s#@ST@#$st#" "$rb"/*; chmod +x "$rb"/*
   magick -size 64x36 xc:'#336699' "$st/tile.png"; cp "$st/tile.png" "$r/tile.png"
+  # (a stand-in desktop of its own for record: the tools above bound, a HOME for the box; its PID 1
+  # reaps what is left to it, as a box's does: a wf-recorder that ended is gone, no zombie that
+  # record stop would wait 15 s on)
+  local reaper='import os, time
+end = time.time() + 3600
+while time.time() < end:
+    try:
+        os.waitpid(-1, 0)
+    except ChildProcessError:
+        time.sleep(0.2)'
   # (a stand-in desktop of its own for record: the tools above bound, a HOME for the box)
   prlimit --core=1: unshare -Urpfui --mount-proc sh -c 'mount -t tmpfs none /home && mkdir /home/sbx && mount -t tmpfs none /run/user &&
     mkdir -p "/run/user/$2" && for t in hyprctl wf-recorder ffmpeg ffprobe; do mount --bind "$1/$t" "/usr/bin/$t"; done || exit 1
-    exec sleep 3600' sh "$rb" "$(id -u)" >/dev/null 2>&1 & local urc=$!
+    exec python3 -c "$3"' sh "$rb" "$(id -u)" "$reaper" >/dev/null 2>&1 & local urc=$!
   cp "$r/bin/hyprctl" "$rb/hyprctl"
-  local lrc=""; for i in $(seq 300); do lrc=$(pgrep -P "$urc" -x sleep) && break; sleep 0.1; done
+  local lrc=""; for i in $(seq 300); do lrc=$(pgrep -P "$urc") && break; sleep 0.1; done
   check "the stand-in recording desktop started" test -n "$lrc"
   local nsrc; nsrc=$(readlink "/proc/$lrc/ns/pid")
   rp4b_rc() {
@@ -5815,7 +5846,7 @@ PYEOF
     rp4b_also_c
     echo "== rt"; (cd "$r/rt/omabox" && for f in rc/* rca/*; do [ -f "$f" ] || continue; case $f in */box.json|*/info.json) continue ;; esac; echo "-- $f"; case $f in */record|*/record.audio) sed -E 's/^[0-9]+(,[0-9]+)*( |$)/P\2/; s/[0-9]{3,}/N/g' "$f" ;; *) sed -E 's/[0-9]{3,}/N/g' "$f" ;; esac; done)
     # (the layout's wf-recorders start together: their lines in either order)
-    for f in wf.log ff.log; do [ ! -f "$st/$f" ] || { echo "== $f"; sed -E "s#$r#R#g; s/[0-9]{6,}/N/g; s/sheet-[0-9]+/sheet-PID/g" "$st/$f" | if [ "$f" = wf.log ]; then LC_ALL=C sort; else cat; fi; }; done
+    for f in wf.log ff.log; do [ ! -f "$st/$f" ] || { echo "== $f"; sed -E "s#$r#R#g; s/sheet-[0-9]+/sheet-PID/g; s/[0-9]{6,}/N/g" "$st/$f" | if [ "$f" = wf.log ]; then LC_ALL=C sort; else cat; fi; }; done
   }
   rp_snap=0 rp_also=rp4b_recst rp4b_pre=(rp4b_recfix)
   rp_env=("${rp_env4c[@]}" PATH="$PATH")
@@ -5927,7 +5958,7 @@ PYEOF
   # (bash's half starts it, in this test's runtime dir and environment, as the cases run)
   rp4b_cli() { env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL ${rp_env[@]+"${rp_env[@]}"} OMABOX_BASH=1 XDG_RUNTIME_DIR="$r/rt" "$CLI" "$@"; }
   rp4b_started() { rp4b_recfix; rp4b_cli -b rc record start -o "$r/co/v.mp4" >/dev/null 2>&1; sleep 0.5
-    [ -f "$r/rt/omabox/rc/record" ] || echo "rp4b_started: no recording started" >&2; }
+    [ -f "$r/rt/omabox/rc/record" ] || no "the case's recording started (its prep)" "no $r/rt/omabox/rc/record"; }
   rp4b_pre=(rp4b_started)
   parity "record start: recording already" record -b rc start -o "$r/co/w.mp4"
   parity "record status: recording" record -b rc status
@@ -5965,6 +5996,14 @@ PYEOF
   rp4b_ptrlock() { rp4b_marked; printf 'hold record 1\nwas false\n' > "$r/rt/omabox/rc/pointer"; : > "$r/rt/omabox/rc/.pointer.lock"; flock "$r/rt/omabox/rc/.pointer.lock" sleep 12 & sleep 0.2; }
   rp4b_pre=(rp4b_ptrlock)
   parity "record stop: the pointer's lock held (432: no temp file left)" record -b rc stop --show-input
+  # A TERM or an INT to omabox alone while the sheet takes its frames (a `$(...)` under rec_traps):
+  # bash finishes the sheet, says it, then exits 143 (130).
+  rp4b_slowtiles() { rp4b_marked; : > "$st/tiles.sleep"; }; rp4b_pre=(rp4b_slowtiles)
+  for i in TERM INT; do
+    rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/tiles-made")
+    parity "record stop --sheet and $i to omabox alone while it takes the frames" record -b rc stop --sheet --frames 3
+  done
+  rp_wrap=()
   rp4b_ffail() { rp4b_marked; : > "$st/ffmpeg.fail"; }; rp4b_pre=(rp4b_ffail)
   parity "record stop: ffmpeg cannot make it (finding 432: nothing left)" record -b rc stop --show-input
   rp4b_pre=(rp4b_recfix)
@@ -12730,7 +12769,8 @@ t_rust_parity() {
   rp_prep=rp_lay
   # (the figures are the window's: their numbers left out, the rows and what they are kept)
   rp_sed='s/[0-9]+\.[0-9]+(%|M|G)/N\1/g; s/: [0-9]+(\.[0-9]+)?(,?)$/: N\2/'
-  parity "gpu --json (both ways)" gpu -b "$B" 500ms --json
+  # (2 s: NVIDIA's pmon samples once a second, and a shorter window caught labwc on one side only)
+  parity "gpu --json (both ways)" gpu -b "$B" 2s --json
   parity "cpu --pid 1 (both ways)" cpu -b "$B" 300ms --pid 1
   # (--threads of a one-thread process of its own: PID 1's threads come in CPU order, which flakes)
   ob run -b "$B" -d -q -- sleep 600 >/dev/null 2>&1
@@ -12788,14 +12828,16 @@ t_rust_parity() {
   parity "check run: the scenario failed, exit 3 (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/bad"
   parity "check run --json: no checkpoint taken (both ways)" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/none"
   # (bash's own line for a command not found names its script and line: the rest compared)
-  rp_sed='s#[^ ]*/bin/omabox: line [0-9]+: #bash: #; s/box up in [0-9]+ s/box up in N s/'
+  rp_sed='s#[^ ]*/bin/omabox: (line [0-9]+: )?#bash: #; s/box up in [0-9]+ s/box up in N s/'
   parity "check run: a scenario not there, 127 (both ways)" check run --base "$ck/base" -o "$ck/o" -- rp-no-such-scenario
   parity "check run --json: checkpoints with 010 and 08 in them (both ways)" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/lz"
   # Scenarios bash cannot run as they are: not executable, a dir, binary; one with no #! is a
   # script bash runs itself; a path to nothing.
   printf 'echo hi\n' > "$ck/noexec"; mkdir -p "$ck/adir"; printf '\000\001x' > "$ck/binary"; chmod +x "$ck/binary"
   printf 'omabox check point whole\n' > "$ck/nosb"; chmod +x "$ck/nosb"
-  for i in noexec adir binary nosb nowhere; do
+  printf '#!/bin/sh\r\nomabox check point whole\r\n' > "$ck/crlf"; printf '#!/nonexistent/interp -x\n' > "$ck/badint"; chmod +x "$ck/crlf" "$ck/badint"
+  cp /usr/bin/true "$ck/xonly"; chmod 0711 "$ck/xonly"
+  for i in noexec adir binary nosb nowhere crlf badint xonly; do
     parity "check run: a scenario that is $i (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/$i"
   done
   # Signals during its box's up and during its scenario: the exit, and no check box left.

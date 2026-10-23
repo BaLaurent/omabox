@@ -79,7 +79,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     select_box(ctx, &name)?;
     need_box(ctx)?;
-    host_session_die(ctx)?;
+    // (bash's host_session: its reads of the host are `$(...)`s, sig::subst: an INT to omabox alone
+    // meanwhile lets the step finish, then ends it, 130, before anything is focused)
+    crate::sig::subst(|| host_session_die(ctx))?;
     if meta(&ctx.d, "mode").0 == b"interactive" {
         // omabox-wlfd connects and execs bwrap, so the host sees the window as the outer bwrap's.
         if focus {
@@ -98,12 +100,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Ok(());
     }
     // The screen it shows (#122): the main one, or --monitor's; one peek window each.
-    let mons = strip_nl(&hypr_json(ctx, &["monitors"])?);
-    let r = jq::jq(
-        &["-r", &format!("{}.name // empty", main_screen(ctx))],
-        Some(&mons),
-        jq::Err::Inherit,
-    );
+    let mons = strip_nl(&crate::sig::subst(|| hypr_json(ctx, &["monitors"]))?);
+    let r = crate::sig::subst(|| {
+        jq::jq(
+            &["-r", &format!("{}.name // empty", main_screen(ctx))],
+            Some(&mons),
+            jq::Err::Inherit,
+        )
+    });
     if !r.ok() {
         return Err(crate::exit::Exit(u8::try_from(r.rc).unwrap_or(1)));
     }
@@ -115,11 +119,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .run(Some(&mons), jq::Err::Inherit)
             .ok();
         if !has {
-            let names = jq::jq(
-                &["-r", r#"map(.name) | join(", ")"#],
-                Some(&mons),
-                jq::Err::Inherit,
-            )
+            let names = crate::sig::subst(|| {
+                jq::jq(
+                    &["-r", r#"map(.name) | join(", ")"#],
+                    Some(&mons),
+                    jq::Err::Inherit,
+                )
+            })
             .text();
             return Err(ctx.die(cat!(
                 "peek: box '",
@@ -147,7 +153,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             ")"
         )));
     }
-    if let Some(pid) = peek_pid(ctx, Some(&output)) {
+    if let Some(pid) = crate::sig::subst(|| peek_pid(ctx, Some(&output))) {
         if focus {
             return focus_pid(ctx, &pid);
         }
@@ -160,7 +166,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Ok(());
     }
     if ws.is_empty() {
-        ws = crate::conf::workspace();
+        ws = crate::sig::subst(crate::conf::workspace);
     }
     ws_note(&ws);
     let peek = crate::root().join("tools/peek/omabox-peek");
@@ -171,7 +177,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // peek runs on the host (it is a window there) and connects to the box's socket from the host's
     // side of its runtime dir, which the box can write: only a real socket, no symlink (finding 63;
     // tools/peek also checks every frame it is sent).
-    let Some(wd) = box_env(&ctx.d, "WAYLAND_DISPLAY") else {
+    let Some(wd) = crate::sig::subst(|| box_env(&ctx.d, "WAYLAND_DISPLAY")) else {
         return Err(ctx.die(cat!("peek: box '", ctx.name, "' has no WAYLAND_DISPLAY")));
     };
     let sock = cat!(ctx.d, "/run/", wd);
@@ -195,7 +201,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .open(&marks)
         {
             // (`(umask 077; : > FILE)`: bash's own line, the subshell's failure ends it)
-            say(cat!(shell::bytes(&marks), ": ", crate::shots::why(&e)));
+            // (bash's redirection line, less its "SCRIPT: line N: ")
+            crate::shots::say_raw(&cat!(
+                shell::bytes(&marks),
+                ": ",
+                crate::shots::why(&e),
+                "\n"
+            ));
             return Err(crate::exit::Exit(1));
         }
     }
@@ -231,7 +243,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         ws,
         " silent', no_initial_focus = true })"
     );
-    host_eval(ctx, &lua)?;
+    // (host_eval's `out=$(host_hyprctl eval ...)`: a substitution's step)
+    crate::sig::subst(|| host_eval(ctx, &lua))?;
     say(cat!(
         "peek at box '",
         ctx.name,
@@ -245,7 +258,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // (bash's `$SECONDS + 5`: whole seconds)
     let deadline = crate::settle::secs() + 5;
     let pid = loop {
-        if let Some(pid) = peek_pid(ctx, Some(&output)) {
+        if let Some(pid) = crate::sig::subst(|| peek_pid(ctx, Some(&output))) {
             let (rc, cl) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
             let seen = Args::new(&["-e"])
                 .kv("--argjson", "p", &pid)
@@ -317,8 +330,10 @@ fn focus_pid(ctx: &Ctx, pid: &[u8]) -> Res<()> {
             "no window to focus (the box's window is gone? omabox ls)"
         )));
     }
-    host_eval(
-        ctx,
-        &cat!("hl.dispatch(hl.dsp.focus({ window = 'pid:", pid, "' }))"),
-    )
+    crate::sig::subst(|| {
+        host_eval(
+            ctx,
+            &cat!("hl.dispatch(hl.dsp.focus({ window = 'pid:", pid, "' }))"),
+        )
+    })
 }

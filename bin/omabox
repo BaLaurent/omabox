@@ -7113,8 +7113,13 @@ bytes_h() { awk -v b="$1" 'BEGIN { if (b < 1048576) printf "%d bytes", b; else i
 # however this omabox ends (with a --no-pointer hold's release, which shares the EXIT trap).
 REC_TMPS=() REC_PART=""
 rec_traps() {
-  trap 'rm -rf -- "${REC_TMPS[@]}"; [ -z "$REC_PART" ] || rm -f -- "$REC_PART"; [ -z "${PTR_TAG:-}" ] || ptr_release_quiet "$PTR_TAG"' EXIT
+  rec_exit_trap
   trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+}
+# rec_traps' EXIT trap alone (finding 432: the input's temp file at stop), which runs on an INT, TERM
+# or HUP ending too, and leaves the signals as they were.
+rec_exit_trap() {
+  trap 'rm -rf -- "${REC_TMPS[@]}"; [ -z "$REC_PART" ] || rm -f -- "$REC_PART"; [ -z "${PTR_TAG:-}" ] || ptr_release_quiet "$PTR_TAG"' EXIT
 }
 
 # Every ffmpeg and ffprobe a recording runs in the box goes through rec_ff (finding 356): ffmpeg
@@ -7618,7 +7623,7 @@ record_stop() {
   local input="" geo=""
   # (Gone however this ends from here, a refusal too: it was left in $TMPDIR, finding 432.)
   if [ -f "$D/record.input" ]; then input=$(mktemp) && { mv -f "$D/record.input" "$input" || { rm -f -- "$input"; false; }; } || input=""; fi
-  [ -z "$input" ] || { REC_TMPS+=("$input"); rec_traps; }
+  [ -z "$input" ] || { REC_TMPS+=("$input"); rec_exit_trap; }
   [ ! -f "$D/record.geo" ] || read -r geo < "$D/record.geo" || geo=""
   rm -f "$D/record.input" "$D/record.geo"
   # Its --no-pointer's hold given back (#228): the pointer as it was before.

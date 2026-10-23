@@ -101,14 +101,25 @@ fn take(id: u64) -> Option<Undo> {
     Some(t.remove(i).1)
 }
 
-/// A foreground child ran when the INT came (read in the handler: by the time the thread looks, that
-/// step may be over and the next not yet begun, where bash would have been waiting all along).
+/// Whether a foreground child ran when the INT came, read in the handler: the thread wakes later,
+/// when that step may be over and an in-process one begun (where bash, had it been there, would end
+/// at once: the safe side).
 static INT_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 extern "C" fn on_signal(sig: libc::c_int) {
     let _e = crate::sig::Errno::save();
-    if sig == libc::SIGINT && crate::sig::FG_ACTIVE.load(Ordering::SeqCst) {
-        INT_BUSY.store(true, Ordering::SeqCst);
+    if sig == libc::SIGINT {
+        INT_BUSY.store(
+            crate::sig::FG_ACTIVE.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
+    }
+    // Nothing new starts from here (a code trap inside a `$(...)` lets the substitution finish
+    // first, sig::subst).
+    if !(CODE_TRAPS.load(Ordering::SeqCst) > 0
+        && crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0)
+    {
+        crate::sig::STOPPING.store(true, Ordering::SeqCst);
     }
     let fd = SIG_W.load(Ordering::Relaxed);
     if fd >= 0 {
@@ -141,11 +152,17 @@ fn arm() {
                 return;
             }
             let sig = libc::c_int::from(b[0]);
-            // (a `$(...)`'s step, sig::subst: bash's main waits there all along)
-            let busy = crate::sig::FG_ACTIVE.load(Ordering::SeqCst)
-                || (sig == libc::SIGINT && INT_BUSY.swap(false, Ordering::SeqCst))
-                || crate::sig::DEFER_INT.load(Ordering::SeqCst);
+            // (an INT is judged by what ran when it came alone)
+            let busy = sig == libc::SIGINT && INT_BUSY.swap(false, Ordering::SeqCst);
             let code = CODE_TRAPS.load(Ordering::SeqCst) > 0;
+            // A code trap during a `$(...)`: bash runs it once the whole substitution is over (probed:
+            // `trap 'exit 143' TERM` during `x=$(a; b)` exits after b). Main finishes it, then parks.
+            if code && crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
+                crate::sig::SUBST_STOP.store(true, Ordering::SeqCst);
+                while crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
             let wait_fg = sig == libc::SIGINT || FG_TRAPS.load(Ordering::SeqCst) > 0;
             let fg = wait_fg.then(|| {

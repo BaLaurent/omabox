@@ -106,10 +106,14 @@ fn rec_ff_subst(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
 /// Bash's words for a number its arithmetic cannot read (a leading 0 that is no octal: 08), less
 /// its "SCRIPT: line N: ".
 fn arith_said(v: &[u8]) {
+    let tok = v
+        .strip_prefix(b"-")
+        .or_else(|| v.strip_prefix(b"+"))
+        .unwrap_or(v);
     let _ = std::io::stderr().write_all(&cat!(
         v,
         ": value too great for base (error token is \"",
-        v,
+        tok,
         "\")\n"
     ));
 }
@@ -251,12 +255,14 @@ fn size_of(p: &std::path::Path) -> Option<i64> {
         .and_then(|m| i64::try_from(m.len()).ok())
 }
 
-/// The files record_stop makes here (the box dir's, the video's .part), removed however it ends
-/// (rec_traps): with `exit 130|143|129` on a signal, as bash's.
+/// The files record_stop makes here (the box dir's, the video's .part, the input's temp file),
+/// removed however it ends: the input's by an EXIT trap alone (finding 432: a signal still ends the
+/// stop as it did), from the copy on by rec_traps (`exit 130|143|129` on a signal, as bash's).
 struct Tmps {
     v: Arc<Mutex<Vec<Vec<u8>>>>,
     part: Arc<Mutex<Vec<u8>>>,
-    trap: Option<crate::trap::Trap>,
+    exit_trap: Option<crate::trap::Trap>,
+    code_trap: Option<crate::trap::Trap>,
 }
 
 impl Tmps {
@@ -264,17 +270,14 @@ impl Tmps {
         Tmps {
             v: Arc::new(Mutex::new(Vec::new())),
             part: Arc::new(Mutex::new(Vec::new())),
-            trap: None,
+            exit_trap: None,
+            code_trap: None,
         }
     }
 
-    /// rec_traps: the trap set (once).
-    fn arm(&mut self) {
-        if self.trap.is_some() {
-            return;
-        }
+    fn undo(&self) -> impl FnOnce() + Send + 'static {
         let (v, p) = (self.v.clone(), self.part.clone());
-        self.trap = Some(crate::trap::on_exit_code(move || {
+        move || {
             // (`rm -rf --`: a folder, or the input's file)
             for d in v.lock().map(|x| x.clone()).unwrap_or_default() {
                 let p = shell::path(&d);
@@ -286,13 +289,32 @@ impl Tmps {
             if !part.is_empty() {
                 rm(&shell::path(&part));
             }
-        }));
+        }
     }
 
-    fn add(&mut self, d: Vec<u8>) {
+    /// rec_traps: the trap set (once).
+    fn arm(&mut self) {
+        if self.code_trap.is_none() {
+            self.code_trap = Some(crate::trap::on_exit_code(self.undo()));
+        }
+    }
+
+    fn push(&mut self, d: Vec<u8>) {
         if let Ok(mut v) = self.v.lock() {
             v.push(d);
         }
+    }
+
+    /// The input's temp file: bash's EXIT trap alone.
+    fn add_exit(&mut self, d: Vec<u8>) {
+        self.push(d);
+        if self.exit_trap.is_none() && self.code_trap.is_none() {
+            self.exit_trap = Some(crate::trap::on_exit(self.undo()));
+        }
+    }
+
+    fn add(&mut self, d: Vec<u8>) {
+        self.push(d);
         self.arm();
     }
 
@@ -461,8 +483,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     // Its sound (#226), put in the video's clock: AFILT, the filter for its input.
     let mut afilt = Vec::new();
     if !apid.is_empty() {
-        let (rc, o) = rec_ff_subst(
+        // (`if rec_ff -o ... | head -c 4096 | grep -q .`: a pipeline, no substitution)
+        let (rc, o) = rec_ff(
             ctx,
+            Ff::Out,
             &w(&[
                 "/usr/bin/ffprobe",
                 "-v",
@@ -518,9 +542,9 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             }
         }
     }
-    // (gone however the stop ends from here, as rec_traps has it: finding 432)
+    // (gone however the stop ends from here, by an EXIT trap: finding 432)
     if !input.is_empty() {
-        tmps.add(input.clone());
+        tmps.add_exit(input.clone());
     }
     let geo = if ctx.at("record.geo").is_file() {
         let d = std::fs::read(ctx.at("record.geo")).unwrap_or_default();

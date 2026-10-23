@@ -196,10 +196,15 @@ fn arith(words: &[&[u8]]) -> Option<i64> {
         match bash_int(v) {
             Some(n) => t = t.wrapping_add(n),
             None => {
+                // (its token without the sign: `-08: ... (error token is "08")`)
+                let tok = v
+                    .strip_prefix(b"-")
+                    .or_else(|| v.strip_prefix(b"+"))
+                    .unwrap_or(v);
                 let _ = std::io::stderr().write_all(&cat!(
                     v,
                     ": value too great for base (error token is \"",
-                    v,
+                    tok,
                     "\")\n"
                 ));
                 return None;
@@ -2011,52 +2016,136 @@ fn scenario(scen: &[Vec<u8>], path: &[u8], bname: &[u8], rund: &[u8], log: &[u8]
         }
         Ok(_) => {}
     }
-    // A file the kernel will not run (no #!, no ELF): bash reads it as a script of its own, or says
-    // it is binary (a NUL in its first line); never /bin/sh's fallback.
-    let mut head = [0u8; 80];
-    let n = std::fs::File::open(&pth)
-        .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
-        .unwrap_or(0);
-    let head = &head[..n];
-    let runnable = head.starts_with(b"#!") || head.starts_with(b"\x7fELF");
-    let mut c = if runnable {
-        let mut c = crate::sig::command(OsStr::from_bytes(&exe));
-        c.arg0(OsStr::from_bytes(prog));
-        c
-    } else {
-        let line = head.split(|&b| b == b'\n').next().unwrap_or_default();
-        if line.contains(&0) {
-            return said(
-                cat!(exe, ": cannot execute binary file: Exec format error"),
-                126,
-            );
-        }
-        let mut c = crate::sig::command("/usr/bin/bash");
-        c.arg(OsStr::from_bytes(&exe));
-        c
-    };
-    c.args(scen[1..].iter().map(|a| OsStr::from_bytes(a)));
-    c.env("PATH", OsStr::from_bytes(path))
-        .env("OMABOX", OsStr::from_bytes(bname))
-        .env("OMABOX_SESSION", "")
-        .env("OMABOX_CHECK_OUT", OsStr::from_bytes(rund))
-        .stdout(Stdio::from(f));
-    match f2.try_clone() {
-        Ok(e) => c.stderr(Stdio::from(e)),
-        Err(_) => c.stderr(Stdio::inherit()),
-    };
-    let r = crate::sig::foreground(|| c.status());
-    match r {
-        Ok(s) => crate::exec::status(s).0,
-        Err(e) => {
-            let rc = if e.raw_os_error() == Some(libc::ENOENT) {
-                127
-            } else {
-                126
-            };
-            said(cat!(exe, ": ", crate::shots::why(&e)), rc)
-        }
+    // The kernel runs it or says why: execve here in the child (std's execvp would hand a file it
+    // cannot run to /bin/sh, which bash never does), then bash's own ways with what it said.
+    let mut envv: Vec<(Vec<u8>, Vec<u8>)> = std::env::vars_os()
+        .map(|(k, v)| (k.as_bytes().to_vec(), v.as_bytes().to_vec()))
+        .filter(|(k, _)| {
+            !matches!(
+                k.as_slice(),
+                b"PATH" | b"OMABOX" | b"OMABOX_SESSION" | b"OMABOX_CHECK_OUT"
+            )
+        })
+        .collect();
+    envv.extend([
+        (b"PATH".to_vec(), path.to_vec()),
+        (b"OMABOX".to_vec(), bname.to_vec()),
+        (b"OMABOX_SESSION".to_vec(), Vec::new()),
+        (b"OMABOX_CHECK_OUT".to_vec(), rund.to_vec()),
+    ]);
+    let envp: Vec<std::ffi::CString> = envv
+        .into_iter()
+        .filter_map(|(k, v)| std::ffi::CString::new(cat!(k, "=", v)).ok())
+        .collect();
+    let mut argv = vec![prog.clone()];
+    argv.extend(scen[1..].iter().cloned());
+    match exec_in_child(&exe, &argv, &envp, &f2) {
+        Ok(rc) => rc,
+        Err(e) => match e.raw_os_error() {
+            Some(libc::ENOEXEC) => {
+                let mut head = [0u8; 80];
+                let n = std::fs::File::open(&pth)
+                    .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
+                    .unwrap_or(0);
+                let line = head[..n].split(|&b| b == b'\n').next().unwrap_or_default();
+                if line.contains(&0) {
+                    return said(
+                        cat!(exe, ": cannot execute binary file: Exec format error"),
+                        126,
+                    );
+                }
+                // (bash reads it as a script of its own, $0 its path)
+                let mut av = vec![b"bash".to_vec(), exe.clone()];
+                av.extend(scen[1..].iter().cloned());
+                match exec_in_child(b"/usr/bin/bash", &av, &envp, &f2) {
+                    Ok(rc) => rc,
+                    Err(e) => said(cat!(exe, ": ", crate::shots::why(&e)), 126),
+                }
+            }
+            Some(libc::ENOENT) => {
+                // (a #! whose interpreter is not there: `#!/bin/sh\r` from a CRLF file, mostly)
+                let mut head = [0u8; 256];
+                let n = std::fs::File::open(&pth)
+                    .and_then(|mut h| std::io::Read::read(&mut h, &mut head))
+                    .unwrap_or(0);
+                match head[..n].strip_prefix(b"#!") {
+                    Some(rest) => {
+                        let st = rest
+                            .iter()
+                            .position(|&c| c != b' ' && c != b'\t')
+                            .unwrap_or(rest.len());
+                        let rest = &rest[st..];
+                        let end = rest
+                            .iter()
+                            .position(|&c| matches!(c, b' ' | b'\t' | b'\n'))
+                            .unwrap_or(rest.len());
+                        // (its control characters shown as bash shows them: ^M for the CR)
+                        let mut name = Vec::new();
+                        for &c in &rest[..end] {
+                            if c < 0x20 || c == 0x7f {
+                                name.push(b'^');
+                                name.push(if c == 0x7f { b'?' } else { c + 64 });
+                            } else {
+                                name.push(c);
+                            }
+                        }
+                        said(
+                            cat!(
+                                exe,
+                                ": ",
+                                name,
+                                ": bad interpreter: No such file or directory"
+                            ),
+                            126,
+                        )
+                    }
+                    None => said(cat!(exe, ": No such file or directory"), 127),
+                }
+            }
+            _ => said(cat!(exe, ": ", crate::shots::why(&e)), 126),
+        },
     }
+}
+
+/// PROGRAM run with ARGV and ENVP, its stdout and stderr OUT, by execve in the child: its status,
+/// or the errno the kernel refused it with.
+fn exec_in_child(
+    program: &[u8],
+    argv: &[Vec<u8>],
+    envp: &[std::ffi::CString],
+    out: &std::fs::File,
+) -> std::io::Result<i32> {
+    let prog = std::ffi::CString::new(program.to_vec())
+        .map_err(|_| std::io::Error::from_raw_os_error(libc::ENOENT))?;
+    let cargv: Vec<std::ffi::CString> = argv
+        .iter()
+        .filter_map(|a| std::ffi::CString::new(a.clone()).ok())
+        .collect();
+    // (as addresses: the closure must be Send; they point into prog, cargv and envp, alive until
+    // the spawn below has returned, and the child has its own copy of them)
+    let mut pa: Vec<usize> = cargv.iter().map(|c| c.as_ptr() as usize).collect();
+    pa.push(0);
+    let mut pe: Vec<usize> = envp.iter().map(|c| c.as_ptr() as usize).collect();
+    pe.push(0);
+    let pp = prog.as_ptr() as usize;
+    let mut c = crate::sig::command(OsStr::from_bytes(program));
+    c.stdout(Stdio::from(out.try_clone()?));
+    c.stderr(Stdio::from(out.try_clone()?));
+    // SAFETY: execve is async-signal-safe; its arguments are NUL-ended arrays of pointers to
+    // NUL-ended strings that outlive the spawn; it returns only when the kernel refused.
+    unsafe {
+        c.pre_exec(move || {
+            libc::execve(
+                pp as *const libc::c_char,
+                pa.as_ptr().cast(),
+                pe.as_ptr().cast(),
+            );
+            Err(std::io::Error::last_os_error())
+        });
+    }
+    let r = crate::sig::foreground(|| c.status()).map(|s| crate::exec::status(s).0);
+    drop((prog, cargv));
+    r
 }
 
 use std::os::unix::process::CommandExt;

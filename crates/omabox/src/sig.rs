@@ -120,13 +120,29 @@ pub static INT_DEFERRED: AtomicBool = AtomicBool::new(false);
 /// alone meanwhile lets the step finish, then ends this process of it (int_deferred_end).
 pub fn subst<T>(f: impl FnOnce() -> T) -> T {
     let outer = DEFER_INT.swap(true, Ordering::SeqCst);
+    SUBST_DEPTH.fetch_add(1, Ordering::SeqCst);
     let r = f();
+    let depth = SUBST_DEPTH.fetch_sub(1, Ordering::SeqCst) - 1;
+    // A code trap waited for the substitution (trap.rs): it ends this process now; nothing after
+    // the substitution runs, as nothing after bash's does.
+    if depth == 0
+        && SUBST_STOP.load(Ordering::SeqCst)
+        && MAIN.get() == Some(&std::thread::current().id())
+    {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
     if !outer {
         DEFER_INT.store(false, Ordering::SeqCst);
         int_deferred_end();
     }
     r
 }
+
+/// How many `$(...)` steps main is inside (subst), and whether a code trap waits for their end.
+pub static SUBST_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+pub static SUBST_STOP: AtomicBool = AtomicBool::new(false);
 
 /// An INT deferred (INT_DEFERRED) ends this process now, of SIGINT, as bash's main did.
 pub fn int_deferred_end() {

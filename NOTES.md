@@ -8899,9 +8899,9 @@ from them.
     video is made; ffmpeg failing to make it (the single recording's pass, or the layout's compose),
     the pointer's hold not given back (its lock busy, too), the box gone under a step, or a signal
     meanwhile ended the command with that file still in $TMPDIR, and an `mv` that failed left the
-    empty one mktemp made. **Fix**: the file joins REC_TMPS as soon as it is made and rec_traps is
-    set then (its EXIT trap removes it however the stop ends; a signal from there exits 130, 143 or
-    129 once the step in the foreground is over, as from the copy on before), and a failed `mv`
+    empty one mktemp made. **Fix**: the file joins REC_TMPS as soon as it is made, with rec_traps'
+    EXIT trap alone (rec_exit_trap: it runs on an INT, TERM or HUP ending as well, and the signals
+    behave as before; rec_traps' own `exit 130|143|129` still begin at the copy), and a failed `mv`
     removes its file, in bash and in the Rust half alike. Tests: t_unit_rust_parity4b (an ffmpeg
     that fails at stop, INT, TERM, HUP and a group INT during the encode, the pointer's lock held,
     each with input recorded and TMPDIR a dir of the test's own: compared both ways, nothing left
