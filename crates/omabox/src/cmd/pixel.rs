@@ -204,8 +204,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         grim.extend([b"-g".to_vec(), format!("{x0},{y0} {bw}x{bh}").into_bytes()]);
     }
     grim.push(b"-".to_vec());
+    // (both removed on every way out: bash's set -e exits left the image in $TMPDIR, finding 443)
     let (mut f, fp) = shell::mktemp()?;
+    let _fp = shell::Rm(fp);
     let (mut ef, ep) = shell::mktemp()?;
+    let _ep = shell::Rm(ep);
     // (A window's first frame off screen can be old: captured twice, as shot does.)
     if !id.is_empty() {
         on_box(ctx, &grim, false, Out::Null, ErrTo::Null).or_exit()?;
@@ -231,12 +234,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         why.pop();
     }
     let why = shell::subst(&why);
-    let _ = std::fs::remove_file(shell::path(&ep));
     let mut img = Vec::new();
     let _ = f.rewind();
     let _ = f.read_to_end(&mut img);
     if r.rc != 0 || img.is_empty() {
-        let _ = std::fs::remove_file(shell::path(&fp));
         if !box_alive(ctx)? {
             return Err(ctx.die(cat!("pixel: box '", ctx.name, "' went down")));
         }
@@ -253,15 +254,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     // grim's PPM: "P6\nW H\n255\n", then RGB. At an output scale over 1 the grab is larger than the
     // box.
-    // (`{ read -r magic; read -r dims; read -r maxv; } < "$f"` under set -e: a line without its
-    // newline ends the command, 1, unsaid, the image left where it is)
+    // (A header cut short is said: bash's `read` of a line without its newline ended it under set
+    // -e, 1, unsaid, finding 442)
     let mut lines = img.splitn(4, |&c| c == b'\n');
     let mut whole = Vec::new();
     for _ in 0..3 {
         whole.push(lines.next().unwrap_or_default());
     }
     if lines.next().is_none() {
-        return Err(Exit(1));
+        return Err(ctx.die("pixel: grim's image is short"));
     }
     let line = |l: &[u8]| -> Vec<u8> {
         let l: Vec<u8> = l.iter().copied().filter(|&c| c != 0).collect();
@@ -272,13 +273,13 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (iw, ih) = (&d[0], &d[1]);
     let num = |v: &[u8]| shell::re_match("^[0-9]+$", v);
     if !(magic == b"P6" && maxv == b"255" && num(iw) && num(ih)) {
-        let _ = std::fs::remove_file(shell::path(&fp));
         return Err(ctx.die("pixel: grim's image is not a PPM it reads"));
     }
     let hdr = (magic.len() + dims.len() + maxv.len() + 3) as i64;
-    // (bash's arithmetic refusing one, an 08: its own words, then exit 1, the image left)
+    // (one bash's arithmetic refuses, an 08: said, where bash's own words ended it, 1, the image
+    // left: finding 442)
     let (Some(iw), Some(ih)) = (shell::bash_int(iw), shell::bash_int(ih)) else {
-        return Err(Exit(1));
+        return Err(ctx.die("pixel: grim's image is not a PPM it reads"));
     };
     let mut text = Vec::new();
     for k in (0..pts.len()).step_by(2) {
@@ -292,16 +293,12 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .and_then(|_| f.read_exact(&mut rgb).ok());
         if got.is_none() {
             out(&text)?;
-            // Nothing from od (the offset at or past the end; past it, od's own line): bash's `read`
-            // of it fails under set -e, 1, unsaid, the image left. Part of a pixel: "short".
+            // (A point at or past the image's end is said: bash's `read` of od's nothing ended it
+            // under set -e, 1, unsaid but for od's own line past it, the image left: findings 441,
+            // 442. Part of a pixel: short.)
             if at >= img.len() as i64 {
-                if at > img.len() as i64 {
-                    // (omabox's words: bash's were od's, though no od runs, finding 441)
-                    crate::exit::say("pixel: the point is past the end of grim's image");
-                }
-                return Err(Exit(1));
+                return Err(ctx.die("pixel: the point is past the end of grim's image"));
             }
-            let _ = std::fs::remove_file(shell::path(&fp));
             return Err(ctx.die("pixel: grim's image is short"));
         }
         let hex = format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2]);
@@ -323,6 +320,5 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             text.extend_from_slice(format!("{},{} {hex}\n", xy[k], xy[k + 1]).as_bytes());
         }
     }
-    let _ = std::fs::remove_file(shell::path(&fp));
     out(text)
 }

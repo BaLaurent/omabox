@@ -598,7 +598,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !mkdir_p(&dir) {
         return Err(ctx.die(cat!("calibrate: cannot make the directory ", dir)));
     }
-    let card = crate::shots::real_or_end(&card)?;
+    let card = crate::shots::real_or_end(ctx, &card)?;
     let part = cat!(card, ".part");
     let marks = calib_marks(&w, &h);
     let drawn = calib_card(&part, &w, &h, &marks).ok_or(Exit(1))?;

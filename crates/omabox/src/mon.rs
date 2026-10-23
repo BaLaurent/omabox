@@ -4,8 +4,9 @@
 //! the box's config placing them (omabox_place_monitors, the one place that places), box.json's
 //! list of them, and an NVIDIA box's labwc told their windows' sizes (finding 234).
 //!
-//! Where bash runs one of these inside `$(...)`, errexit is off in it (no inherit_errexit): a step
-//! that fails there goes on, and only a die ends it. The callers keep that.
+//! A step that fails ends the command the same way in every caller, and a record of box.json's
+//! that cannot be written is said and the command goes on (bash's set -e held in some callers and
+//! not in others, by where the call sat: finding 442).
 
 use crate::boxes::{box_alive, box_file, lock_file, meta, run_read};
 use crate::cat;
@@ -433,35 +434,35 @@ pub fn labwc_apply(ctx: &mut Ctx) -> Res<bool> {
     Ok(r.rc == 0)
 }
 
-/// `jq ARGS "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"`. ERREXIT: set -e
-/// holds where it runs, so a mv that fails ends the command (1); jq failing is not the end of it.
-pub fn jq_box_json(ctx: &Ctx, args: Args, errexit: bool) -> Res<()> {
+/// `jq ARGS "$D/box.json" > "$D/box.json.tmp" && mv "$D/box.json.tmp" "$D/box.json"`: whether
+/// box.json was written, why not said (jq's or mv's words, or omabox's). The temporary file is gone
+/// either way (bash left it when jq or the mv failed: finding 443).
+pub fn jq_box_json(ctx: &Ctx, args: Args) -> bool {
     let tmp = cat!(ctx.d, "/box.json.tmp");
+    let _tmp = crate::shell::Rm(tmp.clone());
     let f = match std::fs::File::create(shell::path(&tmp)) {
         Ok(f) => f,
         Err(e) => {
-            say(cat!(tmp, ": ", crate::shots::why(&e)));
-            return Ok(());
+            say(cat!(ctx.label(), crate::shots::cant_write(&tmp, &e)));
+            return false;
         }
     };
     let r = args
         .arg(cat!(ctx.d, "/box.json"))
         .run_file(jq::Err::Inherit);
-    let _ = std::io::Write::write_all(&mut &f, &r.out);
+    if let Err(e) = std::io::Write::write_all(&mut &f, &r.out) {
+        say(cat!(ctx.label(), crate::shots::cant_write(&tmp, &e)));
+        return false;
+    }
     drop(f);
-    if !r.ok() {
-        return Ok(());
-    }
-    if !crate::shots::mv_f(&tmp, &cat!(ctx.d, "/box.json")) && errexit {
-        return Err(Exit(1));
-    }
-    Ok(())
+    r.ok() && crate::shots::mv_f(&tmp, &cat!(ctx.d, "/box.json"))
 }
 
 /// monitors_record: box.json's list of every monitor (for ls --json), from Hyprland, under the box's
-/// lock as mode writes it; not an interactive box's (the user closes and resizes its windows). Bash's
-/// returns are all quiet: only hypr_json's words, and a mv that fails where set -e holds (ERREXIT).
-pub fn monitors_record(ctx: &Ctx, errexit: bool) -> Res<()> {
+/// lock as mode writes it; not an interactive box's (the user closes and resizes its windows). Its
+/// returns are quiet but for hypr_json's words and a box.json it could not write, said, the command
+/// going on.
+pub fn monitors_record(ctx: &Ctx) -> Res<()> {
     if meta(&ctx.d, "mode").0 != b"headless" {
         return Ok(());
     }
@@ -484,13 +485,20 @@ pub fn monitors_record(ctx: &Ctx, errexit: bool) -> Res<()> {
     if !box_alive(ctx)? {
         return Ok(());
     }
-    jq_box_json(
+    if !jq_box_json(
         ctx,
         Args::new(&[])
             .kv("--argjson", "m", &m)
             .arg(crate::jqprog::MONITORS_RECORD_JQ),
-        errexit,
-    )
+    ) {
+        say(cat!(
+            ctx.label(),
+            "box '",
+            ctx.name,
+            "''s list of monitors was not updated: ls --json may show the old one"
+        ));
+    }
+    Ok(())
 }
 
 /// `$(box_layout [LINE])`: the box's layout as it places its monitors (omabox_monitor_layout,

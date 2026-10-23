@@ -765,9 +765,10 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
                 "/out.mp4 there is kept)"
             )));
         }
-        // (set -e: mv's failure ends it, 1, the .part gone with rec_traps)
+        // (mv's failure said, 1, the .part gone with rec_traps: bash's set -e ended it unsaid but
+        // for mv's own words, finding 442)
         if !crate::shots::mv_f(&part, &rec.file) {
-            return Err(Exit(1));
+            return Err(ctx.die(cat!("record: could not put the video at ", rec.file)));
         }
         tmps.set_part(b"");
     }

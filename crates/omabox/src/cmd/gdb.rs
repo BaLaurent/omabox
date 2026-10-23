@@ -9,7 +9,7 @@ use crate::args::{optarg, unexpected, unknown_opt_hint};
 use crate::boxes::{BoxPid, box_pid, covers_held, need_box};
 use crate::cat;
 use crate::exec::{Relayed, stdio_relay};
-use crate::exit::{Ctx, Exit, Res, say};
+use crate::exit::{Ctx, Res, say};
 use crate::select::select_box;
 use crate::shell;
 use crate::shellnote::{shell_pid, shell_running, shell_state};
@@ -112,11 +112,17 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !crate::exec::executable(b"/usr/bin/gdb") {
         return Err(ctx.die("gdb: no /usr/bin/gdb (package gdb); a box runs the host's"));
     }
-    // (`bp=$(box_pid)` under set -e: its status 3, a box this user namespace cannot read, ends
-    // the command there, unsaid)
+    // (A box this user namespace cannot read, said as box_alive says it, 1: bash's set -e ended it
+    // with box_pid's 3, unsaid, finding 442.)
     let bp = match box_pid(&ctx.d) {
         BoxPid::Pid(p) => p,
-        BoxPid::Unknown => return Err(Exit(3)),
+        BoxPid::Unknown => {
+            return Err(ctx.die(cat!(
+                "cannot tell whether box '",
+                ctx.name,
+                "' is up from this user namespace (a sandbox's?): run omabox outside it"
+            )));
+        }
         BoxPid::None => return Err(ctx.die(cat!("box '", ctx.name, "' is not up"))),
     };
     covers_held(ctx)?;
@@ -313,10 +319,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         "-ex",
         "echo == omabox: end\\n",
     ]));
-    // (set -e: a failure here ends the command with its status, unsaid)
+    // (A failure here said, 1: bash's set -e ended it with the step's status, unsaid, finding 442.)
     let rc = relay(&argv, false, false).rc;
     if rc != 0 {
-        return Err(Exit(u8::try_from(rc & 0xff).unwrap_or(1)));
+        return Err(ctx.die(cat!(
+            "gdb: cannot start gdb in box '",
+            ctx.name,
+            "' (status ",
+            rc.to_string(),
+            ")"
+        )));
     }
     let end = crate::settle::secs() + 10;
     loop {

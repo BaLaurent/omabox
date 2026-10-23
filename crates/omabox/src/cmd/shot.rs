@@ -1617,7 +1617,7 @@ fn burst_run(
             )));
         }
     }
-    s.out = crate::shots::real_or_end(&s.out)?;
+    s.out = crate::shots::real_or_end(ctx, &s.out)?;
     let (_, err) = shell::mktemp()?;
     let probe: Vec<Vec<u8>> = vec![
         b"test".to_vec(),

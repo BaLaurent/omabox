@@ -234,14 +234,19 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if !box_alive(ctx)? {
         return Err(ctx.die(cat!("mode: box '", ctx.name, "' went down meanwhile")));
     }
-    jq_box_json(
+    if !jq_box_json(
         ctx,
         Args::new(&[])
             .kv("--arg", "s", &want)
             .kv("--argjson", "sc", &sc)
             .arg(crate::jqprog::MODE_RECORD_JQ),
-        true,
-    )?;
+    ) {
+        return Err(ctx.die(cat!(
+            "mode: ",
+            want,
+            " is set, but ls will not show it (box.json not written)"
+        )));
+    }
     drop(lock);
     // Its other monitors placed right of or below it move with its new size (#161).
     if has_monitors(ctx) {
@@ -257,7 +262,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if !moved.is_empty() {
             say(cat!("mode: moved the monitors placed next to it: ", moved));
         }
-        monitors_record(ctx, true)?;
+        monitors_record(ctx)?;
     }
     out(cat!(size_text(&screen, &sc), "\n"))
 }

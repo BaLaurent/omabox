@@ -3770,22 +3770,30 @@ EOF
   parity "pixel --active" pixel -b fk --active 5 5 30 30
   parity "pixel --window: no stableId" pixel -b fk --window fk-off 5 5
   parity "pixel --window: none such" pixel -b fk --window nope 1 1
+  # (what each side left in a TMPDIR of the test's own, listed after it, then cleared: bash's set -e
+  # exits left its frame there, finding 443)
+  mkdir -p "$r/tmpp"; rp_env=(TMPDIR="$r/tmpp")
+  rp_tmpp() { rp_fk_also; echo "== TMPDIR"; (cd "$r/tmpp" && command find . -mindepth 1 -printf '%P\n') | sed -E 's/^tmp\.[A-Za-z0-9]+$/TMPFILE/'; rm -rf "$r/tmpp"; mkdir -p "$r/tmpp"; }
+  rp_also=rp_tmpp
   rp_ppm() { rp_fk; printf '%b' "$1" > "$fk/grim.ppm"; }
   rp_p1() { rp_ppm 'P6\n2 2\n255'; }
-  rp_prep=rp_p1; parity "pixel: grim's image with no newline after 255: 1, unsaid" pixel -b fk 1 1
+  rp_why="442, 443" rp_bash=(err= state~^TMPFILE$) rp_rust=("err=omabox: pixel: grim's image is short" state!~^TMPFILE$)
+  rp_prep=rp_p1; parity "pixel: grim's image with no newline after 255: 1, unsaid in bash, its frame left" pixel -b fk 1 1
   rp_p2() { rp_ppm 'P6\n2 2\n255\n\001\002'; }
   rp_prep=rp_p2; parity "pixel: an image short of its pixels" pixel -b fk 1 1 2 2
   rp_p3() { rp_ppm 'P6\n2 2\n255\n'; }
-  rp_prep=rp_p3; parity "pixel: an image of its header alone: nothing read, 1" pixel -b fk 1 1 900 900
-  rp_why=441 rp_bash=("err=od: cannot skip past end of combined input") rp_rust=("err=omabox: pixel: the point is past the end of grim's image")
+  rp_why="442, 443" rp_bash=(err= state~^TMPFILE$) rp_rust=("err=omabox: pixel: the point is past the end of grim's image" state!~^TMPFILE$)
+  rp_prep=rp_p3; parity "pixel: an image of its header alone: nothing read, 1, unsaid in bash, its frame left" pixel -b fk 1 1 900 900
+  rp_why="441, 443" rp_bash=("err=od: cannot skip past end of combined input" state~^TMPFILE$) rp_rust=("err=omabox: pixel: the point is past the end of grim's image" state!~^TMPFILE$)
   rp_prep=rp_p3; parity "...a point past its end (od's own words in bash)" pixel -b fk 1 900 1 1
   rp_p4() { rp_ppm 'P6\n08 2\n255\n\001\002\003'; }
-  rp_prep=rp_p4; parity "pixel: a width bash's arithmetic refuses (08), 1" pixel -b fk 1 1
+  rp_why="442, 443" rp_bash=(err= state~^TMPFILE$) rp_rust=("err=omabox: pixel: grim's image is not a PPM it reads" state!~^TMPFILE$)
+  rp_prep=rp_p4; parity "pixel: a width bash's arithmetic refuses (08), 1, unsaid in bash, its frame left" pixel -b fk 1 1
   rp_p5() { rp_ppm 'P5\n2 2\n255\n\001\002\003'; }
   rp_prep=rp_p5; parity "pixel: not a PPM it reads" pixel -b fk 1 1
   rp_p6() { rp_fk; rm -f "$fk/grim.ppm"; }
   rp_prep=rp_p6; parity "pixel: no frame, grim's words" pixel -b fk 1 1
-  rp_prep=rp_fk
+  rp_prep=rp_fk rp_also=rp_fk_also rp_env=()
   parity "pixel --in --json: a shot's pixels, on the screen" pixel -b fk --in "$r/fk-s.png" --json 100 100 10 10
   parity "pixel --in: a window crop's, in the window" pixel -b fk --in "$r/fk-w.png" 1 1
   parity "pixel --in: outside the image" pixel -b fk --in "$r/fk-w.png" 391 1
@@ -4302,7 +4310,8 @@ while True:
   # --burst into folders that cannot be one or cannot be cleared; -o past a parent that cannot be
   # looked into; -o a link that points nowhere yet (readlink -f follows it).
   parity "shot --burst -o a folder that cannot be listed" shot -b fk --burst 2 -o /root
-  parity "shot -o in a folder that cannot be looked into" shot -b fk -o /root/rp.png
+  rp_why=442 rp_bash=(err=) rp_rust=("err=omabox: shot: cannot resolve /root/rp.png (a folder on its way is missing or cannot be looked into, or a link loops)")
+  parity "shot -o in a folder that cannot be looked into: 1, unsaid in bash" shot -b fk -o /root/rp.png
   rp_dangle() { ln -s "$o3/new.png" "$o3/dangle.png"; }; rp3_pre=(rp_dangle)
   parity "shot -o a link to a file not there yet" shot -b fk -o "$o3/dangle.png"
   rp3_pre=()
@@ -6006,7 +6015,8 @@ PYEOF
   parity "check point: the wait fails on a box with no screen" check point -b fk a
   parity "check point --window: the wait fails" check point -b fk a --window x -g "0,0 10x10" --ignore "1,1 2x2"
   rp_env=("${rp_env4c[@]}")
-  parity "check point -o: a file in the way" check point -b fk a -o "$im/a.png"
+  rp_why=442 rp_bash=(rc=1 "err~^mkdir: cannot create directory") rp_rust=(rc=2 "err=omabox: check: cannot make $im/a.png: File exists")
+  parity "check point -o: a file in the way (2 in Rust, check's for its own failures)" check point -b fk a -o "$im/a.png"
   # check run, up to its boxes
   parity "check run: no scenario" check run
   parity "check run: no scenario after --" check run --
@@ -6037,7 +6047,8 @@ PYEOF
   parity "check run: the box does not start (a bad --size)" check run --base "$r/co/base" -o "$r/co/o" --size 1x1x1 --clean --xwayland -- true
   parity "check run --approve --runs 2: the box does not start" check run --approve --runs 2 --base "$r/co/base" -o "$r/co/o" --size bogus -- true
   rp4b_ofile() { rp4b_base; : > "$r/co/ofile"; }; rp4b_pre=(rp4b_ofile)
-  parity "check run -o: a file in the way" check run --base "$r/co/base" -o "$r/co/ofile" -- true
+  rp_why=442 rp_bash=(rc=1 "err~^mkdir: cannot create directory") rp_rust=(rc=2 "err=omabox: check: cannot make $r/co/ofile: File exists")
+  parity "check run -o: a file in the way (2 in Rust)" check run --base "$r/co/base" -o "$r/co/ofile" -- true
   rp_snap=1 rp_also=rp4b_also_c
   rp_env=("${rp_env4c[@]}") rp4b_pre=() rp_also=rp4b_also
   # --- record ---
@@ -13412,7 +13423,8 @@ EOF
   # --approve into a base that cannot be made: mkdir's failure ends it, 1, its boxes gone.
   mkdir -p "$ck/ro"; chmod 555 "$ck/ro"
   rp_prep=rp_ckr
-  parity "check run --approve: a base that cannot be made, 1 (both ways)" check run --approve --runs 2 --base "$ck/ro/base" -o "$ck/o" -- "$ck/scen"
+  rp_why=442 rp_bash=(rc=1 "err~^mkdir: cannot create directory") rp_rust=(rc=2 "err~^omabox: check: cannot make $ck/ro/base: Permission denied$")
+  parity "check run --approve: a base that cannot be made, 1 (2 in Rust, check's own failure)" check run --approve --runs 2 --base "$ck/ro/base" -o "$ck/o" -- "$ck/scen"
   chmod 755 "$ck/ro"
   check_eq "...every check box went down" "" "$(cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n')"
   rp_prep="" rp_env=() rp_also="" rp_sed=""

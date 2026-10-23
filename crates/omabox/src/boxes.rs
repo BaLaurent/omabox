@@ -500,15 +500,24 @@ pub fn take_over(ctx: &Ctx, held: bool) -> Res<bool> {
     let mut up = true;
     if !box_alive(ctx)? {
         up = false;
-    } else if !meta(d, "agent").0.is_empty() && !agent_alive(d) && record_agent(d, &pid, &start) {
-        let _ = std::fs::rename(at(d, "box.json.tmp"), at(d, "box.json"));
+    } else if !meta(d, "agent").0.is_empty() && !agent_alive(d) {
+        // (said when it cannot be: bash left box.json.tmp, unsaid, finding 443)
+        let tmp = shell::Rm(shell::bytes(&at(d, "box.json.tmp")).to_vec());
+        if !(record_agent(d, &pid, &start)
+            && std::fs::rename(shell::path(&tmp.0), at(d, "box.json")).is_ok())
+        {
+            crate::exit::say(cat!(
+                "box '",
+                ctx.name,
+                "' could not be given to this agent (box.json not written): the reaper may take it down"
+            ));
+        }
     }
     drop(lock);
     Ok(up)
 }
 
-/// `jq '.agent = PID | .agent_start = START' box.json > box.json.tmp`: whether jq succeeded (the
-/// file it was writing is left as it was when not).
+/// `jq '.agent = PID | .agent_start = START' box.json > box.json.tmp`: whether it was written.
 fn record_agent(d: &[u8], pid: &[u8], start: &[u8]) -> bool {
     use std::io::Write;
     let Ok(mut tmp) = File::create(at(d, "box.json.tmp")) else {

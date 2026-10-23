@@ -53,10 +53,17 @@ pub fn real(v: &[u8]) -> Vec<u8> {
     crate::repo::readlink_f(v).unwrap_or_default()
 }
 
-/// `X=$(readlink -f -- "$V")` under set -e: readlink saying nothing when it fails, the command
-/// ends there, 1.
-pub fn real_or_end(v: &[u8]) -> Res<Vec<u8>> {
-    crate::repo::readlink_f(v).ok_or(crate::exit::Exit(1))
+/// `X=$(readlink -f -- "$V")`: the path, or the command ended, 1, saying why (bash's set -e ended
+/// it there unsaid: finding 442).
+pub fn real_or_end(ctx: &crate::exit::Ctx, v: &[u8]) -> Res<Vec<u8>> {
+    crate::repo::readlink_f(v).ok_or_else(|| {
+        ctx.die(cat!(
+            ctx.label(),
+            "cannot resolve ",
+            v,
+            " (a folder on its way is missing or cannot be looked into, or a link loops)"
+        ))
+    })
 }
 
 /// `mv -f -- SRC DST` as coreutils' mv: into DST when it is a directory (a link to one too), else
@@ -103,7 +110,7 @@ pub fn shot_path(ctx: &Ctx, out: &[u8]) -> Res<(Vec<u8>, Vec<u8>)> {
     if !mkdir_p(&dir) {
         return Err(ctx.die(cat!("shot: cannot make the directory ", dir)));
     }
-    let out = real_or_end(out)?;
+    let out = real_or_end(ctx, out)?;
     let file = cat!(out, ".part");
     if let Err(e) = std::fs::File::create(shell::path(&file)) {
         return Err(ctx.die(cat!("shot: cannot write ", out, ": ", why(&e))));

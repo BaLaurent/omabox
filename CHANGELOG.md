@@ -34,6 +34,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   --monitor`'s add, or while it waited for the box's shell. It now ends the box, as any other `up`
   that fails, with the signal's exit code (130, 143, 129); a Ctrl-C to `up` alone no longer lets it
   go on.
+- **`pixel` left a temporary file in $TMPDIR** when grim's frame was cut short, its size unreadable or
+  the point past its end, and a failed update of a box's `box.json` left `box.json.tmp` in the box's
+  folder.
 
 ### Changes from the bash omabox
 
@@ -61,6 +64,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   of grim's image" (was od's words), and `clip`'s refusal names the process "omabox", not "bash". Exit
   codes unchanged (127 for a scenario not found, 126 for one that cannot run). Scripts that matched
   those texts: match the exit code, or the new words.
+- **Where omabox ended without a word, it says why**, with its usual exit codes: `pixel` on a frame
+  it cannot read (1), `gdb` on a box this user namespace cannot read (1, was 3) or a gdb that did
+  not start (1, was gdb's status), `check` on a folder or file it cannot make, write or copy (2,
+  check's code for its own failures; was 1, check's code for "changed"), `shot`, `record` and
+  `calibrate` on a path that cannot be resolved (1). A box's list of monitors that cannot be written
+  to its `box.json` is said and the command carries on (some commands ended with 1 there, unsaid, and
+  others went on). Scripts that tested for exit 3 from gdb, or exit 1 from `check` for those: test
+  for non-zero, or for 2.
 
 ## 1.0.1 — unreleased
 

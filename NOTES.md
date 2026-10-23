@@ -9260,6 +9260,34 @@ from them.
     run jq: not found in PATH", "set for omabox, pid N" (CHANGELOG). Tests: t_rust_parity (the twelve
     scenario kinds and the one not there), t_unit_rust_parity (pixel's, shot's, clip's), t_clip:
     expected differences; check.rs's interpreters_as_the_kernel_reads_them, jq.rs's not_run_said.
+442. **Silent set -e exits, and helpers' statuses taken for omabox's** (2026-10-23, #324 wave 4c).
+    Where a bash step failed under set -e the command ended with that step's status and often without
+    a word, and the Rust half did the same: pixel on a frame whose header was cut short or whose size
+    bash's arithmetic refused, or a point at or past its end (1, unsaid); gdb on a box whose pid
+    namespace this user namespace cannot read (box_pid's 3, unsaid) or a gdb that did not start (its
+    status); check's mkdir and cp (1, which is check's code for "changed": a run whose base could
+    not be made read as a change), its redirections, a report it could not move into place (unseen);
+    shot, record and calibrate on a path readlink -f could not resolve (1, unsaid); record stop's
+    video it could not move. And whether a step ended the command at all hung on where bash's call
+    sat: mon.rs and deskwin.rs passed an `errexit` flag (inside a `$(...)` or an `||`, set -e is off),
+    so a box.json or monitor-windows record that could not be written ended `mode`, `output` and
+    `monitor remove` with 1, and went unseen in `monitor add`. **Change** (Rust over bash): one rule. A step
+    that fails says what failed (`omabox: CMD: ...`) and ends the command with its usual code: 1, or 2
+    under check (its code for its own failures); a box.json record of the monitors that cannot be
+    written is said and the command goes on, in every caller (mode's own record ends it: "WANT is set,
+    but ls will not show it"); the errexit flags are gone (CHANGELOG). gdb's 3 there is now 1, check's
+    1 there now 2. Tests: t_unit_rust_parity (pixel's, shot -o past an unreadable folder),
+    t_unit_rust_parity4b and t_rust_parity (check's folder that cannot be made): expected differences.
+    gdb's unreadable namespace has no case: need_box refuses such a box first, so only a box changing
+    under it reaches that step.
+443. **pixel left its frame in $TMPDIR, and a failed box.json update its box.json.tmp** (2026-10-23,
+    #324 wave 4c; a bug in both halves, fixed in the Rust half only: bash's is no longer run for these
+    commands). pixel's three set -e exits of finding 442 came after its `mktemp`, so each left the
+    grabbed frame in $TMPDIR. jq_box_json (mode, monitor, output: `jq ... > box.json.tmp && mv`) left
+    box.json.tmp in the box's dir when jq or the mv failed, and take_over (an agent resumed, finding
+    93) when its jq failed. **Fix**: the temporary files are removed on every way out (shell::Rm), and
+    take_over says when it could not record the agent. Tests: t_unit_rust_parity (pixel's cases list
+    a TMPDIR of their own: the frame left in bash, none in Rust, expected differences).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

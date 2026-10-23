@@ -262,22 +262,38 @@ fn rm(p: &[u8]) {
     let _ = std::fs::remove_file(shell::path(p));
 }
 
-/// `cmd ARGS` with this process's stdio (cp, mkdir -p, sort -o): its status.
-/// A step under set -e: its failure ends the command with its status.
-fn must(rc: i32) -> Res<()> {
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(Exit(u8::try_from(rc & 0xff).unwrap_or(1)))
-    }
+/// A step that failed: WHY said, and the command ended, 2 (check's for its own failures; bash's set
+/// -e ended it with the step's status, mostly 1, check's "changed": finding 442).
+fn failed(ctx: &Ctx, why: Vec<u8>) -> Exit {
+    say(cat!("check: ", why));
+    ctx.refused()
 }
 
-/// `: > FILE` / `CMD > FILE` under set -e: the file written, or its failure said and the command
-/// ended, 1 (in omabox's words: bash's were its redirection line's, finding 441).
+/// `mkdir -p DIR`, or why not said and the command ended (failed).
+fn mkdirs(ctx: &Ctx, d: &[u8]) -> Res<()> {
+    std::fs::create_dir_all(shell::path(d))
+        .map_err(|e| failed(ctx, cat!("cannot make ", d, ": ", crate::shots::why(&e))))
+}
+
+/// `cp -- SRC TO`, TO a file's path, or why not said and the command ended (failed).
+fn copy(ctx: &Ctx, src: &[u8], to: &[u8]) -> Res<()> {
+    std::fs::copy(shell::path(src), shell::path(to))
+        .map(|_| ())
+        .map_err(|e| {
+            failed(
+                ctx,
+                cat!("cannot copy ", src, " to ", to, ": ", crate::shots::why(&e)),
+            )
+        })
+}
+
+/// `: > FILE` / `CMD > FILE`: the file written, or its failure said and the command ended, 2 (check's
+/// for its own failures; bash's set -e ended it 1, check's "changed", with its redirection line
+/// alone: findings 441, 442).
 fn put(p: &[u8], data: &[u8]) -> Res<()> {
     std::fs::write(shell::path(p), data).map_err(|e| {
         say(cat!("check: ", crate::shots::cant_write(p, &e)));
-        Exit(1)
+        Exit(2)
     })
 }
 
@@ -438,8 +454,12 @@ fn check_report_in(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
         rm(&part);
         return None;
     }
-    // (mv's failure goes unseen: the caller's `if` holds set -e off)
-    crate::shots::mv_f(&part, png);
+    // (A report that could not be put in place is none: the caller says so, its part gone. Bash's
+    // mv failed unseen, the caller's `if` holding set -e off: finding 442.)
+    if !crate::shots::mv_f(&part, png) {
+        rm(&part);
+        return None;
+    }
     Some(a[0].clone())
 }
 
@@ -1215,11 +1235,7 @@ fn check_point(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             "check point: outside a check run (omabox check run -- SCENARIO calls it), give -o DIR",
         ));
     }
-    // (set -e: mkdir's own words and status end it)
-    let rc = run_tool("mkdir", &[b"-p".to_vec(), outd.clone()]);
-    if rc != 0 {
-        return Err(Exit(u8::try_from(rc & 0xff).unwrap_or(1)));
-    }
+    mkdirs(ctx, &outd)?;
     let f = |ext: &str| cat!(outd, "/", id, ext);
     let png = f(".png");
     // (`[ ! -e ]`: a link to nothing is no shot taken)
@@ -1820,10 +1836,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             std::process::id().to_string()
         );
     }
-    let rc = run_tool("mkdir", &[b"-p".to_vec(), outd.clone()]);
-    if rc != 0 {
-        return Err(Exit(u8::try_from(rc & 0xff).unwrap_or(1)));
-    }
+    mkdirs(ctx, &outd)?;
     if !shell::path(&outd).is_dir() {
         // (`$(cd "$out" && pwd)`: cd's own words, the assignment's failure ends it)
         say_cd(&outd);
@@ -1918,7 +1931,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             put(&cat!(outd, "/env.json"), &e)?;
         }
         let rund = cat!(outd, "/run", k.to_string());
-        must(run_tool("mkdir", &[b"-p".to_vec(), rund.clone()]))?;
+        mkdirs(ctx, &rund)?;
         // The scenario's `omabox` is this one (its bin first), driving this run's box ($OMABOX).
         let path = cat!(root_bin, ":", shell::env_or_empty("PATH"));
         let runlog = cat!(outd, "/run", k.to_string(), ".log");
@@ -2705,7 +2718,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
     let plan = cat!(outd, "/baseline.plan");
     let body = cat!(plan, ".body");
     let run = |k: usize| cat!(outd, "/run", k.to_string());
-    must(run_tool("mkdir", &[b"-p".to_vec(), base.to_vec()]))?;
+    mkdirs(ctx, base)?;
     put(&body, b"")?;
     let ids1 = check_ids(&run(1));
     for k in 2..=runs {
@@ -2826,10 +2839,13 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             }
             append(&uf, &add);
         }
-        must(run_tool(
+        if run_tool(
             "sort",
             &[b"-u".to_vec(), b"-o".to_vec(), uf.clone(), uf.clone()],
-        ))?;
+        ) != 0
+        {
+            return Err(failed(ctx, cat!("cannot sort ", uf)));
+        }
         // The noise: what is left between the runs outside the unstable regions, all specks.
         let mut big = 0i64;
         for j in 1..=runs {
@@ -2855,15 +2871,9 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             }
         };
         let rb = run(best);
-        must(run_tool(
-            "cp",
-            &[
-                b"--".to_vec(),
-                cat!(rb, "/", id, ".png"),
-                cat!(rb, "/", id, ".point"),
-                cat!(base, "/"),
-            ],
-        ))?;
+        for ext in [".png", ".point"] {
+            copy(ctx, &cat!(rb, "/", id, ext), &cat!(base, "/", id, ext))?;
+        }
         pspeck.insert(id.clone(), ps);
         let bpoint = cat!(base, "/", id, ".point");
         let first = file_lines(&bpoint).first().cloned().unwrap_or_default();
@@ -2876,7 +2886,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
         }
         let rbt = cat!(rb, "/", id, ".tree.json");
         if shell::path(&rbt).is_file() {
-            must(run_tool("cp", &[b"--".to_vec(), rbt, cat!(base, "/")]))?;
+            copy(ctx, &rbt, &cat!(base, "/", id, ".tree.json"))?;
         } else {
             rm(&cat!(base, "/", id, ".tree.json"));
         }
@@ -2884,10 +2894,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
         let unst_data = std::fs::read(shell::path(&uf)).unwrap_or_default();
         if !unst_data.is_empty() {
             unst += 1;
-            must(run_tool(
-                "cp",
-                &[b"--".to_vec(), uf.clone(), cat!(base, "/")],
-            ))?;
+            copy(ctx, &uf, &cat!(base, "/", shell::basename(&uf)))?;
             if odd.len() + 1 < runs {
                 let odds: Vec<String> = odd.iter().map(ToString::to_string).collect();
                 out(cat!(
@@ -3030,14 +3037,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
             format!("speck {ps}\n").as_bytes(),
         );
     }
-    must(run_tool(
-        "cp",
-        &[
-            b"--".to_vec(),
-            cat!(outd, "/env.json"),
-            cat!(base, "/check.json"),
-        ],
-    ))?;
+    copy(ctx, &cat!(outd, "/env.json"), &cat!(base, "/check.json"))?;
     out(cat!(
         "check: baseline of ",
         n.to_string(),

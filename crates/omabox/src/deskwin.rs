@@ -4,7 +4,7 @@
 //! done on purpose, by address (no focus moves), and a host rule catching the new window, by a class
 //! of its own, keeps it off the user's workspace (findings 70, 429).
 //!
-//! As in mon.rs: what bash runs inside `$(...)` runs with errexit off; ERREXIT says where it is on.
+//! As in mon.rs: a step that fails ends the command the same way in every caller (finding 442).
 
 use crate::boxes::{BoxPid, box_pid, meta};
 use crate::cat;
@@ -110,9 +110,9 @@ pub fn desk_windows(ctx: &Ctx, clients: Option<&[u8]>) -> Option<Vec<u8>> {
 }
 
 /// desk_prune: a window closed on the desktop unplugged its monitor: its line and its address go
-/// before the picture is laid out again. ERREXIT: a mv of the windows' record that fails ends the
-/// command there.
-pub fn desk_prune(ctx: &Ctx, errexit: bool) -> Res<()> {
+/// before the picture is laid out again. The windows' record that cannot be rewritten is said, and
+/// the command goes on (its temporary file gone).
+pub fn desk_prune(ctx: &Ctx) -> Res<()> {
     let Ok(m) = hypr_json(ctx, &["monitors"]) else {
         return Ok(());
     };
@@ -157,20 +157,26 @@ pub fn desk_prune(ctx: &Ctx, errexit: bool) -> Res<()> {
             jq::Err::Inherit,
         );
         let new = cat!(ctx.d, "/monitor-windows.new");
+        let _new = shell::Rm(new.clone());
         if let Err(e) = std::fs::write(shell::path(&new), &r.out) {
-            say(cat!(new, ": ", crate::shots::why(&e)));
-        }
-        if !crate::shots::mv_f(&new, shell::bytes(&mw)) && errexit {
-            return Err(Exit(1));
+            say(cat!(ctx.label(), crate::shots::cant_write(&new, &e)));
+        } else if !crate::shots::mv_f(&new, shell::bytes(&mw)) {
+            say(cat!(
+                ctx.label(),
+                "box '",
+                ctx.name,
+                "''s record of its monitor windows was not updated"
+            ));
         }
     }
     Ok(())
 }
 
-/// Under ERREXIT a step whose status is RC ends the command with it.
-fn chk(errexit: bool, rc: i32) -> Res<()> {
-    if errexit && rc != 0 {
-        return Err(Exit(u8::try_from(rc & 0xff).unwrap_or(1)));
+/// A step whose status is RC: its failure said (WHAT could not be done) and the command ended, 1, in
+/// every caller (bash's set -e ended it with the step's status, unsaid, where it held: finding 442).
+fn chk(ctx: &Ctx, rc: i32, what: &str) -> Res<()> {
+    if rc != 0 {
+        return Err(ctx.die(cat!("monitor: ", what)));
     }
     Ok(())
 }
@@ -187,7 +193,7 @@ fn ints(v: &[&[u8]]) -> Option<Vec<i64>> {
 /// size of its view; with no monitors left it goes back to tiling, if it tiled before. With LINE (a
 /// monitor about to be made), its window's size and place relative to the host monitor, "W H X Y".
 /// Moves by address: no focus moves.
-pub fn desk_relay(ctx: &Ctx, new: &[u8], errexit: bool) -> Res<Vec<u8>> {
+pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
     let (rc, clients) = host_hyprctl(ctx, &[b"-j", b"clients"], false);
     if rc != 0 {
         return Err(ctx.die("monitor: cannot read your desktop's windows"));
@@ -230,12 +236,12 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8], errexit: bool) -> Res<Vec<u8>> {
                 .arg(crate::jqprog::MON_BY_ID_JQ),
             &mons,
         );
-        chk(errexit, rc)?;
+        chk(ctx, rc, "cannot read your desktop's monitors")?;
         mon = m;
     }
     if mon.is_empty() {
         let (rc, m) = jqt(Args::new(&["-c", crate::jqprog::MON_FOCUSED_JQ]), &mons);
-        chk(errexit, rc)?;
+        chk(ctx, rc, "cannot read your desktop's monitors")?;
         mon = m;
     }
     if mon.is_empty() {
@@ -283,13 +289,13 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8], errexit: bool) -> Res<Vec<u8>> {
         .run(Some(&mon), jq::Err::Inherit);
     // (`read -r ... < <(jq ...)`: nothing read is read's failure)
     if r.out.is_empty() {
-        chk(errexit, 1)?;
+        chk(ctx, 1, "cannot read your monitor's free area")?;
     }
     let a = shell::read_fields(&r.out, 6);
     let (hrc, hw) = jqt(Args::new(&["-r", &format!("{JQ_MON}lw | floor")]), &mon);
-    chk(errexit, hrc)?;
+    chk(ctx, hrc, "cannot read your monitor's size")?;
     let (hrc, hh) = jqt(Args::new(&["-r", &format!("{JQ_MON}lh | floor")]), &mon);
-    chk(errexit, hrc)?;
+    chk(ctx, hrc, "cannot read your monitor's size")?;
     let Some(lay) = box_layout(ctx, if new.is_empty() { None } else { Some(new) }) else {
         return Err(ctx.die(cat!(
             "monitor: box '",
@@ -354,8 +360,10 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8], errexit: bool) -> Res<Vec<u8>> {
         );
         if fl != b"true" {
             if let Err(e) = std::fs::write(ctx.at("main-window"), cat!(main, " tiled\n")) {
-                say(cat!(ctx.d, "/main-window: ", crate::shots::why(&e)));
-                chk(errexit, 1)?;
+                return Err(ctx.die(cat!(
+                    "monitor: ",
+                    crate::shots::cant_write(&cat!(ctx.d, "/main-window"), &e)
+                )));
             }
             host_eval(
                 ctx,
@@ -621,7 +629,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
             "''s windows on your desktop"
         )));
     }
-    desk_prune(ctx, false)?;
+    desk_prune(ctx)?;
     // Named here (the next free WAYLAND-N), so its line, and so its place and scale, are there
     // before it is.
     let m = hypr_json(ctx, &["monitors"])
@@ -640,7 +648,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
     let name = format!("WAYLAND-{i}").into_bytes();
     let line = cat!(name, " ", mode, " ", monitor_place(&place), " ", scale);
     // The picture with it: the windows there moved (and the main one floated) first, then its line.
-    let rect = desk_relay(ctx, &line, false).map_err(|_| Exit(1))?;
+    let rect = desk_relay(ctx, &line).map_err(|_| Exit(1))?;
     let rest = strip_nl(&monitors_file(ctx));
     if !monitors_write(ctx, &with_line(&rest, &line)) {
         return Err(ctx.die(cat!(
@@ -799,7 +807,7 @@ pub fn monitor_add_window(ctx: &mut Ctx, spec: &[u8]) -> Res<Vec<u8>> {
         )));
     }
     crate::trap::sleep(b"0.3");
-    monitors_record(ctx, false)?;
+    monitors_record(ctx)?;
     // (`hypr_json monitors | jq ...` last: its status the subshell's, pipefail's)
     let m = hypr_json(ctx, &["monitors"])?;
     let r = jq::tool(

@@ -117,11 +117,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     if act == b"back" {
         output_back(ctx, &outn, &mut |l| out(cat!(l, "\n")))?;
-        return monitors_record(ctx, true);
+        return monitors_record(ctx);
     }
     if gap.is_none() && cycles.is_none() {
         let gone = output_drop(ctx, &outn)?;
-        monitors_record(ctx, true)?;
+        monitors_record(ctx)?;
         // With other monitors one is still there (#161); the main screen is never one of them.
         let left = match hypr_json(ctx, &["monitors"]) {
             Ok(m) => {

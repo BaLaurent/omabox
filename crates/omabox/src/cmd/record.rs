@@ -1459,7 +1459,7 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         if !crate::shots::mkdir_p(&dir) {
             return Err(ctx.die(cat!("record: cannot make the directory ", dir)));
         }
-        file = crate::shots::real_or_end(&file)?;
+        file = crate::shots::real_or_end(ctx, &file)?;
         let part = cat!(file, ".part");
         if let Err(e) = std::fs::OpenOptions::new()
             .write(true)

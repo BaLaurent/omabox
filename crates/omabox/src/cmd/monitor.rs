@@ -348,8 +348,8 @@ fn remove(ctx: &mut Ctx, o: &[u8], interactive: bool) -> Res<()> {
     }
     // An interactive box's windows: the picture laid out again without it (#174).
     if interactive {
-        desk_prune(ctx, true)?;
-        desk_relay(ctx, b"", true)?;
+        desk_prune(ctx)?;
+        desk_relay(ctx, b"")?;
     }
     // One placed right of or below it now goes next to the one before it, as a reload would.
     let Ok(moved) = monitors_place(ctx) else {
@@ -361,7 +361,7 @@ fn remove(ctx: &mut Ctx, o: &[u8], interactive: bool) -> Res<()> {
             ")"
         )));
     };
-    monitors_record(ctx, true)?;
+    monitors_record(ctx)?;
     let moved = if moved.is_empty() {
         Vec::new()
     } else {
@@ -546,6 +546,6 @@ fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u8>> {
             " for the box's config reloads"
         )));
     }
-    monitors_record(ctx, false)?;
+    monitors_record(ctx)?;
     Ok(made)
 }

@@ -598,6 +598,15 @@ pub fn mktemp_args(args: &[&[u8]]) -> Result<(std::fs::File, Vec<u8>), crate::ex
     Ok((f, p))
 }
 
+/// A temporary file, removed when this goes, on every way out.
+pub struct Rm(pub Vec<u8>);
+
+impl Drop for Rm {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(path(&self.0));
+    }
+}
+
 /// A path from bytes.
 pub fn path(v: &[u8]) -> PathBuf {
     PathBuf::from(OsString::from_vec(v.to_vec()))
