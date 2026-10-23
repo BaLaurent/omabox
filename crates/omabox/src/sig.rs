@@ -135,6 +135,14 @@ pub fn run_child<T>(
         let t = with(&mut ch);
         let st = end(&mut ch);
         FG_ACTIVE.store(false, Ordering::SeqCst);
+        if group_cut(st.1) {
+            // (the substitution's subshell gone: main stops here, the trap's thread ends it)
+            drop(g);
+            SUBST_CUT.store(true, Ordering::SeqCst);
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+        }
         drop(g);
         break Ok((t, st));
     };
@@ -233,6 +241,30 @@ pub fn subst<T>(f: impl FnOnce() -> T) -> T {
 /// How many `$(...)` steps main is inside (subst), and whether a code trap waits for their end.
 pub static SUBST_DEPTH: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static SUBST_STOP: AtomicBool = AtomicBool::new(false);
+/// While a code trap waits (SUBST_STOP): the signals that came since, as bits (1 << N, the trap's
+/// thread reads them from its pipe), and SUBST_CUT, main's word that a group one killed the
+/// substitution's child: bash's subshell died of it, so nothing more of the substitution runs.
+pub static SECOND: AtomicI32 = AtomicI32::new(0);
+pub static SUBST_CUT: AtomicBool = AtomicBool::new(false);
+
+/// While a code trap waits for the substitution: a child that died of INT, TERM or HUP when this
+/// process got the same one too (within 300 ms: the trap's thread reads it) was killed by a group
+/// signal, as bash's subshell was.
+fn group_cut(sig: Option<i32>) -> bool {
+    let Some(s) = sig else { return false };
+    if !SUBST_STOP.load(Ordering::SeqCst)
+        || ![libc::SIGINT, libc::SIGTERM, libc::SIGHUP].contains(&s)
+    {
+        return false;
+    }
+    for _ in 0..30 {
+        if SECOND.load(Ordering::SeqCst) & (1 << s) != 0 {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
 
 /// An INT deferred (INT_DEFERRED) ends this process now, of SIGINT, as bash's main did.
 pub fn int_deferred_end() {
@@ -433,12 +465,13 @@ mod signal_cases {
 
     const CASE: &str = "OMABOX_SIG_CASE";
 
-    /// Some((code or 128+signal, stderr)) from the parent; None in the child, which runs the case.
+    /// Some((code or 128+signal, stderr)) from the parent; None in the child alone, which runs the
+    /// case (a child that cannot be started fails the test, never runs the case in the parent).
     fn in_child(name: &str) -> Option<Option<(i32, String)>> {
         if std::env::var(CASE).as_deref() == Ok(name) {
             return None;
         }
-        let exe = std::env::current_exe().ok()?;
+        let exe = std::env::current_exe().expect("the test binary's path");
         let mut ch = std::process::Command::new(exe)
             .args([
                 &format!("sig::signal_cases::{name}"),
@@ -451,8 +484,8 @@ mod signal_cases {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .ok()?;
-        let err = ch.stderr.take()?;
+            .expect("the case's child");
+        let err = ch.stderr.take().expect("the case's stderr");
         let reader = std::thread::spawn(move || {
             let mut s = String::new();
             let _ = std::io::Read::read_to_string(&mut { err }, &mut s);
@@ -521,6 +554,81 @@ mod signal_cases {
         assert_eq!(rc, 143, "{err}");
         assert!(err.contains("CASE second child over"), "{err}");
         assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE after"), "{err}");
+    }
+
+    fn sh(s: &str) {
+        let mut c = super::command("sh");
+        c.args(["-c", s]);
+        let _ = super::run_status(c);
+    }
+
+    /// A code trap's substitution, a TERM to omabox alone in its first step, then SECOND (to
+    /// omabox alone, or with GROUP to its child too, which dies of it) in its second: bash's
+    /// answer and whether its third step ran.
+    fn two_signals(name: &str, second: i32, group: bool) -> Option<(i32, String)> {
+        let Some(r) = in_child(name) else {
+            super::set_main();
+            let _t = crate::trap::on_exit_code(|| eprintln!("CASE undo"));
+            kill_at(&[(200, libc::SIGTERM), (900, second)]);
+            super::subst(|| {
+                sh("sleep 0.6");
+                if group {
+                    // (its child dies of it at 900 ms as well: a group signal)
+                    sh(&format!("sleep 0.3; kill -{second} $$; sleep 1"));
+                } else {
+                    sh("sleep 0.6");
+                }
+                eprintln!("CASE third step");
+                sh("sleep 0.3");
+            });
+            eprintln!("CASE after the substitution");
+            return None;
+        };
+        r
+    }
+
+    /// A group signal second: bash's subshell dies of it, nothing more of the substitution runs,
+    /// the traps run in signal-number order (TERM's 143; INT's 130 first).
+    #[test]
+    fn term_then_group_term() {
+        let Some((rc, err)) = two_signals("term_then_group_term", libc::SIGTERM, true) else {
+            return;
+        };
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE third"), "{err}");
+    }
+
+    #[test]
+    fn term_then_group_int() {
+        let Some((rc, err)) = two_signals("term_then_group_int", libc::SIGINT, true) else {
+            return;
+        };
+        assert_eq!(rc, 130, "{err}");
+        assert!(!err.contains("CASE third"), "{err}");
+    }
+
+    /// Two to omabox alone: the substitution finishes, then the lowest signal's trap: TERM then INT
+    /// ends 130, TERM then HUP 129 (bash's order).
+    #[test]
+    fn term_then_int() {
+        let Some((rc, err)) = two_signals("term_then_int", libc::SIGINT, false) else {
+            return;
+        };
+        assert_eq!(rc, 130, "{err}");
+        assert!(err.contains("CASE third"), "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE after"), "{err}");
+    }
+
+    #[test]
+    fn term_then_hup() {
+        let Some((rc, err)) = two_signals("term_then_hup", libc::SIGHUP, false) else {
+            return;
+        };
+        assert_eq!(rc, 129, "{err}");
+        assert!(err.contains("CASE third"), "{err}");
         assert!(!err.contains("CASE after"), "{err}");
     }
 

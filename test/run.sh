@@ -3041,6 +3041,13 @@ sig=$1 mark=$2; shift 2
 [ -z "${RP_IGN:-}" ] || trap '' $RP_IGN
 set -m
 "$@" & p=$!
+# (RP_DEADLINE: seconds after which CMD's whole group is KILLed, so a hung omabox leaves nothing
+# behind: a timeout around rp-sig would reach rp-sig alone, CMD being a group of its own)
+# (it ends by itself once CMD is gone: a watcher killed would have its own "Killed" line said)
+[ -z "${RP_DEADLINE:-}" ] || {
+  for ((t = 0; t < RP_DEADLINE * 5; t++)); do kill -0 "$p" || exit 0; sleep 0.2; done
+  kill -KILL -- -"$p"
+} >/dev/null 2>&1 &
 for i in $(seq 200); do [ -e "$mark" ] && break; sleep 0.05; done
 sleep 0.2
 case $sig in group-*) kill -"${sig#group-}" -- -"$p" ;; *) kill -"$sig" "$p" ;; esac
@@ -6007,9 +6014,10 @@ while time.time() < end:
   done
   # Twice (0.4 s apart, both in its ffmpeg): the second stays pending, bash still finishes the
   # sheet and exits 143 (130) once. (The Rust half hung there: the second signal parked main inside
-  # the substitution the first one's trap waited for. A KILL at 40 s fails it rather than the suite.)
+  # the substitution the first one's trap waited for. Its group KILLed at 40 s fails it rather than
+  # the suite, nothing of it left.)
   for i in TERM INT; do
-    rp_wrap=(timeout -s KILL 40 env RP_LINGER=3 RP_TWICE=0.4 "$r/rp-sig" "$i" "$st/tiles-made")
+    rp_wrap=(env RP_LINGER=3 RP_TWICE=0.4 RP_DEADLINE=40 "$r/rp-sig" "$i" "$st/tiles-made")
     parity "record stop --sheet and $i twice to omabox alone while it takes the frames" record -b rc stop --sheet --frames 3
   done
   rp_wrap=()

@@ -155,6 +155,32 @@ extern "C" fn on_signal(sig: libc::c_int) {
     }
 }
 
+/// The signals the handler wrote to the pipe and the thread has not read yet (INT, TERM, HUP).
+fn drain(f: &std::fs::File) -> Vec<libc::c_int> {
+    use std::os::fd::AsRawFd;
+    let mut v = Vec::new();
+    loop {
+        let mut p = libc::pollfd {
+            fd: f.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd of ours, no wait.
+        if unsafe { libc::poll(&mut p, 1, 0) } != 1 || p.revents & libc::POLLIN == 0 {
+            return v;
+        }
+        let mut b = [0u8; 1];
+        // SAFETY: a one-byte read into b from the pipe poll said is readable.
+        if unsafe { libc::read(f.as_raw_fd(), b.as_mut_ptr().cast(), 1) } != 1 {
+            return v;
+        }
+        let s = libc::c_int::from(b[0]);
+        if [libc::SIGINT, libc::SIGTERM, libc::SIGHUP].contains(&s) {
+            v.push(s);
+        }
+    }
+}
+
 /// The handlers and the thread that undoes on a signal, once.
 fn arm() {
     if SIG_W.load(Ordering::SeqCst) >= 0 {
@@ -186,6 +212,9 @@ fn arm() {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
             };
             let mut held = None;
+            // (signals that came after this one, read while it was handled: bash runs the pending
+            // traps in signal-number order, so a code trap ends with the lowest one's code)
+            let mut pending: Vec<libc::c_int> = Vec::new();
             // A code trap during a `$(...)`: when the child running then did not die of the signal
             // (one to omabox alone), bash runs the trap once the whole substitution is over (probed:
             // `trap 'exit 143' TERM` during `x=$(a; b)` exits after b): main finishes it, then
@@ -195,12 +224,20 @@ fn arm() {
                 let g = busy_at.then(lock_fg);
                 if g.is_some() && crate::sig::FG_SIG.load(Ordering::SeqCst) != sig {
                     // (main goes on to the substitution's end, where it parks: sig::subst)
+                    crate::sig::SECOND.store(0, Ordering::SeqCst);
                     crate::sig::SUBST_STOP.store(true, Ordering::SeqCst);
                     crate::sig::STOPPING.store(false, Ordering::SeqCst);
                     drop(g);
-                    while crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
+                    // (till its end, or a group signal's death of its child: sig::group_cut)
+                    while crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0
+                        && !crate::sig::SUBST_CUT.load(Ordering::SeqCst)
+                    {
                         // (a second signal's handler that read SUBST_STOP before it was set)
                         crate::sig::STOPPING.store(false, Ordering::SeqCst);
+                        for s in drain(&f) {
+                            pending.push(s);
+                            crate::sig::SECOND.fetch_or(1 << s, Ordering::SeqCst);
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
                 } else {
@@ -224,12 +261,17 @@ fn arm() {
                 drop(fg);
                 continue;
             }
+            if code {
+                pending.extend(drain(&f));
+            }
             run_undos();
             if code {
-                // (bash's `exit 130|143|129` in its trap, its EXIT trap run on the way)
+                // (bash's `exit 130|143|129` in the first of its traps to run, HUP's before INT's
+                // before TERM's, its EXIT trap run on the way)
+                let first = pending.into_iter().fold(sig, libc::c_int::min);
                 let _ = std::io::Write::flush(&mut std::io::stdout());
                 // SAFETY: _exit ends this process at once, nothing left to run.
-                unsafe { libc::_exit(128 + sig) }
+                unsafe { libc::_exit(128 + first) }
             }
             // SAFETY: the default disposition back, then the signal to this process: it ends of it,
             // as bash does after its EXIT trap.

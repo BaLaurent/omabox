@@ -8829,6 +8829,11 @@ from them.
     3b's scroll and keys-to-box too), and
     `run -d --wait` is the Rust half's, on the settle machinery `wait` shares (settle.rs). Tests:
     t_unit_rust_handoff, t_unit_rust_parity, t_rust_parity.
+    Where the halves still differ on signals (wave 4b, each on the safe side): an INT to omabox alone
+    while it works in-process ends the Rust half at once, where bash would finish the step it is in;
+    a TERM to omabox alone while `record sheet` takes its frames ends the Rust half 143 with no sheet
+    (bash's main dies at once, its subshell finishes the sheet); a TERM during the EXIT trap that an
+    INT began ends bash at once, 143, its undo cut short, where the Rust half finishes the undo first.
 
 426. **A refused OMABOX_STILL_DUMP left a temporary dir behind** (2026-10-22, #324 wave 3a's review).
     settle_begin made its `mktemp -d` dir for the tool's two fifos, and an action's before snapshot

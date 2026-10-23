@@ -46,11 +46,17 @@ pub fn host_session_wl(ctx: &Ctx) -> Result<(Vec<u8>, Vec<u8>), Vec<u8>> {
             .ok();
     let mut sig = sig;
     if !live {
-        match jq::jq(&["length"], Some(&all), jq::Err::Inherit)
+        // (`case $(jq length ...)`, `sig=$(jq ...)`: substitutions, as wl's below)
+        match crate::sig::subst(|| jq::jq(&["length"], Some(&all), jq::Err::Inherit))
             .text()
             .as_slice()
         {
-            b"1" => sig = jq::jq(&["-r", ".[0].instance"], Some(&all), jq::Err::Inherit).text(),
+            b"1" => {
+                sig = crate::sig::subst(|| {
+                    jq::jq(&["-r", ".[0].instance"], Some(&all), jq::Err::Inherit)
+                })
+                .text();
+            }
             b"0" => {
                 return Err(cat!(
                     "no Hyprland session in ",
@@ -59,11 +65,13 @@ pub fn host_session_wl(ctx: &Ctx) -> Result<(Vec<u8>, Vec<u8>), Vec<u8>> {
                 ));
             }
             _ => {
-                let all_s = jq::jq(
-                    &["-r", r#"map(.instance) | join(", ")"#],
-                    Some(&all),
-                    jq::Err::Inherit,
-                )
+                let all_s = crate::sig::subst(|| {
+                    jq::jq(
+                        &["-r", r#"map(.instance) | join(", ")"#],
+                        Some(&all),
+                        jq::Err::Inherit,
+                    )
+                })
                 .text();
                 return Err(cat!(
                     "several Hyprland sessions: set HYPRLAND_INSTANCE_SIGNATURE to one of ",
@@ -72,11 +80,13 @@ pub fn host_session_wl(ctx: &Ctx) -> Result<(Vec<u8>, Vec<u8>), Vec<u8>> {
             }
         }
     }
-    let wl = Args::new(&["-r"])
-        .kv("--arg", "s", &sig)
-        .arg("first(.[] | select(.instance == $s) | .wl_socket) // empty")
-        .run(Some(&all), jq::Err::Inherit)
-        .text();
+    let wl = crate::sig::subst(|| {
+        Args::new(&["-r"])
+            .kv("--arg", "s", &sig)
+            .arg("first(.[] | select(.instance == $s) | .wl_socket) // empty")
+            .run(Some(&all), jq::Err::Inherit)
+    })
+    .text();
     let sock = std::fs::metadata(shell::path(&cat!(rt, "/", wl)));
     if !(shell::re_match("^[A-Za-z0-9._-]+$", &wl) && sock.is_ok_and(|m| m.file_type().is_socket()))
     {

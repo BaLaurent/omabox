@@ -1299,8 +1299,9 @@ fn record_hold(ctx: &mut Ctx, rec: &mut Rec, dur: i64, from: i64, quiet: bool) -
 
 // --- start -----------------------------------------------------------------------------------------------
 
+/// `$(jq -r PROG <<<INPUT)`: a substitution's step (sig::subst).
 pub(crate) fn jq_r(prog: &str, input: &[u8]) -> (i32, Vec<u8>) {
-    let r = jq::jq(&["-r", prog], Some(input), jq::Err::Inherit);
+    let r = crate::sig::subst(|| jq::jq(&["-r", prog], Some(input), jq::Err::Inherit));
     (r.rc, r.text())
 }
 
@@ -1415,25 +1416,31 @@ fn record_start(ctx: &mut Ctx, rec: &mut Rec, file: &[u8], o: &Opts, asname: boo
         let mainn = jq_r(&format!("{ms} // empty | .name"), &mons).1;
         let mut g = jq_r(&format!("{jq_mon}{}", P::GEO_MIN_JQ), &mons).1;
         let head = layout.split(|&c| c == b'\n').next().unwrap_or_default();
-        let k = jq::awk(&[P::GEO_K_AWK], Some(head), jq::Err::Inherit).text();
+        // (`geo+=" $(head ... | awk ...)"`, twice)
+        let k = crate::sig::subst(|| jq::awk(&[P::GEO_K_AWK], Some(head), jq::Err::Inherit)).text();
         let rest: Vec<&[u8]> = layout.split(|&c| c == b'\n').skip(1).collect();
-        let m = jq::awk(
-            &[
-                b"-v".to_vec(),
-                cat!("m=", mainn),
-                P::GEO_MAIN_AWK.as_bytes().to_vec(),
-            ],
-            Some(&rest.join(&b'\n')),
-            jq::Err::Inherit,
-        )
+        let m = crate::sig::subst(|| {
+            jq::awk(
+                &[
+                    b"-v".to_vec(),
+                    cat!("m=", mainn),
+                    P::GEO_MAIN_AWK.as_bytes().to_vec(),
+                ],
+                Some(&rest.join(&b'\n')),
+                jq::Err::Inherit,
+            )
+        })
         .text();
         g.extend_from_slice(&cat!(" ", k, " ", m));
         g
     } else {
-        let r = Args::new(&["-r"])
-            .kv("--arg", "n", &mon)
-            .arg(P::GEO_ONE_JQ)
-            .run(Some(&mons), jq::Err::Inherit);
+        // (`geo=$(jq ... | head -n 1)`)
+        let r = crate::sig::subst(|| {
+            Args::new(&["-r"])
+                .kv("--arg", "n", &mon)
+                .arg(P::GEO_ONE_JQ)
+                .run(Some(&mons), jq::Err::Inherit)
+        });
         r.text()
             .split(|&c| c == b'\n')
             .next()

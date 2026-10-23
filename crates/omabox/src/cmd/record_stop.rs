@@ -128,7 +128,7 @@ fn ff_line(ctx: &mut Ctx, argv: &[Vec<u8>], n: usize) -> Res<Vec<u8>> {
     Ok(o.split(|&c| c == b'\n').next().unwrap_or_default().to_vec())
 }
 
-/// `awk -v K=V ... 'BEGIN { PROG }'`'s output.
+/// `$(awk -v K=V ... 'BEGIN { PROG }')`: a substitution's step (sig::subst).
 fn awk_begin(vars: &[(&str, &[u8])], prog: &str) -> Vec<u8> {
     let mut a: Vec<Vec<u8>> = Vec::new();
     for (k, v) in vars {
@@ -136,7 +136,7 @@ fn awk_begin(vars: &[(&str, &[u8])], prog: &str) -> Vec<u8> {
         a.push(cat!(k, "=", v));
     }
     a.push(prog.as_bytes().to_vec());
-    jq::tool("awk", &a, None, jq::Err::Inherit).text()
+    crate::sig::subst(|| jq::tool("awk", &a, None, jq::Err::Inherit)).text()
 }
 
 /// bytes_h B: a size in words.
@@ -1473,8 +1473,15 @@ fn record_cut(
     let d = awk_begin(&[("m", &cut_b)], r#"BEGIN { printf "%.3f", m / 1000 }"#);
     // What ffmpeg says, a value a line at most: the host reads no more than that, and checks each.
     let grep_o = |ctx: &mut Ctx, a: &[Vec<u8>], re: &str| -> Res<Vec<u8>> {
-        let (rc, o) = crate::sig::subst(|| rec_ff(ctx, Ff::Err, a))?;
-        let g = jq::tool("grep", &["-oE", re], Some(&o), jq::Err::Inherit);
+        // (`fz=$(rec_ff ... | grep -oE RE | head ...)`: the grep in the substitution too)
+        let (rc, g) = crate::sig::subst(|| {
+            rec_ff(ctx, Ff::Err, a).map(|(rc, o)| {
+                (
+                    rc,
+                    jq::tool("grep", &["-oE", re], Some(&o), jq::Err::Inherit),
+                )
+            })
+        })?;
         if rc != 0 || !g.ok() {
             return Ok(Vec::new());
         }
@@ -1527,68 +1534,75 @@ fn record_cut(
         )?;
     }
     // The times something happened, ms in the video ("A FROM TO"): the input, the marks.
-    let mut act = Vec::new();
-    let input_s = !input.is_empty() && size_of(&shell::path(input)).is_some_and(|s| s > 0);
-    if input_s {
-        let x: &[u8] = if show { b"3000" } else { b"0" };
-        act.extend(
-            jq::tool(
-                "awk",
-                &[
-                    b"-v".to_vec(),
-                    cat!("f=", first),
-                    b"-v".to_vec(),
-                    cat!("x=", x),
-                    P::CUT_INPUT_AWK.as_bytes().to_vec(),
-                    input.to_vec(),
-                ],
-                None,
-                jq::Err::Inherit,
-            )
-            .out,
-        );
-    }
-    if !marks.is_empty() {
-        act.extend(
-            jq::tool(
-                "awk",
-                &[
-                    b"-F".to_vec(),
-                    b"\t".to_vec(),
-                    b"-v".to_vec(),
-                    cat!("f=", first),
-                    P::CUT_MARKS_AWK.as_bytes().to_vec(),
-                ],
-                Some(&cat!(marks, "\n")),
-                jq::Err::Inherit,
-            )
-            .out,
-        );
-    }
+    // (`act=$( { awk ...; awk ...; } )`)
+    let act = crate::sig::subst(|| {
+        let mut act = Vec::new();
+        let input_s = !input.is_empty() && size_of(&shell::path(input)).is_some_and(|s| s > 0);
+        if input_s {
+            let x: &[u8] = if show { b"3000" } else { b"0" };
+            act.extend(
+                jq::tool(
+                    "awk",
+                    &[
+                        b"-v".to_vec(),
+                        cat!("f=", first),
+                        b"-v".to_vec(),
+                        cat!("x=", x),
+                        P::CUT_INPUT_AWK.as_bytes().to_vec(),
+                        input.to_vec(),
+                    ],
+                    None,
+                    jq::Err::Inherit,
+                )
+                .out,
+            );
+        }
+        if !marks.is_empty() {
+            act.extend(
+                jq::tool(
+                    "awk",
+                    &[
+                        b"-F".to_vec(),
+                        b"\t".to_vec(),
+                        b"-v".to_vec(),
+                        cat!("f=", first),
+                        P::CUT_MARKS_AWK.as_bytes().to_vec(),
+                    ],
+                    Some(&cat!(marks, "\n")),
+                    jq::Err::Inherit,
+                )
+                .out,
+            );
+        }
+        act
+    });
     let act = strip_nl(&act);
-    let sedp = |v: &[u8], prog: &str| {
-        jq::tool("sed", &["-n", prog], Some(&cat!(v, "\n")), jq::Err::Inherit).out
-    };
-    let mut feed = cat!(act, "\n");
-    feed.extend(sedp(&fz, r"s/^freeze_\(start\|end\): /F\1 /p"));
-    feed.extend(sedp(&sl, r"s/^silence_\(start\|end\): /S\1 /p"));
+    // (`cuts=$( { ...; sed ...; sed ...; } | awk ... | sort -n -u)`)
     let fps = rec.fps.clone();
-    let cuts_raw = jq::tool(
-        "awk",
-        &[
-            b"-v".to_vec(),
-            cat!("fps=", fps),
-            b"-v".to_vec(),
-            cat!("nb=", nb),
-            b"-v".to_vec(),
-            cat!("cut=", cut_b),
-            P::CUT_AWK.as_bytes().to_vec(),
-        ],
-        Some(&feed),
-        jq::Err::Inherit,
-    )
-    .out;
-    let cuts = strip_nl(&sort(&["-n", "-u"], &cuts_raw));
+    let cuts = crate::sig::subst(|| {
+        let sedp = |v: &[u8], prog: &str| {
+            jq::tool("sed", &["-n", prog], Some(&cat!(v, "\n")), jq::Err::Inherit).out
+        };
+        let mut feed = cat!(act, "\n");
+        feed.extend(sedp(&fz, r"s/^freeze_\(start\|end\): /F\1 /p"));
+        feed.extend(sedp(&sl, r"s/^silence_\(start\|end\): /S\1 /p"));
+        let cuts_raw = jq::tool(
+            "awk",
+            &[
+                b"-v".to_vec(),
+                cat!("fps=", fps),
+                b"-v".to_vec(),
+                cat!("nb=", nb),
+                b"-v".to_vec(),
+                cat!("cut=", cut_b),
+                P::CUT_AWK.as_bytes().to_vec(),
+            ],
+            Some(&feed),
+            jq::Err::Inherit,
+        )
+        .out;
+        strip_nl(&sort(&["-n", "-u"], &cuts_raw))
+    });
     if cuts.is_empty() {
         say(cat!(
             "record --cut-idle: no still stretch longer than ",
@@ -1916,7 +1930,8 @@ fn record_sheet(
     } else {
         Vec::new()
     };
-    let r = jq::jq(&["-r", P::SHEET_JQ], Some(&strip_nl(&j)), jq::Err::Null);
+    // (`read ... < <(jq -r ...)`: its read cut short by an INT as a substitution's)
+    let r = crate::sig::subst(|| jq::jq(&["-r", P::SHEET_JQ], Some(&strip_nl(&j)), jq::Err::Null));
     let f = shell::read_fields(&r.out, 5);
     let ok = r.ok()
         && shell::re_match(
