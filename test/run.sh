@@ -3107,8 +3107,8 @@ t_unit_rust_handoff() {
   check_eq "a taken-over command runs in Rust, with main's words" "rust -b b1 x" "$("$CLI" _rust -b b1 x 2>&1)"
   out=$(OMABOX_BASH=1 "$CLI" _rust 2>&1); rc=$?
   check_eq "OMABOX_BASH=1: bash keeps it (it has no _rust: exit 2)" "2 omabox: unknown command: _rust (omabox help lists the commands and their options)" "$rc $out"
-  out=$("$ROOT/build/bin/omabox" help path 2>&1); rc=$?
-  check_eq "a command the binary lacks goes back to bash" "0 $("$CLI" help path 2>&1)" "$rc $out"
+  out=$("$ROOT/build/bin/omabox" _rust-nosuch 2>&1); rc=$?
+  check_eq "a command the binary lacks goes back to bash" "2 omabox: unknown command: _rust-nosuch (omabox help lists the commands and their options)" "$rc $out"
 }
 
 # The Rust half's parity (#324), which every wave reuses: `parity LABEL ARGS...` runs `omabox ARGS` both
@@ -5878,6 +5878,52 @@ PYEOF
 # in a pid namespace of its own). No case starts a box: every one is refused, or finds its box up.
 # Wave 5b: down, ls, save, saves, version and _reap on boxes of the test's own, dead ones and
 # stand-ins taken down for real, their HOMEs and saves in the test's cache and data dirs.
+# Wave 6-front (#324): the front of the CLI in the Rust half. A1, the help: bin/omabox's text compiled in
+# (help.txt, the same bytes as usage_text's), and `help`, `help CMD`, `CMD --help` cut as bash's usage
+# cuts it, for every command and alias.
+t_unit_rust_front() {
+  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust front" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  local r=$TMP/rpf c
+  rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/norepo"
+  check "help.txt is bin/omabox's usage_text, byte for byte" cmp -s <(lib usage_text) "$ROOT/crates/omabox/src/help.txt"
+  rp_rt=$r/rt rp_dir=$r/norepo rp_env=() rp_snap=1 rp_prep="" rp_sed="" rp_wrap=()
+  parity "help" help
+  parity "help --long" help --long
+  parity "-h" -h
+  parity "--help" --help
+  parity "--help --long" --help --long
+  parity "help -h: help's own" help -h
+  parity "help --help --long" help --help --long
+  parity "help --long -h: the short form, as bash's" help --long -h
+  parity "help: an unknown command" help nosuch
+  parity "help: a typo's nearest" help shto
+  parity "help: an empty word" help ''
+  parity "help exit-codes" help exit-codes
+  parity "help exit-codes --long" help exit-codes --long
+  parity "help: two words, the first taken" help shot up
+  # (bash handed the word to awk -v, which reads escapes in it: u\160 was up)
+  rp_why=500 rp_bash=(rc=0 'out~^  omabox up \[NAME\]' 'out~^' err=)
+  rp_rust=(rc=2 out= 'err=omabox: unknown command: u\160 (omabox help lists the commands and their options)')
+  parity "help with a backslash: taken as written" help 'u\160'
+  for c in $(lib eval 'echo $COMMANDS') screenshot logs list -V --version; do
+    parity "help $c" help "$c"
+    parity "help $c --long" help "$c" --long
+  done
+  for c in $(lib eval 'echo $COMMANDS') screenshot logs list; do
+    [ "$c" != hyprctl ] || continue
+    parity "$c --help" "$c" --help
+  done
+  parity "-b N shot --help" -b rpf shot --help
+  parity "-b N run -h" -b rpf run -h
+  parity "shot -b N --help" shot -b rpf --help
+  parity "nosuch --help" nosuch --help
+  # (a --help after other words: the command's own parser, each Rust's since its wave)
+  # (not clip: under an agent it refuses first, naming its comm, bash's an expected 6b difference)
+  for c in lua log events setup config pixel tree cpu output monitor gdb ports keys-to-box save saves scroll run up check; do
+    parity "$c: --help after a word" "$c" --json --help
+  done
+}
+
 t_unit_rust_parity5() {
   [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity 5" "no build/bin/omabox (an install: every command runs in bash)"; return; }
   local r=$TMP/rp5 u1="" l1="" ns1 i
@@ -20295,7 +20341,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)

@@ -77,6 +77,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **`help WORD` takes WORD as written**: `omabox help 'u\160'` is an unknown command (exit 2). The
+  bash omabox handed the word to awk, which read escapes in it, so it printed `up`'s help. Scripts:
+  nothing to change.
 - **`config` and `guard` refuse a settings link they cannot follow** (into a folder not there yet,
   or a loop), saying so and naming it; the bash omabox exited 1 there without a word. The link is
   kept. A config that cannot be read stops every `up` (exit 2) and `config` says so; the bash

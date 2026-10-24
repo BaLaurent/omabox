@@ -28,7 +28,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             b"--remove" => remove = true,
             b"--feedback-skill" => fb = "on",
             b"--no-feedback-skill" => fb = "off",
-            b"-h" | b"--help" => return crate::to_bash(ctx, args),
+            b"-h" | b"--help" => return crate::help::usage("setup"),
             _ => return Err(unknown_opt(ctx, "setup", a)),
         }
     }

@@ -30,7 +30,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 i += 1;
             }
             b"--json" => as_json = true,
-            b"-h" | b"--help" => return crate::to_bash(ctx, args),
+            b"-h" | b"--help" => return crate::help::usage("lua"),
             b"--" => {
                 src.extend(args[i + 1..].iter().cloned());
                 break;

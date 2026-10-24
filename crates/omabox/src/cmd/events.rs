@@ -279,7 +279,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
                 n = args[i + 1].clone();
                 i += 1;
             }
-            b"-h" | b"--help" => return crate::to_bash(ctx, args),
+            b"-h" | b"--help" => return crate::help::usage("events"),
             _ if a.starts_with(b"-") => return Err(unknown_opt(ctx, "events", a)),
             _ => {
                 return Err(unexpected(

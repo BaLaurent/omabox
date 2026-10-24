@@ -30,7 +30,7 @@ RELAY=$ROOT/tools/relay/omabox-relay
 # The Rust half (#324, crates/omabox, built into build/bin): the commands it has taken over run there
 # (rust_handoff). OMABOX_BASH=1 keeps every command here, to compare the two.
 RUST=$ROOT/build/bin/omabox
-RUST_CMDS=" _rust path env which hyprctl lua run log logs events wait windows tree pixel keys keys-to-box click scroll pointer drag shot screenshot calibrate monitor output mode gpu cpu audio ports clip peek gdb check record up down ls list save saves version -V --version _reap config brief reload restart-shell host broker guard setup "
+RUST_CMDS=" _rust path env which hyprctl lua run log logs events wait windows tree pixel keys keys-to-box click scroll pointer drag shot screenshot calibrate monitor output mode gpu cpu audio ports clip peek gdb check record up down ls list save saves version -V --version _reap config brief reload restart-shell host broker guard setup help -h --help "
 NO_RUST=${OMABOX_BASH:-}; unset OMABOX_BASH   # for this call only, not what it starts
 # aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
 # the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
@@ -16019,7 +16019,8 @@ main() {
   # Not hyprctl's: its arguments are hyprctl's own.
   local a=("$@")
   while [ "${a[0]:-}" = -b ] || [ "${a[0]:-}" = --box ]; do a=("${a[@]:2}"); done
-  case ${a[0]:-} in -h|--help) [ "$cmd" = hyprctl ] || [ "$cmd" = _reap ] || { usage "$cmd"; exit; } ;; esac
+  # (The help is the Rust half's since wave 6-front: `help CMD` there.)
+  case ${a[0]:-} in -h|--help) [ "$cmd" = hyprctl ] || [ "$cmd" = _reap ] || { rust_handoff help "$cmd"; usage "$cmd"; exit; } ;; esac
   # calibrate draws and reads its card here, in a jail too: only the box's size goes by the broker.
   # (A caller the broker cannot place, or one it turns away, is a refusal, not a usage error.)
   if [ -n "${OMABOX_BROKER_PEER:-}" ]; then PARSING=0; broker_init; broker_check "$cmd" "$@"; PARSING=1

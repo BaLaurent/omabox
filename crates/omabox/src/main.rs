@@ -14,6 +14,7 @@ mod exec;
 mod exit;
 mod gpu;
 mod guard;
+mod help;
 mod host;
 mod hypr;
 mod input;
@@ -149,6 +150,7 @@ fn main() -> ExitCode {
         Some("setup") => Some(cmd::setup::run),
         Some("reload") => Some(cmd::reload::run),
         Some("restart-shell") => Some(cmd::restart_shell::run),
+        Some("help" | "-h" | "--help") => Some(|_, a| help::run(a)),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.
@@ -234,14 +236,6 @@ pub fn root() -> PathBuf {
         .and_then(|p| p.parent())
         .map(PathBuf::from)
         .unwrap_or_default()
-}
-
-/// A call the Rust half leaves to bash (help text, what a later wave ports): bash runs it from the
-/// start, told not to hand it back. Nothing has been done by then: it is the same call.
-pub fn to_bash(ctx: &exit::Ctx, args: &[Vec<u8>]) -> exit::Res<()> {
-    let rest: Vec<OsString> = args.iter().map(|a| OsString::from_vec(a.clone())).collect();
-    back_to_bash(OsString::from_vec(ctx.main_cmd.clone()), rest);
-    Err(exit::Exit(126))
 }
 
 fn back_to_bash(cmd: OsString, rest: Vec<OsString>) -> ExitCode {

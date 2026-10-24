@@ -9922,6 +9922,20 @@ from them.
     t_monitors_wait_nvidia and t_monitors_wait (the monitors' scales and places read from the box,
     besides up's line).
 
+500. **The help in the Rust half** (2026-10-24, #324 wave 6-front, A1). bin/omabox's usage_text is
+    crates/omabox/src/help.txt (`$PASS_KEY` expanded; t_unit_rust_front checks it is usage_text's
+    bytes), compiled in; help.rs cuts it as bash's usage and usage_form did (bare `help`, `--long`,
+    `help CMD`, the `@` and `@short` paragraphs, run with up's lines). `help`, `-h` and `--help` are
+    in RUST_CMDS, and bash's `CMD --help` hands `help CMD` over; a `--help` after other words in the
+    Rust half's commands prints it in-process (lua, log, events, setup and config went back to bash
+    for it, the rest ran `omabox help CMD`); opt_form reads the command's lines from it, where a
+    table of them was copied by hand. Until the flip bash keeps its own copy of the text (a jail's
+    `bin/omabox` is mapped alone, with no help.txt beside it). **Change** (Rust over bash): a word
+    is taken as written; bash gave it to `awk -v`, which reads escapes, so `help 'u\160'` printed
+    up's help where it is now an unknown command (CHANGELOG). Tests: t_unit_rust_front (help, help
+    CMD and help CMD --long for every command and alias, CMD --help for each, after -b, mid-argument;
+    the escape an expected difference), help.rs's every_command_has_help.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

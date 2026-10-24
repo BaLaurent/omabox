@@ -18,7 +18,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     for a in args {
         match a.as_slice() {
             b"--json" => as_json = true,
-            b"-h" | b"--help" => return crate::to_bash(ctx, args),
+            b"-h" | b"--help" => return crate::help::usage("config"),
             _ if a.starts_with(b"-") => return Err(unknown_opt(ctx, "config", a)),
             _ => words.push(a.clone()),
         }

@@ -1,0 +1,752 @@
+omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
+
+  omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...
+            [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...]
+            [--env KEY=VAL]...
+            [--no-seed extensions,fonts]                 your plugins' settings files, your fonts left on the desk
+            [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/
+            [--theme NAME]                               start on that theme, not your desktop's current one
+            [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors
+            [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]
+            [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
+            [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic
+            [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
+            [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   only what is tested moves
+            [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
+            [--quickshell PATH]                          a Quickshell build of yours for the box's shell
+            [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
+            [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
+            [--new]                                      start it under a free name, box-1, box-2, ... (printed)
+            [--json]                                     the box as ls --json lists it, on stdout
+  omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...
+             [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only
+  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
+              [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
+              [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time
+  omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [--glide DURATION]
+                | mark TEXT [--hold DURATION] | hold DURATION | stop [SHEET] [POLISH] | status [--json])   a video of the screen
+  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--hold 1s] [--no-pointer] [--audio] [--glide DURATION]
+                [SHEET] [POLISH] -- ACTION...   one action, recorded
+  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [SHEET] [POLISH]
+                --for DURATION   the screen for that long, no action
+  omabox record [-b NAME] sheet VIDEO [-o PNG] [--frames 15 | --every DURATION] [--fit N]   a contact sheet of a video
+              SHEET: --sheet [--frames 15 | --every DURATION] [--fit N]   the recording's contact sheet, FILE.sheet.png
+              POLISH: [--show-input] [--captions] [--cut-idle [1s]]   clicks, pointer, keys and marks drawn in; still stretches cut
+  omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb
+  omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
+  omabox calibrate [CARD] --answer "A X,Y B X,Y ..." [--json]   where you see each mark: 1:1, or the --fit N that maps it
+  omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them
+  omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text
+  omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO [ARG...]
+                                                         a visual check: the scenario's checkpoints against a baseline
+  omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
+                                                         a checkpoint, in a scenario: once still, a shot (and the tree)
+  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png] [--json]
+                                                         what differs, as a check sees it
+  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s DURATION | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return
+  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
+               [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click
+  omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [BTN]
+              [--steps 10 | --glide DURATION] [--hold DURATION] [--mod MODS]  press, move, hold, release
+              [--shot-fit N | --shot-g "X,Y WxH" | --shot-monitor NAME]   (with --shot: as shot's --fit, -g, --monitor)
+  omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N | --glide DURATION] [--mod MODS] -- ARGS...
+                 raw: move X Y [--steps N], click/down/up [BTN], scroll DY, hscroll DX,
+                 source wheel|finger|continuous|tilt, sleep DURATION
+  omabox pointer [-b NAME] hide | show                   the pointer out of shots and recordings (it still moves), over reloads
+  omabox scroll [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y DY [DX] [--source wheel|finger|continuous|tilt]
+                [--mod MODS]
+                                                         scroll there (DX: sideways; 15 is a wheel notch)
+  omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time
+         COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]
+               | change [-g GEOM | --window SEL] [--ignore GEOM]...
+               | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | until -- CMD [ARG...]
+  omabox hyprctl [-b NAME] ARGS...
+  omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns
+  omabox peek [-b NAME] [--monitor NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)
+  omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys to the box while focused, pointer on it
+  omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)
+  omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox
+  omabox mode [-b NAME] [--json | WxH[@HZ][,scale=S]|host]   show or change a headless box's screen mode
+  omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back
+  omabox gpu [-b NAME] [DURATION] [--json]               GPU engine time of this box's processes (default 5s)
+  omabox gpu release GPU                                 take down the headless boxes rendering on that GPU
+  omabox audio [-b NAME] [DURATION] [--json]             an up --audio box's sound for DURATION (3s): when, how loud
+  omabox cpu [-b NAME] [DURATION] [--settle DURATION] [--pid PID | --app NAME] [--threads] [--json]
+                                                         CPU (% of one core) and memory of this box's processes (default 5s)
+  omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors
+  omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches
+  omabox env [NAME | -b NAME]                            exports for host-side Wayland tools
+  omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]
+                                                         a box's logs: hyprland (the default), shell, apps, run,
+                                                         events, keyring, labwc, systemd, audio, gdb,
+                                                         journal, box, reap
+  omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit
+  omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)
+  omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events
+  omabox events [-b NAME] --mark [MARK] [--json]         from here: prints the offset, keeps MARK for --since
+  omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]
+  omabox path [NAME | -b NAME] [--home | --run | --logs [--json]]   the box dir; --home: its /home/sbx (<dir>/home);
+                                                         --run: its /run/user/$UID (<dir>/run); --logs: each log's file
+  omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)
+  omabox ls [--json]
+  omabox which [--json] PID                              the box a host process is in, or "not in a box" (exit 1)
+  omabox brief [-b NAME]                                 ~15 lines for a subagent's prompt: the box, its windows, the rules
+  omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
+  omabox saves [--json] | saves rm SAVE...               the saves: list, delete
+  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu, shot-fit, protect-ports
+  omabox guard [on|off [claude|codex]]                   the agent guard: show, add, remove
+  omabox guard exec -- AGENT [ARG...]                    run any other agent under the guard
+  omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
+  omabox clip [-b NAME] [--from-box]                     your clipboard into an interactive box, or back
+  omabox broker [on|off]                                 let agents inside ai-jail drive their own boxes
+  omabox setup [--remove]                                your links (skill, bar widget), settings dir, agent guard
+  omabox setup --feedback-skill|--no-feedback-skill      opt in to the omabox-feedback skill, or out again
+  omabox setup --aquamarine [--force]                    build omabox's aquamarine: the fix, and its own patches
+  omabox --version [--json]                              and which aquamarine new boxes use
+  omabox help [COMMAND [--long] | exit-codes]            one command's options (--long: its notes); what each exit code means
+
+@ up run ls down path
+NAME defaults to $OMABOX, else the current git repo's name, else "default". In an agent session
+(Claude Code, Codex, `guard exec`) that name gets the session's id, myrepo-5cc72cdc: one box per
+session, gone when its agent exits. OMABOX_SESSION= (empty) turns that off. A git worktree is named
+by its own folder, so each worktree has its own box. Outside any repo (a scratch dir) the name
+is default-SESSION; with no box of that name, every command but `up` uses the session's one box
+started from its repo, said once: `down` too, so `omabox down` there takes that box down. A
+`down` whose name has no box, while the session has boxes up started elsewhere, names each with the
+`down -b` that takes it, and exits 1.
+@+ up run shot record pixel calibrate windows tree check keys keys-to-box click scroll pointer drag wait hyprctl lua log gdb events peek restart-shell reload mode output monitor gpu cpu audio ports env path down save clip brief
+-b NAME (or --box NAME) picks the box, in every command that takes one; it goes before the command
+too (omabox -b NAME windows).
+@+ shot record calibrate check
+-o (or --output) names what the command writes.
+@short shot pixel tree check keys click scroll pointer drag wait
+--window SEL (or -w SEL): a window: active (or --active), 0x... (its address), pid:N, class:RE, title:RE, a word
+@short keys click scroll drag run
+--wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore GEOM]... [--strict] [--json]
+       after it, a change on screen within --start, then still for --quiet; 124 if not by --timeout;
+       the line adds what changed on the desktop (windows, layers, focus), a 124 where the input went
+@short run
+-d (or --detach): the command left running in the box, its log said on stderr; --replace: the same one stopped first
+@short shot
+--monitor NAME: one monitor of the box's (omabox monitor list)
+@short tree
+--layer SEL (or -l SEL): a layer surface (the bar, a panel, a menu): its namespace, address:0x... or pid:N
+@short log events
+-f (or --follow): on until the box goes down
+@ path
+From the host, the box's HOME (/home/sbx in it) is <dir>/home, `omabox path --home`, and its
+/run/user/$UID (its XDG_RUNTIME_DIR: sockets, an app's runtime state) is <dir>/run, `omabox path
+--run`. An agent reads and writes box files with its own file tools on the path --home prints. The host's own
+/run/user/$UID is the real session's: never read a box app's state there.
+@ brief
+`omabox brief -b NAME` is for an agent that hands box work to a subagent: paste its output into
+the subagent's prompt and the subagent needs no skill. It names the box, its size and its windows
+(each with a --window SEL that finds it alone, six at most), then the rules: -b NAME on every call,
+one literal command per call, look, act once, look again, never resend unseen input, no sleep,
+never the real desktop, the box HOME's host path for the file tools, scripts there for several
+shell steps, stay in your worktree; and to load the skill when that is not enough. With no box up,
+the same for a box the subagent starts itself (up --new), and a note on stderr. Exit 0 but for a
+usage error.
+@ run
+`omabox run` with no box up starts a throwaway box for the command, with the current repo
+mounted as a discarded overlay (writes succeed, vanish at teardown), and tears it down after.
+A box named with -b or $OMABOX must be up: `run` fails rather than start a throwaway. With a
+box up, `run` uses it and the repo is read-only there (tests that write into the tree: down first).
+Outside any repo a throwaway mounts nothing of the current dir: the command runs in the box HOME
+(/home/sbx), said when a word of it is a path there; `run --overlay DIR` (or --ro-bind DIR)
+brings it in.
+--net isolated --allow PORTS on a throwaway `run` keeps tests off your real local services.
+`run` exits with the command's status; 125 is run's own failure (no box, a bad option, a throwaway
+that did not start, the box going down while the command ran), never a code of the command's
+(omabox help exit-codes).
+@ up run ports
+Every box has its own network (pasta): by default the internet, the LAN and your servers. Across
+the box boundary use 127.0.0.1, not localhost; a box's servers appear on your 127.0.0.1 about a
+second after they listen, one box per port (a box server on a port the host or another box has
+fails to start, address in use; of two started within a second, only one gets it there:
+`omabox ports` names the holders). --net isolated: a loopback and the --allow ports only, which
+are for reaching those host ports from the box: pasta listens on each in the box, so a box server
+on one fails, address in use (`ports`: allowed); serve on another;
+--addr ADDR (repeatable) puts an address on that loopback, for an app that wants a peer from a
+non-local address: one in a documentation range (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
+2001:db8::/32). A server on 203.0.113.10 sees a client bound to 203.0.113.11 come from there.
+@ ports
+ON 127.0.0.1:PORT HERE, by its --json host.state: this (this box); this-resets (this box's pasta
+holds it, but the server is on ::1 or a 127.x other than 127.0.0.1 only, so connections are reset);
+shared (several boxes serve on it and one of them holds it, which cannot be read; one on ::1 only is
+named as resetting); host (a process of yours, named; from inside ai-jail, unnamed, and also a box
+outside the jail serving on it too); other-user; nothing (yet: a port comes about
+a second after its server listens); isolated, no-network (the box's net: nothing is forwarded);
+allowed (an isolated box's --allow port: pasta's in the box, leading to the host's).
+@ run keys up
+`run` starts the command with the box's environment, not yours: --pass VAR hands it one of your
+variables (a password too: never on a command line); --env-file FILE hands it a file's KEY=VAL lines
+(a dev.env: read as data, nothing expanded; --pass wins); `keys --pass VAR` types one (never `-t`
+for a secret: the process list shows it). `keys -t` and `keys --pass` type newline and tab
+(Return, Tab); any other control character is refused (exit 2); a value's one trailing \r is dropped.
+--env KEY=VAL is the box session's, on `up` (and a throwaway `run`'s box); `run --env` on a box
+that is up hands it to the command, as --env-file does (--pass wins). Never what the session sets
+itself (PATH, HOME, XDG_RUNTIME_DIR, XDG_*_HOME, WAYLAND_DISPLAY, DISPLAY, HYPRLAND_INSTANCE_SIGNATURE,
+LD_PRELOAD, OMABOX_BOX...), by any of them.
+@ up run
+--seed SRC:DEST: a file or folder of yours copied into the box HOME at DEST (.config/x or ~/.config/x)
+before its session starts, for a plugin that reads its config once at start; the same refusals as
+--ro-bind (no secret stores; nothing in ~/.config/omarchy but plugins/ and themes/). A copy: the
+box's changes stay in the box; a link already in DEST is replaced, never written through. Never
+into a --plugin's or --theme-dir's folder there (refused: it would replace the plugin or theme):
+write the file in that folder instead.
+@ up run
+--no-seed extensions: the box starts without your ~/.config/omarchy/extensions (the plugins' settings
+files, the menu's extension), with a new Omarchy user's (/etc/skel's; a --from save's own stay).
+Otherwise `up` copies it, and says each file a --plugin's code names there ("seeded
+extensions/NAME.json from your desk"): that plugin starts on your desk's settings, an on/off switch
+in them too.
+--no-seed fonts: the box starts without your fonts. Otherwise ~/.local/share/fonts and ~/.fonts are
+mounted read-only at the same place in the box HOME (`ls --json`: desk_fonts), so a theme's or a
+plugin's own faces draw as on your desk (not in a --clean box unless --keep fonts; nor when the box
+HOME has its own folder there, a --from save's or a --seed's: it keeps that one). A link in them that
+leads out of them is not in the box (said). Comma-separated, repeatable.
+@ up run
+--theme-dir DIR: a theme you are editing, live: the box HOME's ~/.config/omarchy/themes/NAME (DIR's
+name) is a link to DIR at its own path, in place of the copy `up` makes of each of your themes. The
+box has DIR there when it is in the repo you run from, a same-path --ro-bind or an --overlay; any
+other DIR is mounted read-only there, refused as --ro-bind's are. omarchy-theme-set NAME in the box
+applies it, as it is then.
+@ up run
+--theme NAME: the box starts on that theme (Omarchy's, one of yours or a --theme-dir one; checked
+before anything is made), not your desktop's current one: omarchy-theme-set NAME runs in the box
+before its Hyprland and bar start, so a test gets the same look whatever your desktop is on (its
+background: your own first for NAME, else the theme's). Over a --from save's look too. `up` again with another is refused.
+@ up run
+--stock-bar: Omarchy's default bar (its shell.json, no shell.toml), not a copy of yours: for shots,
+sizes and colours as most people see them. --theme leaves your bar as it is; without this `up`
+says when that bar is not Omarchy's ("seeded the bar from your desk: its shell.json layout and
+shell.toml [bar]"). Plugins are placed as without it.
+@ up run
+--no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
+@ up run check
+--clean: a desktop where only what is tested moves, for shots compared across runs (`check`):
+Omarchy's bar (--stock-bar) on tokyo-night (or --theme), a #ff00ff wallpaper (no theme has it: any of
+it inside a window or the bar is a hole), the bar's clock frozen at "Friday 12:00" (in its place, at
+its width), English (en_US.UTF-8, else C.UTF-8) in UTC for the whole session, no pointer, no network
+(--net connected gives it back), animations off (over reloads too), none of your fonts (--no-seed
+fonts). --keep LIST takes any of animations, bar (yours), clock, fonts (yours), locale (yours and
+your timezone), pointer, wallpaper back. A theme set later in the box brings that theme's wallpaper.
+@ up run audio record
+--audio: the box's own PipeWire, WirePlumber and pipewire-pulse (PipeWire and Pulse apps both play),
+its only devices a speaker nobody hears (omabox-speaker, a null sink: the default output) and a
+silent microphone (omabox-mic, the default input). Nothing reaches your audio: a box has no /dev/snd
+and its own runtime dir (its sockets, never yours). `audio` says whether the box made a sound,
+`record --audio` puts it in the video (AAC). Logs: `log audio`. Without it a box has no audio.
+@ up run reload
+--autoreload: the box's Hyprland reloads its config when a file it loaded changes, as a desktop's
+does; a box turns that off, so an update of omabox or Omarchy leaves it as it is. For a project that
+must see what a file change does (a helper rewriting a file the config loads, on a Hyprland event,
+reloads for ever). Its config is still the box's own copy; an Omarchy update reloads it too.
+@ up run restart-shell
+--plugin PATH|ID: a shell plugin, read-only, enabled where its manifest says; `up` and
+`restart-shell` warn when Omarchy's validator or the shell refuses it (`ls --json`: plugin_status).
+One the box has at its own path (in the repo `up` runs from, a same-path --ro-bind or an --overlay)
+is linked to there, as on a desk, so readlink -f leads into its repo; any other is mounted
+(plugin_status: via).
+@ up run restart-shell
+--desk-shell: your desktop's shell as it is, to check a plugin against a real desk: every plugin in
+~/.config/omarchy/plugins (read-only, as --plugin's; a --plugin of the same id wins: your working
+copy) but omabox's own widget (it lists your boxes; --plugin mounts it), your shell.json unfiltered
+(only idle held off: a box has no real input; omabox's widget taken out of it), and the other files
+in ~/.config/omarchy your plugins read (a plugin's JSON, a folder beside shell.json) copied into the
+box's. Never api-keys.env nor anything named or holding a key, token, secret, password, credential,
+auth, cookie or session (any .env, .pem, .gpg...), hooks/ (your scripts), a git dir or a backup; regular
+files up to 1 MiB (16 MiB, 1000 in all); a link only to a file inside the folder. `up` says what went
+in and what did not, and why (`ls --json`: desk_shell). Not with --stock-bar; not inside ai-jail.
+@ up run
+--hyprland PATH: the box runs that binary (its folder mounted read-only at its own path) with the
+box's aquamarine, so a build must link a libaquamarine soname the box has (checked before the box
+starts); hyprctl and hyprpm stay the installed ones (a warning when the versions differ). `ls` and
+`windows` name it. Compositor logic runs for real (layouts, focus, input routing, the Lua config,
+IPC, protocols); DRM/KMS, real monitors, HDR/VRR, multi-GPU, libinput with real devices and the
+session and suspend paths never run in a box (the lock screen does, without a real password).
+--quickshell PATH: the box's shell (and `quickshell`/`qs` on its PATH, and omabox's own calls to
+its shell) runs that binary, its folder mounted read-only at its own path. Quickshell uses Qt's
+private API, so the build must be one against the installed Qt: `up` refuses a build against
+another Qt, or one needing a library the box lacks, naming both. `ls` and `windows` name it;
+`ls --json` has quickshell_version (`quickshell --version` in the box, every box's), which is the
+last release's number, never proof that a fix is in: a build of an unreleased commit says it too.
+@ shot windows keys click drag pointer scroll wait pixel tree check
+SEL picks one window: active, its address (0x...), pid:N, class:RE, title:RE, initialClass:RE,
+initialTitle:RE (any case), or a word (its class or the class's last part, nautilus for
+org.gnome.Nautilus, or part of its title; failing those, a hyphen-separated part of the class,
+portal for xdg-desktop-portal-gtk); repeat to narrow. None or
+several is exit 2, with the candidates (`wait window SEL` asks for a window like it: any of several
+does, each named); -w is --window, and --active is --window active wherever it goes. `shot --window` is the
+window's own pixels, covered or on another workspace too; `click --window` takes the window's
+coordinates and focuses it first when it is off screen or covered there (--no-raise refuses instead);
+a layer surface over that point (a notification toast, a panel) is said on stderr, the click sent
+(it goes to the layer where the layer takes input; only its rectangle is known), and --no-raise
+refuses (`wait layer NAMESPACE --gone` waits one out); one spanning the screen (Omarchy's
+notifications and dock, input on their items only) is said as one the input may go to, never
+refused; `windows` lists them under its table.
+`keys --window` focuses it, then types.
+@ keys
+`keys --window` focuses the window (the active one again), then types; while a layer holds the
+keyboard against any window (Omarchy's launcher, a menu) it refuses, exit 1, before sending or
+focusing anything: close the layer first (Escape; twice in a launcher with text in its field).
+`keys down:KEY` presses KEY and leaves it down across later commands (`pointer move`, `click`,
+`keys`) until `keys up:KEY`: a bind on a key's release, a gesture made while a key is held. KEY
+is one key (XF86Tools, super, shift, a; down:A holds a). Hyprland joins it with the other keys:
+`keys down:super`, then `keys a` fires SUPER+A; shift held types capitals. A held letter repeats
+in the focused app, as a real key does, until another key is pressed. A key already held, or an
+up:KEY not held, is exit 1, before any key of the call is sent. Anything still held is let go when
+the box goes down (with your agent, for a box named after your session); a holder killed outright,
+by the next keys (said). Not with --pass.
+@ keys pointer
+`keys -s DURATION` and `pointer -- sleep DURATION` pause there (300ms, 1.5s; up to 10m). A bare
+number there is refused (milliseconds up to 0.9, seconds everywhere else): write the unit.
+@ shot click drag pointer pixel
+--fit N scales a shot's image down to N pixels on its longest side (a scaled screen's image is its
+layout times the scale: 2560 px for a 1280 px layout at 2). --zoom N (2-16, with -g) shows each pixel of
+a small crop as N x N, unblended: a 1 px border, a glyph's edge; `click --in` maps it back.
+-g "X,Y WxH" (or X,Y,W,H) crops: the screen's, or with --window the window's own coordinates; a
+region past the edge is cut to it, said on stderr (one with nothing inside is refused).
+A cropped or scaled shot says so on stderr: `click --in SHOT X Y` (and `drag`, `pointer --in`)
+take that image's pixels (a window shot follows the window if it moved). Screen shots show the
+pointer (--no-pointer: not this one; `pointer hide`: none until `pointer show`); window shots never
+do. -o makes the file's folder if it is missing.
+@ shot config drag
+`omabox config shot-fit N` makes --fit N every shot's default ($OMABOX_SHOT_FIT overrides it; off
+or `default` clears it): for a model that reads points in the smaller image its API scales a big
+one down to (1456 for 16:9 on Claude), set once. It goes wherever --fit goes (a window, -g,
+--monitor, --burst, drag --shot), not --changed or --zoom; --fit N wins, --fit 0 is full size.
+@ scroll pointer
+`scroll X Y DY [DX]` moves the pointer there and scrolls: DY down (negative: up), DX right (negative:
+left), in wl_pointer units (15 is one wheel notch). Without --source it is one plain axis event;
+--source wheel (or tilt) sends a notch a frame, as a mouse does (apps counting notches see each),
+finger or continuous the distance in 10 frames then a stop, as a touchpad does (kinetic scrolling).
+A wheel turns in whole notches: DY 20 scrolls 15, said on stderr. Hyprland binds see a wheel as
+mouse_up/mouse_down and mouse_left/mouse_right (--mod super: Omarchy's SUPER+wheel binds); a tilt or
+a finger reaches apps but no bind (Hyprland binds the wheel source only): test binds with a wheel.
+Qt apps get every wheel, a real mouse's too, from a device of type TouchPad (Qt's Wayland plugin has
+no other: QTBUG-112432), so a Qt Quick WheelHandler left at its default acceptedDevices (Mouse)
+never fires; a wheel still is one (angleDelta 120 a notch; pixelDelta 15 from Qt 6.12). Give it
+`acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad`, or use a MouseArea's onWheel.
+@ click drag pointer scroll
+The pointer starts at the screen's centre and stays where it was left; `click` and `pointer move`
+jump there. --steps N travels in N steps from where it is, over what lies between: under Omarchy's
+focus-follows-mouse the windows on the way take focus, as with a real mouse (`pointer --steps N --
+move A move B` passes through A). --mod MODS (ctrl, shift, alt, super, altgr; ctrl+shift, or --mod
+again) holds modifiers down across a click, drag, scroll or pointer run, released after it, whatever
+happens to omabox. SUPER with the left or right button is Hyprland's move or resize window, not the
+app's. --glide DURATION (up to 10s; for videos) travels there in that time, eased in and out, a step
+each 40 ms: the pointer seen moving, as a hand moves it (drag: to its start, then its path, each in
+that time). Without it nothing glides, but while `record start --glide` records.
+@ click drag pointer
+BTN is left (the default), right, middle, back or forward (also side and extra: a mouse's thumb
+buttons, BTN_SIDE and BTN_EXTRA, which apps take as back and forward).
+@ shot
+`shot --burst N` takes N frames (2-200) of the same capture 100 ms apart (--every DURATION; --every 0:
+back to back, ~15 ms a crop, ~25 a 1920x1080 screen) into a folder, one line each: its path and time,
+with --diff where it differs from the frame before ("changed X,Y WxH", in the screen's coordinates as
+wait says them, whatever -g, --monitor or --fit took; with --window in the window's own, as `click
+--window` takes them). The whole burst is one capture client in the box, so Hyprland posts its
+screencast events once (four a monitor), not four a frame, which stalled the timers and animations of
+a shell or widget that works on each event: any pace is safe. Frames identical to the one before are
+counted on stderr: nothing new drawn between them. (A box started by an omabox from before takes a
+grim a frame, and says so: there, faster than 100 ms can stall them.)
+-o DIR: a folder used before loses the frame-NNN.png and sheet.png a burst left there, nothing else;
+without -o, a new folder each time. --after -- ACTION takes the first frame, then runs `omabox
+ACTION` (keys, click, scroll, run -d, monitor add ...) beside the rest: a transition from its start.
+--sheet adds one contact sheet of them all, labelled with their times: one image to read instead of N.
+@ record
+`record start` records one output of the box (its main screen, or --monitor NAME) at its own pixels:
+a box at `--size 3840x2160,scale=2` gives a 4K video. `record stop` ends it and prints the file, an
+MP4 (H.264) at a steady --fps (30), -o FILE or a new one in $TMPDIR. `record -- ACTION` (an omabox
+command: keys, click, run -d ...) records that one action and --hold (1s) after it. Needs wf-recorder
+and ffmpeg; both run in the box. One recording a box at a time; `record status` says if one runs.
+`--monitor all` records every monitor as one video of the whole layout, as `shot` takes it: each
+at its place, at the highest scale of them (a lower-scale one scaled up), turned as it is shown,
+black between them; the video the size of the screen's shot (one black edge more if a side is odd).
+A wf-recorder each, in step by their frames' own times: a change drawn on two monitors at once is in
+the same frame, give or take one (each monitor draws on its own clock), and marks and sheets work as
+for one. Past H.264's largest frame (8192x4352's pixels, 16384 a side) the whole is scaled down to
+fit, said at start; a big layout takes `stop` longer to put together.
+`record mark TEXT` (while one runs) notes TEXT at the time it is called, in the video's own clock: ms
+from its first frame, exact to a few ms (the screen's own frame times, not when start returned). Mark
+just before what it names (a scene, a key press: what is drawn after shows up from that time on).
+`record stop` writes them beside the video, FILE.marks.tsv (ms, wall-clock time as `events` has it,
+text) and FILE.vtt (captions, each mark until the next), and says where. Captions burnt in: `ffmpeg -i
+demo.mp4 -vf subtitles=demo.vtt out.mp4` (players load demo.vtt beside demo.mp4 by themselves); a cut
+at two marks' ms: `ffmpeg -ss 4.200 -to 9.850 -i demo.mp4 -c:v libx264 cut.mp4`. A script of omabox
+calls and sleeps runs longer than its sleeps (each call takes its time): marks show where it drifts.
+Time in a recording, never a sleep: `record --for 5s` records the screen for 5 s with no action
+(start, a hold, stop: something that moves by itself). In a take, `record hold 2s` (between start and
+stop) returns once the video has 2 s more from when it was called, in the video's own clock (its
+frames' times, not the wall clock): a box slow to give frames, or a script slow to call, never
+shortens the pause the viewer sees (the time before the call is in the video too); it says the span
+("held 4.210s to 6.210s"). `record mark TEXT --hold 2s` is the mark, then that hold from it (60s at
+most; --for and hold 60m). A bare number is seconds. `wait still` is no hold: it returns at once
+on a still screen and runs to its timeout under a clock or a spinner.
+`record stop --sheet` (or `record --sheet -- ACTION`) adds FILE.sheet.png, and `record sheet VIDEO` makes
+one of any video (ffmpeg reads it in the box: a box must be up): a contact sheet to read instead of
+watching, --frames N (15) from the first to the last or one each --every DURATION, each labelled with
+its time and the marks since the frame before it ("> 4.20s TEXT"), 5 a row, 320 px tiles or --fit N
+(shot-fit's by default) for the whole sheet. An agent checks a take from it and fixes its script.
+`record --audio` (an up --audio box) adds the box's sound, from its speaker, as AAC in the MP4: in
+step with the picture (ffmpeg's first samples stamped and put in the video's clock: a sound starts
+within ~15 ms of a change drawn at the same moment), with --monitor all too. A player is slower to
+start than a terminal to draw: pw-play's first sound came ~60 ms after its terminal changed.
+Polish for people watching it (#176): `record start --glide DURATION` makes click, pointer and drag
+glide there in that time while it records (unless --steps), the pointer seen moving. `record stop
+--show-input` draws what click, scroll, pointer, drag and keys did into the video, as peek shows it,
+at the times it happened: a ring over the pointer following each move (gone 3 s after the last), a
+ripple from each click (its button named but for left), key captions at the bottom (typed text a
+character at a time; keys 1.5 s apart in one caption; --pass as *); `--captions` the marks' texts at
+the top, each until the next (in a layout, both on the main screen). `--cut-idle [DURATION]` cuts
+every still stretch longer than DURATION (1s) to that: no frame change (a blinking caret or a clock
+digit is still), no input (with --show-input, 3 s after it while it is drawn), no mark, no sound;
+whole frames, the sound by the same times, the marks and captions moved with them. The input comes
+from omabox's own commands (`run`'s app moving its own windows is not input).
+A video is at most 16 GiB (an hour of 4K at 36 Mbit/s): omabox copies no more out of a box, and
+`stop` says so and keeps a larger one in the box. Each ffmpeg step of `stop` and `sheet` has a
+time limit (60 s, and 5 s more a second of 1080p30 recorded; ffmpeg 9.0.1 can deadlock): one that
+runs out is killed and run once more, then said, the recording's raw files kept in the box. Inside
+ai-jail all of it works through the broker: the jail's own omabox resolves -o and opens the video,
+its marks, captions and sheet (and `record sheet`'s video) itself, and the broker writes and
+reads them only through those, never at a path the jail names; one stopped outside the jail goes
+to ~/.cache/omabox/records.
+@ audio
+`audio [DURATION]` listens to the box's speaker for DURATION (3s, up to 10m) from now, 100 ms at a time: "sound for
+1.1s of 3s: peak -21.1 dBFS, RMS -24.5 dBFS while it sounded; at 0.4-1.5s", or "silence for 3s".
+The speaker is a null sink, exact zeros while nothing plays: anything above -70 dBFS is a sound.
+--json: sound (true/false), sound_s, peak_db, rms_db, spans ([from, to] seconds), levels (each
+window's t, peak_db, rms_db; null for silence). Exit 0 either way. Start it, then make the sound
+(`omabox run -d -- APP`, a key), or record with --audio and check the video.
+@ shot record pointer up
+`shot --no-pointer` (a screen shot, --burst too) and `record --no-pointer` leave the pointer out, for
+stills and videos meant for people (no arrow on the app, none parked on a hover state): it is hidden
+(Hyprland's cursor:invisible), a frame without it awaited (up to a second), and shown again after,
+as it was, also on a failure or Ctrl-C; a recording keeps it hidden until `record stop`.
+`pointer hide` (or `up --no-pointer`) hides it in the box until `pointer show`, over config reloads
+and theme switches (omarchy-theme-set reloads). Hidden, it still moves and clicks where it is told,
+focus still follows it, and peek's marks still show it; `wait` and `--changed` leave out where it
+is, as they do when it shows.
+@ shot
+`shot --changed` (or `--window SEL --changed`) is a crop of what changed since the last whole
+shot of the same screen or window (`shot` without -g, --fit, --zoom or --monitor, or --changed;
+with --fit 0 while shot-fit is set), 16 px around it; stderr says where it is (`click --in` maps
+it) and, when it changed in places far apart, each. Nothing changed: no image, nothing on stdout,
+exit 0, said on stderr. No earlier shot of it (or another size or mode since): a whole shot, said
+why. A caret blinking alone (4 px thin, 40 long at most) and where the pointer was before it moved
+are not changes; --ignore "X,Y WxH" (up to 16, in the shot's coordinates: the window's with
+--window) leaves out an animation or a caret elsewhere. --since SHOT compares with that whole shot
+instead (not from a jail).
+@ calibrate
+A harness may show its model a big image scaled down, and some models then give points in the
+smaller image: `click X Y` off a full-size shot lands short, up and to the left, and nothing says
+so. `calibrate` draws a test card (here, no box needed: the size of a full shot of the box, or
+1920x1080 with none up), 6 marks at random points, A to F, and prints its path and how to answer:
+open it as you open a shot and give each cross's centre in the image's pixels. --answer says whether
+they read 1:1 (full-size shots and `click X Y` land), else at what scale, the --fit N whose shots,
+with `click --in`, map them back within a few pixels, and the `omabox config shot-fit N` to
+suggest to the user (their setting: never set it). Readings no one scale fits (a mark misread, two
+letters swapped) are said so, exit 1: draw a new card and read again. --answer reads the card the
+last `calibrate` here drew (one per session or repo), or CARD.
+@ pixel
+`pixel X Y` reads the box's own pixel (#rrggbb), with no shot: a colour off a scaled shot, or one read
+by eye, is not the one drawn. Several points in one call print "X,Y #rrggbb" each. The screen's pixels
+are what is shown: the pointer drawn over them, a window through Omarchy's opacity; --window reads
+that window's own pixels (its coordinates, covered or not). --in SHOT maps that image's pixels.
+@ tree
+`tree` prints a window's accessibility tree as text (--window SEL; none: the active window): a
+line a node, `role "name" 'text' =value [states] @X,Y WxH`, indented by level; anonymous containers,
+hidden nodes and what lies outside the window are left out (--all keeps them). The bounds are the
+window's own coordinates: `click --window SEL` at their middle lands on that node. Ask first, read
+whole later: --find TEXT prints only the lines holding TEXT (any case, not in the bounds), each after
+its ancestors (`list > list item "Beta" [selected] @12,354 1872x22`); exit 1 when none does.
+--json: an array, one object a node printed. GTK, Qt and egui/winit (AccessKit) apps have a tree
+(`tree` sets org.a11y.Status.IsEnabled, which Qt and AccessKit wait for). AccessKit needs
+accesskit_unix 0.22+ (eframe 0.37+) with at-spi2-core 2.61+: an older one waits only for
+ScreenReaderEnabled, which those no longer have (`tree` sets it where it is), so it never joins the
+bus and has no tree, said so; update the app's AccessKit. Chromium and Electron only
+when started with --force-renderer-accessibility; terminals have none: "no accessibility tree", exit 1.
+An app that publishes only some of its windows (egui's root viewport, not its child ones): a window it
+does not publish has no tree, and its only one stands for a window of another title only at that
+window's size, and when no other window of the app is that size (else "cannot be told"), exit 1.
+--layer SEL (or -l SEL) reads a layer surface instead (the shell's bar, panels, menus, a plugin's panel): its
+namespace (omabox hyprctl layers), address:0x... or pid:PID. Its bounds are the screen's coordinates:
+a plain `click X Y` at their middle lands on that node. Quickshell publishes them from 0.3.2 on, and
+only items that set an Accessible role: "the layer publishes no accessible items", exit 1, when none
+does (Omarchy's own bar). Two layers of one process with one size cannot be told apart (their frames
+have no names) unless one of them holds the keyboard: said so, exit 1.
+@ check
+`check` compares an app's or a plugin's look with a baseline, so a person need not look. A SCENARIO
+is a script of yours that sets the box up, drives it with omabox commands and calls `omabox check
+point ID` where a shot should match (once still, full size whatever shot-fit: the screen, -g,
+--window SEL with its tree; --ignore leaves a region out, in -g's coordinates: the window's with
+--window, else the screen's); `check run` gives it a fresh `up --clean` box each run (UP OPTIONS; OMABOX
+names the box). --approve runs it 3 times and writes the baseline to --base DIR (./omabox-check):
+what most runs showed, where they differed "unstable" and left out from then on, and baseline.png,
+every checkpoint kept in one image (or pages): look at it before you keep the baseline (a wrong
+screen most runs showed is kept too). Without --approve it runs once and says for each checkpoint
+same, changed (each region "at X,Y WxH", the tree's changes; "as ID" for one an earlier one
+had), holes, new or missing; when any changed, look at
+report.png first (each change cropped beside its baseline). Exit 0 all same, 1 not, 2 called wrongly or
+could not run (an option, a file, no box, no magick), 3 the scenario failed, 4 no baseline. Shots are compared exactly but for specks (stray parts smaller than the
+approve runs differed by, said under "same"), and searched for holes (the #ff00ff wallpaper inside a
+window, the bar or a popup). `check diff A B` compares two shots of yours the same way. More (times
+and dates, specks, holes): the omabox skill's reference.md, "Visual checks". Not inside ai-jail yet.
+@ drag
+`drag` presses at X1 Y1, moves to X2 Y2 in --steps (10), holds there for --hold (a drop target
+reacting to the hover) and releases. --hold takes a duration up to 60s, like 300ms or 2s: a bare
+number is seconds, as for every duration.
+--shot FILE takes a shot while the button is still down, as `shot` takes one: the whole layout
+(--shot-fit N, --shot-g "X,Y WxH" and --shot-monitor NAME are shot's --fit, -g and --monitor; a
+scaled or cropped one says so, for `click --in`). --wait ignores the cursor along the drag's path
+(it is in every frame): what the drag changes beside it counts, a change wholly under it may not.
+@ wait keys click run scroll drag
+`wait still`: nothing on screen changed for --quiet; a caret blinking in place (4 px thin, 40 long at
+most) and the cursor do not count, and are said (--strict counts them). `wait change`: the first
+change there, for an app that redraws later, by itself (a sync, a timer): then `wait still`; never
+`wait until -- false` as a sleep. `keys`, `click`, `scroll`,
+`drag` and `run -d` take --wait [--start 2s] [--quiet 300ms] [--timeout 10s] [-g GEOM] [--ignore
+GEOM]... [--json]: a change within --start (5s for run -d), then quiet. --ignore "X,Y WxH" (up to 16)
+leaves out an animation that never stops (a spinner, a glow); a 124 "still changing" names it when
+one small region kept changing. -g watches only that part of the screen. The screen is every monitor;
+-g and --ignore are in the layout's coordinates (as a plain click's), and beside --window in the
+window's own (0,0 its top left corner), as --window's X Y and shot -g are. To watch a part of the
+screen whatever the window, -g without --window.
+Their line then adds what changed on the desktop since just before the input: a window opened or
+closed, a layer drawn or hidden, focus, a title, the workspace (3 at most, then "+N more (omabox
+events --since OFFSET)"); a 124 says where the input went (the focused window, a layer holding the
+keyboard, what was under the point) and "no window, layer or focus changed" when nothing did. Since
+the input, not caused by it. --json adds changes (null: not read), target and events_since.
+Exit 0 satisfied, 124 not by --timeout (after --wait: the input WAS sent), 1 unknown (the box went
+down, an interactive box's hidden window renders nothing): never 0 for what could not be seen.
+Durations, here as everywhere: 300ms, 2s, 1.5m, 1h (a bare number is seconds); --timeout at most
+10m. Waiting counts as using the box.
+@ wait
+`wait until -- CMD`: until CMD, run in the box, exits 0 (tried every 100 ms): a server answering
+(`curl -fsS http://127.0.0.1:PORT/`), a file written, a process gone (`sh -c '! pgrep -x NAME'`).
+@ up run
+$OMABOX_READY_TIMEOUT: how long `up` waits for Hyprland and the shell (default 30s).
+@ reload
+A box's Hyprland runs a copy of omabox's config made at `up`, with autoreload off (unless
+`up --autoreload`): updating omabox (a pull, an upgrade) leaves running boxes' config as it is (its
+other scripts in a box are the new ones from their next start: shell.sh at `restart-shell`). `reload`
+copies this omabox's config in (only when it differs) and reloads it; like any config reload, binds,
+rules and Lua state added since are gone.
+@ lua
+`lua` takes an expression or statements (`return` what to print); one line per value: strings and
+numbers as they are, nil as nil, tables and Hyprland's objects (a window, a monitor) as JSON (--json:
+strings quoted too). A Lua error is exit 1 with its message. An error inside a callback (hl.on,
+hl.timer) that runs later is logged nowhere: catch it with pcall.
+@ log
+`log` prints the last -n lines (100) of each log named, of a box that died too; run is the latest
+`run -d`'s, apps what Omarchy's launcher started, journal what programs sent the box's journal
+sockets (/run/systemd/journal: dbus-broker, `logger` and `logger --journald` (`-t omarchy-shell`
+goes to shell), `/usr/bin/systemd-cat` (the bare name writes ~/ID.log), units' output; at most 4 MB,
+then journal.1.log), box bwrap's. shell's lines carry their time (YYYY-MM-DD HH:MM:SS.mmm, Quickshell's
+--log-times; the launcher's `logger` lines too, not what Quickshell prints outside its log) as
+`omabox events`' do (HH:MM:SS.mmm); Hyprland's have none. --grep sees the time as part of the
+line. -f (or --follow) follows them until the box goes down (-n then counts lines before --grep). Hyprland writes
+its log in pieces: its newest lines can come late. `log gdb --crash`: only each crash's signal and
+the backtrace of the thread it hit (-n and --grep then apply to those).
+@ gdb
+`gdb` prints every thread's backtrace of the box's Hyprland (--shell: the shell; --pid PID: a
+process of the box), stopped or deadlocked too, and leaves it as it was; -- ARGS replace the backtrace
+with gdb's own (-ex 'info threads'). --watch attaches until a crash: the backtrace of the fatal
+signal goes to `omabox log gdb` (the thread it hit first, then every thread; `log gdb --crash` for
+that one alone), then the crash goes on. gdb gets CAP_SYS_PTRACE in the box's user
+namespace only: it traces the box's processes, never the host's. No symbols beyond the binaries'
+own (debuginfod off).
+@ events
+`events`: what the box's Hyprland reported on its event socket (activewindow>>, urgent>>, ...) from
+its start, never cleared. --mark MARK takes "from here" (a byte offset: safe while events come);
+--since MARK (a mark, an offset, or 30s/2m/1h ago) reads from there. --grep and --until match the
+EVENT>>DATA part (grep -E). --until: the first matching event from --since (or from now), printed:
+exit 0, 124 none by --timeout, 1 the box went down; -f (or --follow) follows until the box goes down.
+@ up peek config
+Interactive boxes and peek windows open on workspace 9, without focus: `omabox config workspace WS`
+(1-99; special:omabox, a special workspace of omabox's own: the bar widget's Show opens it, a
+workspace switch hides it; special:NAME; special = Omarchy's scratchpad on SUPER+S, on 4.5 its Quake
+console) or --workspace. A peek window shows click, pointer and keys for ~3 s (a ring, key captions,
+--pass values as *); never the box's own frames.
+@ up config
+Closing an interactive box's window ends the box; `omabox config confirm-close on` asks first (a
+second close is a yes).
+A headless box renders on the first GPU; `omabox config gpu` lists them, and `omabox config gpu
+nvidia` (amd, intel, a driver's name, or a PCI slot: two GPUs of one kind) picks another; `up`
+falls back to the first, saying so and why, when that one is not there (a card handed to a VM).
+$OMABOX_RENDER_NODE overrides it. An interactive box renders on the GPU your desktop's compositor
+uses, whatever the setting.
+`omabox config protect-ports 8080,5432` keeps those host ports from every connected box, through
+any of the host's addresses (an isolated box's --allow refuses them; `default` removes them; it
+needs nft). The Rust half's alone: under OMABOX_BASH=1 it is an unknown key.
+@ up setup --version
+aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until the system's has it: a
+release, or a package patched with it; omabox looks for what the fix added, not the version): a
+headless box on an NVIDIA render node and confirm-close need it, and `up` refuses them without it;
+`omabox setup --aquamarine` builds it (a checkout's build/prefix, else ~/.local/share/omabox), with
+omabox's own fixes for interactive boxes on top: a key held when the window loses focus is released,
+and in a monitor's window your pointer lands on that monitor and your cursor stays shown. No system
+aquamarine has those, so it builds even when the system's has the fix; it builds nothing only when
+boxes already use this omabox's build (--force rebuilds it). `omabox --version` says which one new
+boxes use: a private build, or the system's (with the fix, patched with it, or without it). A git
+worktree of omabox with no build of its own uses its main checkout's build/prefix, and says so.
+OMABOX_AQUAMARINE=system: the system's aquamarine all the same (testing).
+@ setup
+`omabox setup --feedback-skill` links the omabox-feedback skill next to the omabox one, for people
+who want to report what omabox got wrong from their own agent sessions: it runs only when you ask
+(/omabox-feedback), shows the drafts it would file and asks before posting anything. Off unless you
+opt in; a later `omabox setup` keeps it, `--no-feedback-skill` (or `--remove`) takes it out.
+@ up keys-to-box
+SUPER + ALT + ESCAPE toggles sending SUPER keys to an interactive box, once:
+until focus leaves it, or a key is pressed with the pointer off it. `keys-to-box on` makes them
+follow focus and the pointer, for the box's lifetime: its window has focus and the pointer is over
+it, SUPER is the box's; focus goes elsewhere or the pointer leaves it (your bar, another monitor),
+it is yours, and the pointer back over it gives it to the box again. SUPER + ALT + ESCAPE over the box
+gives the keys back until the box loses focus and gets it again. No argument prints on or off. While keys go to a box, its window's border takes the
+theme's red and the bar widget's icon is lit.
+@ clip
+`clip` hands your clipboard's item (text, else an image by its type) to an interactive box, once;
+--from-box hands the box's back. With no -b: the interactive box whose window has focus, else the only
+one. Never for agents (refused in their sessions, under the guard, in ai-jail). Nothing keeps
+watching either clipboard. Bind it to a key in your Hyprland config to paste into the box you are in.
+@ up run
+A headless box goes down after $OMABOX_IDLE (default 2h) with no omabox command against it, no
+peek window and no `omabox run` still running; --idle 30m|2h|0 (never) per box. Interactive: never.
+Write the unit: a bare --idle 45 is refused (minutes up to 0.9, seconds everywhere else).
+@ run
+`run -d` (or --detach) says where the command's output goes (its log) on stderr: -q says nothing (errors still),
+--print-log prints the log's path on stdout (first, before --wait's line). `run -d --replace`
+first stops what `run -d` started in that box with the same command and arguments (SIGTERM to its
+session, SIGKILL after 5 s) and waits for its windows to go: a rebuilt app in one step. Nothing
+else in the box is touched: an app started some other way stays, and so does a job of the same
+program with other arguments (named, with its pid). A `run -d` whose command ends in its first
+0.3 s, leaving nothing running (a server on a port already taken), says so instead of started, with
+its exit status and its log's last lines, and exits with that status. A `run -d --wait` whose
+command ended before the screen settled, leaving nothing running, says so too, and exits with that
+status (124 when it was 0: the screen is still the question); one killed or failed by the time the
+screen settled on something else (a window closing) is unsatisfied, said the same way. A job that ends later, within its
+first 30 s, with a status other than 0 (a server that dies a second in) is said once by the box's
+next command, whatever it is: "warning: run -d job CMD (pid N) exited with status 1 after 2.1s,
+since the last command (omabox log -b NAME run)". Not one --replace stopped, one killed (SIGTERM,
+SIGINT, SIGKILL) while an `omabox run` ran in the box or just after (`omabox run -- pkill APP`),
+nor one already said.
+@ up run
+A `run -d` job is not activity: a server only polled over HTTP needs --idle 0 (or longer).
+At --idle 0 a session's box still goes with its agent (`ls` says never); a box with another name
+(-b NAME) stays.
+@ up down ls
+A headless box at --idle 0 with no agent to go with stays up until `down`. Once what started it is
+gone (the script or agent whose command ran `up`), `ls` says orphan under IDLE (`ls --json`:
+orphan) and `down --orphans` takes those down; nothing does by itself. One you started at a terminal,
+outside an agent session, is yours: never an orphan.
+@ up mode gpu cpu run
+Sizes: WxH is @60; `host` copies your focused monitor's size and refresh rate (scale stays 1).
+`,scale=S` (1 to 4, as a monitor's) gives the main screen a scale, headless only: `--size 3840x2160,scale=2`
+is a 4K screen laid out as 1920x1080, the bar and apps their usual size in twice the pixels, so a
+`shot` of it is 3840x2160 (coordinates stay the layout's: `click --in` maps a shot's). `mode WxH`
+without one is scale 1. Hyprland may round a scale to whole pixels (`mode` says so).
+Measure rendering cost with `omabox gpu` (and `omabox cpu`) in a box whose mode matches your monitor.
+@ up monitor shot peek
+More monitors: `up --monitor SPEC` (repeatable) or `monitor add SPEC` on a running box.
+SPEC is WxH[@HZ][,scale=S][,right|below|X,Y]: placed right of the last one made by default, or below
+it, or at X,Y in the layout (which starts at 0,0 on the main screen: no left or above). Scale 1 to 4;
+Hyprland may round it to a whole-pixel size (2560x1440 at 1.5 becomes 1.6). The main screen (--size,
+`mode`) is HEADLESS-2; the others HEADLESS-3, -4, ... (or --name); on NVIDIA, where a box draws on
+Wayland outputs, WAYLAND-1 and WAYLAND-2, -3, ... (no --name); there a headless output a program makes
+itself (`hyprctl output create headless`) is listed 0x0, which `monitor list` and `shot` say, naming a
+box on another GPU to test it in. `monitor remove NAME` unplugs one:
+Hyprland moves its workspaces to the others. They survive a config reload, and one placed right or
+below moves when the one before it changes size (`mode`, said) or goes; an X,Y one stays. Coordinates
+(click, drag, pointer, pixel, -g) are the layout's (`pixel` refuses a point in a gap between them);
+`shot --monitor NAME` takes one monitor (a shot of a mixed-scale layout comes out at the highest
+scale: --fit). `peek` shows the main screen, `peek --monitor NAME` another: a window per monitor, tiled
+on the workspace, each marking the clicks and pointer on its own monitor (keys on all); one whose
+monitor drops (`output drop`) says it is gone, and shows it again once it is back; the whole
+layout at once is `shot`. An interactive box's monitors are windows on your desktop, on its
+workspace, placed in the box as a headless box's; on your screen the box's layout scaled as a whole,
+as display settings draw it: one scale for every window (at most 1), the picture centred on the
+monitor its main window is on, the main window floated for it (it tiles again when the last monitor
+goes); each `monitor add` and `remove` lays it out again. Each window is a view of its monitor:
+the monitor's size in the layout, which the bar and apps see, is the one asked for (the main
+screen's --size, a SPEC's), its mode its window's pixels at a scale of at most 1 (`monitor list`).
+Resizing a window changes its view's scale, not the monitor (a window of another shape shows it
+smaller along one side); closing one unplugs it. They need aquamarine's fix, as NVIDIA boxes do, and
+omabox's build of it puts your pointer on the monitor whose window it is in and keeps your cursor
+shown from one window to the next (`monitor add` says when a box's aquamarine does neither).
+@ gpu
+`gpu release GPU` (a PCI slot, or nvidia, amd, intel: `omabox config gpu` lists them) takes down every
+headless box rendering on that GPU, naming each, so it can be handed elsewhere (a VM: a box holds its
+render node, and on NVIDIA its /dev/nvidia*). Interactive boxes are left alone (they render on the
+desktop's GPU), and so are boxes on other GPUs. An `up` or `down` in progress is waited for first.
+Each box's GPU is in `gpu`, `ls` (with more than one GPU, or when it is a fallback, and why) and
+`--json` (render).
+`gpu` reads the kernel's per-process DRM counters (AMD; Intel untested). NVIDIA's driver has none:
+there it is the driver's own sampling through nvidia-smi pmon, whole seconds, each process's share of
+the GPU as seen once a second (`--json` says which, as source).
+@ cpu
+`cpu` is `gpu`'s twin for CPU and memory: each process in the box's pid namespace (never the
+desktop's, which a host `top` or `pgrep` mixes in), its CPU over DURATION (5s) as % of one core (100% is
+one core busy; the rows add up to the total), its RSS and PSS (shared pages split among the processes
+sharing them: the total is what the box holds) as last seen. Sampled every second: a process that
+started in the window counts all its time, one that exited keeps what was seen up to its last sample
+(both said). --settle DURATION waits that long before the window (an app's start-up left out). --pid PID: one
+process, as the box numbers it (`omabox run -- ps -e`) or its host pid; --app NAME: the processes of
+that name (their /proc comm, the first 15 bytes). --threads, with --pid or --app: each of their
+threads too, under its process, by its name (comm: a Qt Quick app's GUI thread apart from its
+QSGRenderThread), over the same window; one row per thread, names repeated or not, its tid as the box
+numbers it, started or exited said as for processes. --json: percent by name (as `gpu`'s), processes
+(pid, host_pid, name, cpu, rss_kb, pss_kb, started, exited; with --threads, threads: tid, host_tid,
+name, cpu, started, exited) and total.
+@ output
+`output drop [OUT]` removes one of a headless box's screens, as a monitor that drops off on wake
+(standby, a KVM, a dock) does: the shell and apps lose their per-screen windows and rebuild them on
+its return. Without OUT the main screen (`mode`'s; other monitors stay on, and while it is away
+`mode` says so); OUT is a monitor's name (`monitor list`, which lists the dropped ones too). Both,
+one after the other, leave the box with no screen. Dropping one twice is refused.
+`output back [OUT]` brings OUT back, without it every one dropped, each with the same name, mode,
+position and scale (a monitor's place is kept while it is away: a config reload does not bring it
+back, and the others stay where they are). --for DURATION does both, the screen gone that long;
+--cycles N repeats, with gaps from 50ms to 2s without --for (a second after each return), and stops
+at the first shell crash (exit 1, its report named). Not in an interactive box (its screens are its
+windows on your desktop: one dropped could not come back).
+@ guard host
+The agent guard (opt-in) gives agents' shell commands (Claude Code, Codex) a display that does not
+exist, so a window, hyprctl or grim outside a box fails instead of reaching your desktop; omabox
+still works, and `omabox host` runs a command you asked for on the real desktop.
+@ broker
+An agent inside ai-jail cannot enter a box: `omabox broker on` (a systemd user socket) lets its
+omabox hand commands to omabox outside, which keeps the jail's boxes to what the jail has (its
+project, its network or none) and to themselves. It prints the lines to add to ~/.ai-jail.
+@ up run
+Crashes in a box skip the desktop's crash notifications (core limit 1 byte; raise it inside for a core).
+@ which
+A box's processes look like the desktop's in a host process list (its shell has the same command
+line): `omabox which PID` names the box a host pid is in, by its pid namespace or an ancestor's, else
+by OMABOX_BOX, which every process a box's session starts carries (said so); `not in a box`, exit 1,
+for anything else, another user's processes too (boxes run as you); exit 2 for a pid that is gone.
+@ save saves up run
+A save keeps what a box's apps set up (signed in, a PIN, a library): the box HOME without .cache and
+its logs, keyring included, paused for the copy. `up --from` starts with it, then seeds your Omarchy
+look on top as for any box (theme, bar, terminals: today's, or --theme's, not the save's). Close an
+app first for a clean save. Saves live in ~/.local/share/omabox/saves until `saves rm`.
+@+ exit-codes help
+Exit codes, the same in every command:
+  0         done, or the condition held (wait, events --until; check run: nothing changed)
+  1         it ran and failed, or the answer is no: no such box up, a refusal, wait's "unknown" (the
+            box went down), tree finding nothing, which's "not in a box"; check: a checkpoint changed
+  2         called wrong: an unknown option or command (the nearest one named), a value missing or
+            not of its form, a word too many or too few; said with omabox help COMMAND. Also: --window
+            SEL matching no window or several (listed), which PID for a process gone, check's errors
+  3, 4      check run: the scenario itself failed / no baseline to compare with
+  124       not in time: wait, --wait (keys, click, scroll, drag, run -d), events --until
+  125       run: omabox's own failure (no box, a bad option, a throwaway that did not start, the box
+            going down while the command ran), never the command's
+  126, 127  run: the command could not be run / was not found in the box
+  N         run, hyprctl: the command's own status, passed through; run -d: the job's, when it ended
+            at once (--wait: before the screen settled)
+  128+N     ended by signal N (130: Ctrl-C)
+An option that takes a value takes it as --opt VALUE or --opt=VALUE, in every command.
+A form on its way out still works for one minor release, warned on stderr ("omabox: deprecated:
+OLD: write NEW"), then is refused (2). OMABOX_STRICT=1 refuses it at once (2), for CI.

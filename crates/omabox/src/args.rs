@@ -76,154 +76,6 @@ fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// The first paragraph of `omabox help CMD` (usage_text's lines), for opt_form.
-fn usage_head(cmd: &[u8]) -> &'static str {
-    match cmd {
-        b"path" => {
-            "  omabox path [NAME | -b NAME] [--home | --run | --logs [--json]]   the box dir; --home: its /home/sbx (<dir>/home);\n                                                         --run: its /run/user/$UID (<dir>/run); --logs: each log's file"
-        }
-        b"env" => {
-            "  omabox env [NAME | -b NAME]                            exports for host-side Wayland tools"
-        }
-        b"brief" => {
-            r#"  omabox brief [-b NAME]                                 ~15 lines for a subagent's prompt: the box, its windows, the rules"#
-        }
-        b"reload" => {
-            r#"  omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox"#
-        }
-        b"restart-shell" => {
-            r#"  omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)"#
-        }
-        b"which" => {
-            "  omabox which [--json] PID                              the box a host process is in, or \"not in a box\" (exit 1)"
-        }
-        b"down" => {
-            "  omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)"
-        }
-        b"save" => {
-            "  omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it"
-        }
-        b"run" => RUN_HEAD,
-        // (up's lines are run's after its own two: its UP OPTIONS)
-        b"up" => RUN_HEAD
-            .find("  omabox up ")
-            .map_or(RUN_HEAD, |i| &RUN_HEAD[i..]),
-        b"hyprctl" => "  omabox hyprctl [-b NAME] ARGS...",
-        b"lua" => {
-            "  omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns"
-        }
-        b"log" | b"logs" => LOG_HEAD,
-        b"events" => EVENTS_HEAD,
-        b"wait" => {
-            "  omabox wait [-b NAME] [--timeout 10s] [--json] COND   until COND holds (exit 0), 124 if not in time\n         COND: still [--quiet 300ms] [-g GEOM | --window SEL] [--ignore GEOM]... [--strict]\n               | change [-g GEOM | --window SEL] [--ignore GEOM]...\n               | window SEL [--gone | --focused] | layer NAMESPACE [--gone] | until -- CMD [ARG...]"
-        }
-        b"windows" => {
-            "  omabox windows [-b NAME] [--json]                      the box's windows, where they are, what covers them"
-        }
-        b"tree" => {
-            "  omabox tree [-b NAME] [--window SEL | --layer SEL] [--find TEXT] [--json] [--all]   a window's (or a layer's) accessibility tree as text"
-        }
-        b"pixel" => {
-            "  omabox pixel [-b NAME] [--window SEL | --active | --in SHOT] [--json] X Y [X Y]...   the colour there, #rrggbb"
-        }
-        b"keys" => {
-            r#"  omabox keys [-b NAME] [--window SEL] [--wait] (COMBO | -t TEXT | --pass VAR | -s DURATION | down:KEY | up:KEY)...  e.g. super+space  -t hi  Return"#
-        }
-        b"keys-to-box" => {
-            r#"  omabox keys-to-box [-b NAME] [on|off]                  interactive: SUPER keys to the box while focused, pointer on it"#
-        }
-        b"click" => {
-            r#"  omabox click [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y [BTN] [--double]
-               [--steps N | --glide DURATION] [--mod MODS]  --steps: travel there; --glide: in that time; --mod ctrl: ctrl-click"#
-        }
-        b"scroll" => {
-            r#"  omabox scroll [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait] X Y DY [DX] [--source wheel|finger|continuous|tilt]
-                [--mod MODS]
-                                                         scroll there (DX: sideways; 15 is a wheel notch)"#
-        }
-        b"pointer" => {
-            r#"  omabox pointer [-b NAME] [--window SEL | --in SHOT] [--steps N | --glide DURATION] [--mod MODS] -- ARGS...
-                 raw: move X Y [--steps N], click/down/up [BTN], scroll DY, hscroll DX,
-                 source wheel|finger|continuous|tilt, sleep DURATION
-  omabox pointer [-b NAME] hide | show                   the pointer out of shots and recordings (it still moves), over reloads"#
-        }
-        b"drag" => {
-            r#"  omabox drag [-b NAME] [--window SEL [--no-raise] | --in SHOT] [--wait | --shot FILE] X1 Y1 X2 Y2 [BTN]
-              [--steps 10 | --glide DURATION] [--hold DURATION] [--mod MODS]  press, move, hold, release
-              [--shot-fit N | --shot-g "X,Y WxH" | --shot-monitor NAME]   (with --shot: as shot's --fit, -g, --monitor)"#
-        }
-        b"shot" => {
-            r#"  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
-              [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
-              [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time"#
-        }
-        b"screenshot" => {
-            r#"  omabox shot [-b NAME] [-o FILE | FILE] [--window SEL | --active] [-g "X,Y WxH"] [--fit N | --zoom N] [--no-pointer] [--json]
-              [--changed [--since SHOT] [--ignore "X,Y WxH"]...]    only what changed since the last shot of it
-              [--burst N [--every DURATION] [--diff] [--sheet] [-o DIR] [--after -- ACTION...]]   frames over time"#
-        }
-        b"calibrate" => {
-            r#"  omabox calibrate [-b NAME] [--size WxH] [CARD]        a test card to read as a shot: do your clicks need --fit?
-  omabox calibrate [CARD] --answer "A X,Y B X,Y ..." [--json]   where you see each mark: 1:1, or the --fit N that maps it"#
-        }
-        b"mode" => {
-            "  omabox mode [-b NAME] [--json | WxH[@HZ][,scale=S]|host]   show or change a headless box's screen mode"
-        }
-        b"output" => {
-            "  omabox output [-b NAME] (drop [OUT] [--for DURATION] [--cycles N] | back [OUT])   a screen gone (a monitor off), and back"
-        }
-        b"monitor" => {
-            "  omabox monitor [-b NAME] (add SPEC [--name N] | remove NAME | list [--json])   a box's other monitors"
-        }
-        b"gpu" => {
-            "  omabox gpu [-b NAME] [DURATION] [--json]               GPU engine time of this box's processes (default 5s)\n  omabox gpu release GPU                                 take down the headless boxes rendering on that GPU"
-        }
-        b"cpu" => {
-            "  omabox cpu [-b NAME] [DURATION] [--settle DURATION] [--pid PID | --app NAME] [--threads] [--json]\n                                                         CPU (% of one core) and memory of this box's processes (default 5s)"
-        }
-        b"audio" => {
-            "  omabox audio [-b NAME] [DURATION] [--json]             an up --audio box's sound for DURATION (3s): when, how loud"
-        }
-        b"ports" => {
-            "  omabox ports [-b NAME] [--json]                        boxes' TCP servers, and which of them your 127.0.0.1 reaches"
-        }
-        b"clip" => {
-            "  omabox clip [-b NAME] [--from-box]                     your clipboard into an interactive box, or back"
-        }
-        b"peek" => {
-            r#"  omabox peek [-b NAME] [--monitor NAME] [--fps N] [--focus] [--workspace WS]  live view-only window of a box (workspace 9)"#
-        }
-        b"gdb" => {
-            r#"  omabox gdb [-b NAME] [--shell | --pid PID] [--watch | -- GDB ARGS]   a backtrace of the box's Hyprland (or shell)"#
-        }
-        b"check" => {
-            r#"  omabox check run [--approve [--runs 3] | --json] [--base DIR] [-o DIR] [--speck N] [UP OPTIONS] -- SCENARIO [ARG...]
-                                                         a visual check: the scenario's checkpoints against a baseline
-  omabox check point ID [-b NAME] [--window SEL] [-g "X,Y WxH"] [--ignore "X,Y WxH"]... [--timeout 15s] [-o DIR]
-                                                         a checkpoint, in a scenario: once still, a shot (and the tree)
-  omabox check diff A.png B.png [--ignore "X,Y WxH"]... [--speck 32] [-o MARKED.png] [--report R.png] [--json]
-                                                         what differs, as a check sees it"#
-        }
-        b"record" => {
-            r#"  omabox record [-b NAME] (start [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [--glide DURATION]
-                | mark TEXT [--hold DURATION] | hold DURATION | stop [SHEET] [POLISH] | status [--json])   a video of the screen
-  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--hold 1s] [--no-pointer] [--audio] [--glide DURATION]
-                [SHEET] [POLISH] -- ACTION...   one action, recorded
-  omabox record [-b NAME] [-o FILE] [--monitor NAME|all] [--fps 30] [--no-pointer] [--audio] [SHEET] [POLISH]
-                --for DURATION   the screen for that long, no action
-  omabox record [-b NAME] sheet VIDEO [-o PNG] [--frames 15 | --every DURATION] [--fit N]   a contact sheet of a video
-              SHEET: --sheet [--frames 15 | --every DURATION] [--fit N]   the recording's contact sheet, FILE.sheet.png
-              POLISH: [--show-input] [--captions] [--cut-idle [1s]]   clicks, pointer, keys and marks drawn in; still stretches cut"#
-        }
-        _ => "",
-    }
-}
-
-/// run's help shows up's lines too: its UP OPTIONS are up's, for a throwaway box.
-const RUN_HEAD: &str = "  omabox run [-b NAME] [-d [--wait] [--replace] [-q] [--print-log]] [--pass VAR]... [--env-file FILE]...\n             [UP OPTIONS] -- CMD [ARG...]                UP OPTIONS: up's, for a throwaway box only\n  omabox up [NAME] [--size WxH[@HZ][,scale=S]|host] [--interactive] [--plugin PATH|ID]... [--overlay DIR]...\n            [--ro-bind DIR[:DEST]]... [--seed SRC:DEST]... [--net isolated [--allow PORT,...] [--addr ADDR]...]\n            [--env KEY=VAL]...\n            [--no-seed extensions,fonts]                 your plugins' settings files, your fonts left on the desk\n            [--theme-dir DIR]...                         a theme you are editing, live, in the box's themes/\n            [--theme NAME]                               start on that theme, not your desktop's current one\n            [--monitor WxH[@HZ][,scale=S][,right|below|X,Y]]...     more monitors\n            [--idle DURATION] [--stock-bar] [--systemd] [--xwayland] [--autoreload] [--no-shell] [--from SAVE]\n            [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files\n            [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic\n            [--no-pointer]                               the pointer hidden from the start (omabox pointer show)\n            [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   only what is tested moves\n            [--hyprland PATH]                            a Hyprland build of yours instead of the installed one\n            [--quickshell PATH]                          a Quickshell build of yours for the box's shell\n            [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy\n            [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)\n            [--new]                                      start it under a free name, box-1, box-2, ... (printed)\n            [--json]                                     the box as ls --json lists it, on stdout";
-const LOG_HEAD: &str = "  omabox log [-b NAME] [LOG...|all] [-n 100|all] [--grep RE [-i]] [-f]\n                                                         a box's logs: hyprland (the default), shell, apps, run,\n                                                         events, keyring, labwc, systemd, audio, gdb,\n                                                         journal, box, reap\n  omabox log [-b NAME] gdb --crash                       only the backtrace of the thread a crash hit";
-const EVENTS_HEAD: &str = "  omabox events [-b NAME] [--since MARK] [--grep RE [-i]] [-n N] [--json]   Hyprland's events\n  omabox events [-b NAME] --mark [MARK] [--json]         from here: prints the offset, keeps MARK for --since\n  omabox events [-b NAME] [--since MARK] (--until RE [--timeout 10s] | -f) [--json]";
-
 /// The form help gives OPT's value in, as ": OPT VALUE" (": -g \"X,Y WxH\""), from the command's
 /// lines in `omabox help CMD`; nothing when help shows none.
 pub fn opt_form(main_cmd: &[u8], opt: &str) -> String {
@@ -231,7 +83,8 @@ pub fn opt_form(main_cmd: &[u8], opt: &str) -> String {
         return String::new();
     }
     let count = |s: &str, c: char| s.matches(c).count();
-    for line in usage_head(main_cmd).lines() {
+    let head = crate::help::head(main_cmd);
+    for line in String::from_utf8_lossy(&head).lines() {
         if line.is_empty() {
             break;
         }
@@ -444,14 +297,8 @@ pub fn name_arg(ctx: &Ctx, cmd: &str, args: &[Vec<u8>]) -> Res<Vec<u8>> {
     Ok(strip_nl(&name))
 }
 
-/// `usage CMD` (a command's --help after its other words): its help as `omabox help CMD` prints it,
-/// its status the command's. The help text is bash's until the front is ported (#324, wave 6).
-pub fn usage(cmd: &str) -> Res<()> {
-    let mut c = crate::sig::omabox_cmd();
-    c.args(["help", cmd]);
-    let rc = crate::sig::run_status(c).unwrap_or(126);
-    crate::cmd::hyprctl::code(rc)
-}
+/// `usage CMD` (a command's --help after its other words): its help as `omabox help CMD` prints it.
+pub use crate::help::usage;
 
 #[cfg(test)]
 mod tests {
