@@ -3109,8 +3109,12 @@ prlimit --pid $$ --core=1: 2>/dev/null || ulimit -S -c 0
 sig=$1 mark=$2; shift 2
 # (RP_IGN: signals it comes with ignored, as from nohup or a script's `&`)
 [ -z "${RP_IGN:-}" ] || trap '' $RP_IGN
+# (INT and QUIT as default for CMD, unless RP_IGN names them: a script run as a background job with
+# job control off, as the suite's parallel jobs are, starts with both ignored, which `set -m` does
+# not undo, and omabox keeps an ignored signal ignored: the INT cases would test nothing)
+dflt=""; for s in INT QUIT; do [[ " ${RP_IGN:-} " == *" $s "* ]] || dflt+=${dflt:+,}$s; done
 set -m
-"$@" & p=$!
+if [ -n "$dflt" ]; then env --default-signal="$dflt" "$@" & p=$!; else "$@" & p=$!; fi
 # (RP_DEADLINE: seconds after which CMD's whole group is KILLed, so a hung omabox leaves nothing
 # behind: a timeout around rp-sig would reach rp-sig alone, CMD being a group of its own)
 # (it ends by itself once CMD is gone: a watcher killed would have its own "Killed" line said)
@@ -13577,6 +13581,9 @@ EOF
   for i in TERM HUP group-INT INT; do
     rp_wrap=(env RP_LINGER=8 "$r_sig" "$i" "$ck/scen-started")
     case $i in TERM|HUP) rp_also=rp_ckleft_np rp_why=453 rp_bash=('state!~/o/run1/whole\.') rp_rust=('state~^\./o/run1/whole\.(png|point) f$') ;; esac
+    # (an INT to omabox alone: bash goes on past the scenario, which outlives it, and compares, 1;
+    # the Rust half stops once the scenario is over, 130, nothing compared: finding 454)
+    [ "$i" != INT ] || { rp_why=454 rp_bash=(rc=1 'out~.') rp_rust=(rc=130 out=); }
     parity "check run and $i during its scenario (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/slow"
     rp_also=rp_ckleft
   done
