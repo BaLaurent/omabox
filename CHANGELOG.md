@@ -77,6 +77,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **A host command omabox runs gets your `SHLVL` and `_` as they came** (`guard exec`, `host`, a
+  `check run` scenario); the bash omabox set its own. Neither is part of omabox's contract. Scripts:
+  nothing to change.
+- **`omabox --version` says the version omabox was built from**: a build older than its checkout
+  (pulled without `./install.sh`) says its own, where the bash omabox read the checkout's file.
 - **A jailed agent's `--pass` and `--env-file` values reach omabox-relay on a file descriptor, not its
   command line**, as values everywhere else in omabox do. `omabox-relay call` takes `--env-fd N`. A
   jail started before the upgrade keeps its old relay: restart it.

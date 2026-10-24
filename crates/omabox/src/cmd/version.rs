@@ -42,12 +42,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     Ok(())
 }
 
-/// `$(cat "$ROOT/VERSION")`.
+/// The checkout's VERSION when this binary was built (wave 6-front, A5; proposal D2): the same
+/// bytes as `$(cat "$ROOT/VERSION")` while binary and tree agree, and the truth for a binary older
+/// than the tree it runs from (a pull without ./install.sh), where reading the file would say the
+/// pulled tree's.
+const VERSION: &str = include_str!("../../../../VERSION");
+
 pub fn version_text() -> Vec<u8> {
-    let root = crate::paths::root();
-    std::fs::read(crate::shell::path(&cat!(root, "/VERSION")))
-        .map(|v| crate::shell::strip_nl(&v))
-        .unwrap_or_default()
+    crate::shell::strip_nl(VERSION.as_bytes())
 }
 
 /// --json (#273, audit J3): the version, and the aquamarine new boxes use as ls --json names a box's

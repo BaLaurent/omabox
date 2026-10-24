@@ -9995,6 +9995,16 @@ from them.
     binary's), t_jail_recipe (a real ai-jail with exactly the recipe's four maps, the binary in
     bin/omabox's place: up, run --pass, shot, a usage error, a refusal, down).
 
+504. **The version built in, and a host child's environment** (2026-10-24, #324 wave 6-front, A5). The
+    binary's `--version`, `version --json` and check's report give the VERSION it was built from
+    (`include_str!`), the same bytes as the file while binary and tree agree, and the truth for a
+    build older than its tree (a pull without ./install.sh), where reading the file said the pulled
+    tree's. Self-spawns stay `root()/bin/omabox` (the reaper's command line, run's throwaway up, a
+    jailed record's steps; D4). **Change** (Q4, not contract): a host command omabox runs (guard
+    exec, host, a check scenario, labwc) gets the caller's SHLVL and `_` as they came; bash's gave
+    it its own (SHLVL as it came for an exec'd one, no `_`; SHLVL+1 and `_` the command's path for
+    a child). Tests: t_unit_rust_front ("a host child's SHLVL and _", an expected difference on the
+    direct leg), t_unit_rust_handoff (a build in a tree whose VERSION differs says its own).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

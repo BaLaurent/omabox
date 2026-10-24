@@ -3130,6 +3130,9 @@ t_unit_rust_handoff() {
   out=$(OMABOX_ROOT=$t/b timeout 10 "$t/b/build/omabox" _rust-nosuch 2>&1); rc=$?
   check_eq "...nor through bin/omabox linked to it" \
     "126 omabox: this omabox has no command _rust-nosuch, and no bash omabox to hand it to ($t/b/bin/omabox is this binary)" "$rc $out"
+  # A5: the version it was built from, not its tree's file (a build older than its checkout).
+  mkdir -p "$t/v/build"; cp "$ROOT/build/omabox" "$t/v/build/omabox"; echo 9.9.9-tree > "$t/v/VERSION"
+  check_eq "a build in a tree whose VERSION differs says its own" "omabox $(cat "$ROOT/VERSION")" "$(XDG_RUNTIME_DIR=$TMP "$t/v/build/omabox" --version 2>&1 | head -n 1)"
   # Called straight, the binary runs its own front: the words as a user gives them.
   check_eq "called straight: its own front (-b moved after the command)" "rust -b b1 x" "$("$ROOT/build/omabox" _rust -b b1 x 2>&1)"
   out=$("$ROOT/build/omabox" _rust-nosuch 2>&1); rc=$?
@@ -6205,6 +6208,12 @@ t_unit_rust_front() {
   parity "broker: ...under run: 125" run -- true
   rp_env=(OMABOX_BROKER_PEER=1); parity "broker: no pidfd named" path
   rp_env=()
+  # A5, a host child's environment (Q4: not contract): bash's exec of a host command gave it SHLVL as
+  # it came (bash's own +1 undone by exec) and no `_`; the binary passes the caller's as they are.
+  rp_env=(SHLVL=3 _=/caller) rp_sed='/^(SHLVL|_)=/!d'
+  rp_why=504 rp_bash=(out=SHLVL=3) rp_rust=($'out=SHLVL=3\n_=/caller')
+  RP_LEGS=direct parity "a host child's SHLVL and _ (guard exec)" guard exec -- /usr/bin/env
+  rp_env=() rp_sed=""
   parity "-b N shot --help" -b rpf shot --help
   parity "-b N run -h" -b rpf run -h
   parity "shot -b N --help" shot -b rpf --help

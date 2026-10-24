@@ -1591,9 +1591,7 @@ fn check_env(box_name: &[u8]) -> Vec<u8> {
         .stdin(Stdio::inherit())
         .stderr(Stdio::null());
     let (lrc, lout) = crate::sig::run_output(c).unwrap_or((127, Vec::new()));
-    let ver = std::fs::read(crate::root().join("VERSION"))
-        .map(|v| strip_nl(&v))
-        .unwrap_or_default();
+    let ver = crate::cmd::version::version_text();
     let r = jq::tool(
         "jq",
         &Args::new(&["-c"])
