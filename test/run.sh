@@ -3328,11 +3328,17 @@ t_unit_rust_parity() {
   check "the stand-in boxes started" test -n "$l1" -a -n "$lp"
   local ns1 nsp; ns1=$(readlink "/proc/$l1/ns/pid") nsp=$(readlink "/proc/$lp/ns/pid")
   local now; now=$(date +%s)
+  # env of live box NAME (finding 493): the socket's hard link in the box dir, where bash's path was
+  # the run dir's; the link one more file in the box dir.
+  rp493() { rp_why=493 rp_bash=("out~/omabox/$1/run/wayland-1\$" "state!~/$1/wayland s\$") rp_rust=("out~/omabox/$1/wayland\$" "state~^\\./omabox/$1/wayland s\$"); }
   # A box dir: rp_box NAME BOX_JSON [CHILD_PID]
   rp_box() { local d=$r/rt/omabox/$1; mkdir -p "$d/home" "$d/run"; printf '%s\n' "$2" > "$d/box.json"; [ -z "${3:-}" ] || echo "{\"child-pid\": $3}" > "$d/info.json"; }
+  # (its Wayland socket a socket, as env wants it: finding 493)
+  rp_sock() { python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$1"; }
   rp_live() {
     rp_box "$1" "{\"mode\":\"headless\",\"pidns\":\"$ns1\"${2:-}}" "$l1"
     printf 'WAYLAND_DISPLAY=wayland-1\0HYPRLAND_INSTANCE_SIGNATURE=sig1\0' > "$r/rt/omabox/$1/run/omabox.env"
+    rp_sock "$r/rt/omabox/$1/run/wayland-1"
   }
   rp_fixture() {
     rm -rf "$r/rt/omabox"; mkdir -p "$r/rt/omabox"
@@ -3352,7 +3358,10 @@ t_unit_rust_parity() {
     rp_live badenv; printf 'WAYLAND_DISPLAY=../x\0' > "$r/rt/omabox/badenv/run/omabox.env"
     rp_box reused "{\"mode\":\"headless\",\"pidns\":\"pid:[1]\"}" "$l1"
     rp_box pst "{\"mode\":\"headless\",\"pidns\":\"$nsp\"}" 1; echo "$pst" > "$r/rt/omabox/pst/pasta.pid"
-    printf 'WAYLAND_DISPLAY=wayland-1\0' > "$r/rt/omabox/pst/run/omabox.env"
+    printf 'WAYLAND_DISPLAY=wayland-1\0' > "$r/rt/omabox/pst/run/omabox.env"; rp_sock "$r/rt/omabox/pst/run/wayland-1"
+    # (its socket's place taken by a link to a socket elsewhere, the desktop's in a box gone hostile)
+    rp_live lnk; rm "$r/rt/omabox/lnk/run/wayland-1"; rp_sock "$r/rt/omabox/lnk/desk.sock"
+    ln -s "$r/rt/omabox/lnk/desk.sock" "$r/rt/omabox/lnk/run/wayland-1"
     # Early ends of run -d jobs (#286): said once, by the record's words; 0, late and junk noted.
     local j=$r/rt/omabox/jobs t=$((now - 3600)) n k st ms ns i=0
     rp_live jobs; : > "$j/jobs-noted"; mkdir -p "$j/jobs"
@@ -3411,8 +3420,11 @@ t_unit_rust_parity() {
   parity "env -x=1" env -x=1
   parity "env: two names" env a b
   parity "env -b a b" env -b a b
-  parity "env of a live box" env live
-  parity "env of a live box behind its pasta (pid recorded)" env pst
+  # (the socket, hard-linked into the box dir, which only the host writes: finding 493)
+  rp493 live; parity "env of a live box" env live
+  rp493 pst; parity "env of a live box behind its pasta (pid recorded)" env pst
+  rp_why=493 rp_bash=(rc=0 'out~^(export WAYLAND_DISPLAY=.*/omabox/lnk/run/wayland-1|unset DISPLAY WAYLAND_SOCKET HYPRLAND_INSTANCE_SIGNATURE)$' err=) rp_rust=(rc=1 out= "err=omabox: env: box 'lnk': its Wayland socket (run/wayland-1) is not a socket: refused (a host tool pointed there could reach another display)")
+  parity "env of a box whose socket is a link now" env lnk
   parity "path of a live box" path live
   parity "path --home of a live box" path --home live
   parity "path --run of a live box" path --run live
@@ -3422,7 +3434,7 @@ t_unit_rust_parity() {
   parity "path of it (no check: path)" path cov
   parity "env: no WAYLAND_DISPLAY" env noenv
   parity "env: an untame WAYLAND_DISPLAY" env badenv
-  parity "env: run -d jobs that ended early, said once" env jobs
+  rp493 jobs; parity "env: run -d jobs that ended early, said once" env jobs
   parity "path: the same" path jobs
   parity "which: no PID" which
   parity "which: two" which 1 2
@@ -3490,7 +3502,7 @@ t_unit_rust_parity() {
   rp_session1() { rp_fixture; rp_live "rp-repo-$s8"; }
   rp_session2() { rp_session1; rp_live "other-$s8"; }
   rp_prep=rp_session1 rp_env=(CLAUDE_CODE_SESSION_ID="$sid")
-  parity "the session's box from outside its repo: used, said" env
+  rp493 "rp-repo-$s8"; parity "the session's box from outside its repo: used, said" env
   parity "...path too" path
   parity "...not for a name given" env nobox
   rp_prep=rp_session2; parity "two: named, none used" env
@@ -3506,12 +3518,13 @@ t_unit_rust_parity() {
   rp_prep=rp_resumed rp_dir=$repo rp_env=(CLAUDE_CODE_SESSION_ID="$sid" CLAUDE_PID="$$")
   # (its numbers as written: 1.50 kept, 1e3 in standard form, where bash's jq wrote 1E+3: finding 449)
   rp_numbers() { grep -E '^  "(n|e)":' "$r/rt/omabox/rp-repo-$s8/box.json"; }
-  rp_why=449 rp_bash=('state~^  "e": 1E\+3$' "state~ \./omabox/rp-repo-$s8/box\.json$") rp_rust=('state~^  "e": 1000$' "state~ \./omabox/rp-repo-$s8/box\.json$")
+  rp493 "rp-repo-$s8"
+  rp_why="449, 493" rp_bash+=('state~^  "e": 1E\+3$' "state~ \./omabox/rp-repo-$s8/box\.json$") rp_rust+=('state~^  "e": 1000$' "state~ \./omabox/rp-repo-$s8/box\.json$")
   rp_also=rp_numbers; parity "a resumed session takes its box over (box.json rewritten)" env
   check_eq "...to this command's agent" "$$ $(lib proc_start $$)" "$(jq -r '"\(.agent) \(.agent_start)"' "$r/rt/omabox/rp-repo-$s8/box.json")"
   rp_why=449 rp_bash=('state~^  "e": 1E\+3$' "state~ \./omabox/rp-repo-$s8/box\.json$") rp_rust=('state~^  "e": 1000$' "state~ \./omabox/rp-repo-$s8/box\.json$")
   parity "...path too" path; rp_also=""
-  rp_env=(CLAUDE_CODE_SESSION_ID="$sid" CLAUDE_PID=1); parity "...not for an agent it does not run under" env
+  rp_env=(CLAUDE_CODE_SESSION_ID="$sid" CLAUDE_PID=1); rp493 "rp-repo-$s8"; parity "...not for an agent it does not run under" env
   # ai-jail's (finding 99): a jail's boxes only.
   rp_prep=rp_fixture rp_dir=$r/norepo rp_env=(OMABOX_JAIL='{"id":"j1"}')
   parity "a jail: not its box" env dead1
@@ -11643,6 +11656,8 @@ t_hostile() {
   check "up A 1024x768" ob up "$A" --size 1024x768 --no-shell
   check "up B 800x600" ob up "$B" --size 800x600 --no-shell
   local DB; DB=$(ob path -b "$B")
+  # (env's path, taken before A tampers with its runtime dir: finding 493)
+  local ea; ea=$(ob env -b "$A" | sed -n 's/^export WAYLAND_DISPLAY=//p')
   ob run -b "$A" -- sh -c "mv \$XDG_RUNTIME_DIR/wayland-1 \$XDG_RUNTIME_DIR/wayland-orig && ln -s '$DB/run/wayland-1' \$XDG_RUNTIME_DIR/wayland-1" >/dev/null 2>&1
   local out; out=$(ob shot -b "$A" -o "$TMP/hostile.png" 2>&1) || true
   if [ -s "$TMP/hostile.png" ]; then
@@ -11653,6 +11668,14 @@ t_hostile() {
       "grim failed: .*(connect|display)" "$out"
   fi
   check "...and the honest box's shot still works" ob shot -b "$B" -o "$TMP/honest.png"
+  # env: a host tool given its path reaches the box's own display, never what the box put in its
+  # socket's place (a link that leads to the desktop's, here B's): a hard link in the box dir (finding
+  # 493; bash printed the run dir's path, which led to B's).
+  check_match "env refuses a box whose Wayland socket is a link now" "its Wayland socket \(run/wayland-1\) is not a socket: refused" "$(ob env -b "$A" 2>&1)"
+  if command -v grim >/dev/null; then
+    rm -f "$TMP/hostile-env.png"; WAYLAND_DISPLAY=$ea grim -t png "$TMP/hostile-env.png" 2>/dev/null
+    check_match "...the path it gave before still leads to that box's own display" '1024 x 768' "$(file "$TMP/hostile-env.png" 2>&1)"
+  else skip "env's path and a host Wayland client" "no grim"; fi
   # a tampered omabox.env: a WAYLAND_DISPLAY with a path in it is refused
   ob run -b "$A" -- sh -c 'tr "\0" "\n" < $XDG_RUNTIME_DIR/omabox.env | sed "s|^WAYLAND_DISPLAY=.*|WAYLAND_DISPLAY=../../../run/user/1000/wayland-1|" | tr "\n" "\0" > $XDG_RUNTIME_DIR/e && mv $XDG_RUNTIME_DIR/e $XDG_RUNTIME_DIR/omabox.env'
   check_match "a path in WAYLAND_DISPLAY is refused" "no WAYLAND_DISPLAY" "$(ob hyprctl -b "$A" monitors 2>&1)"
@@ -14162,6 +14185,8 @@ t_rust_parity() {
   ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
   for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
   rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_prep="" rp_snap=0
+  # (the box's socket, hard-linked into its dir, which only the host writes: finding 493)
+  rp_why=493 rp_bash=("out~^export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/run/wayland-[0-9]+\$") rp_rust=("out~^export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/wayland\$")
   parity "env of a box up" env -b "$B"
   parity "path" path -b "$B"
   parity "path --home" path --home "$B"
@@ -19304,7 +19329,7 @@ t_pointer() {
   check "click --mod altgr" ob click -b "$B" --window R 50 50 --mod altgr
   ob click -b "$B" --window R 50 50 >/dev/null
   check_eq "...and nothing held after it (the next click plain)" "0 0 " "$(pr)"
-  check_match "env: the box's display to export" "^export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/run/wayland-[0-9]+$" "$(ob env -b "$B" | head -1)"
+  check_match "env: the box's display to export (its socket, linked in the box dir: finding 493)" "^export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/wayland$" "$(ob env -b "$B" | head -1)"
   # #214, finding 287: what a Qt Quick app gets. Left half: a WheelHandler as Qt makes it (a mouse's
   # only); right half: one taking any device, logging the event. Wheels go up: the binds above take
   # mouse_down.

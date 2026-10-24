@@ -5,7 +5,8 @@ use crate::boxes::{box_env, need_box};
 use crate::cat;
 use crate::exit::{Ctx, Res, out};
 use crate::select::select_box;
-use crate::shell::quote_q;
+use crate::shell::{self, quote_q};
+use std::os::unix::fs::FileTypeExt;
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // (name_arg says why; its words are still being read: a usage error.)
@@ -14,14 +15,83 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     need_box(ctx)?;
     // The box bus is private and its Hyprland socket path too long to reach directly: for those use
     // `omabox run` and `omabox hyprctl`. Plain Wayland clients (wl-paste, wlr-randr, ...) work with
-    // this. The socket is in the box's runtime dir: a tool pointed at it talks to whatever the box
-    // put there.
+    // this.
     let Some(wd) = box_env(&ctx.d, "WAYLAND_DISPLAY") else {
         return Err(ctx.die(cat!("box '", ctx.name, "' has no WAYLAND_DISPLAY")));
     };
+    let path = match socket_link(&ctx.d, &wd) {
+        Ok(p) => p,
+        Err(why) => {
+            return Err(ctx.die(cat!(
+                "env: box '",
+                ctx.name,
+                "': its Wayland socket (run/",
+                wd,
+                ") ",
+                why,
+                ": refused (a host tool pointed there could reach another display)"
+            )));
+        }
+    };
     out(cat!(
         "export WAYLAND_DISPLAY=",
-        quote_q(&cat!(ctx.d, "/run/", wd)),
+        quote_q(&path),
         "\nunset DISPLAY WAYLAND_SOCKET HYPRLAND_INSTANCE_SIGNATURE\n"
     ))
+}
+
+/// The box's Wayland socket for host tools, as a hard link in the box dir, which only the host
+/// writes (finding 493). Its runtime dir is the box's to write: a link put there in the socket's
+/// place, resolved on the host, would lead a host tool to the real desktop's compositor (bash
+/// printed that path). A hard link names the socket's inode itself, which only a process in the box
+/// can have bound; link(2) never follows a link, and what it made is checked again, so a swap
+/// between the check and the link is caught.
+fn socket_link(d: &[u8], wd: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let is_socket = |p: &[u8]| {
+        std::fs::symlink_metadata(shell::path(p)).is_ok_and(|m| m.file_type().is_socket())
+    };
+    let src = cat!(d, "/run/", wd);
+    if !is_socket(&src) {
+        return Err("is not a socket");
+    }
+    let dst = cat!(d, "/wayland");
+    let tmp = cat!(d, "/.wayland.", std::process::id().to_string());
+    let _ = std::fs::remove_file(shell::path(&tmp));
+    if std::fs::hard_link(shell::path(&src), shell::path(&tmp)).is_err() {
+        return Err("cannot be linked");
+    }
+    if !is_socket(&tmp) {
+        let _ = std::fs::remove_file(shell::path(&tmp));
+        return Err("is not a socket");
+    }
+    if std::fs::rename(shell::path(&tmp), shell::path(&dst)).is_err() {
+        let _ = std::fs::remove_file(shell::path(&tmp));
+        return Err("cannot be linked");
+    }
+    Ok(dst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn a_link_in_the_sockets_place_is_refused() {
+        let d = std::env::temp_dir().join(format!("omabox-env-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("run")).expect("dirs");
+        let db = shell::bytes(&d).to_vec();
+        let _host = UnixListener::bind(d.join("host.sock")).expect("a socket");
+        std::os::unix::fs::symlink(d.join("host.sock"), d.join("run/wayland-1")).expect("a link");
+        assert_eq!(socket_link(&db, b"wayland-1"), Err("is not a socket"));
+        assert!(!d.join("wayland").exists());
+        std::fs::remove_file(d.join("run/wayland-1")).expect("rm");
+        let _own = UnixListener::bind(d.join("run/wayland-1")).expect("a socket");
+        assert_eq!(socket_link(&db, b"wayland-1"), Ok(cat!(&db, "/wayland")));
+        let ino = |p: &str| std::fs::metadata(d.join(p)).expect(p).ino();
+        assert_eq!(ino("run/wayland-1"), ino("wayland"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

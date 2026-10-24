@@ -9852,6 +9852,21 @@ from them.
     limit too. Test: t_inspect (events -f's tail, started under a 2-byte limit: 1 byte; 2 with
     OMABOX_BASH=1).
 
+493. **`omabox env` exported a path the box could change** (2026-10-24, #324, the native-entry step).
+    It printed `$D/run/wayland-N`, in the box's runtime dir, which the box writes: a box process that
+    put a link there in its socket's place led a host tool run after `eval "$(omabox env)"` to
+    whatever the link named, the desktop's own compositor included (confirmed on the bash half with
+    two boxes, one standing in for the desktop, as t_hostile does).
+    **Fix** (Rust over bash): env hard-links the socket into the box dir, which only the host writes,
+    and exports that, `$D/wayland`: link(2) never follows a link, and what it made must be a socket,
+    so only a socket a box process bound (always the box's own) is ever named there. A run dir whose
+    socket is not one is refused ("env: box 'B': its Wayland socket (run/wayland-1) is not a socket:
+    refused ..."), exit 1. A path given earlier keeps naming the box's own socket whatever the box
+    does to its run dir later. Tests: env.rs's a_link_in_the_sockets_place_is_refused; t_hostile (the
+    refusal, and a host grim on the earlier path captures that box's own screen); t_pointer (the path);
+    t_unit_rust_parity ("env of a box whose socket is a link now" and the live boxes' env: expected
+    differences).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -60,6 +60,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `/dev/tty` and read what you typed there, write to it or signal its session. It now leads a session
   of its own, with no controlling terminal; a Ctrl-C, Ctrl-\ or Ctrl-Z at your terminal still reaches
   it. A command run at your terminal keeps the pseudo-terminal of its own it had.
+- **`omabox env` printed a path inside the box's runtime folder**, which the box can write: a link
+  put there in its socket's place could lead a host tool to another display, your desktop's included.
+  It now prints a hard link to the box's own socket in the box's folder, and refuses a socket that is
+  not one.
 - **The tools omabox runs against a box (grim, hyprctl, its input tools) could make a crash
   notification on your desktop**: unlike a box's own commands, they kept your core limit. They get
   the box's 1-byte limit.
@@ -81,6 +85,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   pseudo-terminal of its own, as before): `/dev/tty` there is "No such device or address", and it
   leads a session of its own. A command that needs a terminal while its output is piped: run it as
   `script -qc CMD /dev/null` in the box.
+- **`omabox env` exports `WAYLAND_DISPLAY=$(omabox path)/wayland`**, a hard link to the box's
+  socket, where it exported `$(omabox path --run)/wayland-1`; it exits 1 when the box's socket is not
+  a socket (a link in its place). Scripts that built the path from `path --run`: use `omabox env`.
 - **`down` of a box it cannot see from this user namespace** (a sandbox's) **refuses**, as `up` does:
   "cannot tell whether box 'B' is up from this user namespace ...", exit 1, the box left running and
   listed. The bash omabox said "box 'B' down", exited 0 and removed the box's dir while it ran on.
