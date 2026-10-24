@@ -60,7 +60,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     match words.len() {
         0 if as_json => out(cat!(json_line(ctx), "\n")),
         0 => {
-            for k in KEYS {
+            for k in shown() {
                 out(cat!(k, "=", conf::get(k.as_bytes()), "\n"))?;
             }
             Ok(())
@@ -165,9 +165,17 @@ fn confirm_live(ctx: &Ctx, v: &[u8]) {
 /// boxes can confirm a close (finding 125), this omabox's version (finding 133), and the GPUs for the
 /// widget's picker (#118): every one on the bus, the one `auto` takes and the one a headless box
 /// renders on now, by slot.
+/// The keys `config` lists: not protect-ports to a jailed agent (the broker's caller), which would
+/// tell it which host ports hold the user's services (#374); broker_check refuses it too.
+fn shown() -> impl Iterator<Item = &'static &'static str> {
+    let jailed = crate::jail::in_jail();
+    KEYS.iter()
+        .filter(move |k| !(jailed && **k == "protect-ports"))
+}
+
 fn json_line(ctx: &Ctx) -> String {
     let mut m = Map::new();
-    for k in KEYS {
+    for k in shown() {
         m.insert(
             k.replace('-', "_"),
             Value::String(String::from_utf8_lossy(&conf::get(k.as_bytes())).into_owned()),

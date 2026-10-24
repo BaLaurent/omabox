@@ -9956,6 +9956,25 @@ from them.
     difference on the direct leg), t_unit_rust_handoff (exit 126 from a copy and from a link, under
     timeout), front.rs's and ready.rs's unit tests.
 
+502. **The broker's side in the Rust half** (2026-10-24, #324 wave 6-front, A3; #373, #374). A call
+    the broker's relay runs on the binary straight (OMABOX_BROKER_PEER set) goes through
+    broker_side.rs before anything runs: broker_init (the caller made sure of by its pidfd, the walk
+    up to a bwrap whose parent is ai-jail, the jail's policy from that bwrap's command line and
+    ai-jail's `--args` memfd, its mounts through the jail's init, OMABOX_JAIL set for what it starts)
+    and broker_check, in bash's words and codes (1, run's 125). It runs before every command, the
+    internal `_` ones included: the binary's main had dispatched those with no check (rev m6); every
+    one is now refused through the broker. A call bash hands over has had bash's. **Changes**: a
+    jailed `config protect-ports` is refused saying why ("protect-ports is not for a jailed agent
+    ..."), where bash's key list made it "a jailed agent does not change omabox's settings" (#373),
+    and a jailed caller's bare `config` and `config --json` leave protect-ports out (both halves:
+    config is the Rust half's), since which host ports are protected tells an agent where the
+    user's services are (#374, S10); neither was listed for a jailed caller by bash, whose CONF_KEYS
+    lacks the key. Tests: t_unit_rust_front (a stand-in jail, a copy of bash named ai-jail starting a
+    real bwrap, calling a broker of each leg through omabox-relay: allowed and refused commands, every
+    `_` word, config's reads, a caller in no jail, a jail without the network, a caller gone; the
+    protect-ports refusal an expected difference on the direct leg), t_unit_jail_policy (each policy
+    and mounts fixture read both ways through `_rust-jail`), broker_side.rs's unit tests, t_jail (the
+    real ai-jail, its broker running the binary straight).
 
 
 

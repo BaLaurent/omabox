@@ -77,6 +77,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **A jailed agent's `config` leaves `protect-ports` out**, and `config protect-ports` from inside
+  ai-jail is refused saying why ("protect-ports is not for a jailed agent"), not as a change of
+  settings: which host ports are protected is the user's to know. Scripts: nothing to change.
 - **Without `XDG_RUNTIME_DIR`, omabox says so in its own words**: "omabox: XDG_RUNTIME_DIR is not
   set" (exit 1, as before), where the bash omabox printed "bin/omabox: line 13: XDG_RUNTIME_DIR:
   XDG_RUNTIME_DIR is not set". Scripts matching that line: match "XDG_RUNTIME_DIR is not set".

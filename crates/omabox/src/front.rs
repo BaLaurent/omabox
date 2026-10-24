@@ -252,10 +252,11 @@ pub fn front(boxes: &[u8], argv: &[Vec<u8>]) -> Res<Option<Call>> {
         crate::help::run(std::slice::from_ref(&cmd))?;
         return Ok(None);
     }
-    // The broker's caller and a jailed one: bin/omabox's until this build has them (A3, A4).
+    // The broker's caller (omabox-relay listen ran this omabox): its jail found and its call checked
+    // before anything runs, omabox's own `_` commands included. calibrate draws and reads its card
+    // where it is called, in a jail too: only the box's size goes by the broker.
     if !crate::shell::env_or_empty("OMABOX_BROKER_PEER").is_empty() {
-        say("the broker's side is bin/omabox's until this build has it");
-        return Err(Exit(126));
+        crate::broker_side::serve(&mut ctx, &cmd, &rest)?;
     } else if cmd != b"calibrate" && relay_wanted(boxes) {
         say("a jailed caller's relay to the broker is bin/omabox's until this build has it");
         return Err(Exit(126));

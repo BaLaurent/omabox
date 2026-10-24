@@ -6011,6 +6011,68 @@ t_unit_rust_front() {
   # (bash's first line refuses it in bash's words, the hand-off's too; the direct leg in omabox's)
   rp_why=501 rp_bash=(err~'^.*bin/omabox: line [0-9]+: XDG_RUNTIME_DIR: XDG_RUNTIME_DIR is not set$') rp_rust=('err=omabox: XDG_RUNTIME_DIR is not set')
   RP_LEGS=direct rp_rt="" rp_snap=0 parity "an empty XDG_RUNTIME_DIR" help
+  # A3, the broker's side: broker_init and broker_check, run before any command, omabox's own `_`
+  # ones too. Its fixture: a stand-in jail, a copy of bash named ai-jail starting a real bwrap with a
+  # pid namespace of its own (as ai-jail does; the broker trusts the names, not the files), whose
+  # caller reaches a broker of each leg through omabox-relay (bash's, the hand-off's, the binary's
+  # own), on a HOME of the test's own. rp_wrap's jcall picks the leg's broker by OMABOX_BASH, as
+  # parity sets it.
+  local R=$ROOT/tools/relay/omabox-relay leg
+  if [ -x "$R" ]; then
+    mkdir -p "$r/aj" "$r/proj/hidden" "$r/home"
+    cp "$(command -v bash)" "$r/aj/ai-jail"
+    for leg in bash rust direct; do
+      local bcmd=(/usr/bin/env OMABOX_BASH=1 "$CLI")
+      [ "$leg" != rust ] || bcmd=(/usr/bin/env OMABOX_BASH= "$CLI")
+      [ "$leg" != direct ] || bcmd=("$ROOT/build/omabox")
+      HOME=$r/home XDG_RUNTIME_DIR=$r/rt "$R" listen --socket "$r/b-$leg.sock" -- "${bcmd[@]}" >/dev/null 2>&1 & SERVERS+=($!)
+    done
+    for leg in bash rust direct; do until_ok 5 test -S "$r/b-$leg.sock" >/dev/null; done
+    # (JAIL_OUT=1: the caller in a bwrap whose parent is not ai-jail; JAIL_NET=0: --unshare-net)
+    printf '%s\n' '#!/bin/bash' \
+      'leg=direct; [ "${OMABOX_BASH+x}" != x ] || { leg=rust; [ "$OMABOX_BASH" != 1 ] || leg=bash; }' \
+      'shift; r=$JC_DIR; cd "$r/proj" || exit 99' \
+      'if [ -n "${JAIL_OUT:-}" ]; then exec bwrap --unshare-pid --die-with-parent --ro-bind / / --dev /dev --proc /proc -- "$JC_RELAY" call "$r/b-$leg.sock" -- "$@"; fi' \
+      'net=(); [ "${JAIL_NET:-1}" = 1 ] || net=(--unshare-net)' \
+      'exec "$r/aj/ai-jail" -c '"'"'n=$1 p=$2 rl=$3 s=$4; shift 4; bwrap --unshare-pid --die-with-parent "${@:1:n}" --ro-bind / / --dev /dev --proc /proc --bind "$p" "$p" --tmpfs "$p/hidden" --chdir "$p" -- "$rl" call "$s" -- "${@:n+1}"; exit $?'"'"' ai-jail ${#net[@]} "$r/proj" "$JC_RELAY" "$r/b-$leg.sock" ${net[@]+"${net[@]}"} "$@"' \
+      > "$r/jcall"
+    chmod +x "$r/jcall"
+    rp_wrap=(env JC_DIR="$r" JC_RELAY="$R" "$r/jcall") rp_snap=1
+    parity "broker: ls from a jail" ls
+    parity "broker: ls --json from a jail" ls --json
+    parity "broker: path from a jail (its default box)" path
+    parity "broker: help from a jail" help path
+    parity "broker: --version from a jail" --version
+    parity "broker: config from a jail (no protect-ports there, #374)" config
+    parity "broker: config --json from a jail" config --json
+    parity "broker: config gpu from a jail" config gpu
+    parity "broker: config gpu auto: refused" config gpu auto
+    parity "broker: config gpu default: refused" config gpu default
+    parity "broker: config nosuch: refused" config nosuch
+    parity "broker: config two words: refused" config --json gpu
+    for c in clip host peek guard broker setup save saves which calibrate nosuch; do parity "broker: $c refused" "$c"; done
+    parity "broker: -b N ls: the front's refusal first" -b rpf ls
+    parity "broker: shot --help: the front's help first" shot --help
+    # (every internal word refused through the broker, whatever the half has)
+    for c in _reap _rust _rust-jq _rust-opts _rust-jail _ptr-release; do parity "broker: $c refused" "$c" x; done
+    # (no state: the throwaway's name holds a pid)
+    rp_snap=0 parity "broker: run from a jail with no box: run's 125" run -- true
+    # (protect-ports: bash's broker knew no such key; the binary's names why it refuses it)
+    rp_why=502 rp_bash=("err=omabox: config: a jailed agent does not change omabox's settings")
+    rp_rust=("err=omabox: config: protect-ports is not for a jailed agent (which host ports are protected is the user's to know)")
+    RP_LEGS=direct parity "broker: config protect-ports refused, said why (#373)" config protect-ports
+    JAIL_OUT=1 parity "broker: a caller in no ai-jail" ls
+    JAIL_OUT=1 parity "broker: ...run's own code then" run -- true
+    JAIL_NET=0 parity "broker: a jail without the network: ls" ls
+    rp_wrap=()
+  else
+    no "the broker's side" "tools/relay is not built (tools_ready builds it)"
+  fi
+  rp_env=(OMABOX_BROKER_PEER=x OMABOX_BROKER_PIDFD=3); parity "broker: a caller that is not a pid" ls
+  rp_env=(OMABOX_BROKER_PEER=1 OMABOX_BROKER_PIDFD=99); parity "broker: a caller gone (no pidfd)" ls
+  parity "broker: ...under run: 125" run -- true
+  rp_env=(OMABOX_BROKER_PEER=1); parity "broker: no pidfd named" path
+  rp_env=()
   parity "-b N shot --help" -b rpf shot --help
   parity "-b N run -h" -b rpf run -h
   parity "shot -b N --help" shot -b rpf --help
@@ -7854,7 +7916,21 @@ t_leak_control() {
 # jailed caller is refused, without a jail.
 t_unit_jail_policy() {
   local d=$TMP/jp; mkdir -p "$d/proj/in" "$d/other" "$d/under/x"
-  pol() { printf '%s\0' /usr/bin/bwrap "$@" | lib jail_policy; }
+  # (wave 6-front, A3: each read both ways, the Rust half's broker_side the same bytes and status;
+  # what differs is gathered in JP_DIFF and checked at the end)
+  JP_DIFF=""
+  jp_both() {
+    local jpin=$TMP/jp-in.$BASHPID b r brc=0 rrc=0
+    if [ "$1" = jail_policy ]; then cat > "$jpin"; else : > "$jpin"; fi
+    b=$(lib "$@" < "$jpin" 2>&1) || brc=$?
+    if [ -x "$ROOT/build/omabox" ]; then
+      r=$("$ROOT/build/omabox" _rust-jail "$@" < "$jpin" 2>&1) || rrc=$?
+      [ "$b|$brc" = "$r|$rrc" ] || JP_DIFF+="$*: bash [$b] $brc, rust [$r] $rrc; "
+    fi
+    [ -z "$b" ] || printf '%s\n' "$b"
+    return "$brc"
+  }
+  pol() { printf '%s\0' /usr/bin/bwrap "$@" | jp_both jail_policy; }
   local p
   p=$(pol --tmpfs /tmp --bind "$d/proj" "$d/proj" --unshare-net --setenv A b -- sh)
   check_eq "no network: --unshare-net" false "$(jq -r .net <<<"$p")"
@@ -7879,7 +7955,7 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   pid=$!
   until_ok 5 test -s "$mf"
   read -r fd ofd < "$mf"
-  polfd() { printf '%s\0' /usr/bin/bwrap "$@" | lib jail_policy "/proc/$pid/fd"; }
+  polfd() { printf '%s\0' /usr/bin/bwrap "$@" | jp_both jail_policy "/proc/$pid/fd"; }
   p=$(polfd --args "$fd" -- sh)
   check_eq "--args: the options read from ai-jail's memfd (no network)" false "$(jq -r .net <<<"$p")"
   check_eq "...and its folder" "$d/proj false" "$(jq -r '.roots[] | "\(.path) \(.masked)"' <<<"$p")"
@@ -7890,7 +7966,7 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   check_match "--args: not without ai-jail's fds" "no ai-jail" "$(pol --args "$fd" -- sh 2>&1; echo " rc=$?")"
   kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
   check_match "...rc 1" "rc=1" "$(pol --bogus -- sh 2>&1; echo " rc=$?")"
-  check_match "an option cut short fails" "cut short" "$(printf '%s\0' bwrap --bind a | lib jail_policy)"
+  check_match "an option cut short fails" "cut short" "$(printf '%s\0' bwrap --bind a | jp_both jail_policy)"
   check_match "no -- fails" "no --" "$(pol --tmpfs /x)"
   # jail_root/jail_sees/repo_top with a policy like that one.
   git -C "$d/proj" init -q
@@ -7993,18 +8069,18 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
     printf '%s\n' "5 4 0:3 /ai-jail-empty $d/proj/sub/a\\040b ro - tmpfs tmpfs ro"
     echo "6 1 0:3 /ai-jail-empty /etc/hosts ro - tmpfs tmpfs ro"; } > "$mi"
   check_eq "jail_mounts: a renamed mask where the kernel has it, the command line's kept, a sub-root not one" \
-    "$d/proj/config/.env|$d/proj/config2/.env|$d/proj/sub/a b" "$(lib jail_mounts "$jp" "$mi" | jq -r '.masks | join("|")')"
+    "$d/proj/config/.env|$d/proj/config2/.env|$d/proj/sub/a b" "$(jp_both jail_mounts "$jp" "$mi" | jq -r '.masks | join("|")')"
   check_eq "...each folder holding one marked masked; nothing outside the jail's folders (/etc/hosts)" "true true" \
-    "$(lib jail_mounts "$jp" "$mi" | jq -r '[.roots[].masked] | map(tostring) | join(" ")')"
+    "$(jp_both jail_mounts "$jp" "$mi" | jq -r '[.roots[].masked] | map(tostring) | join(" ")')"
   printf '%s\n' "7 2 0:3 /ai-jail-empty $d/proj/x\\012y ro - tmpfs tmpfs ro" >> "$mi"
-  check_match "...a mount point with a newline hides its whole folder" "\"$d/proj\"" "$(lib jail_mounts "$jp" "$mi" | jq -c '.masks')"
+  check_match "...a mount point with a newline hides its whole folder" "\"$d/proj\"" "$(jp_both jail_mounts "$jp" "$mi" | jq -c '.masks')"
   printf '%s\n' "1 0 0:1 / / rw - tmpfs tmpfs rw" "7 1 0:3 /ai-jail-empty $d/proj/x\\012y ro - tmpfs tmpfs ro" > "$d/mountinfo-nl"
   check_eq "...marked masked even when that is all there is (jail_root takes no such folder; #210)" "true" \
-    "$(lib jail_mounts "$(jq -nc --arg p "$d/proj" '{roots: [{path: $p, masked: false}], masks: []}')" "$d/mountinfo-nl" | jq -r '.roots[0].masked')"
-  check_fails "...an unreadable mountinfo fails" lib jail_mounts "$jp" "$d/no-mountinfo"
+    "$(jp_both jail_mounts "$(jq -nc --arg p "$d/proj" '{roots: [{path: $p, masked: false}], masks: []}')" "$d/mountinfo-nl" | jq -r '.roots[0].masked')"
+  check_fails "...an unreadable mountinfo fails" jp_both jail_mounts "$jp" "$d/no-mountinfo"
   printf '%s\n' "8 1 0:3 /ai-jail-empty $d/sp\\040ace/.env ro - tmpfs tmpfs ro" > "$d/mountinfo-sp"
   check_eq "...a folder with a space in its path (the kernel writes it \\040)" "$d/sp ace/.env" \
-    "$(lib jail_mounts "$(jq -nc --arg p "$d/sp ace" '{roots: [{path: $p, masked: false}], masks: []}')" "$d/mountinfo-sp" | jq -r '.masks[]')"
+    "$(jp_both jail_mounts "$(jq -nc --arg p "$d/sp ace" '{roots: [{path: $p, masked: false}], masks: []}')" "$d/mountinfo-sp" | jq -r '.masks[]')"
   mkdir -p "$d/proj/config2"; echo secret > "$d/proj/config2/.env"
   check_match "seed_spec refuses the renamed folder's masked file" "does not go into the box" \
     "$(cd "$d/proj" && OMABOX_JAIL="$(lib jail_mounts "$jp" "$mi" | jq -c '. + {id: "1 2", cwd: ""}')" bash -c 'source "$1"; seed_spec "config2/.env:.config/leak"' _ "$lm" 2>&1)"
@@ -8013,6 +8089,7 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   git -C "$d/proj" config core.fsmonitor "touch $d/gitrev-ran"
   check_eq "git_rev: nothing for a jailed caller" "" "$(OMABOX_JAIL=$JM lib git_rev "$d/proj")"
   check_fails "...its core.fsmonitor never ran" test -e "$d/gitrev-ran"
+  [ ! -x "$ROOT/build/omabox" ] || check_eq "jail_policy and jail_mounts: the Rust half's broker reads each case as bash's" "" "$JP_DIFF"
 }
 
 # #210: a jailed caller's folder goes into its box with what the jail hides in it covered again, and the
@@ -8672,9 +8749,12 @@ t_jail() {
   # A masked file in a folder the jail may write: the jail renames the folder holding it (the mount
   # moves with it, on the host too), then asks to seed it from its new path.
   echo SEKRIT > "$TMP/jren/cfg/.env"
-  # The broker as systemd starts it: a few variables, the socket handed over.
+  # The broker as systemd starts it: a few variables, the socket handed over. It runs the binary
+  # straight where there is one (wave 6-front, A3: its own front and broker side), as it will once
+  # bin/omabox is the binary.
+  local bcli=$CLI; [ ! -x "$ROOT/build/omabox" ] || bcli=$ROOT/build/omabox
   env -i HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" LANG="${LANG:-C.UTF-8}" USER="$USER" \
-    systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$CLI" >"$br/log" 2>&1 & SERVERS+=($!)
+    systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$bcli" >"$br/log" 2>&1 & SERVERS+=($!)
   until_ok 5 test -S "$br/sock" >/dev/null
   ob up "$P-host" >/dev/null 2>&1   # the user's box: not the jail's to drive
   cat > "$repo/t.sh" <<EOF

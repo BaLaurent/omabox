@@ -4,6 +4,7 @@
 //! it runs that front itself (front.rs, wave 6-front).
 mod args;
 mod boxes;
+mod broker_side;
 mod bwrap;
 mod cmd;
 mod conf;
@@ -214,6 +215,11 @@ fn main() -> ExitCode {
             }
             None => ExitCode::from(1),
         },
+        // The suite's check that the broker reads a jail as bash does (broker_side::probe).
+        Some("_rust-jail") => {
+            let words: Vec<Vec<u8>> = rest.into_iter().map(OsString::into_vec).collect();
+            ExitCode::from(broker_side::probe(&words))
+        }
         // A signal's release of shot --no-pointer's hold (ptr::hold_until_exit), in this process.
         Some("_ptr-release") => {
             let words: Vec<Vec<u8>> = rest.into_iter().map(OsString::into_vec).collect();
