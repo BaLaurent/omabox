@@ -1384,6 +1384,9 @@ fn record_overlay(
         )));
     }
     c.arg(P::OVERLAY_AWK);
+    // (typed text a character each, as UTF-8 whatever the caller's locale: gawk's length and substr
+    // follow LC_CTYPE, so under C an é was two pieces of a byte each, finding 447)
+    c.env("LC_ALL", "C.UTF-8");
     c.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit());

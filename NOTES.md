@@ -9350,7 +9350,10 @@ from them.
     dot), and system errors are said in English. A caller's own patterns (`events --grep`,
     `--until`) still read the caller's LC_CTYPE and LC_COLLATE, chosen as bash chose them
     (shell::caller_locale, uselocale around them), and what omabox runs inherits the caller's
-    environment as before (CHANGELOG). Tests: t_unit_rust_parity ("...by characters in C too",
+    environment as before, but for the awk that lays typed text out on a recording
+    (`record stop --show-input`): it runs with LC_ALL=C.UTF-8, since gawk's length and substr
+    follow LC_CTYPE and under C made an é two pieces of a byte each (`gawk 'BEGIN { print
+    length("é") }'` is 2 under C, 1 under C.UTF-8) (CHANGELOG). Tests: t_unit_rust_parity ("...by characters in C too",
     "...in characters under LC_ALL=C too": expected differences), shell.rs's
     cut_counts_characters_in_any_locale, length_controls_and_case_in_any_locale.
 
