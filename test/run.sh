@@ -326,7 +326,8 @@ lock_waiter() {
   for p in "$@" $(pgrep -d ' ' -P "$(IFS=,; echo "$*")" 2>/dev/null); do
     c=$(pgrep -x flock -P "$p" | head -n 1)
     [ -z "$c" ] || { echo "$c"; return 0; }
-    ! ls -l "/proc/$p/fd" 2>/dev/null | grep -qF -- "-> $lk" || { echo "$p"; return 0; }
+    # (each fd's target starting with the lock's path, as ls -l's "-> PATH" matched it: " (deleted)" too)
+    local fd t; for fd in "/proc/$p/fd"/*; do t=$(readlink "$fd" 2>/dev/null) || continue; [[ $t != "$lk"* ]] || { echo "$p"; return 0; }; done
   done
   return 1
 }
@@ -3513,9 +3514,9 @@ t_unit_rust_parity() {
   parity "which --json: by OMABOX_BOX" which --json "$e1"
   parity "which: an OMABOX_BOX no box can have" which "$e2"
   # (en_US.UTF-8's [A-Za-z] takes é in bash's =~: omabox's own patterns are ASCII, finding 445)
-  [ -z "$rp_ul" ] || { rp_env=(LC_ALL=$rp_ul); rp_why=445 rp_bash=(rc=0 out=é 'err~^omabox: which: by its environment') rp_rust=(rc=1 'out=not in a box' err=); }
+  [ -z "$rp_ul" ] || { rp_env=("LC_ALL=$rp_ul"); rp_why=445 rp_bash=(rc=0 out=é 'err~^omabox: which: by its environment') rp_rust=(rc=1 'out=not in a box' err=); }
   rp_ul_parity "which: OMABOX_BOX in the locale's letters" which "$e3"
-  [ -z "$rp_ul" ] || { rp_env=(LC_ALL=$rp_ul); rp_why=445 rp_bash=(rc=0 'out={"pid":P,"box":"é","by":"env"}' 'err~^omabox: which: by its environment') rp_rust=(rc=1 'out={"pid":P,"box":null,"by":null}' err=); }
+  [ -z "$rp_ul" ] || { rp_env=("LC_ALL=$rp_ul"); rp_why=445 rp_bash=(rc=0 'out={"pid":P,"box":"é","by":"env"}' 'err~^omabox: which: by its environment') rp_rust=(rc=1 'out={"pid":P,"box":null,"by":null}' err=); }
   rp_sed='s/"pid":[0-9]+/"pid":P/'; rp_ul_parity "which --json: OMABOX_BOX in the locale's letters" which --json "$e3"
   rp_env=() rp_sed=""
   kill "$e1" "$e2" "$e3" 2>/dev/null
@@ -3561,7 +3562,7 @@ t_unit_rust_parity() {
   # (bash's glob lists them in the locale's collation, en_US.UTF-8's a before B; omabox's in byte
   # order, B before a, the same in every locale: finding 446)
   rp_session3() { rp_session2; rp_live "B-$s8"; rp_live "a-$s8"; }
-  [ -z "$rp_ul" ] || { rp_env=(CLAUDE_CODE_SESSION_ID="$sid" LC_ALL=$rp_ul); rp_why=446 rp_bash=("err~boxes are a-$s8 B-$s8 other-$s8 rp-repo-$s8 ") rp_rust=("err~boxes are B-$s8 a-$s8 other-$s8 rp-repo-$s8 "); }
+  [ -z "$rp_ul" ] || { rp_env=(CLAUDE_CODE_SESSION_ID="$sid" "LC_ALL=$rp_ul"); rp_why=446 rp_bash=("err~boxes are a-$s8 B-$s8 other-$s8 rp-repo-$s8 ") rp_rust=("err~boxes are B-$s8 a-$s8 other-$s8 rp-repo-$s8 "); }
   rp_prep=rp_session3; rp_ul_parity "four: named in byte order" env
   rp_env=(CLAUDE_CODE_SESSION_ID="$sid")
   # A resumed session (finding 93): the box records an agent gone; this command's agent takes it.
@@ -3814,9 +3815,9 @@ t_unit_rust_parity() {
   parity "pixel: 33 points" pixel $(seq 66)
   parity "pixel: not a number" pixel 1 x
   # (a digit of en_US.UTF-8's [0-9], ², passed bash's check for its arithmetic to refuse: finding 445)
-  [ -z "$rp_ul" ] || { rp_env=(LC_ALL=$rp_ul); rp_why=445 rp_bash=(rc=1 'err~/bin/omabox: line [0-9]+: 10#: invalid integer constant') rp_rust=(rc=2 'err~^omabox: pixel: '); }
+  [ -z "$rp_ul" ] || { rp_env=("LC_ALL=$rp_ul"); rp_why=445 rp_bash=(rc=1 'err~/bin/omabox: line [0-9]+: 10#: invalid integer constant') rp_rust=(rc=2 'err~^omabox: pixel: '); }
   rp_ul_parity "pixel: a digit of the locale's" pixel 1 ²
-  [ -z "$rp_ul" ] || { rp_env=(LC_ALL=$rp_ul); rp_why=445 rp_bash=(rc=1 'err~/bin/omabox: line [0-9]+: 10#: invalid integer constant') rp_rust=(rc=2 'err~^omabox: click: '); }
+  [ -z "$rp_ul" ] || { rp_env=("LC_ALL=$rp_ul"); rp_why=445 rp_bash=(rc=1 'err~/bin/omabox: line [0-9]+: 10#: invalid integer constant') rp_rust=(rc=2 'err~^omabox: click: '); }
   rp_ul_parity "click: a digit of the locale's" click -b dead1 ² 1
   rp_env=()
   parity "pixel: six digits" pixel 1 123456
@@ -6302,7 +6303,7 @@ t_unit_rust_parity5() {
   parity "up --from: a bad save name" up rpa --from 'a/b'
   parity "up --from: no such save" up rpa --from rp-no-such-save
   parity "up --desk-shell and --stock-bar" up rpa --desk-shell --stock-bar
-  rp_env=(OMABOX_DESK_CONFIG=$r/none); parity "up --desk-shell: no desk config" up rpa --desk-shell; rp_env=()
+  rp_env=("OMABOX_DESK_CONFIG=$r/none"); parity "up --desk-shell: no desk config" up rpa --desk-shell; rp_env=()
   rp_env=(OMABOX_RENDER_NODE=/dev/dri/card9); parity "up: no usable render node (a card node named)" up rpa --no-shell; rp_env=()
   # (a cwd with a file `fonts`: bash's unquoted words were globbed against it, finding 457)
   rp_dir=$r/glob rp_why=457 rp_bash=("err~^omabox: --overlay: no such directory") rp_rust=("err~^omabox: --no-seed: what a box starts without")
@@ -6311,7 +6312,7 @@ t_unit_rust_parity5() {
   # (--audio's missing programs, with a PATH that has all but PipeWire's: bash joined them with a bare
   # comma, finding 462)
   mkdir -p "$r/nopw"; for i in /usr/bin/*; do case ${i##*/} in pipewire|wireplumber|pipewire-pulse|pactl) ;; *) ln -s "$i" "$r/nopw/" ;; esac; done
-  rp_env=(PATH=$r/nopw) rp_why=462 rp_bash=("err~^omabox: up --audio needs pipewire,wireplumber,pipewire-pulse,pactl ") rp_rust=("err~^omabox: up --audio needs pipewire, wireplumber, pipewire-pulse, pactl ")
+  rp_env=("PATH=$r/nopw") rp_why=462 rp_bash=("err~^omabox: up --audio needs pipewire,wireplumber,pipewire-pulse,pactl ") rp_rust=("err~^omabox: up --audio needs pipewire, wireplumber, pipewire-pulse, pactl ")
   parity "up --audio without PipeWire: the programs named" up rpa --audio --no-shell --net isolated; rp_env=()
   parity "up --help" up --help
   # After the lock: a down that came while it started (finding 147), the box's own dir untouched.
@@ -6484,7 +6485,7 @@ t_unit_rust_parity5() {
   parity "ls --json under C: B before a" ls --json
   parity "saves --json under C: B before a" saves --json
   if [ -n "$rp5b_ul" ]; then
-    rp_env=("${rp5b_env[@]}" LC_ALL=$rp5b_ul)
+    rp_env=("${rp5b_env[@]}" "LC_ALL=$rp5b_ul")
     rp_why=446 rp_bash=('out~"name":"a-x".*"name":"B-x"') rp_rust=('out~"name":"B-x".*"name":"a-x"')
     parity "ls --json: in byte order in every locale" ls --json
     rp_why=446 rp_bash=('out~"name":"a-s".*"name":"B-s"') rp_rust=('out~"name":"B-s".*"name":"a-s"')
@@ -7917,6 +7918,7 @@ t_unit_parallel() {
     cursor_same "0, 0"; OMABOX_TEST_CURSOR=strict PTR="5, 7" cursor_same "0, 0"; echo "pass=$pass fail=$fail")
   check_match "S8: a pointer that moved during a test fails it under strict, one that stayed says nothing" \
     "it was at 0, 0, now at 5, 7 .*pass=0 fail=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+  # shellcheck disable=SC2030 # (a fake test's counters, in a subshell on purpose)
   out=$(hostctl() { echo "5, 7"; }; evidence() { :; }; pass=0 fail=0 failed=() CUR=t_fake; NOTES=$(mktemp)
     cursor_same "0, 0"; notes; rm -f "$NOTES"; echo "pass=$pass fail=$fail")
   check_match "...by default only a note (the suite runs while you use the mouse)" \
@@ -7966,6 +7968,7 @@ print(a.getsockname()[1], b.getsockname()[1])')
 # are leaked into the stand-in on purpose, and each must be reported. A clean
 # host log means something only then: when this test fails, so does the host's verdict.
 t_leak_control() {
+  # shellcheck disable=SC2031 # (the globals; only t_unit_parallel's fake run changed them, in its subshell)
   local S=$P-ctl f0=$fail log
   up_ok "$S" --no-shell --net isolated || { no "up the stand-in" "$UP_OUT"; return; }
   log=$(ob path -b "$S")/run/events.log
@@ -8050,6 +8053,7 @@ t_leak_control() {
   check "a window of the suite's opened silently is reported" scanned silent end3 "^leak: a window opened, of this run's: .*OMABOX_SUITE=$P .*class=silentleak"
   ob run -b "$S" -- pkill -f 'foot -a silentleak' >/dev/null 2>&1
   ob down "$S" >/dev/null 2>&1
+  # shellcheck disable=SC2031 # (the globals; only t_unit_parallel's fake run changed them, in its subshell)
   [ "$fail" != "$f0" ] || LEAK_PROVEN=1
 }
 
@@ -12613,7 +12617,7 @@ echo "%s $*" >> "$HOME/stub.log"
         rm -rf "$sh2"; mkdir -p "$sh2"
         printf '%s
 ' "$a" | env -u CLAUDE_CONFIG_DIR -u CODEX_HOME HOME="$sh2" XDG_DATA_HOME="$sh2/.local/share" XDG_CACHE_HOME="$sh2/.cache" \
-          XDG_CONFIG_HOME="$sh2/.config" PATH="$sst:$PATH" OMABOX_BASH=$hf script -qec "$CLI setup" /dev/null >/dev/null 2>&1
+          XDG_CONFIG_HOME="$sh2/.config" PATH="$sst:$PATH" "OMABOX_BASH=$hf" script -qec "$CLI setup" /dev/null >/dev/null 2>&1
         check "setup in a terminal, answer [${a}]$([ -z "$hf" ] || echo ' (bash)'): a no, remembered" test -e "$sh2/.config/omabox/widget-declined"
         check_fails "...and no widget enabled" grep -q "plugin enable" "$sh2/stub.log"
       done
@@ -14576,7 +14580,7 @@ t_rust_parity_up() {
     echo "== files"; (cd "$d" 2>/dev/null && command find . -maxdepth 1 -printf '%p %y\n' | LC_ALL=C sort)
     echo "== home"; (cd "$d/home" 2>/dev/null && command find .config/rp .config/omarchy/themes/rp-theme -maxdepth 0 -printf '%p %y %l\n' 2>/dev/null)
   }
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=$r/norepo rp_env=(HOME=$h) rp_snap=0 rp_prep=rpu_down rp_also=rpu_state
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=$r/norepo rp_env=("HOME=$h") rp_snap=0 rp_prep=rpu_down rp_also=rpu_state
   rp_sed='s/\b[0-9]+(\.[0-9]+)? ?(s|ms)\b/T/g; s/"created":"[^"]*"/"created":T/'
   parity "up: headless, no shell, isolated" up "$U" --no-shell --net isolated
   parity "up --json: with its shell" up "$U" --net isolated --json
@@ -14594,14 +14598,14 @@ t_rust_parity_up() {
   mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"
   rpu_victim() { rpu_state; echo "== victim"; head -c 4 "$r/victim" | od -An -c | tr -s ' '; echo victim > "$r/victim"; }
   echo victim > "$r/victim"
-  rp_env=(HOME=$h XDG_DATA_HOME=$r/data) rp_also=rpu_victim rp_why=461 rp_bash=('state~^ 211 P N G$') rp_rust=('state~^ v i c t$')
+  rp_env=("HOME=$h" "XDG_DATA_HOME=$r/data") rp_also=rpu_victim rp_why=461 rp_bash=('state~^ 211 P N G$') rp_rust=('state~^ v i c t$')
   parity "up --from a save with a link at the clean wallpaper's place" up "$U" --no-shell --clean --from rp-save
-  rp_env=(HOME=$h) rp_also=rpu_state
+  rp_env=("HOME=$h") rp_also=rpu_state
   # A desk with no shell.json: bash's own redirection error said, the Rust half's empty bar unsaid
   # (finding 462).
   mkdir -p "$r/desk-empty"
-  rp_env=(HOME=$h OMABOX_DESK_CONFIG=$r/desk-empty) rp_why=462 rp_bash=('err~shell\.json: No such file or directory$') rp_rust=('err!~No such file or directory')
-  parity "up with a desk that has no shell.json" up "$U" --no-shell --net isolated; rp_env=(HOME=$h)
+  rp_env=("HOME=$h" "OMABOX_DESK_CONFIG=$r/desk-empty") rp_why=462 rp_bash=('err~shell\.json: No such file or directory$') rp_rust=('err!~No such file or directory')
+  parity "up with a desk that has no shell.json" up "$U" --no-shell --net isolated; rp_env=("HOME=$h")
   # protect-ports set (finding 459): the Rust half starts a connected box with the port left out of
   # pasta's host rules; bash's half, which cannot hold it, refuses to start one.
   local pp; pp=$(free_port); echo "protect-ports=$pp" > "$h/.config/omabox/config"
@@ -14621,7 +14625,7 @@ t_rust_parity_up() {
   parity "ls: the box up" ls
   rp_sed="" rp_check=rpu_json
   parity "ls --json: the box up" ls --json
-  rp_check="" rp_env=(XDG_DATA_HOME=$r/data5b)
+  rp_check="" rp_env=("XDG_DATA_HOME=$r/data5b")
   rpu_nosave() { rm -rf "$r/data5b"; }
   rp_prep=rpu_nosave rp_sed='s/\(([0-9.,]+[KMG]?)(, keyring secrets included)?\)/(SIZE\2)/; s/ is [0-9.,]+[KMG]?: / is SIZE: /'
   parity "save of the box up" save rp5b-save -b "$U"
@@ -14632,7 +14636,7 @@ t_rust_parity_up() {
   rp_prep=rpu_resave; parity "saves rm" saves rm rp5b-save
   # Wave 5c on the box up: brief names it, reload gives its Hyprland the config again (unchanged: not
   # written), both ways. restart-shell on a box with its shell, below.
-  rp_env=(HOME=$h) rp_prep="" rp_sed="" rp_check="" rp_also=""
+  rp_env=("HOME=$h") rp_prep="" rp_sed="" rp_check="" rp_also=""
   parity "brief -b: the box up, no windows" brief -b "$U"
   parity "reload: the box up" reload -b "$U"
   parity "reload by its name" reload "$U"
@@ -14647,7 +14651,7 @@ t_rust_parity_up() {
   rpu_down
   # restart-shell (wave 5c) on a box with its shell: each side restarts it, then brief and reload see
   # the box as it is after.
-  rp_prep="" rp_also="" rp_env=(HOME=$h)
+  rp_prep="" rp_also="" rp_env=("HOME=$h")
   if HOME=$h ob up "$U" --net isolated >/dev/null 2>&1; then
     parity "restart-shell: the box's shell restarted" restart-shell -b "$U"
     parity "brief -b: the box with its bar" brief -b "$U"
@@ -20117,6 +20121,7 @@ t_unit_wait_facts() {
 thin_check() {
   local got; got="$3 $(jq -r '.change.h' <<<"$2" 2>/dev/null)"
   if [[ $got =~ ^124\ [23]$ ]]; then ok "$1"; return; fi
+  # shellcheck disable=SC2031 # (the globals; only t_unit_parallel's fake run changed them, in its subshell)
   local e=$EVID/$CUR f; mkdir -p "$e"
   for f in before after; do ob run -b "$B" -- cat "$4/$f.ppm" > "$e/${4##*/}-$f.ppm" 2>/dev/null; done
   ob shot -b "$B" -o "$e/${4##*/}-screen.png" >/dev/null 2>&1 || true
@@ -20795,7 +20800,8 @@ home_shapes() {
 # of it in its command line (a box dir, a reaper) or its environment (OMABOX_BOX, the box session's;
 # OMABOX_NAME, a run's), this runner and what it runs aside.
 box_procs() {
-  local p c e mine=" $$ $(descendants $$ | xargs) "
+  local p c e mine
+  mine=" $$ $(descendants $$ | xargs) "
   for p in /proc/[0-9]*; do
     [[ $mine != *" ${p#/proc/} "* ]] || continue
     c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
