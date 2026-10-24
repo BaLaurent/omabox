@@ -19998,9 +19998,14 @@ t_inspect() {
   sleep 1
   check_eq "marks taken during a burst are at line ends" "" "$(for k in "${marks[@]}"; do [ "$k" = 0 ] || [ "$(head -c "$k" "$E" | tail -c 1 | od -An -tx1 | tr -d ' ')" = 0a ] || echo "$k"; done)"
   check_eq "...and the file has no NUL" "$(wc -c < "$E")" "$(tr -d '\0' < "$E" | wc -c)"
-  "$CLI" events -b "$B" -f > "$TMP/ev.f" 2>&1 & local ef=$!   # ($CLI: $! is omabox itself, not a subshell running ob)
+  # ($CLI: $! is omabox itself, not a subshell running ob; prlimit execs it. A soft core limit of 2
+  # bytes, which nothing here lowers to 1 but omabox, for the check below.)
+  prlimit --core=2: "$CLI" events -b "$B" -f > "$TMP/ev.f" 2>&1 & local ef=$!
   local bpid; bpid=$(cat "$(ob path -b "$B")/pid")
   until_ok 5 pgrep -f "^tail -c [+][0-9]+ -F --pid=$bpid " >/dev/null   # (following)
+  # A tool omabox runs in the box's namespaces never makes a crash notification either (finding 492).
+  check_eq "...its tail, a tool in the box's namespaces: core limit 1 byte" 1 \
+    "$(prlimit --pid "$(pgrep -n -f "^tail -c [+][0-9]+ -F --pid=$bpid ")" --core -o SOFT --noheadings 2>&1 | tr -d ' ')"
   kill -TERM "$ef"; wait "$ef" 2>/dev/null
   check "events -f stopped: its tail goes too" until_ok 3 bash -c "! pgrep -f '^tail -c [+][0-9]+ -F --pid=$bpid '"
   check_match "log events: the file as it is" '^[0-9]+\.[0-9]{3} ' "$(ob log -b "$B" events -n 1)"

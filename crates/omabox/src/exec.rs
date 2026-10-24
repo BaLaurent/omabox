@@ -632,9 +632,11 @@ fn on_box_with(
         (b"HYPRLAND_INSTANCE_SIGNATURE".to_vec(), sig),
         (b"LANG".to_vec(), lang),
     ];
+    // (a crash of one of omabox's tools there never notifies the desktop either: finding 492)
     let fds = Fds {
         pid: pid_to,
         bg,
+        nocore: true,
         ..Fds::default()
     };
     let r = match crate::enter::Entry::open(&ctx.d, &pid, crate::enter::TOOL) {

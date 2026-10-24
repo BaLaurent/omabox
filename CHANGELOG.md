@@ -60,6 +60,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `/dev/tty` and read what you typed there, write to it or signal its session. It now leads a session
   of its own, with no controlling terminal; a Ctrl-C, Ctrl-\ or Ctrl-Z at your terminal still reaches
   it. A command run at your terminal keeps the pseudo-terminal of its own it had.
+- **The tools omabox runs against a box (grim, hyprctl, its input tools) could make a crash
+  notification on your desktop**: unlike a box's own commands, they kept your core limit. They get
+  the box's 1-byte limit.
 
 ### Changes from the bash omabox
 

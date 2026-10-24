@@ -9845,6 +9845,13 @@ from them.
     command leads a session of its own", "nor of what it leaves running": each fails with
     OMABOX_BASH=1).
 
+492. **The tools omabox runs in a box's namespaces had the caller's core limit** (2026-10-24, #324,
+    the native-entry step). on_box's grim, hyprctl, tail and input tools ran with the caller's core
+    limit, unlike box_exec's commands (finding 67), so one crashing from a terminal or the widget
+    would have made a crash notification on the desktop. **Fix** (Rust only): they get the 1-byte
+    limit too. Test: t_inspect (events -f's tail, started under a 2-byte limit: 1 byte; 2 with
+    OMABOX_BASH=1).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
