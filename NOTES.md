@@ -9369,7 +9369,10 @@ from them.
     **Change** (Rust over bash): one reader, shell::dec: an optional sign, then ASCII digits,
     decimal whatever its zeros (`010` is 10, `08` is 8), checked at 64 bits. Every `^[0-9]+$` check
     is shell::is_num and every region goes through geom_parse, so a number past 64 bits gets the
-    option's usual refusal; the arithmetic on them saturates instead of wrapping. A number omabox
+    option's usual refusal; what the Rust half wrapped as bash did (wrapping_add, _sub, _mul, _div,
+    _neg) saturates instead. Plain + - * stay where the inputs are bounded (record stop's frame
+    count, cuts and marks, events' times, pixel's points: each from a {1,N}-digit check or a
+    tool's answer). A number omabox
     cannot read where it expects one (a tool's answer, a record of its own) ends the command in its
     words, "omabox: CMD: cannot read WHAT as a number: 'V'" (num::read), exit 1 as before. Regions
     are written as the numbers read: shot's `-g 010,...` is `10,...` in grim's argument, the record
