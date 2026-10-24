@@ -1497,6 +1497,99 @@ mod tests {
         );
     }
 
+    fn seg() -> impl proptest::strategy::Strategy<Value = Vec<u8>> {
+        use proptest::prelude::*;
+        let parts = prop::sample::select(vec![
+            "dev",
+            "dri",
+            "card0",
+            "renderD128",
+            "input",
+            "event1",
+            "run",
+            "dbus",
+            "seatd.sock",
+            "user",
+            "1000",
+            "..",
+            ".",
+            "usr",
+            "home",
+            "sbx",
+            "tmp",
+            "nvidia0",
+            "opt",
+            "omabox",
+            "srv",
+        ]);
+        prop::collection::vec(parts, 1..5).prop_map(|v| format!("/{}", v.join("/")).into_bytes())
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(48))]
+        // S1 (#355): whatever combination of up's options (its mounts, overlays, plugins, desk fonts,
+        // net mode, --systemd, --interactive, NVIDIA's nodes and card placeholders) the bwrap words
+        // come out with no seat path as a bind's source or destination, or up is refused.
+        #[test]
+        fn up_options_never_bind_the_seat(
+            interactive: bool, systemd: bool, clean: bool, net in 0u8..3,
+            overlays in proptest::collection::vec(seg(), 0..3),
+            ro in proptest::collection::vec((seg(), seg()), 0..4),
+            plugins in proptest::collection::vec(seg(), 0..3),
+            fonts in proptest::collection::vec((seg(), seg()), 0..2),
+            cards in proptest::collection::vec(0u8..4, 0..3),
+        ) {
+            let rt = shell::env_or_empty("XDG_RUNTIME_DIR");
+            let base = std::env::temp_dir().join(format!("omabox-up-prop-{}", std::process::id()));
+            let d = cat!(shell::bytes(&base), "/box");
+            let _ = std::fs::create_dir_all(shell::path(&cat!(d, "/run")));
+            let mut ctx = Ctx::new(b"up", shell::bytes(&base).to_vec());
+            ctx.name = b"box".to_vec();
+            ctx.d = d.clone();
+            let u = Up {
+                interactive,
+                systemd,
+                clean,
+                net: [b"connected".to_vec(), b"isolated".to_vec(), b"none".to_vec()][usize::from(net)].clone(),
+                size: b"1920x1080@60".to_vec(),
+                scale: b"1".to_vec(),
+                overlays,
+                ro_args: ro,
+                plugins: plugins
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, dir)| crate::plugins::Plugin { id: format!("p{i}").into_bytes(), dir })
+                    .collect(),
+                ..Up::default()
+            };
+            let render = RenderNode::new(b"/dev/dri/renderD128").ok_or(proptest::test_runner::TestCaseError::fail("node"))?;
+            let devs: Vec<NvidiaDev> = NvidiaDev::new(b"/dev/nvidia0").into_iter().collect();
+            let cards: Vec<Vec<u8>> = cards.iter().map(|n| format!("card{n}").into_bytes()).collect();
+            let fonts: Vec<(Vec<u8>, Vec<u8>)> = fonts;
+            let etc = Etc { overlay: false, files: Vec::new() };
+            let r = crate::exit::muted(|| {
+                bwrap_args(&ctx, &u, &render, std::slice::from_ref(&render), &devs, &cards, false, &etc, &fonts)
+            });
+            if let Ok(args) = r {
+                let mut i = 0;
+                while i < args.len() {
+                    let w = args[i].as_slice();
+                    if matches!(w, b"--bind" | b"--ro-bind" | b"--dev-bind") {
+                        let (src, dest) = (&args[i + 1], &args[i + 2]);
+                        let own = crate::bwrap::lexical(src).starts_with(&cat!(d, "/"));
+                        let placeholder = own && dest.starts_with(b"/dev/dri/card");
+                        proptest::prop_assert!(own || src == b"@CGROUP@" || crate::bwrap::seat_path(src, &rt).is_none(), "source {:?}", String::from_utf8_lossy(src));
+                        proptest::prop_assert!(placeholder || crate::bwrap::seat_path(dest, b"").is_none(), "dest {:?}", String::from_utf8_lossy(dest));
+                        i += 3;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            let _ = std::fs::remove_dir_all(&base);
+        }
+    }
+
     #[test]
     fn locale_order() {
         let v = host_locale_vars();

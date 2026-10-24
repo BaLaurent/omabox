@@ -665,6 +665,36 @@ pub fn run_cwd_note(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
 mod tests {
     use super::*;
 
+    proptest::proptest! {
+        // S3 (#355): every path at or under HOME's secret stores, ~/.config/omarchy outside plugins/
+        // and themes/, the runtime dir and the kernel's trees, and every folder holding one of them
+        // (HOME itself, /), is refused as a mount, however it is spelled.
+        #[test]
+        fn secret_paths_are_refused(
+            root in proptest::sample::select(vec![
+                ".ssh", ".gnupg", ".local/share/keyrings", ".password-store", ".aws", ".kube",
+                ".docker", ".config/gh", ".config/omarchy", ".config/omarchy/hooks", ".claude", ".codex",
+            ]),
+            tail in proptest::collection::vec(proptest::sample::select(vec!["a", "b.c", ".", "x y"]), 0..3),
+            slash: bool,
+        ) {
+            let home = shell::env_or_empty("HOME");
+            let mut p = cat!(home, "/", root);
+            for t in &tail {
+                p = cat!(p, "/", t);
+            }
+            if slash {
+                p.push(b'/');
+            }
+            proptest::prop_assert!(refuse_src(&p).is_some(), "{:?}", String::from_utf8_lossy(&p));
+            proptest::prop_assert!(refuse_src(&home).is_some());
+            proptest::prop_assert!(refuse_src(b"/").is_some());
+            for sys in ["/run", "/dev/input", "/proc/1", "/sys"] {
+                proptest::prop_assert!(refuse_src(sys.as_bytes()).is_some(), "{}", sys);
+            }
+        }
+    }
+
     #[test]
     fn lexical_paths() {
         assert_eq!(realpath_ms(b"/a/./b/../c//d/"), Some(b"/a/c/d".to_vec()));
