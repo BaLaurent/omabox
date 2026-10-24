@@ -83,11 +83,17 @@ pub fn shell_hung(ctx: &Ctx, pid: &[u8]) -> bool {
 /// shell_state: none (--no-shell), running, hung, restarting (its launcher about to start it again)
 /// or gone.
 pub fn shell_state(ctx: &Ctx) -> &'static str {
+    shell_state_given(ctx, "")
+}
+
+/// shell_state GIVEN: with GIVEN `hung` or `ok`, what shell_hung said already (`ls` asks every box's
+/// at once), not asked again; "" asks.
+pub fn shell_state_given(ctx: &Ctx, given: &str) -> &'static str {
     if meta(&ctx.d, "shell").0 != b"true" {
         return "none";
     }
     if let Some(p) = shell_pid(ctx).filter(|p| shell_running(ctx, p)) {
-        return if shell_hung(ctx, &p) {
+        return if given == "hung" || (given.is_empty() && shell_hung(ctx, &p)) {
             "hung"
         } else {
             "running"

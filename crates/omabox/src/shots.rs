@@ -643,7 +643,7 @@ pub fn zero_note(mons: &[u8], wayland_screen: &[u8], other: Option<&[u8]>) -> Ve
 
 /// other_gpu DRIVER: the first usable render node (readable and writable) on another driver, as
 /// "renderD128 amdgpu"; empty for none.
-fn other_gpu(driver: &[u8]) -> Vec<u8> {
+pub fn other_gpu(driver: &[u8]) -> Vec<u8> {
     let mut nodes: Vec<Vec<u8>> = std::fs::read_dir("/dev/dri")
         .map(|rd| {
             rd.flatten()

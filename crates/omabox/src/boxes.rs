@@ -105,7 +105,7 @@ fn pasta_pid(d: &[u8]) -> bool {
 /// The pid in pasta.pid while it is still this box's pasta: a pasta (its comm: pasta re-execs itself
 /// as passt.avx2 on most CPUs, and is non-dumpable, but comm stays readable) whose command line names
 /// this pid file. Neither alone: a copy of sleep can be called pasta, and any argv can hold a path.
-fn box_pasta(d: &[u8]) -> Option<Vec<u8>> {
+pub fn box_pasta(d: &[u8]) -> Option<Vec<u8>> {
     let pasta = std::fs::read(at(d, "pasta.pid"))
         .ok()
         .map(|v| strip_nl(&v))
