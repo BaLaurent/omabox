@@ -188,7 +188,7 @@ pub fn fd_file(ctx: &Ctx, n: &[u8], write: bool, what: &str) -> Res<()> {
 }
 
 /// conf_check shot-fit V: its normal form (off, or a longest side), or None.
-fn fit_check(v: &[u8]) -> Option<Vec<u8>> {
+pub fn fit_check(v: &[u8]) -> Option<Vec<u8>> {
     match v {
         b"off" | b"0" => Some(b"off".to_vec()),
         _ => shell::re_match("^[1-9][0-9]{1,4}$", v).then(|| v.to_vec()),

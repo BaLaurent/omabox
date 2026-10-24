@@ -133,6 +133,7 @@ fn main() -> ExitCode {
         Some("save") => Some(cmd::save::save),
         Some("saves") => Some(cmd::save::saves),
         Some("version" | "-V" | "--version") => Some(cmd::version::run),
+        Some("config") => Some(cmd::config::run),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.

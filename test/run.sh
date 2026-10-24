@@ -1831,7 +1831,10 @@ t_unit_live_edit() {
 t_unit_config() {
   local h=$TMP/confhome; mkdir -p "$h"
   cfg() { HOME=$h "$CLI" config "$@" 2>&1; }
-  check_eq "defaults" "workspace=9 confirm-close=off bar-icon=always gpu=auto shot-fit=off" "$(cfg | tr '\n' ' ' | sed 's/ $//')"
+  # (protect-ports: the Rust half's key, finding 480; bash's half lists the first five)
+  local dflt="workspace=9 confirm-close=off bar-icon=always gpu=auto shot-fit=off protect-ports="
+  [ -x "$ROOT/build/bin/omabox" ] || dflt=${dflt% protect-ports=}
+  check_eq "defaults" "$dflt" "$(cfg | tr '\n' ' ' | sed 's/ $//')"
   check_eq "set a workspace" workspace=4 "$(cfg workspace 4)"
   # Omarchy 4.5's scratchpad is its Quake console (#292, finding 423): `special` still works, saying
   # so in a line, on a host whose tree has default/hypr/qconsole.lua; not before (omarchy<4.5).
@@ -6112,6 +6115,124 @@ t_unit_rust_parity5() {
   parity "_reap of a dead box with no owner: ends at its first poll" _reap d10 c-d10
   rp_why=471 rp_bash=("err=omabox: box 'thr' down") rp_rust=('err~^omabox: DATE box .thr.: watching it every 5 s$' "err~^omabox: box 'thr' down$")
   parity "_reap of a dead throwaway box whose run is gone: taken down" _reap thr c-thr
+  # Wave 5c: config, brief, reload, restart-shell, host, broker, guard and setup. setup and guard write
+  # agents' configs and links, so every case runs on a HOME (and XDG dirs) of the test's own, never
+  # the user's, with CLAUDE_CONFIG_DIR and CODEX_HOME unset; what they reach outside it is a stand-in
+  # (systemctl, omarchy, omarchy-shell, and for host a Hyprland session of the test's own: a stub
+  # hyprctl and a socket in the runtime dir), each logging its call in the HOME.
+  local c=$r/c5 ch=$r/c5/home cst=$r/c5/stub cbt=$r/c5/buildstub
+  mkdir -p "$cst" "$cbt"
+  for i in systemctl omarchy omarchy-shell; do
+    printf '#!/bin/sh\necho "%s $*" >> "$HOME/stub.log"\n' "$i" > "$cst/$i"
+  done
+  # (systemctl: the user manager's environment from the HOME's sysenv file; is-active as RP5C_ACTIVE says)
+  cat >> "$cst/systemctl" <<'EOF'
+[ "$*" != "--user show-environment" ] || { cat "$HOME/sysenv" 2>/dev/null; exit 0; }
+[ "$*" != "--user is-active -q omabox-broker.socket" ] || exit "${RP5C_ACTIVE:-3}"
+exit 0
+EOF
+  cat > "$cst/hyprctl" <<'EOF'
+#!/bin/sh
+[ "$1 $2" = "-j instances" ] && { cat "$HOME/instances.json" 2>/dev/null || echo '[]'; exit 0; }
+echo "stub hyprctl: $*" >&2; exit 1
+EOF
+  # (setup --aquamarine's build tools: each logs and fails, so nothing is cloned or built)
+  for i in git cmake ninja hyprwayland-scanner pkg-config c++; do
+    printf '#!/bin/sh\necho "%s $*" >> "$HOME/stub.log"\nexit 1\n' "$i" > "$cbt/$i"
+  done
+  chmod +x "$cst"/* "$cbt"/*
+  rp5c_fix() {
+    rm -rf "$ch" "$c/rt"; mkdir -p "$ch" "$c/rt/omabox"
+    python3 -I -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$c/rt/wayland-rp"
+  }
+  # The HOME after the call: every path (a backup's time evened out), each file's sum, what the
+  # stand-ins were asked.
+  rp5c_home() {
+    echo "== home"
+    (cd "$ch" && command find . -printf '%p %y %l %m\n' | sed -E 's/\.bak-[0-9]+\.[0-9]+/.bak-T/' | LC_ALL=C sort
+      command find . -type f ! -name stub.log -print0 | LC_ALL=C sort -z | xargs -0 -r md5sum | sed -E 's/\.bak-[0-9]+\.[0-9]+/.bak-T/')
+    echo "== stubs"; cat "$ch/stub.log" 2>/dev/null
+  }
+  # (env's -u words first: it reads none after an assignment)
+  local rp5c_env=(-u CLAUDE_CONFIG_DIR -u CODEX_HOME -u OMABOX_SESSION -u OMABOX_AGENT_PID -u OMABOX_BROKER_SOCK
+    -u OMABOX_SHOT_FIT -u OMABOX_RENDER_NODE -u CLAUDE_ENV_FILE HOME="$ch" XDG_CONFIG_HOME="$ch/.config"
+    XDG_DATA_HOME="$ch/.local/share" XDG_CACHE_HOME="$ch/.cache" XDG_STATE_HOME="$ch/.local/state" PATH="$cst:$PATH")
+  # (a backup's time in what guard says evened out)
+  rp_rt=$c/rt rp_dir=$r/norepo rp_snap=1 rp_prep=rp5c_fix rp_also=rp5c_home rp_sed='s/\.bak-[0-9]+\.[0-9]+/.bak-T/g' rp_mask="" rp_wrap=() rp_env=("${rp5c_env[@]}")
+  # config: refusals, then each key both ways (protect-ports, the Rust half's alone: finding 480).
+  parity "config --bogus" config --bogus
+  parity "config --jsn (the nearest named)" config --jsn
+  parity "config bar-icon sometimes" config bar-icon sometimes
+  parity "config workspace 0" config workspace 0
+  parity "config shot-fit 5" config shot-fit 5
+  parity "config gpu nope" config gpu nope
+  parity "config confirm-close maybe" config confirm-close maybe
+  parity "config --help" config --help
+  rp_why=480 rp_bash=('err~^omabox: config: unknown key nope \(keys: workspace confirm-close bar-icon gpu shot-fit\) ') rp_rust=('err~^omabox: config: unknown key nope \(keys: workspace confirm-close bar-icon gpu shot-fit protect-ports\) ')
+  parity "config nope 1: the keys listed" config nope 1
+  rp_why=480 rp_bash=('err~got 3 words \(keys: workspace confirm-close bar-icon gpu shot-fit\)') rp_rust=('err~got 3 words \(keys: workspace confirm-close bar-icon gpu shot-fit protect-ports\)')
+  parity "config a b c" config a b c
+  rp_why=480 rp_bash=('out=workspace=9
+confirm-close=off
+bar-icon=always
+gpu=auto
+shot-fit=off') rp_rust=('out=workspace=9
+confirm-close=off
+bar-icon=always
+gpu=auto
+shot-fit=off
+protect-ports=')
+  parity "config: every key, protect-ports too" config
+  rp_why=480 rp_bash=('out~"shot_fit":"off","confirm_close_available":') rp_rust=('out~"shot_fit":"off","protect_ports":"","confirm_close_available":')
+  parity "config --json: protect_ports too" config --json
+  parity "config workspace" config workspace
+  parity "config workspace 4" config workspace 4
+  parity "config workspace special:omabox" config workspace special:omabox
+  parity "config workspace default" config workspace default
+  parity "config confirm-close yes" config confirm-close yes
+  parity "config bar-icon auto" config bar-icon auto
+  parity "config gpu: the value, the GPUs on stderr" config gpu
+  parity "config gpu amdgpu: a driver is its kind" config gpu amdgpu
+  parity "config gpu 03:00.0: a slot, its domain added" config gpu 03:00.0
+  parity "config shot-fit 1456" config shot-fit 1456
+  rp_env=("${rp5c_env[@]}" OMABOX_SHOT_FIT=800); parity "config shot-fit: OMABOX_SHOT_FIT said" config shot-fit; rp_env=("${rp5c_env[@]}")
+  rp5c_conf() { rp5c_fix; mkdir -p "$ch/.config/omabox"; printf '# mine\nworkspace = 3 \nbar-icon=nope\nshot-fit=1456\n' > "$ch/.config/omabox/config"; }
+  rp_prep=rp5c_conf
+  rp_why=480 rp_bash=('out!~protect-ports') rp_rust=('out~^protect-ports=$')
+  parity "config: a bad value said and ignored, the rest read" config
+  parity "config shot-fit default: its line gone, the rest kept" config shot-fit default
+  rp5c_linked() { rp5c_conf; mv "$ch/.config/omabox/config" "$ch/dotconfig"; ln -s "$ch/dotconfig" "$ch/.config/omabox/config"; }
+  rp_prep=rp5c_linked; parity "config through a linked config: the link kept" config workspace 5
+  # confirm-close follows into the running interactive boxes that took it from the config.
+  rp5c_inter() {
+    rp5c_fix; mkdir -p "$c/rt/omabox/ib/run" "$c/rt/omabox/pin/run" "$c/rt/omabox/noaq/run"
+    echo '{"mode":"interactive","confirm_close_from":"config"}' > "$c/rt/omabox/ib/box.json"
+    echo '{"mode":"interactive","confirm_close_from":"flag"}' > "$c/rt/omabox/pin/box.json"
+    echo '{"mode":"interactive","confirm_close_from":"config","aquamarine":{"fixed":false}}' > "$c/rt/omabox/noaq/box.json"
+  }
+  rp_prep=rp5c_inter
+  parity "config confirm-close on: the boxes that took it from the config follow" config confirm-close on
+  parity "config confirm-close off" config confirm-close off
+  rp_prep=rp5c_fix
+  rp_why=480 rp_bash=('rc=2' 'err~^omabox: config: unknown key protect-ports ' 'out=' 'state!~\./\.config') rp_rust=('rc=0' 'err=' 'out=protect-ports=5432,8080' 'state~\./\.config')
+  parity "config protect-ports 8080,5432: set, sorted (finding 480)" config protect-ports 8080,5432
+  rp_why=480 rp_bash=('err~^omabox: config: unknown key protect-ports ') rp_rust=('err~^omabox: config: bad protect-ports: 8080, 0 \(host ports no connected box reaches')
+  parity "config protect-ports with a port 0: refused" config protect-ports '8080, 0'
+  rp_why=480 rp_bash=('err~^omabox: config: unknown key protect-ports ') rp_rust=('err~^omabox: config: bad protect-ports: 70000 ')
+  parity "config protect-ports past 65535: refused" config protect-ports 70000
+  rp_why=480 rp_bash=('err~^omabox: config: unknown key protect-ports ') rp_rust=('err~^omabox: config: bad protect-ports: 80,,81 ')
+  parity "config protect-ports with an empty item: refused" config protect-ports 80,,81
+  rp5c_pp() { rp5c_fix; mkdir -p "$ch/.config/omabox"; printf 'protect-ports = 8080 , 22\n' > "$ch/.config/omabox/config"; }
+  rp_prep=rp5c_pp
+  rp_why=480 rp_bash=('rc=2' 'out=' 'err~unknown key protect-ports') rp_rust=('rc=0' 'out=22,8080' 'err=')
+  parity "config protect-ports: what up reads, blanks around commas allowed" config protect-ports
+  rp_why=480 rp_bash=('rc=2' 'err~unknown key protect-ports' 'out=' 'state~\./\.config/omabox/') rp_rust=('rc=0' 'out=protect-ports=' 'err=' 'state~\./\.config/omabox/')
+  parity "config protect-ports default: removed" config protect-ports default
+  rp5c_ppbad() { rp5c_fix; mkdir -p "$ch/.config/omabox"; printf 'protect-ports=8080;rm\n' > "$ch/.config/omabox/config"; }
+  rp_prep=rp5c_ppbad
+  rp_why=480 rp_bash=('err=' 'out!~protect-ports') rp_rust=('err~protect-ports=8080;rm is not a list of ports .*no box starts until it is one' 'out~^protect-ports=8080;rm$')
+  parity "config: a bad protect-ports said as up says it, shown as it is" config
+  rp_prep=rp5c_fix
   rp_prep="" rp_sed="" rp_also="" rp_mask="" rp_env=() rp_snap=1
   [ ! -f "$b/kids" ] || xargs -r kill -KILL < "$b/kids" 2>/dev/null
 }

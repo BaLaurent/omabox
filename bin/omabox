@@ -30,7 +30,7 @@ RELAY=$ROOT/tools/relay/omabox-relay
 # The Rust half (#324, crates/omabox, built into build/bin): the commands it has taken over run there
 # (rust_handoff). OMABOX_BASH=1 keeps every command here, to compare the two.
 RUST=$ROOT/build/bin/omabox
-RUST_CMDS=" _rust path env which hyprctl lua run log logs events wait windows tree pixel keys keys-to-box click scroll pointer drag shot screenshot calibrate monitor output mode gpu cpu audio ports clip peek gdb check record up down ls list save saves version -V --version _reap "
+RUST_CMDS=" _rust path env which hyprctl lua run log logs events wait windows tree pixel keys keys-to-box click scroll pointer drag shot screenshot calibrate monitor output mode gpu cpu audio ports clip peek gdb check record up down ls list save saves version -V --version _reap config "
 NO_RUST=${OMABOX_BASH:-}; unset OMABOX_BASH   # for this call only, not what it starts
 # aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
 # the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
@@ -208,7 +208,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
   omabox brief [-b NAME]                                 ~15 lines for a subagent's prompt: the box, its windows, the rules
   omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it
   omabox saves [--json] | saves rm SAVE...               the saves: list, delete
-  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu, shot-fit
+  omabox config [--json | KEY [VALUE | default]]         settings: workspace, confirm-close, bar-icon, gpu, shot-fit, protect-ports
   omabox guard [on|off [claude|codex]]                   the agent guard: show, add, remove
   omabox guard exec -- AGENT [ARG...]                    run any other agent under the guard
   omabox host -- CMD [ARG...]                            one command on your real desktop (when asked for)
@@ -693,6 +693,9 @@ nvidia\` (amd, intel, a driver's name, or a PCI slot: two GPUs of one kind) pick
 falls back to the first, saying so and why, when that one is not there (a card handed to a VM).
 \$OMABOX_RENDER_NODE overrides it. An interactive box renders on the GPU your desktop's compositor
 uses, whatever the setting.
+\`omabox config protect-ports 8080,5432\` keeps those host ports from every connected box, through
+any of the host's addresses (an isolated box's --allow refuses them; \`default\` removes them; it
+needs nft). The Rust half's alone: under OMABOX_BASH=1 it is an unknown key.
 @ up setup --version
 aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until the system's has it: a
 release, or a package patched with it; omabox looks for what the fix added, not the version): a

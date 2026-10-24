@@ -318,6 +318,10 @@ them, and `omabox config KEY default` puts one back.
   `--zoom`; `click --in` maps it as usual, and `--fit 0` takes one shot full size. `off` (the
   default) clears it; `OMABOX_SHOT_FIT=N` (or `off`) overrides it for one agent. Which N, for the
   model at hand: have the agent run `omabox calibrate` (it reads a test card and says the size).
+- `protect-ports 8080,5432`: host ports no connected box reaches (a database, your own app's dev
+  server), on the host's loopback or any of its other addresses; an isolated box's `--allow` refuses
+  them. None by default; `default` removes them. Needs `nft` (nftables) when set. A value that is not
+  a list of ports stops every `up` until it is fixed.
   Tested on a desktop with an AMD iGPU and an NVIDIA dGPU (on `nvidia` and on `vfio-pci`); laptops
   (hybrid graphics, MUX, eGPU) should work the same but are untested: reports welcome (#119).
 

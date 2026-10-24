@@ -799,6 +799,9 @@ new namespaces": ask the user to run `omabox broker on` outside the jail and add
   An `--allow` port is taken inside the box too (pasta listens on it there, leading to the host's):
   it is for reaching a host server from the box, and a box server on that port fails, "address in
   use" (`omabox ports` lists it as `allowed`). Serve on another port.
+- The user may keep host ports from every connected box (`omabox config protect-ports`, theirs to
+  set): a server there is refused from the box as if nothing listened, and `--allow` refuses such a
+  port. Ask the user, never change the setting yourself.
 - Across the box boundary use `127.0.0.1`, not `localhost`, with a server listening on IPv4
   (`127.0.0.1`, `0.0.0.0` or `::`): from a box, `localhost` is reset on an IPv4-only server, and
   between boxes always. A box's server is reachable from the host (and other boxes) on

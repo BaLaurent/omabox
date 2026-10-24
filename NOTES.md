@@ -9732,6 +9732,21 @@ from them.
     Tests: t_other_userns (a down from another user namespace), t_unit_rust_parity5 ("down of a box
     this namespace cannot read", an expected difference: bash's said it down).
 
+480. **`omabox config protect-ports`** (2026-10-24, #324 wave 5c, #355; S10). Wave 5a's protected
+    ports could only be written in `~/.config/omabox/config` by hand. **Added** (the Rust half only;
+    bash's CONF_KEYS stays as it was, a fallback): `omabox config protect-ports 8080,5432` sets the
+    key, checked as `up` reads it (net.rs's protect_parse: ports 1-65535, blanks around the commas
+    allowed, no empty item), and written in its normal form, sorted, each once (`5432,8080`): a value
+    `config` writes is one every `up` takes. `config protect-ports default` removes the line (none
+    protected). `omabox config` lists it (`protect-ports=` when unset) and `--json` has
+    `protect_ports` after `shot_fit`. A value in the file that is not a list of ports is not ignored
+    with "ignoring", as the other keys' are: `config` says it as `up` says it ("... no box starts until
+    it is one") and shows it as it is, since every `up` refuses it (S10 fails closed). The refusal of
+    an unknown key lists it among the keys. Under `OMABOX_BASH=1`, `config protect-ports` is an
+    unknown key, as before; a jailed agent's `config protect-ports` (reading) is still refused by
+    bash's broker_check, whose key list is bash's (wave 6). Tests: t_unit_rust_parity5 (the cases
+    with protect-ports are expected differences, finding 480), t_unit_config.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

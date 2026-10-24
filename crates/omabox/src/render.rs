@@ -12,6 +12,7 @@ use crate::cat;
 use crate::exit::{Ctx, Res, say};
 use crate::gpu::{conf_gpu, gpu_is, gpu_kind, render_driver, render_slot};
 use crate::shell;
+use std::os::unix::ffi::OsStrExt;
 
 /// Where render nodes and their devices are (bash's DRI, SYSDRM, SYSPCI).
 pub const DRI: &str = "/dev/dri";
@@ -150,7 +151,12 @@ fn conf_want() -> Vec<u8> {
 /// NVIDIA card handed to a VM), the first usable one, said with why (finding 237). Only ever a render
 /// node, never a card node: that is the seat (finding 5).
 pub fn render_node(ctx: &Ctx) -> Res<RenderNode> {
-    let mut n = shell::env_or_empty("OMABOX_RENDER_NODE");
+    render_node_with(ctx, shell::env_or_empty("OMABOX_RENDER_NODE"))
+}
+
+/// render_node with OMABOX_RENDER_NODE as N (`OMABOX_RENDER_NODE="" render_node`: the setting's).
+pub fn render_node_with(ctx: &Ctx, n: Vec<u8>) -> Res<RenderNode> {
+    let mut n = n;
     if n.is_empty() {
         let want = conf_want();
         let mut fell = false;
@@ -270,10 +276,8 @@ fn pci_why(dev: &[u8]) -> Vec<u8> {
     }
 }
 
-/// gpu_why_not WANT: why no usable GPU is the one WANT names (a kind or a slot), each such GPU with
-/// its reason ("0000:01:00.0: bound to vfio-pci"), or that there is none.
-pub fn gpu_why_not(want: &[u8]) -> Vec<u8> {
-    let mut why: Vec<u8> = Vec::new();
+/// The PCI devices' dirs (`"$SYSPCI"/*`), in byte order.
+fn pci_devs() -> Vec<Vec<u8>> {
     let mut devs: Vec<Vec<u8>> = std::fs::read_dir(SYSPCI)
         .map(|rd| {
             rd.flatten()
@@ -283,7 +287,127 @@ pub fn gpu_why_not(want: &[u8]) -> Vec<u8> {
         })
         .unwrap_or_default();
     devs.sort();
-    for name in devs {
+    devs
+}
+
+/// lspci's name of the GPU at SLOT: the model's bracketed name (`GB203 [GeForce RTX 5070 Ti]`), or
+/// the whole model; nothing without lspci.
+fn lspci_name(slot: &[u8]) -> Vec<u8> {
+    if !crate::exec::executable_on_path(b"lspci") {
+        return Vec::new();
+    }
+    let mut c = crate::sig::command("lspci");
+    c.args(["-mm", "-s"])
+        .arg(std::ffi::OsStr::from_bytes(slot))
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let o = c.output().map(|o| o.stdout).unwrap_or_default();
+    // (awk -F'"' 'NR == 1 { print $6 }')
+    let first = o.split(|&c| c == b'\n').next().unwrap_or_default();
+    let name = first
+        .split(|&c| c == b'"')
+        .nth(5)
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default();
+    shell::re_group(r"\[(.+)\]", &name, 1).unwrap_or(name)
+}
+
+/// gpu_json: the GPUs on the PCI bus (display class 0x03) for the bar widget's picker (#118): each
+/// one's slot, driver, kind, name, render node and whether a box can render on it, with why not.
+/// From the bus, not /dev/dri, so a GPU handed to a VM (vfio-pci) is listed too.
+pub fn gpu_json() -> serde_json::Value {
+    use serde_json::{Map, Value};
+    let s = |v: &[u8]| Value::String(String::from_utf8_lossy(v).into_owned());
+    let or_null = |v: &[u8]| if v.is_empty() { Value::Null } else { s(v) };
+    let mut all = Vec::new();
+    for slot in pci_devs() {
+        let dev = cat!(SYSPCI, "/", slot);
+        if !read_subst(&cat!(dev, "/class")).starts_with(b"0x03") {
+            continue;
+        }
+        let why = pci_why(&dev);
+        let mut m = Map::new();
+        m.insert("pci".into(), s(&slot));
+        m.insert("driver".into(), s(&pci_driver(&dev)));
+        m.insert("kind".into(), or_null(&pci_kind(&dev)));
+        m.insert("name".into(), s(&lspci_name(&slot)));
+        m.insert("node".into(), or_null(&slot_node(&slot)));
+        m.insert("available".into(), Value::Bool(why.is_empty()));
+        if !why.is_empty() {
+            m.insert("why".into(), s(&why));
+        }
+        all.push(Value::Object(m));
+    }
+    Value::Array(all)
+}
+
+/// gpu_list: every render node, for `omabox config gpu` (#156): its driver, its slot, the values
+/// that name it, and `*` on the one a headless box would render on now (render_node's choice, said
+/// without its note).
+pub fn gpu_list(ctx: &Ctx) -> Vec<u8> {
+    let usen = crate::exit::muted(|| render_node(ctx))
+        .map(|n| n.as_bytes().to_vec())
+        .unwrap_or_default();
+    let mut o = Vec::new();
+    let env = shell::env_or_empty("OMABOX_RENDER_NODE");
+    if !env.is_empty() {
+        o.extend_from_slice(&cat!(
+            "OMABOX_RENDER_NODE=",
+            env,
+            " overrides the setting here\n"
+        ));
+    }
+    o.extend_from_slice(
+        b"GPUs (* = where a headless box renders now; set one with: omabox config gpu VALUE):\n",
+    );
+    let pad = |v: &[u8], w: usize| {
+        let mut v = v.to_vec();
+        while v.len() < w {
+            v.push(b' ');
+        }
+        v
+    };
+    for n in render_globbed() {
+        if !shell::path(&n).exists() {
+            continue;
+        }
+        let d = render_driver(&n);
+        let slot = render_slot(&n);
+        let k = gpu_kind(&d);
+        let mark: &[u8] = if n == usen { b"*" } else { b" " };
+        let node = n.rsplit(|&c| c == b'/').next().unwrap_or_default();
+        let names = if k.is_empty() {
+            cat!("gpu ", slot)
+        } else {
+            cat!("gpu ", k, " or gpu ", slot)
+        };
+        let usable: &[u8] = if rw(&n) {
+            b""
+        } else {
+            b" (not usable: no access)"
+        };
+        o.extend_from_slice(&cat!(
+            mark,
+            " ",
+            pad(node, 11),
+            " ",
+            pad(&d, 8),
+            " ",
+            pad(&slot, 13),
+            " ",
+            names,
+            usable,
+            "\n"
+        ));
+    }
+    o
+}
+
+/// gpu_why_not WANT: why no usable GPU is the one WANT names (a kind or a slot), each such GPU with
+/// its reason ("0000:01:00.0: bound to vfio-pci"), or that there is none.
+pub fn gpu_why_not(want: &[u8]) -> Vec<u8> {
+    let mut why: Vec<u8> = Vec::new();
+    for name in pci_devs() {
         let dev = cat!(SYSPCI, "/", name);
         if !read_subst(&cat!(dev, "/class")).starts_with(b"0x03") {
             continue;

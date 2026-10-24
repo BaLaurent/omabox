@@ -11,8 +11,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   connected box reaches, on the host's loopback or through any of its other addresses (a docker
   bridge, a VPN), TCP and UDP; an isolated box's `--allow` refuses them. None by default. Needs `nft`
   (nftables) when set. A value that is not a list of ports refuses every `up` (exit 2) rather than
-  being ignored; `OMABOX_BASH=1 up` refuses a connected box while the list is set. Until `omabox
-  config` takes the key, write it in the file ([#355](https://github.com/diogochaves/omabox/issues/355)).
+  being ignored; `OMABOX_BASH=1 up` refuses a connected box while the list is set. Set it with
+  `omabox config protect-ports 8080,5432` (checked as `up` reads it, kept sorted; `default` removes
+  it); `omabox config` lists it, `--json` as `protect_ports`
+  ([#355](https://github.com/diogochaves/omabox/issues/355)).
 
 ### Changed
 
@@ -60,6 +62,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   "cannot tell whether box 'B' is up from this user namespace ...", exit 1, the box left running and
   listed. The bash omabox said "box 'B' down", exited 0 and removed the box's dir while it ran on.
   Scripts: run `down` outside the sandbox.
+- **`omabox config` has a sixth key, `protect-ports`**: listed after `shot-fit` (`protect-ports=`
+  when none is set), in `--json` as `protect_ports`, and named among the keys when one is unknown.
+  A bad value of it in the file is said as `up` says it and shown, not ignored. Scripts that read
+  `omabox config` line by line or its `--json` keys: expect the new one. `OMABOX_BASH=1 config` does
+  not know it.
 - **A jailed agent's `down` and `up` check whose the box is again once they hold its name's lock**,
   and a jailed `down` that finds no box cancels only its own jail's `up` of that name, not yours.
   Scripts: nothing to change.

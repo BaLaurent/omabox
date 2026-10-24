@@ -203,20 +203,25 @@ pub fn conf_protect(ctx: &crate::exit::Ctx) -> crate::exit::Res<Ports> {
     match protect_parse(&v) {
         Some(p) => Ok(p),
         None => {
-            crate::exit::say(cat!(
-                config,
-                ": protect-ports=",
-                v,
-                " is not a list of ports (PORT[,PORT...], each 1-65535): no box starts until it is one, or the line is gone (a box would reach the ports it means to keep)"
-            ));
+            crate::exit::say(protect_bad(&config, &v));
             Err(crate::exit::Exit(ctx.die_rc.unwrap_or(2)))
         }
     }
 }
 
+/// What up says of a protect-ports value V in CONFIG that is not a list of ports (`config` too).
+pub fn protect_bad(config: &[u8], v: &[u8]) -> Vec<u8> {
+    cat!(
+        config,
+        ": protect-ports=",
+        v,
+        " is not a list of ports (PORT[,PORT...], each 1-65535): no box starts until it is one, or the line is gone (a box would reach the ports it means to keep)"
+    )
+}
+
 /// `8080, 5432` as Ports: each comma-separated item with blanks (space, tab) around it trimmed; an
 /// empty item, a trailing comma or anything but digits is no list.
-fn protect_parse(v: &[u8]) -> Option<Ports> {
+pub fn protect_parse(v: &[u8]) -> Option<Ports> {
     let blank = |c: &u8| *c == b' ' || *c == b'\t';
     let mut items: Vec<&[u8]> = Vec::new();
     for it in v.split(|&c| c == b',') {

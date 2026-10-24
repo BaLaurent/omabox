@@ -13,7 +13,7 @@ fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"env" => Some("-b= --box="),
         b"which" => Some("--json"),
         b"down" => Some("-b= --box= --all --orphans"),
-        b"ls" | b"list" | b"saves" | b"--version" => Some("--json"),
+        b"ls" | b"list" | b"saves" | b"--version" | b"config" => Some("--json"),
         b"save" => Some("-b= --box= --force"),
         b"run" => Some(concat!(
             "-b= --box= -d --detach -q --print-log --replace --pass= --env-file= ",

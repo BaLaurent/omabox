@@ -5,6 +5,7 @@ pub mod calibrate;
 pub mod check;
 pub mod click;
 pub mod clip;
+pub mod config;
 pub mod cpu;
 pub mod down;
 pub mod drag;
