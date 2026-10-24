@@ -8836,7 +8836,7 @@ from them.
     3b's scroll and keys-to-box too), and
     `run -d --wait` is the Rust half's, on the settle machinery `wait` shares (settle.rs). Tests:
     t_unit_rust_handoff, t_unit_rust_parity, t_rust_parity.
-    Where the halves still differ on signals (wave 4b): (a) an INT to omabox alone while it works
+    Where the halves still differ on signals (wave 4b; 4c): (a) an INT to omabox alone while it works
     in-process ends the Rust half at once, where bash would finish the step it is in (the safe side);
     (b) a TERM to omabox alone while `record sheet` takes its frames ends both 143, but bash's
     subshell finishes the sheet after its main is gone, where the Rust half makes none (the safe
@@ -8844,7 +8844,9 @@ from them.
     once, its undo cut short, or (pending behind a code trap) picks the lowest-numbered exit code,
     where the Rust half finishes the undo and exits with the first signal's code (the safe side,
     finding 452); (d) a code trap (record stop's) runs once bash's `$(...)` in progress is over, for
-    a signal to omabox alone, where the Rust half stops after the foreground child (finding 452).
+    a signal to omabox alone, where the Rust half stops after the foreground child (finding 452);
+    (e) a TERM or HUP runs bash's EXIT trap at once, its foreground child left running, where the
+    Rust half waits for that child, bounded (~20 s at most), before the undo (finding 453).
 
 426. **A refused OMABOX_STILL_DUMP left a temporary dir behind** (2026-10-22, #324 wave 3a's review).
     settle_begin made its `mktemp -d` dir for the tool's two fifos, and an action's before snapshot
@@ -9454,6 +9456,27 @@ from them.
     t_unit_rust_parity4 ("monitor add, interactive, and group-TERM twice, the second during the
     trap": bash's trap cut short leaves the token file, the Rust half's removes it): expected
     differences.
+
+453. **A TERM or HUP undid a command's work while its foreground step still ran** (2026-10-24, #324
+    wave 4c). Bash runs its EXIT trap at once on TERM and HUP, the foreground child left running
+    (an INT waits for it), and the Rust half copied that (trap.rs's wait only for INT, or with a code
+    trap on). So `check run` took its box down while the scenario still drove it, and left the
+    scenario running after omabox had ended (it went on to fail its next step on a box gone); an
+    interactive `monitor add` sent its remove before the create had reached the box ("output not
+    found") and had to send it again; gpu's and cpu's dir went while a child still wrote into it.
+    The audit's own example, `check run` TERMed during its box's `up`, leaves no box in either half
+    (bash's down waits for the up's lock, findings 147 and 237): parity holds there, unchanged.
+    **Change** (Rust over bash): on INT, TERM and HUP the trap waits for main's foreground child,
+    bounded: 10 s, then a TERM to it (not at once: a child that is itself omabox would get it in its
+    own cleanup), 5 s, then a KILL, 5 s; then the undo, whatever is left. A TERM may so take up to
+    the step's end, at most ~20 s; nothing it started is left running. Exit codes unchanged. Seen by
+    a caller: `check run` stopped during a scenario takes that scenario's step to its end (its point
+    written) before its boxes go; `monitor add`'s remove comes once, after the create, its token
+    file then removed where bash's stayed. Tests: sig.rs's term_waits_for_the_foreground_child and
+    a_child_that_will_not_end_is_stopped (both fail on the version before: the undo saw nothing; a
+    30 s hang); t_rust_parity ("check run and TERM|HUP during its scenario"), t_unit_rust_parity4
+    ("monitor add ... group-TERM before the create reaches the box", "... group-TERM, the box's
+    create handled 6 s late"): expected differences.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

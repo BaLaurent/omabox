@@ -139,8 +139,10 @@ pub fn run_child<T>(
             }
         };
         FG_ACTIVE.store(!int_ignored, Ordering::SeqCst);
+        FG_PID.store(i32::try_from(ch.id()).unwrap_or(0), Ordering::SeqCst);
         let t = with(&mut ch);
         let st = end(&mut ch);
+        FG_PID.store(0, Ordering::SeqCst);
         FG_ACTIVE.store(false, Ordering::SeqCst);
         drop(g);
         break Ok((t, st));
@@ -190,6 +192,9 @@ fn park_while_stopping() {
 /// it waited for did not die of it.
 pub static FG_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static FG_INT: AtomicBool = AtomicBool::new(false);
+/// The pid of main's foreground child while it runs (0: none), for a signal's stop that waited
+/// for it long enough (trap.rs's foreground_over).
+pub static FG_PID: AtomicI32 = AtomicI32::new(0);
 
 /// DEFER_INT: main runs what bash runs in a `$(...)` subshell (monitor_add_window): an INT to omabox
 /// alone ends bash's main at once (its read of the substitution is cut short, 130) while the subshell,
@@ -552,6 +557,59 @@ mod signal_cases {
         assert_eq!(rc, 143, "{err}");
         assert!(err.contains("CASE undo over"), "{err}");
         assert!(!err.contains("CASE after"), "{err}");
+    }
+
+    /// A TERM to omabox alone during a foreground child (a check run's `up`): the trap waits for it,
+    /// so the undo sees what it did (bash ran its EXIT trap at once, the child left running: finding
+    /// 453); then 143.
+    #[test]
+    fn term_waits_for_the_foreground_child() {
+        let f = std::env::temp_dir().join(format!("omabox-sig-fg.{}", std::process::id()));
+        let Some(r) = in_child("term_waits_for_the_foreground_child") else {
+            super::set_main();
+            let g = f.clone();
+            let _t = crate::trap::on_exit(move || {
+                let seen = if g.exists() {
+                    "the child's file"
+                } else {
+                    "nothing"
+                };
+                eprintln!("CASE undo saw {seen}");
+            });
+            kill_at(&[(150, libc::SIGTERM)]);
+            let mut c = super::command("sh");
+            c.args(["-c", "sleep 0.5; : > \"$0\"", &f.to_string_lossy()]);
+            let _ = super::run_status(c);
+            eprintln!("CASE after the child");
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        let _ = std::fs::remove_file(&f);
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE undo saw the child's file"), "{err}");
+        assert!(!err.contains("CASE after"), "{err}");
+    }
+
+    /// A foreground child that does not end: waited for FG_GRACE[0], sent a TERM it ignores, then a
+    /// KILL; the undo runs and this ends of its signal, never hanging on it (finding 453).
+    #[test]
+    fn a_child_that_will_not_end_is_stopped() {
+        let Some(r) = in_child("a_child_that_will_not_end_is_stopped") else {
+            super::set_main();
+            let _t = crate::trap::on_exit_code(|| eprintln!("CASE undo"));
+            kill_at(&[(150, libc::SIGHUP)]);
+            let mut c = super::command("sh");
+            c.args(["-c", "trap '' TERM; exec sleep 30"]);
+            let rc = super::run_status(c);
+            eprintln!("CASE after the child {rc:?}");
+            return;
+        };
+        let t0 = std::time::Instant::now();
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 129, "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE after"), "{err}");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(8), "{err}");
     }
 
     /// monitor add's shape: a DEFER_INT step, an INT to omabox alone in it, int_deferred_end's undo

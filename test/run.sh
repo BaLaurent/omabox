@@ -5419,7 +5419,7 @@ EOF
   # the stand-in host saw; rp4_want says what else: none (no window made), closed (each one made closed
   # again by the trap's remove), kept (made and left: a monitor on workspace 9), N (that many made);
   # rp4_tok whether WAYLAND-2's class token is gone (the box read it, or made none) or kept (a box that
-  # may have yet to read it).
+  # may have yet to read it); BASH:RUST where they differ (kept:gone).
   rp4_safe() {
     local why; why=$(python3 - "$st/host.log" "${rp4_want:-}" <<'PYEOF'
 import re, sys
@@ -5454,8 +5454,10 @@ if want.isdigit() and len(made) != int(want):
 print("; ".join(bad))
 PYEOF
 )
-    local tf=$r/rt/omabox/fki/run/omabox.appid.WAYLAND-2
-    case ${rp4_tok:-} in
+    local tf=$r/rt/omabox/fki/run/omabox.appid.WAYLAND-2 tok=${rp4_tok:-}
+    # (BASH:RUST, where the halves differ on purpose; both bash's under --installed)
+    case $tok in *:*) if [ "$1" = bash ] || [ ! -x "$ROOT/build/bin/omabox" ]; then tok=${tok%%:*}; else tok=${tok#*:}; fi ;; esac
+    case $tok in
       gone) [ ! -e "$tf" ] || why+="${why:+; }its class token left" ;;
       kept) [ -e "$tf" ] || why+="${why:+; }its class token gone" ;;
     esac
@@ -5520,14 +5522,16 @@ PYEOF
   rp4_late() { rp4_imain; : > "$st/create.later"; }; rp4_pre=(rp4_late) rp4_want=closed
   rp_wrap=("$r/rp-sig" group-TERM "$st/creating")
   parity "monitor add, interactive, and group-TERM during the create: its window on 9 by its rule, then closed (finding 429)" monitor -b fki add 800x600
-  # The create still on its way to the box (hyprctl not yet connected) when the signal comes: the
-  # trap's remove gets there first ("output not found"), so it is sent again after the create: by the
-  # Rust half once the create's capture is over (held open by timeout's hyprctl, a process group of its
-  # own the signal never reaches), by bash half a second on.
+  # The create still on its way to the box (hyprctl not yet connected) when the signal comes: bash's
+  # trap's remove gets there first ("output not found"), so it sends it again half a second on. The
+  # Rust half's trap waits for the create's capture first (held open by timeout's hyprctl, a process
+  # group of its own the signal never reaches), so its one remove comes after the create (finding 453).
   rp4_arrive() { rp4_imain; echo 0.4 > "$st/create.arrive"; }; rp4_pre=(rp4_arrive) rp4_tok=gone
   rp_wrap=(env RP_LINGER=2 "$r/rp-sig" group-TERM "$st/create-sent")
+  rp_why=453 rp_bash=('state~^output remove WAYLAND-2') rp_rust=('state~^output remove WAYLAND-2')
   parity "monitor add, interactive, and group-TERM before the create reaches the box: removed after it, the token gone (finding 429)" monitor -b fki add 800x600
-  check_eq "...a remove before the create, then one after it" "remove create remove" \
+  local rp4_rm="remove create remove"; [ ! -x "$ROOT/build/bin/omabox" ] || rp4_rm="create remove"
+  check_eq "...a remove before the create, then one after it (bash); one after it (Rust)" "$rp4_rm" \
     "$(grep -oE '^output (create|remove)' "$st/hypr.log" | sed 's/output //' | paste -sd' ')"
   rp_wrap=(env RP_LINGER=2 "$r/rp-sig" group-HUP "$st/create-sent") rp4_want="" rp4_tok=""
   rp4_safe_only "monitor add, interactive, and group-HUP before the create reaches the box: its window on 9 by its rule, both ways (finding 429)" monitor -b fki add 800x600
@@ -5576,9 +5580,12 @@ PYEOF
   check_eq "...the box never got it, the remove sent twice" "0 2" \
     "$(grep -c '^output create' "$st/hypr.log" 2>/dev/null || true) $(grep -c '^output remove WAYLAND-2' "$st/hypr.log" 2>/dev/null || true)"
   rp4_tok=""
-  # (the trap's remove queued behind that create gives up at 5 s too, and is handled after it; the one
-  # sent again then finds no output: the token stays, both ways)
-  rp_wrap=(env RP_LINGER=8 "$r/rp-sig" group-TERM "$st/creating") rp4_pre=(rp4_l6) rp4_want=closed rp4_tok=kept
+  # (bash's remove queued behind that create gives up at 5 s too, and is handled after it; the one
+  # sent again then finds no output: its token stays. The Rust half's trap waits for the create's
+  # capture, which hyprctl gives up at 5 s, then sends its remove, handled after the create: ok, the
+  # token gone, finding 453.)
+  rp_wrap=(env RP_LINGER=8 "$r/rp-sig" group-TERM "$st/creating") rp4_pre=(rp4_l6) rp4_want=closed rp4_tok=kept:gone
+  rp_why=453 rp_bash=('state~omabox\.appid\.WAYLAND-2( f)?$') rp_rust=('state!~omabox\.appid\.WAYLAND-2')
   parity "monitor add, interactive, and group-TERM, the box's create handled 6 s late (finding 429)" monitor -b fki add 800x600
   # A second signal while the trap removes the output: it ends bash's there (signals are not held:
   # the window is safe by its rule), the remove already asked for; the Rust half's trap finishes.
@@ -13547,9 +13554,16 @@ EOF
     rp_wrap=(env RP_LINGER=8 "$r_sig" "$i" "$ck/o/run1.up.log")
     parity "check run and $i during its box's up (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/slow"
   done
+  # (a TERM or HUP to omabox alone: bash's EXIT trap takes the box down at once, the scenario left
+  # running to fail its point; the Rust half waits for the scenario, here 6 s (10 at most, then a TERM
+  # to it), so its point is taken, then the box goes: finding 453. The point's contents are left out:
+  # base's are the same lines.)
+  rp_ckleft_np() { (cd "$ck" && command find . -printf '%p %y\n' | LC_ALL=C sort); rp_ckwait; echo "== boxes"; (cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n'); }
   for i in TERM HUP group-INT INT; do
     rp_wrap=(env RP_LINGER=8 "$r_sig" "$i" "$ck/scen-started")
+    case $i in TERM|HUP) rp_also=rp_ckleft_np rp_why=453 rp_bash=('state!~/o/run1/whole\.') rp_rust=('state~^\./o/run1/whole\.(png|point) f$') ;; esac
     parity "check run and $i during its scenario (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/slow"
+    rp_also=rp_ckleft
   done
   # (a scenario a Ctrl-C kills: bash ends 130 at once, its boxes taken down)
   rp_wrap=(env RP_LINGER=8 "$r_sig" group-INT "$ck/o/run1.log")

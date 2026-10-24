@@ -41,6 +41,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **A TERM or HUP lets the step in progress end before omabox undoes its work** (at most ~20 s,
+  then that step is stopped): `check run` stopped during a scenario takes down its boxes once the
+  scenario's step is over, where the bash omabox took them down under it and left the scenario
+  running; nothing omabox started is left running. Exit codes unchanged.
 - **The first INT, TERM or HUP decides how omabox ends**, and what it was undoing finishes: a
   second signal no longer cuts its cleanup short, and the exit code is the first signal's (TERM then
   INT: 143; the bash omabox gave the lowest-numbered one's, 130). A signal during `record stop`

@@ -1,13 +1,13 @@
 //! bash's EXIT trap for what a command made on its way (gpu's and cpu's temporary dir, the monitor
 //! an interactive `monitor add` was making): undone when the command ends, however it ends, and on
-//! INT, TERM or HUP, the signal then raised again: bash runs its EXIT trap and dies of the signal
-//! (probed: at once for TERM and HUP, its foreground child left running; for INT once that child is
-//! over, and not at all when that child did not die of it: an INT to omabox alone). A code trap's
-//! (on_exit_code) ends with the signal's 128+N instead. The first signal decides: once its undo
-//! begins, another INT, TERM or HUP changes nothing, and the undo finishes (bash's second signal
-//! cut its trap short, or ran the lowest-numbered pending trap's code: finding 452). Nothing new
-//! starts meanwhile (sig::run_child). A signal ignored when omabox started stays ignored
-//! (sig::catch).
+//! INT, TERM or HUP, the signal then raised again, as bash dies of it after its EXIT trap. A code
+//! trap's (on_exit_code) ends with the signal's 128+N instead. Before the undo, main's foreground
+//! child is waited for, bounded (foreground_over: bash ran its EXIT trap at once on TERM and HUP,
+//! the child left running, finding 453); an INT to omabox alone that this child outlives lets the
+//! command go on, as bash does. The first signal decides: once its undo begins, another INT, TERM
+//! or HUP changes nothing, and the undo finishes (bash's second signal cut its trap short, or ran
+//! the lowest-numbered pending trap's code: finding 452). Nothing new starts meanwhile
+//! (sig::run_child). A signal ignored when omabox started stays ignored (sig::catch).
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -15,8 +15,6 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 type Undo = Box<dyn FnOnce() + Send>;
 
 static TRAPS: Mutex<Vec<(u64, Undo)>> = Mutex::new(Vec::new());
-/// Traps that wait for main's foreground child whatever the signal (on_exit_code's).
-static FG_TRAPS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static NEXT: AtomicU64 = AtomicU64::new(1);
 /// The signal thread holds sig::FOREGROUND while it undoes (an INT's, which waited for that child).
 static FG_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -43,8 +41,7 @@ pub fn on_exit(f: impl FnOnce() + Send + 'static) -> Trap {
 /// whatever it died of, then this process exits with that code (not of the signal).
 pub fn on_exit_code(f: impl FnOnce() + Send + 'static) -> Trap {
     CODE_TRAPS.fetch_add(1, Ordering::SeqCst);
-    FG_TRAPS.fetch_add(1, Ordering::SeqCst);
-    let c = (CodeCount, FgCount);
+    let c = CodeCount;
     on_exit(move || {
         drop(c);
         f();
@@ -87,15 +84,6 @@ struct CodeCount;
 impl Drop for CodeCount {
     fn drop(&mut self) {
         CODE_TRAPS.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-/// FG_TRAPS' share of one on_exit_code trap, given back when it is done with or dropped.
-struct FgCount;
-
-impl Drop for FgCount {
-    fn drop(&mut self) {
-        FG_TRAPS.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -161,6 +149,51 @@ extern "C" fn on_signal(sig: libc::c_int) {
     }
 }
 
+/// How long a signal's stop waits for main's foreground child, then once more after a TERM to it,
+/// then after a KILL (each step's end shortened in the unit tests).
+#[cfg(not(test))]
+const FG_GRACE: [std::time::Duration; 3] = [
+    std::time::Duration::from_secs(10),
+    std::time::Duration::from_secs(5),
+    std::time::Duration::from_secs(5),
+];
+#[cfg(test)]
+const FG_GRACE: [std::time::Duration; 3] = [
+    std::time::Duration::from_millis(1000),
+    std::time::Duration::from_millis(500),
+    std::time::Duration::from_millis(500),
+];
+
+/// Main's foreground child over (sig::FOREGROUND held), so the undo comes after what that step did
+/// (check run's down after its box's up; gpu's and cpu's dir removed once nothing writes to it): at
+/// most FG_GRACE[0], then the child is sent a TERM (not at once: a child that is itself omabox would
+/// get the signal in its own cleanup), FG_GRACE[1] more, then a KILL. None when even then main has not
+/// let go (what the child left running holds its pipes): the undo goes on regardless (finding 453).
+fn foreground_over() -> Option<std::sync::MutexGuard<'static, ()>> {
+    for (i, grace) in FG_GRACE.iter().enumerate() {
+        let end = std::time::Instant::now() + *grace;
+        loop {
+            match crate::sig::FOREGROUND.try_lock() {
+                Ok(g) => return Some(g),
+                Err(std::sync::TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => {}
+            }
+            if std::time::Instant::now() >= end {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let pid = crate::sig::FG_PID.load(Ordering::SeqCst);
+        if let (true, Some(s)) = (pid > 0, [libc::SIGTERM, libc::SIGKILL].get(i)) {
+            // SAFETY: a signal to main's foreground child (run_child clears FG_PID once it reaps it).
+            unsafe {
+                libc::kill(pid, *s);
+            }
+        }
+    }
+    None
+}
+
 /// The handlers and the thread that undoes on a signal, once.
 fn arm() {
     if SIG_W.load(Ordering::SeqCst) >= 0 {
@@ -192,8 +225,13 @@ fn arm() {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
             };
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
-            let wait_fg = sig == libc::SIGINT || FG_TRAPS.load(Ordering::SeqCst) > 0;
-            let fg = wait_fg.then(lock_fg);
+            // (an INT that may yet let main go on waits for the child as long as it runs: its end
+            // says; every other signal stops the command, the child waited for a bounded time)
+            let fg = if sig == libc::SIGINT && busy && !code {
+                Some(lock_fg())
+            } else {
+                foreground_over()
+            };
             // An INT to omabox alone while a child ran that did not die of it: bash goes on (probed:
             // `kill -INT` of the script during a sleep, the rest of it ran, its EXIT trap at its end).
             // In a DEFER_INT step (bash's `$(...)` subshell) only the first: bash's main has ended of
