@@ -6198,7 +6198,7 @@ t_unit_rust_front() {
     parity "broker: -b N ls: the front's refusal first" -b rpf ls
     parity "broker: shot --help: the front's help first" shot --help
     # (every internal word refused through the broker, whatever the half has)
-    for c in _reap _rust _rust-jq _rust-opts _rust-jail _ptr-release; do parity "broker: $c refused" "$c" x; done
+    for c in _reap _rust _rust-jq _rust-opts _rust-jail _ptr-release _enter; do parity "broker: $c refused" "$c" x; done
     # (no state: the throwaway's name holds a pid)
     rp_snap=0 parity "broker: run from a jail with no box: run's 125" run -- true
     # (protect-ports: bash's broker knew no such key; the binary's names why it refuses it)

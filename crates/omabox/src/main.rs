@@ -79,8 +79,12 @@ fn main() -> ExitCode {
         }
     }
     // The native box entry for a command line script runs (exec.rs's box_pty): before anything else,
-    // as nsenter was (one thread, nothing caught).
-    if std::env::args_os().nth(1).is_some_and(|a| a == "_enter") {
+    // as nsenter was (one thread, nothing caught). Never for a broker's caller: its words go through
+    // broker_check, which refuses `_enter` (S9); broker_init takes OMABOX_BROKER_PEER out of the
+    // environment, so the broker's own box_pty children still come here.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "_enter")
+        && std::env::var_os("OMABOX_BROKER_PEER").is_none_or(|p| p.is_empty())
+    {
         let rest: Vec<OsString> = std::env::args_os().skip(2).collect();
         return enter::main(&rest);
     }

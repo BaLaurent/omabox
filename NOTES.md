@@ -9974,7 +9974,10 @@ from them.
     `_` word, config's reads, a caller in no jail, a jail without the network, a caller gone; the
     protect-ports refusal an expected difference on the direct leg), t_unit_jail_policy (each policy
     and mounts fixture read both ways through `_rust-jail`), broker_side.rs's unit tests, t_jail (the
-    real ai-jail, its broker running the binary straight).
+    real ai-jail, its broker running the binary straight). The native entry's `_enter` (finding 490)
+    was dispatched before the front, so a broker running the binary straight ran a caller's `_enter`
+    unchecked (found in review, never released: the broker unit still runs bash's front); it is now
+    taken first only when no broker caller is set, and `_enter` joined the refused words' cases.
 
 503. **A jailed caller's omabox in the Rust half, its values off the relay's command line** (2026-10-24,
     #324 wave 6-front, A4). Called straight inside ai-jail (no user namespace there, the broker's
