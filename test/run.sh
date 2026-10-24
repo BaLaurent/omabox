@@ -5820,6 +5820,8 @@ t_unit_rust_parity5() {
   parity "up --desk-shell of a box up already" up rpu --desk-shell --plugin "$r/pl/good"
   rp_wrap=(setpriv --no-new-privs)
   parity "up from a no_new_privs process, of a box up already" up rpu
+  rp_prep=""
+  parity "up --net isolated from a no_new_privs process, no box up: refused" up rpn --net isolated --no-shell
   rp_wrap=() rp_prep=""
   kill "$u1" 2>/dev/null
   rm -rf "$r/rt/omabox/rpu"

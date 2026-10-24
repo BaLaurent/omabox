@@ -1050,7 +1050,7 @@ pub fn confirm_conf() -> Vec<u8> {
 
 /// `grep -q '^NoNewPrivs:[[:space:]]*1$' /proc/self/status`.
 fn no_new_privs() -> bool {
-    procfs::status(b"self", "NoNewPrivs", 1).is_some_and(|v| v == b"1")
+    procfs::status(b"self", "NoNewPrivs", 2).is_some_and(|v| v == b"1")
 }
 
 /// `unshare -U true`: whether this process may make a user namespace (a child tries; nothing of
