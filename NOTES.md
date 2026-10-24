@@ -9717,8 +9717,20 @@ from them.
     fallback): once `down` and `up` hold the lock, a jailed caller's box is checked again, and one
     that is not the jail's is refused ("box 'B' is not this jail's: ..."). A jailed `down` that finds
     no box writes its jail under its `.down-` marker's time, and only an `up` of that jail is
-    cancelled by it; the user's own `down` cancels any. Tests: t_unit_down_jail_race (fails on the
+    cancelled by it; the user's own `down` cancels any, and a jailed one never writes over
+    that marker. Tests: t_unit_down_jail_race (fails on the
     bash half: the box taken down, the box told, the up cancelled), up.rs's down_markers.
+
+473. **`down` of a box this user namespace cannot read said it down and left it running** (2026-10-24,
+    #324 wave 5b). From another user namespace (a sandbox's, `unshare -Ur`), box_pid cannot read the
+    box's PID 1's namespace and answers "cannot tell" (status 3), which `up` and every box command
+    stop on (#87). kill_box took that for no pid at all: `down` killed nothing, removed the box's dir
+    and HOME, said "box 'B' down" and exited 0, while the box ran on with nothing left to find it by.
+    **Fix** (the Rust half; bash's down keeps the bug, a fallback): `down` refuses such a box in up's
+    words ("cannot tell whether box 'B' is up from this user namespace (a sandbox's?): run omabox
+    outside it"), exit 1, and leaves it as it is; `down --all` goes on to the next box (CHANGELOG).
+    Tests: t_other_userns (a down from another user namespace), t_unit_rust_parity5 ("down of a box
+    this namespace cannot read", an expected difference: bash's said it down).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

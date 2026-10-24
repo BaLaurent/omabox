@@ -56,6 +56,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **`down` of a box it cannot see from this user namespace** (a sandbox's) **refuses**, as `up` does:
+  "cannot tell whether box 'B' is up from this user namespace ...", exit 1, the box left running and
+  listed. The bash omabox said "box 'B' down", exited 0 and removed the box's dir while it ran on.
+  Scripts: run `down` outside the sandbox.
 - **A jailed agent's `down` and `up` check whose the box is again once they hold its name's lock**,
   and a jailed `down` that finds no box cancels only its own jail's `up` of that name, not yours.
   Scripts: nothing to change.

@@ -6000,6 +6000,18 @@ t_unit_rust_parity5() {
   parity "down of an idle note's name: the note goes" down gone
   rp5b_expired() { rp5b_fix; echo 30m > "$b/rt/omabox/.expired-gone"; }
   rp_prep=rp5b_expired; parity "...with the note there" down gone; rp_prep=rp5b_fix
+  # A box whose PID 1 this user namespace cannot read (a non-dumpable process: its ns unreadable):
+  # bash's down said it down and removed its dir and HOME, its PID 1 left running; the Rust half
+  # refuses, as up does (finding 473).
+  cp /usr/bin/sleep "$b/nd"; chmod 111 "$b/nd"
+  rp5b_unk() {
+    local p; rp5b_fix; p=$( ("$b/nd" 600 >/dev/null 2>&1 & echo $!) )
+    echo "$p" >> "$b/kids"; echo "unk $p" >> "$b/pid1s"
+    rp5b_box unk; echo "{\"child-pid\": $p}" > "$b/rt/omabox/unk/info.json"
+  }
+  rp_why=473 rp_bash=(rc=0 "err=omabox: box 'unk' down" 'state!~\./omabox/unk') \
+    rp_rust=(rc=1 "err=omabox: cannot tell whether box 'unk' is up from this user namespace (a sandbox's?): run omabox outside it" 'state~\./omabox/(\.lock-)?unk')
+  rp_prep=rp5b_unk; parity "down of a box this namespace cannot read: refused, its PID 1 and dir kept" down unk; rp_prep=rp5b_fix
   rp5b_inter() { rp5b_fix; rp5b_up inter '{mode: "interactive"}'; }
   rp_prep=rp5b_inter; parity "down of an interactive box (no host session: the submap left alone, unsaid)" down inter; rp_prep=rp5b_fix
   parity "down --all" down --all
@@ -11610,6 +11622,11 @@ t_other_userns() {
   check_match "up from another user namespace stops: it cannot tell" "cannot tell whether box '$B' is up from this user namespace" "$out"
   check_eq "...with an error" 1 "$rc"
   check_eq "...and the box is the same one, still up" "$created up" "$(jq -r .created "$D/box.json" 2>&1) $(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
+  check "...which run still reaches" ob run -b "$B" -- true
+  # A down from there (finding 473): refused the same way, the box left as it was.
+  rc=0; out=$(unshare -Ur "$CLI" down "$B" 2>&1) || rc=$?
+  check_eq "down from another user namespace stops too, with an error" "1 omabox: cannot tell whether box '$B' is up from this user namespace (a sandbox's?): run omabox outside it" "$rc $out"
+  check_eq "...the box the same one, still up" "$created up" "$(jq -r .created "$D/box.json" 2>&1) $(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
   check "...which run still reaches" ob run -b "$B" -- true
   check "down" ob down "$B"
 }

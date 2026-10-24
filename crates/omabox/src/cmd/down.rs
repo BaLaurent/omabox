@@ -144,6 +144,17 @@ pub fn down_one(ctx: &mut Ctx, given: &[u8], cond: &DownIf) -> Res<bool> {
     if cond.agent_gone && crate::boxes::agent_alive(&ctx.d) {
         return Ok(true);
     }
+    // A box whose PID 1 this user namespace cannot read (a sandbox's call) is left as it is, said as
+    // up says it: bash's kill_box took it for no box, removed its dir and said it down while its
+    // PID 1 ran on (finding 473).
+    if matches!(crate::boxes::box_pid(&ctx.d), crate::boxes::BoxPid::Unknown) {
+        say(cat!(
+            "cannot tell whether box '",
+            ctx.name,
+            "' is up from this user namespace (a sandbox's?): run omabox outside it"
+        ));
+        return Ok(false);
+    }
     // Its peek windows, one per monitor shown (#164).
     for p in crate::marks::peek_pids(ctx) {
         signal(&p, libc::SIGTERM);
