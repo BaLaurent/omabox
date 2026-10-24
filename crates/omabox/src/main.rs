@@ -12,6 +12,7 @@ mod deskwin;
 mod exec;
 mod exit;
 mod gpu;
+mod guard;
 mod host;
 mod hypr;
 mod input;
@@ -134,6 +135,13 @@ fn main() -> ExitCode {
         Some("saves") => Some(cmd::save::saves),
         Some("version" | "-V" | "--version") => Some(cmd::version::run),
         Some("config") => Some(cmd::config::run),
+        Some("brief") => Some(cmd::brief::run),
+        Some("host") => Some(cmd::host::run),
+        Some("broker") => Some(cmd::broker::run),
+        Some("guard") => Some(cmd::guard::run),
+        Some("setup") => Some(cmd::setup::run),
+        Some("reload") => Some(cmd::reload::run),
+        Some("restart-shell") => Some(cmd::restart_shell::run),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.
@@ -183,6 +191,8 @@ fn main() -> ExitCode {
                 .chain(shelljson::JQ_INLINE)
                 .chain(cmd::ls::JQ_INLINE)
                 .chain(cmd::down::JQ_INLINE)
+                .chain(cmd::brief::JQ_INLINE)
+                .chain(guard::JQ_INLINE)
             {
                 print!("{p}\0");
             }

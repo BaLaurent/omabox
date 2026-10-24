@@ -6233,6 +6233,138 @@ protect-ports=')
   rp_why=480 rp_bash=('err=' 'out!~protect-ports') rp_rust=('err~protect-ports=8080;rm is not a list of ports .*no box starts until it is one' 'out~^protect-ports=8080;rm$')
   parity "config: a bad protect-ports said as up says it, shown as it is" config
   rp_prep=rp5c_fix
+  # brief: refusals, then the brief of no box up (wave 5c's box up is t_rust_parity_up's).
+  parity "brief --bogus" brief --bogus
+  parity "brief x" brief x
+  parity "brief -b with no value" brief -b
+  parity "brief: no box up, the brief for one the subagent starts" brief -b nobox
+  # reload, restart-shell: their refusals, and no box up.
+  for i in reload restart-shell; do
+    parity "$i --bogus" "$i" --bogus
+    parity "$i: two names" "$i" a b
+    parity "$i -b with no value" "$i" -b
+    parity "$i of no box up" "$i" -b nobox
+    parity "$i --help" "$i" --help
+  done
+  # host, on the stand-in session: refusals, then commands run on it with what host gives them.
+  parity "host: nothing to run" host
+  parity "host --: nothing to run" host --
+  parity "host: no Hyprland session" host -- true
+  rp5c_one() { rp5c_fix; echo '[{"instance":"rp-sig","wl_socket":"wayland-rp"}]' > "$ch/instances.json"; printf 'DISPLAY=:7\nQT_QPA_PLATFORMTHEME=gtk3\nGH_BROWSER=firefox\nBROWSER=$'"'"'/opt/my browser'"'"'\n' > "$ch/sysenv"; }
+  rp5c_two() { rp5c_one; echo '[{"instance":"a","wl_socket":"wayland-rp"},{"instance":"b","wl_socket":"wayland-rp"}]' > "$ch/instances.json"; }
+  rp5c_nosock() { rp5c_one; echo '[{"instance":"rp-sig","wl_socket":"wayland-gone"}]' > "$ch/instances.json"; }
+  rp_prep=rp5c_two; parity "host: two sessions, none named" host -- true
+  rp_prep=rp5c_nosock; parity "host: the session's socket gone" host -- true
+  rp_prep=rp5c_one
+  local hsh='echo "$WAYLAND_DISPLAY $HYPRLAND_INSTANCE_SIGNATURE ${DISPLAY-unset} ${QT_QPA_PLATFORMTHEME-unset} ${BROWSER-unset} ${GH_BROWSER-unset} ${QT_FORCE_STDERR_LOGGING-unset}"; echo "$PATH" | tr : "\n" | grep -c share/guard'
+  parity "host: the session's display, the user manager's DISPLAY and Qt theme" host -- sh -c "$hsh"
+  rp_env=("${rp5c_env[@]}" WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-guard QT_FORCE_STDERR_LOGGING=1
+    BROWSER="$ROOT/share/guard/xdg-open" GH_BROWSER=/x/share/guard/xdg-open PATH="$ROOT/share/guard:/y/share/guard/:$cst:$PATH")
+  parity "host from a guarded shell: the guard's PATH and browsers given way" host -- sh -c "$hsh"
+  rp_env=("${rp5c_env[@]}" BROWSER=firefox)
+  parity "host: a BROWSER the guard did not set stays" host -- sh -c "$hsh"
+  rp_env=("${rp5c_env[@]}")
+  parity "host: a long argument and NAME=value cut in the record" host -- env "PATH=$(printf '/opt/long/dir/bin:%.0s' {1..10})$PATH" true "$(printf 'a%.0s' {1..130})"
+  parity "host: its exit code" host -- sh -c 'exit 7'
+  rp_why=481 rp_bash=('err~^omabox: on your real desktop: rp-no-such-cmd$' 'err~: exec: rp-no-such-cmd: not found$') rp_rust=('err~^omabox: on your real desktop: rp-no-such-cmd$' 'err~^omabox: host: cannot run rp-no-such-cmd: not found in PATH$')
+  parity "host: a command not there, in omabox's words (finding 481)" host -- rp-no-such-cmd
+  rp_prep=rp5c_fix
+  # broker: refusals; on, its state and off, through the stand-in systemctl.
+  parity "broker maybe" broker maybe
+  parity "broker on off" broker on off
+  parity "broker --help" broker --help
+  parity "broker: off" broker
+  rp_env=("${rp5c_env[@]}" RP5C_ACTIVE=0); parity "broker: on" broker; rp_env=("${rp5c_env[@]}")
+  parity "broker on: the units written, the socket enabled" broker on
+  rp_env=("${rp5c_env[@]}" OMABOX_BROKER_SOCK=/run/rp/elsewhere/sock); parity "broker on: OMABOX_BROKER_SOCK in the recipe" broker on; rp_env=("${rp5c_env[@]}")
+  rp5c_units() { rp5c_fix; mkdir -p "$ch/.config/systemd/user"; : > "$ch/.config/systemd/user/omabox-broker.socket"; : > "$ch/.config/systemd/user/omabox-broker.service"; }
+  rp_prep=rp5c_units; parity "broker off: the units gone" broker off; rp_prep=rp5c_fix
+  # guard: refusals, state, on and off for each agent, a settings file broken, linked or from a
+  # checkout that is gone; Codex's config in each form the guard edits or refuses.
+  parity "guard maybe" guard maybe
+  parity "guard on vim" guard on vim
+  parity "guard on claude x" guard on claude x
+  parity "guard --help" guard --help
+  parity "guard: no agent's settings, off, what on does" guard
+  parity "guard on: Claude Code" guard on
+  rp5c_codex() { rp5c_fix; mkdir -p "$ch/.codex"; printf 'model = "x"\n\n[features]\nhooks = true\n' > "$ch/.codex/config.toml"
+    echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"herdr.sh session","timeout":10}]}]}}' > "$ch/.codex/hooks.json"; }
+  rp_prep=rp5c_codex
+  parity "guard on: both, Codex's hook beside another" guard on
+  parity "guard on codex" guard on codex
+  parity "guard: Codex off, Claude Code off" guard
+  # (each setup step on the test's HOME, as the cases run)
+  rp5c_run() { env "${rp5c_env[@]}" "$CLI" "$@" >/dev/null 2>&1; }
+  rp5c_on() { rp5c_codex; rp5c_run guard on; rm -f "$ch"/.claude/*.bak-* "$ch"/.codex/*.bak-*; }
+  rp_prep=rp5c_on
+  parity "guard: both on" guard
+  parity "guard on: already" guard on
+  parity "guard off: both, the files as they were" guard off
+  parity "guard off claude" guard off claude
+  rp5c_old() { rp5c_on; jq --arg c 'echo x omabox-guard PATH="/nonexistent/co/share/guard:$PATH"' '.hooks.SessionStart[-1].hooks[0].command = $c' "$ch/.claude/settings.json" > "$ch/s.new" && mv "$ch/s.new" "$ch/.claude/settings.json"
+    jq '.hooks.SessionStart |= map(select(any(.hooks[]; .command | contains("omabox-guard")) | not))' "$ch/.codex/hooks.json" > "$ch/h.new" && mv "$ch/h.new" "$ch/.codex/hooks.json"; }
+  rp_prep=rp5c_old
+  parity "guard: outdated, from a checkout that is gone; Codex's hook missing" guard
+  parity "guard on: both renewed" guard on
+  rp5c_broken() { rp5c_codex; mkdir -p "$ch/.claude"; echo '{"broken":' > "$ch/.claude/settings.json"; echo '{"hooks":' > "$ch/.codex/hooks.json"; }
+  rp_prep=rp5c_broken
+  parity "guard: settings that are not JSON, each said for its agent" guard
+  parity "guard on claude: refused, untouched" guard on claude
+  parity "guard on codex: refused before anything is written" guard on codex
+  rp5c_link() { rp5c_on; mv "$ch/.claude/settings.json" "$ch/real.json"; ln -s "$ch/real.json" "$ch/.claude/settings.json"; }
+  rp_prep=rp5c_link; parity "guard off: a linked settings file stays a link" guard off claude
+  rp5c_alt() { rp5c_fix; mkdir -p "$ch/alt"; }
+  rp_prep=rp5c_alt rp_env=("${rp5c_env[@]}" CLAUDE_CONFIG_DIR="$ch/alt"); parity "guard on: CLAUDE_CONFIG_DIR" guard on claude; rp_env=("${rp5c_env[@]}")
+  rp5c_toml() { rp5c_fix; mkdir -p "$ch/.codex"; printf '%s\n' "$1" > "$ch/.codex/config.toml"; }
+  rp5c_inline() { rp5c_toml 'shell_environment_policy = { inherit = "core" }'; }
+  rp5c_table() { rp5c_toml $'[shell_environment_policy]\ninherit = "core"'; }
+  rp5c_clash() { rp5c_toml $'[shell_environment_policy.set]\nDISPLAY = ":0"'; }
+  rp5c_bad() { rp5c_toml 'x = '; }
+  rp5c_inside() { rp5c_on; printf '%s\n' "" "# >>> omabox guard" "[shell_environment_policy.set]" 'MINE = "1"' "# <<< omabox guard" >> "$ch/.codex/config.toml"; }
+  for i in inline table clash bad inside; do
+    rp_prep=rp5c_$i; parity "guard on codex: a config.toml ($i)" guard on codex; parity "guard off codex: ($i)" guard off codex; parity "guard: ($i)" guard
+  done
+  rp_prep=rp5c_fix
+  # guard exec: what the agent gets.
+  local gsh='echo "$WAYLAND_DISPLAY $HYPRLAND_INSTANCE_SIGNATURE [${DISPLAY-unset}] [${QT_QPA_PLATFORMTHEME-unset}] $QT_FORCE_STDERR_LOGGING $BROWSER $GH_BROWSER ${PATH%%:*}"; echo "${OMABOX_SESSION:+session} $([ "$OMABOX_AGENT_PID" = $$ ] && echo self || echo "$OMABOX_AGENT_PID")"; prlimit --pid $$ --core -o SOFT --noheadings | tr -d " "'
+  parity "guard exec: nothing to run" guard exec
+  parity "guard exec --: nothing to run" guard exec --
+  parity "guard exec: the guard, a session of its own, a core limit of 1 byte" guard exec -- sh -c "$gsh"
+  rp_env=("${rp5c_env[@]}" OMABOX_SESSION=gsess OMABOX_AGENT_PID=999999999)
+  parity "guard exec in a session whose agent is not above it: this one the agent" guard exec sh -c "$gsh"
+  rp_env=("${rp5c_env[@]}" OMABOX_SESSION=gsess OMABOX_AGENT_PID=$$)
+  parity "guard exec under the session's agent: kept" guard exec -- sh -c "$gsh"
+  rp_env=("${rp5c_env[@]}")
+  rp_why=481 rp_bash=('err~: exec: rp-no-such-cmd: not found$') rp_rust=('err=omabox: guard exec: cannot run rp-no-such-cmd: not found in PATH')
+  parity "guard exec: a command not there, in omabox's words (finding 481)" guard exec -- rp-no-such-cmd
+  # setup: refusals, a setup and its undoing, the feedback skill, an outdated link; no terminal, so
+  # nothing asked. Then --aquamarine on build tools that fail at once (nothing cloned or built).
+  parity "setup --nope" setup --nope
+  parity "setup --force alone" setup --force
+  parity "setup --aquamarine --remove" setup --aquamarine --remove
+  parity "setup --feedback-skill --remove" setup --feedback-skill --remove
+  parity "setup --help" setup --help
+  parity "setup: a clean HOME" setup
+  rp5c_agents() { rp5c_fix; mkdir -p "$ch/.codex" "$ch/.pi/agent" "$ch/.config/omarchy"; echo '{"bar":{"layout":{"right":[{"id":"x.y"}]}}}' > "$ch/.config/omarchy/shell.json"; }
+  rp_prep=rp5c_agents
+  parity "setup: Codex and pi there, the guard offered" setup
+  parity "setup --feedback-skill" setup --feedback-skill
+  parity "setup --no-feedback-skill" setup --no-feedback-skill
+  rp5c_set() { rp5c_agents; rp5c_run setup --feedback-skill; rp5c_run guard on claude; rm -f "$ch"/.claude/*.bak-*
+    ln -sfn /old/checkout/skill-feedback "$ch/.codex/skills/omabox-feedback"; echo '{"bar":{"layout":{"right":[{"id":"chaves.omabox"}]}}}' > "$ch/.config/omarchy/shell.json"
+    mkdir -p "$ch/.config/systemd/user" "$ch/.local/share/omabox/aquamarine/lib" "$ch/.cache/omabox-aquamarine" "$ch/.local/share/omabox/saves/s1"
+    : > "$ch/.config/systemd/user/omabox-broker.socket"; echo bar-icon=auto > "$ch/.config/omabox/config"; }
+  rp_prep=rp5c_set
+  parity "setup again: the widget on, the feedback link refreshed, the guard half on" setup
+  parity "setup --remove: links, guard, broker, widget and the build gone; settings and saves kept" setup --remove
+  rp5c_moved() { rp5c_set; ln -sfn /elsewhere "$ch/.claude/skills/omabox"; rm -rf "$ch/.agents/skills/omabox"; mkdir -p "$ch/.agents/skills/omabox"; }
+  rp_prep=rp5c_moved
+  parity "setup --remove: a link moved elsewhere and a real dir kept" setup --remove
+  parity "setup: a real dir where a link goes, refused" setup
+  rp_prep=rp5c_fix rp_env=("${rp5c_env[@]}" PATH="$cbt:$cst:$PATH")
+  parity "setup --aquamarine: this omabox's build, or one that stops at the clone" setup --aquamarine
+  parity "setup --aquamarine --force: stops at the clone" setup --aquamarine --force
+  rp_env=("${rp5c_env[@]}")
   rp_prep="" rp_sed="" rp_also="" rp_mask="" rp_env=() rp_snap=1
   [ ! -f "$b/kids" ] || xargs -r kill -KILL < "$b/kids" 2>/dev/null
 }
@@ -13900,6 +14032,13 @@ t_rust_parity_up() {
   parity "saves --json" saves --json
   rp_sed=""; rpu_resave() { rpu_nosave; ob save rp5b-save -b "$U" >/dev/null 2>&1; }
   rp_prep=rpu_resave; parity "saves rm" saves rm rp5b-save
+  # Wave 5c on the box up: brief names it, reload gives its Hyprland the config again (unchanged: not
+  # written), both ways. restart-shell on a box with its shell, below.
+  rp_env=(HOME=$h) rp_prep="" rp_sed="" rp_check="" rp_also=""
+  parity "brief -b: the box up, no windows" brief -b "$U"
+  parity "reload: the box up" reload -b "$U"
+  parity "reload by its name" reload "$U"
+  parity "restart-shell -b with a name too" restart-shell -b "$U" x
   rp_env=() rp_prep=""
   rpu_up() { ob up "$U" --no-shell --net isolated >/dev/null 2>&1; bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$U" > "$r/rpu-pid1"; }
   # (its PID 1 recorded before each side's down, in rpu_up: gone after it, or not)
@@ -13907,6 +14046,17 @@ t_rust_parity_up() {
     echo "== HOME $(test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$U" && echo there || echo gone)"
     echo "== PID 1 $(kill -0 "$(cat "$r/rpu-pid1" 2>/dev/null)" 2>/dev/null && echo up || echo gone)"; }
   rp_prep=rpu_up rp_also=rpu_gone; parity "down of the box up" down "$U"
+  rpu_down
+  # restart-shell (wave 5c) on a box with its shell: each side restarts it, then brief and reload see
+  # the box as it is after.
+  rp_prep="" rp_also="" rp_env=(HOME=$h)
+  if HOME=$h ob up "$U" --net isolated >/dev/null 2>&1; then
+    parity "restart-shell: the box's shell restarted" restart-shell -b "$U"
+    parity "brief -b: the box with its bar" brief -b "$U"
+    parity "reload: the box with its shell" reload -b "$U"
+  else
+    no "up of a box with its shell for restart-shell's parity"
+  fi
   rpu_down
   rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/ rp_check="" rp_env=()
 }

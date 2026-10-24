@@ -3,7 +3,7 @@
 //! (share/passthrough.lua), installed with hyprctl eval: runtime only, never in the user's config.
 
 use crate::cat;
-use crate::exit::{Ctx, Res, say};
+use crate::exit::{Ctx, Exit, Res, say};
 use crate::jq::{self, Args};
 use crate::shell;
 use std::ffi::OsStr;
@@ -263,5 +263,187 @@ impl<'a> HostSilent<'a> {
     /// share/passthrough.lua on the host (install_passthrough).
     pub fn passthrough(&self) -> Res<()> {
         install_passthrough(self.ctx)
+    }
+}
+
+/// The user's real desktop, reached because the user asked for it (`omabox host -- CMD`, finding
+/// 67): S8's one exception. Nothing else in omabox runs a command there unsilenced (HostSilent only
+/// starts a box's window, silent); a HostAsked is made only by `host`, whose caller is the user's
+/// explicit request, and all it can do is hand the whole session over to that one command.
+pub struct HostAsked {
+    sig: Vec<u8>,
+    wl: Vec<u8>,
+}
+
+impl HostAsked {
+    /// The session as omabox finds it (host_session), for a command the user asked to run there.
+    pub fn user_asked(ctx: &Ctx) -> Res<HostAsked> {
+        let (sig, wl) = host_session_die(ctx)?;
+        Ok(HostAsked { sig, wl })
+    }
+
+    /// ARGV run in this process's place on the session (`exec "$@"`): DISPLAY and the Qt theme as
+    /// the user manager has them (uwsm exports the session there), the caller's PATH without the
+    /// guard's, Qt's logging as usual, the guard's browser stand-in (finding 92, any checkout's)
+    /// given way to the user manager's value or none, cores as usual. Said first, every argument (a
+    /// long one cut, #150), so the exception is on the record. Returns only when ARGV cannot run.
+    pub fn exec(self, ctx: &Ctx, argv: &[Vec<u8>]) -> Res<()> {
+        use std::os::unix::process::CommandExt;
+        let Some(prog) = argv.first() else {
+            return Err(ctx.die("host: nothing to run (omabox host -- CMD ...)"));
+        };
+        let sysenv = {
+            let mut c = crate::sig::command("systemctl");
+            c.args(["--user", "show-environment"])
+                .stdin(Stdio::inherit())
+                .stderr(Stdio::null());
+            match crate::sig::run_output(c) {
+                Ok((0, o)) => shell::subst(&o),
+                _ => Vec::new(),
+            }
+        };
+        let mut c = crate::sig::command(OsStr::from_bytes(prog));
+        c.args(argv[1..].iter().map(|a| OsStr::from_bytes(a)));
+        for v in ["DISPLAY", "QT_QPA_PLATFORMTHEME"] {
+            let val = sysenv_value(&sysenv, v);
+            let tame = !val.is_empty()
+                && val
+                    .iter()
+                    .all(|&c| c.is_ascii_alphanumeric() || matches!(c, b':' | b'.' | b'_' | b'-'));
+            if tame {
+                c.env(v, OsStr::from_bytes(&val));
+            } else {
+                c.env_remove(v);
+            }
+        }
+        let name = self.wl.rsplit(|&c| c == b'/').next().unwrap_or_default();
+        c.env("WAYLAND_DISPLAY", OsStr::from_bytes(name))
+            .env("HYPRLAND_INSTANCE_SIGNATURE", OsStr::from_bytes(&self.sig))
+            .env("PATH", OsStr::from_bytes(&crate::exec::caller_path(false)))
+            .env_remove("QT_FORCE_STDERR_LOGGING");
+        // A BROWSER the guard did not set stays: Omarchy sets it in the shell, not the user
+        // manager. systemctl prints a value with spaces or shell characters quoted, as $'...': not
+        // taken as it is.
+        for v in ["BROWSER", "GH_BROWSER"] {
+            if !shell::env_or_empty(v).ends_with(b"/share/guard/xdg-open") {
+                continue;
+            }
+            let val = sysenv_value(&sysenv, v);
+            if val.is_empty() || val.ends_with(b"/share/guard/xdg-open") || val.starts_with(b"$'") {
+                c.env_remove(v);
+            } else {
+                c.env(v, OsStr::from_bytes(&val));
+            }
+        }
+        // (`ulimit -Sc "$(ulimit -Hc)"`)
+        let mut lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: lim is ours, a valid rlimit for both calls.
+        unsafe {
+            if libc::getrlimit(libc::RLIMIT_CORE, &mut lim) == 0 {
+                lim.rlim_cur = lim.rlim_max;
+                libc::setrlimit(libc::RLIMIT_CORE, &lim);
+            }
+        }
+        say(cat!(
+            "on your real desktop: ",
+            shell::strip_nl(&host_record(argv))
+        ));
+        let err = c.exec();
+        let (why, rc) = crate::exec::exec_failed(prog, &err);
+        say(cat!("host: cannot run ", prog, ": ", why));
+        Err(Exit(rc))
+    }
+}
+
+/// `sed -n "s/^NAME=//p" <<<"$SYSENV"`: every value of NAME there, a line each.
+fn sysenv_value(sysenv: &[u8], name: &str) -> Vec<u8> {
+    let lead = cat!(name, "=");
+    let vals: Vec<&[u8]> = sysenv
+        .split(|&c| c == b'\n')
+        .filter_map(|l| l.strip_prefix(lead.as_slice()))
+        .collect();
+    vals.join(&b'\n')
+}
+
+/// host_record ARGS: the line host prints, the record of what ran on the user's desktop (#150): every
+/// argument, a long one cut to its start and how much is left out, so an expanded PATH does not
+/// drown it. NAME=value past 60 characters of value, anything else past 120.
+pub fn host_record(args: &[Vec<u8>]) -> Vec<u8> {
+    let cut = |v: &[u8]| {
+        cat!(
+            shell::head_chars(v, 40),
+            "…(+",
+            (shell::char_count(v) - 40).to_string(),
+            " chars)"
+        )
+    };
+    let rec: Vec<Vec<u8>> = args
+        .iter()
+        .map(|a| {
+            let named = a
+                .first()
+                .is_some_and(|&c| c.is_ascii_alphabetic() || c == b'_')
+                && a.iter().position(|&c| c == b'=').is_some_and(|i| {
+                    a[..i]
+                        .iter()
+                        .all(|&c| c.is_ascii_alphanumeric() || c == b'_')
+                });
+            if named {
+                let i = a.iter().position(|&c| c == b'=').unwrap_or(0);
+                let val = &a[i + 1..];
+                if shell::char_count(val) <= 60 {
+                    a.clone()
+                } else {
+                    cat!(&a[..=i], cut(val))
+                }
+            } else if shell::char_count(a) > 120 {
+                cut(a)
+            } else {
+                a.clone()
+            }
+        })
+        .collect();
+    rec.join(&b' ')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_record_cuts_long_words() {
+        let a = |v: &[&str]| v.iter().map(|x| x.as_bytes().to_vec()).collect::<Vec<_>>();
+        assert_eq!(
+            host_record(&a(&["printf", "%s", "A=b", "x"])),
+            b"printf %s A=b x"
+        );
+        let long = "a".repeat(130);
+        assert_eq!(
+            String::from_utf8(host_record(&a(&["true", &long, "x"]))).unwrap_or_default(),
+            format!("true {}…(+90 chars) x", "a".repeat(40))
+        );
+        let path = format!("PATH={}", "/opt/x:".repeat(10));
+        assert_eq!(
+            String::from_utf8(host_record(&a(&[&path]))).unwrap_or_default(),
+            format!("PATH={}…(+30 chars)", &"/opt/x:".repeat(10)[..40])
+        );
+        // (a value of 60 characters stays whole; one word of 120 too)
+        let v60 = format!("K={}", "v".repeat(60));
+        assert_eq!(host_record(&a(&[&v60])), v60.as_bytes());
+        assert_eq!(
+            host_record(&a(&[&"w".repeat(120)])),
+            "w".repeat(120).as_bytes()
+        );
+    }
+
+    #[test]
+    fn sysenv_values() {
+        let e = b"DISPLAY=:1\nBROWSER=$'/a b'\nXDISPLAY=no\n";
+        assert_eq!(sysenv_value(e, "DISPLAY"), b":1");
+        assert_eq!(sysenv_value(e, "BROWSER"), b"$'/a b'");
+        assert_eq!(sysenv_value(e, "NONE"), b"");
     }
 }

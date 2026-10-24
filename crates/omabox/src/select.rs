@@ -251,7 +251,7 @@ fn readable(p: &[u8]) -> bool {
 }
 
 /// Whether this process is PID or runs under it.
-fn descends_from(target: &[u8]) -> bool {
+pub fn descends_from(target: &[u8]) -> bool {
     let mut p = std::process::id().to_string().into_bytes();
     while p != target {
         if shell::test_int(&p).is_none_or(|n| n <= 1) {

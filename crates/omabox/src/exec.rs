@@ -1310,6 +1310,17 @@ pub fn stdio_relay(argv: &[Vec<u8>], capture: bool, err_null: bool) -> std::io::
     Ok(Relayed { rc, out })
 }
 
+/// Why PROG could not be exec'd, in omabox's words (finding 441: not bash's `line N: exec:` line), and
+/// the status bash's exec gave: 127 for one not there, 126 for one that cannot run.
+pub fn exec_failed(prog: &[u8], e: &std::io::Error) -> (String, u8) {
+    match e.kind() {
+        std::io::ErrorKind::NotFound if prog.contains(&b'/') => ("no such file".into(), 127),
+        std::io::ErrorKind::NotFound => ("not found in PATH".into(), 127),
+        std::io::ErrorKind::PermissionDenied => ("permission denied".into(), 126),
+        _ => (crate::shots::why(e), 126),
+    }
+}
+
 /// `command -v NAME >/dev/null` for a program: an executable file of that name in a dir of PATH.
 pub fn executable_on_path(name: &[u8]) -> bool {
     shell::env_or_empty("PATH")

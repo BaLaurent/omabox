@@ -9747,6 +9747,29 @@ from them.
     bash's broker_check, whose key list is bash's (wave 6). Tests: t_unit_rust_parity5 (the cases
     with protect-ports are expected differences, finding 480), t_unit_config.
 
+481. **`config`, `brief`, `reload`, `restart-shell`, `host`, `broker`, `guard` and `setup` in the
+    Rust half** (2026-10-24, #324 wave 5c). cmd/config.rs (with conf.rs's key table: each key's check,
+    default and help; render.rs's gpu_json and gpu_list), cmd/brief.rs (its window list is bash's jq
+    program, checked verbatim), cmd/reload.rs, cmd/restart_shell.rs (on ready.rs's wait_ready and
+    shell_watch; its 15 s deadline on the monotonic clock, finding 450), cmd/host.rs, cmd/broker.rs,
+    cmd/guard.rs (guard.rs builds GUARD_HOOK, GUARD_CODEX_HOOK and GUARD_CODEX byte for byte as bash
+    expands them, so share/guard/hook-version's stamps hold; its jq programs and Codex's python run
+    verbatim, checked against bin/omabox), cmd/setup.rs (setup's links, the feedback skill, the
+    widget and guard offers asked as bash asked them in a terminal, --remove, --aquamarine). Bash's
+    functions stay as the fallback. `host` runs its command through host::HostAsked, the one type that
+    reaches the user's desktop unsilenced: made only by `host`, whose caller asked for the real
+    desktop (S8's exception, explicit in the type where bash's was implicit); everything else of
+    omabox's on the host goes through HostSilent. The broker's own policy reading (broker_init: the
+    jail's bwrap command line) and refusals (broker_check) stay in bash's front until wave 6; `broker`
+    here is the on/off switch and its state. **Change** (Rust over bash, finding 441's rule): `host --
+    CMD` and `guard exec -- CMD` whose CMD cannot run say so in omabox's words ("omabox: host: cannot
+    run CMD: not found in PATH", "no such file" for a path, "permission denied"), where bash printed
+    its own `bin/omabox: line N: exec: CMD: not found`; the exit codes are bash's (127 not there, 126
+    cannot run). Tests: t_unit_rust_parity5 (wave 5c's cases both ways on a HOME of the test's own,
+    with stand-ins for systemctl, omarchy, omarchy-shell, a Hyprland session for host and failing
+    build tools for setup --aquamarine), t_rust_parity_up (brief, reload and restart-shell on a box
+    up), and the suite's tests of each command, which now run the Rust half.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

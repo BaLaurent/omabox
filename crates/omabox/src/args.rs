@@ -10,11 +10,12 @@ use crate::shell::strip_nl;
 fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
     match cmd {
         b"path" => Some("-b= --box= --logs --run --home --json"),
-        b"env" => Some("-b= --box="),
+        b"env" | b"brief" | b"reload" | b"restart-shell" => Some("-b= --box="),
         b"which" => Some("--json"),
         b"down" => Some("-b= --box= --all --orphans"),
         b"ls" | b"list" | b"saves" | b"--version" | b"config" => Some("--json"),
         b"save" => Some("-b= --box= --force"),
+        b"setup" => Some("--aquamarine --force --remove --feedback-skill --no-feedback-skill"),
         b"run" => Some(concat!(
             "-b= --box= -d --detach -q --print-log --replace --pass= --env-file= ",
             "--wait --start= --quiet= --timeout= --strict --json --ignore= -g= ",
@@ -83,6 +84,15 @@ fn usage_head(cmd: &[u8]) -> &'static str {
         }
         b"env" => {
             "  omabox env [NAME | -b NAME]                            exports for host-side Wayland tools"
+        }
+        b"brief" => {
+            r#"  omabox brief [-b NAME]                                 ~15 lines for a subagent's prompt: the box, its windows, the rules"#
+        }
+        b"reload" => {
+            r#"  omabox reload [-b NAME]                                the box's Hyprland config again, from this omabox"#
+        }
+        b"restart-shell" => {
+            r#"  omabox restart-shell [-b NAME]                         reload the Omarchy shell (after plugin edits)"#
         }
         b"which" => {
             "  omabox which [--json] PID                              the box a host process is in, or \"not in a box\" (exit 1)"

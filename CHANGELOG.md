@@ -67,6 +67,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   A bad value of it in the file is said as `up` says it and shown, not ignored. Scripts that read
   `omabox config` line by line or its `--json` keys: expect the new one. `OMABOX_BASH=1 config` does
   not know it.
+- **`host` and `guard exec` say a command they cannot run in omabox's words**: "omabox: host: cannot
+  run CMD: not found in PATH" (or "no such file", "permission denied"), where the bash omabox printed
+  "bin/omabox: line N: exec: CMD: not found". Exit codes unchanged (127, 126).
 - **A jailed agent's `down` and `up` check whose the box is again once they hold its name's lock**,
   and a jailed `down` that finds no box cancels only its own jail's `up` of that name, not yours.
   Scripts: nothing to change.

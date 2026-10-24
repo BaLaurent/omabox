@@ -12,6 +12,12 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::process::Stdio;
 
+/// The aquamarine commit `omabox setup --aquamarine` builds (after v0.15.1), and AQ_BUILD, what a build
+/// of it with omabox's own patches records (patches/aquamarine; finding 247).
+pub const AQ_COMMIT: &str = "7bb8bdf4";
+pub const AQ_BUILD: &str = "7bb8bdf4+keys+layout+cursor+appid";
+/// What omabox's own patches fix, which no system aquamarine has (finding 247).
+pub const AQ_OWN: &str = "keys held when an interactive box's window loses focus, the pointer and cursor in its monitors' windows, and those windows kept off your workspace";
 /// What a refusal of aquamarine's fix says to do.
 pub const AQ_HOWTO: &str = "omabox setup --aquamarine builds it for you (a minute or two)";
 /// What #415 added that the library exports: a system aquamarine with it has the fix whatever its
@@ -368,11 +374,11 @@ fn exit_contains(hay: &[u8], needle: &[u8]) -> bool {
 /// aquamarine upgrade): skipped, said so. FIXED for every private build, and a system one that exports
 /// #415's symbol or is after AQ_FIXED_AFTER. OMABOX_AQUAMARINE=system skips the private builds (the
 /// suite on stock, finding 125). None after its words, when it cannot.
-pub fn aq_pick(ctx: &Ctx, want: &[u8], sys: &[u8], dirs: &[Vec<u8>]) -> Option<Aq> {
+/// ENV is OMABOX_AQUAMARINE's value (`OMABOX_AQUAMARINE="" aq_resolve`: setup --aquamarine's).
+fn aq_pick_env(ctx: &Ctx, want: &[u8], sys: &[u8], dirs: &[Vec<u8>], env: &[u8]) -> Option<Aq> {
     if want.is_empty() {
         return None;
     }
-    let env = shell::env_or_empty("OMABOX_AQUAMARINE");
     let dirs: &[Vec<u8>] = if env == b"system" { &[] } else { dirs };
     if !env.is_empty() && env != b"system" {
         let _ = ctx.die(cat!("OMABOX_AQUAMARINE is system or unset, got ", env));
@@ -480,6 +486,11 @@ pub fn aq_main_lib(co: &[u8]) -> Option<Vec<u8>> {
 /// checkout's (aq_main_lib), the user's data dir, and in a box (an omabox started there: the suite's
 /// stand-in hosts) the box's own, last (finding 130).
 pub fn aq_resolve(ctx: &Ctx, soname: &[u8]) -> Option<Aq> {
+    aq_resolve_env(ctx, soname, &shell::env_or_empty("OMABOX_AQUAMARINE"))
+}
+
+/// aq_resolve with ENV as OMABOX_AQUAMARINE.
+pub fn aq_resolve_env(ctx: &Ctx, soname: &[u8], env: &[u8]) -> Option<Aq> {
     let root = crate::paths::root();
     let main = aq_main_lib(&root).unwrap_or_default();
     let mut dirs = vec![cat!(root, "/build/prefix/lib")];
@@ -490,7 +501,7 @@ pub fn aq_resolve(ctx: &Ctx, soname: &[u8]) -> Option<Aq> {
     if shell::path(b"/opt/omabox/share/session.sh").is_file() {
         dirs.push(b"/opt/omabox/lib".to_vec());
     }
-    let mut aq = aq_pick(ctx, soname, AQ_SYSDIR.as_bytes(), &dirs)?;
+    let mut aq = aq_pick_env(ctx, soname, AQ_SYSDIR.as_bytes(), &dirs, env)?;
     if aq.kind == b"private" && !main.is_empty() && aq.lib == main {
         aq.main = main.strip_suffix(b"/lib").unwrap_or(&main).to_vec();
     }

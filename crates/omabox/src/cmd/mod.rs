@@ -1,6 +1,8 @@
 //! The commands ported from bin/omabox, one module each.
 
 pub mod audio;
+pub mod brief;
+pub mod broker;
 pub mod calibrate;
 pub mod check;
 pub mod click;
@@ -13,6 +15,8 @@ pub mod env;
 pub mod events;
 pub mod gdb;
 pub mod gpu;
+pub mod guard;
+pub mod host;
 pub mod hyprctl;
 pub mod keys;
 pub mod keys_to_box;
@@ -30,8 +34,11 @@ pub mod ports;
 pub mod reap;
 pub mod record;
 pub mod record_stop;
+pub mod reload;
+pub mod restart_shell;
 pub mod run;
 pub mod save;
+pub mod setup;
 pub mod shot;
 pub mod tree;
 pub mod up;
