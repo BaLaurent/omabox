@@ -18641,7 +18641,8 @@ os.write(os.open("/proc/self/comm", os.O_WRONLY), b"x\x1b[1my\nz"); open("/tmp/t
   check "...the box's gdb.log a file of its own" test -f "$D/home/gdb.log" -a ! -L "$D/home/gdb.log"
   check_match "...a name with a newline and an escape: printed tamed" "gdb watches x\?\?1my\?z \(pid $wp in box" "$out"
   check_match "...in the header too" "== omabox gdb --watch x\?\?1my\?z \(pid $wp in the box\)" "$(ob log -b "$B" gdb -n all 2>&1)"
-  out=$(ob gdb -b "$B" --watch 2>&1); rc=$?
+  # (its caller at a core limit of 2 bytes, which nothing but omabox lowers to 1: the check below)
+  out=$(prlimit --core=2: "$CLI" gdb -b "$B" --watch 2>&1); rc=$?
   check_eq "gdb --watch: exit 0" 0 "$rc"
   check_match "...said, with where the backtrace goes" "gdb watches Hyprland .*omabox log -b $B gdb" "$out"
   # ...from the box's network namespace (finding 229), not the host's: the gdb that is the box's
@@ -18651,6 +18652,12 @@ os.write(os.open("/proc/self/comm", os.O_WRONLY), b"x\x1b[1my\nz"); open("/tmp/t
     [ "$(readlink "/proc/$g/ns/pid")" = "$(readlink "/proc/$bp/ns/pid")" ] && gn+="$(readlink "/proc/$g/ns/net") "
   done
   check_eq "...gdb in the box's network namespace" "$(readlink "/proc/$bp/ns/net") $(readlink "/proc/$bp/ns/net") " "$gn"
+  # A crash of the watching gdb makes no notification on the desktop either (findings 67, 492).
+  local gc=""
+  for g in $(pgrep -x gdb); do
+    [ "$(readlink "/proc/$g/ns/pid")" = "$(readlink "/proc/$bp/ns/pid")" ] && gc+="$(prlimit --pid "$g" --core -o SOFT --noheadings | tr -d ' ') "
+  done
+  check_eq "...its core limit 1 byte, its caller's 2" "1 1 " "$gc"
   check_match "...a second gdb: refused, naming the watch" "traced already, by pid [0-9]+" "$(ob gdb -b "$B" 2>&1)"
   # #233: the first watch's process killed, not crashed: gdb runs its crash commands all the same, and --crash finds none.
   ob run -b "$B" -- kill -KILL "$wp"

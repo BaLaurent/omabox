@@ -9854,8 +9854,9 @@ from them.
     the native-entry step). on_box's grim, hyprctl, tail and input tools ran with the caller's core
     limit, unlike box_exec's commands (finding 67), so one crashing from a terminal or the widget
     would have made a crash notification on the desktop. **Fix** (Rust only): they get the 1-byte
-    limit too. Test: t_inspect (events -f's tail, started under a 2-byte limit: 1 byte; 2 with
-    OMABOX_BASH=1).
+    limit too, and so do stdio_relay's commands (gdb's steps, its watching gdb, restart-shell's
+    kill: the review's fix round, finding 494). Tests: t_inspect (events -f's tail, started under a
+    2-byte limit: 1 byte; 2 with OMABOX_BASH=1), t_gdb (the watching gdb, the same way).
 
 493. **`omabox env` exported a path the box could change** (2026-10-24, #324, the native-entry step).
     It printed `$D/run/wayland-N`, in the box's runtime dir, which the box writes: a box process that

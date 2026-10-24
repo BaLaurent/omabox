@@ -1328,6 +1328,9 @@ pub fn stdio_relay(
         argv,
         Fds {
             only: true,
+            // (gdb's steps, its --watch's gdb, restart-shell's kill: a crash there makes no
+            // notification either, finding 492)
+            nocore: true,
             enter,
             ..Fds::default()
         },

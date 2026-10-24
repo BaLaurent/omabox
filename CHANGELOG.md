@@ -66,7 +66,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   put there in its socket's place could lead a host tool to another display, your desktop's included.
   It now prints a hard link to the box's own socket in the box's folder, and refuses a socket that is
   not one.
-- **The tools omabox runs against a box (grim, hyprctl, its input tools) could make a crash
+- **The tools omabox runs against a box (grim, hyprctl, its input tools, gdb) could make a crash
   notification on your desktop**: unlike a box's own commands, they kept your core limit. They get
   the box's 1-byte limit.
 
