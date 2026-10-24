@@ -95,7 +95,7 @@ pub static GATED: AtomicBool = AtomicBool::new(false);
 /// C made before (sig::command parks, never under FOREGROUND), then with FOREGROUND held: spawned
 /// (nothing once a trap is on its way), FG_ACTIVE raised once it exists when it takes a Ctrl-C
 /// (takes_ctrl_c; never one started with SIGINT ignored, INT_IGNORED: a Ctrl-C reaches no child
-/// then, finding 112's `<(...)`), its pid in FG_PID, WITH run on it (feeding or reading its pipes),
+/// then, finding 112's `<(...)`), a pidfd of it in FG_CHILD, WITH run on it (feeding or reading its pipes),
 /// its end read and recorded (exec::status: FG_INT) before the lock drops. C is dropped right after
 /// the spawn, so the pipe ends it held close. Its status and signal, or the spawn's error.
 pub fn run_child<T>(
@@ -143,10 +143,14 @@ pub fn run_child<T>(
             !int_ignored && TAKES_INT.load(Ordering::SeqCst),
             Ordering::SeqCst,
         );
-        FG_PID.store(i32::try_from(ch.id()).unwrap_or(0), Ordering::SeqCst);
+        let pid = i32::try_from(ch.id()).unwrap_or(0);
+        set_fg_child(pidfd_open(pid).map(|fd| (fd, pid)));
         let t = with(&mut ch);
+        // (its end seen without reaping it, so its pid is not free for reuse while FG_CHILD names
+        // it; then FG_CHILD cleared, then it is reaped)
+        wait_unreaped(pid);
+        set_fg_child(None);
         let st = end(&mut ch);
-        FG_PID.store(0, Ordering::SeqCst);
         FG_ACTIVE.store(false, Ordering::SeqCst);
         drop(g);
         break Ok((t, st));
@@ -189,11 +193,72 @@ fn park_while_stopping() {
 /// handled, which lets the command go on when that child did not die of it.
 pub static FG_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static FG_INT: AtomicBool = AtomicBool::new(false);
-/// The pid of main's foreground child while it runs (0: none), for a signal's stop that waited
-/// for it long enough (trap.rs's foreground_over).
-pub static FG_PID: AtomicI32 = AtomicI32::new(0);
+/// Main's foreground child while it runs, unreaped: a pidfd of it and its pid, for a signal's stop
+/// that waited for it long enough (trap.rs's foreground_over, signal_foreground).
+static FG_CHILD: Mutex<Option<(std::os::fd::OwnedFd, i32)>> = Mutex::new(None);
 
-/// While main runs F, its foreground child is one that takes a Ctrl-C itself (gdb's run, check run's
+fn set_fg_child(v: Option<(std::os::fd::OwnedFd, i32)>) {
+    if let Ok(mut g) = FG_CHILD.lock() {
+        *g = v;
+    }
+}
+
+/// A pidfd of PID (pidfd_open), or None (a kernel without it, or PID gone).
+fn pidfd_open(pid: i32) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: pidfd_open takes a pid and flags; its result is a new fd of ours, or -1.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    let fd = i32::try_from(fd).ok().filter(|&f| f >= 0)?;
+    // SAFETY: fd was just opened for us, and nothing else owns it.
+    Some(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+}
+
+/// Waits for PID's end without reaping it (waitid's WNOWAIT): until it is reaped its pid, and its
+/// process group's id when it leads one, stay its own.
+fn wait_unreaped(pid: i32) {
+    let Ok(id) = libc::id_t::try_from(pid) else {
+        return;
+    };
+    loop {
+        // SAFETY: a zeroed siginfo_t of ours for waitid to fill.
+        let r = unsafe {
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            libc::waitid(libc::P_PID, id, &mut info, libc::WEXITED | libc::WNOWAIT)
+        };
+        if r == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
+            return;
+        }
+    }
+}
+
+/// SIG to main's foreground child, through its pidfd (never another process that took its pid), and
+/// to its process group when it leads one of its own (timeout's: what it runs is in it). Whether
+/// there was such a child.
+pub fn signal_foreground(sig: libc::c_int) -> bool {
+    let Ok(g) = FG_CHILD.lock() else {
+        return false;
+    };
+    let Some((fd, pid)) = g.as_ref() else {
+        return false;
+    };
+    // SAFETY: a signal through a pidfd we hold; the child is unreaped while FG_CHILD names it, so
+    // its group's id is still its own (getpgid, kill of the group).
+    unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd.as_raw_fd(),
+            sig,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        );
+        if libc::getpgid(*pid) == *pid && *pid != libc::getpgrp() {
+            libc::kill(-*pid, sig);
+        }
+    }
+    true
+}
+
+/// While main runs F, its foreground child is one that takes a Ctrl-C itself (check run's
 /// scenario): a terminal's INT that the child outlives lets the command go on (trap.rs), as bash goes
 /// on when the child it waited for did not die of it. Any other child is just waited for, then the
 /// command stops (finding 454).
@@ -509,6 +574,16 @@ mod signal_cases {
         }))
     }
 
+    /// A file of the case's, the same path in the test and in its child (named by the test's pid).
+    fn case_file(tag: &str) -> std::path::PathBuf {
+        let pid = if std::env::var(CASE).is_ok() {
+            std::os::unix::process::parent_id()
+        } else {
+            std::process::id()
+        };
+        std::env::temp_dir().join(format!("omabox-sig-{tag}.{pid}"))
+    }
+
     fn sleep_child(s: &str) -> std::io::Result<i32> {
         let mut c = super::command("sleep");
         c.arg(s);
@@ -605,7 +680,7 @@ mod signal_cases {
     /// 453); then 143.
     #[test]
     fn term_waits_for_the_foreground_child() {
-        let f = std::env::temp_dir().join(format!("omabox-sig-fg.{}", std::process::id()));
+        let f = case_file("fg");
         let Some(r) = in_child("term_waits_for_the_foreground_child") else {
             super::set_main();
             let g = f.clone();
@@ -648,10 +723,72 @@ mod signal_cases {
         let t0 = std::time::Instant::now();
         let (rc, err) = r.expect("it hung");
         assert_eq!(rc, 129, "{err}");
+        assert!(err.contains(crate::trap::STOPPING_LINE), "{err}");
         assert!(!err.contains("[killed by signal"), "{err}");
         assert!(err.contains("CASE undo"), "{err}");
         assert!(!err.contains("CASE after"), "{err}");
         assert!(t0.elapsed() < std::time::Duration::from_secs(8), "{err}");
+    }
+
+    /// A foreground child that leads a process group of its own (as `timeout` does), whose own
+    /// child would outlive it: the stop's TERM reaches the whole group, through a pidfd (finding 453).
+    #[test]
+    fn the_stop_reaches_the_childs_group() {
+        let f = case_file("grp");
+        let Some(r) = in_child("the_stop_reaches_the_childs_group") else {
+            super::set_main();
+            let _t = crate::trap::on_exit(|| eprintln!("CASE undo"));
+            kill_at(&[(300, libc::SIGTERM)]);
+            let mut c = super::command("sh");
+            c.args([
+                "-c",
+                "sleep 30 & echo $! > \"$0\"; wait",
+                &f.to_string_lossy(),
+            ]);
+            std::os::unix::process::CommandExt::process_group(&mut c, 0);
+            let _ = super::run_status(c);
+            eprintln!("CASE after the child");
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        let gc = std::fs::read_to_string(&f).unwrap_or_default();
+        let _ = std::fs::remove_file(&f);
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        let gc: i32 = gc.trim().parse().expect("the grandchild's pid");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        // SAFETY: a probe of a pid, signal 0.
+        let alive = unsafe { libc::kill(gc, 0) } == 0
+            && std::fs::read_to_string(format!("/proc/{gc}/cmdline"))
+                .is_ok_and(|c| c.starts_with("sleep"));
+        assert!(!alive, "the group's sleep {gc} outlived the stop");
+    }
+
+    /// A TERM while main runs a trap's undo itself (a trap dropped on a refusal), its first of two
+    /// steps: the signal's thread waits for that undo, so its second step runs too (it found TRAPS
+    /// empty and ended the process halfway through).
+    #[test]
+    fn a_signal_waits_for_an_undo_main_runs() {
+        let Some(r) = in_child("a_signal_waits_for_an_undo_main_runs") else {
+            super::set_main();
+            crate::trap::stop_on_signals();
+            let t = crate::trap::on_exit(|| {
+                let _ = sleep_child("0.5");
+                eprintln!("CASE step 1 over");
+                let _ = sleep_child("0.2");
+                eprintln!("CASE step 2 over");
+            });
+            kill_at(&[(200, libc::SIGTERM)]);
+            drop(t);
+            eprintln!("CASE after the undo");
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            eprintln!("CASE after the wait");
+            return;
+        };
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE step 2 over"), "{err}");
+        assert!(!err.contains("CASE after the wait"), "{err}");
     }
 
     /// An INT sent by a process (`kill -INT PID`) while a foreground child runs that would take a
@@ -695,7 +832,7 @@ mod signal_cases {
     }
 
     /// A Ctrl-C from the terminal (SI_KERNEL, to the whole group) during a 1 s foreground child that
-    /// ignores it, after 400 ms: MARKED (sig::takes_ctrl_c, gdb's or a scenario's), the command goes
+    /// ignores it, after 400 ms: MARKED (sig::takes_ctrl_c, a scenario's), the command goes
     /// on, as before and as bash's; otherwise it stops once the child is over, 130 (finding 454).
     fn ctrl_c(name: &str, marked: bool, child: &str) -> Option<(i32, String)> {
         let Some(r) = in_child_tty(name, Some(400)) else {
@@ -727,6 +864,30 @@ mod signal_cases {
         assert!(err.contains("CASE child got INT"), "{err}");
         assert!(err.contains("CASE past the step Ok(0)"), "{err}");
         assert!(err.contains("CASE undo"), "{err}");
+    }
+
+    /// A Ctrl-C a marked child ignores (it runs 30 s), then a TERM from a process: the TERM stops the
+    /// command, the child waited for (bounded) and stopped, 143, in about two seconds; the Ctrl-C's
+    /// wait read no more signals and held it for the child's 30 s.
+    #[test]
+    fn ctrl_c_then_a_term_stops() {
+        let name = "ctrl_c_then_a_term_stops";
+        let Some(r) = in_child_tty(name, Some(400)) else {
+            super::set_main();
+            let _t = crate::trap::on_exit(|| eprintln!("CASE undo"));
+            kill_at(&[(800, libc::SIGTERM)]);
+            let mut c = super::command("sh");
+            c.args(["-c", "trap '' INT; exec sleep 30"]);
+            let rc = super::takes_ctrl_c(|| super::run_status(c));
+            eprintln!("CASE past the step {rc:?}");
+            return;
+        };
+        let t0 = std::time::Instant::now();
+        let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE past"), "{err}");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(6), "{err}");
     }
 
     #[test]

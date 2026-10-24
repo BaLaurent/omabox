@@ -924,15 +924,27 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     record_start(ctx, &mut rec, &file, &o, !o.as_.is_empty())?;
     // Once it records, the pointer stays hidden until `record stop` (finding 320).
     crate::ptr::hold_keep();
+    if o.forms.is_none() && o.ract.is_empty() {
+        return Ok(());
+    }
     let st = o_stop_plain(&o);
+    // --for and -- ACTION stop what they started: an INT, TERM or HUP meanwhile stops the recording
+    // as their end would (the video so far kept, the pointer given back), then exits 128+N (bash's
+    // left it recording, the pointer hidden: finding 455). Forgotten before their own stop.
+    let stop_trap = {
+        let (mut c, st) = (ctx.clone(), o_stop_plain(&o));
+        crate::trap::on_exit_code(move || {
+            let mut rec = Rec::default();
+            let _ = crate::cmd::record_stop::stop(&mut c, &mut rec, &st);
+        })
+    };
     // --for (#259): the hold from its first frame, in the video's clock; stopped whatever it says.
     if let Some(forms) = o.forms {
-        let held = record_hold(ctx, &mut rec, forms, call_us, true)?;
+        let held = record_hold(ctx, &mut rec, forms, call_us, true);
+        stop_trap.forget();
+        let held = held?;
         crate::cmd::record_stop::stop(ctx, &mut rec, &st)?;
         return if held { Ok(()) } else { Err(Exit(1)) };
-    }
-    if o.ract.is_empty() {
-        return Ok(());
     }
     let mut c = crate::sig::omabox_cmd();
     c.arg("-b").arg(OsStr::from_bytes(&ctx.name));
@@ -944,6 +956,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let rc = crate::sig::run_status(c).unwrap_or(127);
     let secs = format!("{}.{:03}", o.hold / 1000, o.hold % 1000);
     crate::trap::sleep(secs.as_bytes());
+    stop_trap.forget();
     crate::cmd::record_stop::stop(ctx, &mut rec, &st)?;
     if rc != 0 {
         say(cat!(

@@ -1854,8 +1854,9 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     };
     let boxes = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
     let bx = boxes.clone();
-    // Every box made so far taken down however this ends (bash's EXIT trap: on TERM and HUP at once,
-    // on INT once the foreground step is over, unless it did not die of it).
+    // Every box made so far taken down however this ends (bash's EXIT trap): on INT, TERM or HUP
+    // once the step in progress is over (its up, its scenario: bounded, trap.rs), unless a terminal's
+    // Ctrl-C was taken by the scenario and it went on.
     let trap = crate::trap::on_exit(move || {
         let all = bx.lock().map(|v| v.clone()).unwrap_or_default();
         for b in all {

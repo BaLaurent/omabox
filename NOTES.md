@@ -8848,7 +8848,12 @@ from them.
     finding 452); (d) a code trap (record stop's) runs once bash's `$(...)` in progress is over, for
     a signal to omabox alone, where the Rust half stops after the foreground child (finding 452);
     (e) a TERM or HUP runs bash's EXIT trap at once, its foreground child left running, where the
-    Rust half waits for that child, bounded (~20 s at most), before the undo (finding 453).
+    Rust half waits for that child, bounded (~20 s at most), before the undo (finding 453); (f) a
+    signal during `record --for` or `record -- ACTION` leaves bash's recording running, where the
+    Rust half stops it, the video made (finding 455). Left as they are, in both halves: a signal
+    between a temporary file's `mktemp` (a child) and its trap (cpu's and gpu's dir, record stop's
+    input file and box-dir folder, each the next line) leaves that file; closing the gap needs the
+    file made in-process, under the trap's lock, with mktemp's own words for its failures.
 
 426. **A refused OMABOX_STILL_DUMP left a temporary dir behind** (2026-10-22, #324 wave 3a's review).
     settle_begin made its `mktemp -d` dir for the tool's two fifos, and an action's before snapshot
@@ -9481,7 +9486,18 @@ from them.
     a_child_that_will_not_end_is_stopped (both fail on the version before: the undo saw nothing; a
     30 s hang); t_rust_parity ("check run and TERM|HUP during its scenario"), t_unit_rust_parity4
     ("monitor add ... group-TERM before the create reaches the box", "... group-TERM, the box's
-    create handled 6 s late"): expected differences.
+    create handled 6 s late"): expected differences. The review's fix round: (1) once the wait passes
+    a second, omabox says "omabox: stopping once the step in progress ends (at most 20 s)" on stderr,
+    once (parity leaves the line out, it is timing); the 10 s bound is to be looked at again when
+    up and down are in Rust (wave 5). (2) The TERM and KILL go through a pidfd of the child, which
+    is waited for without being reaped (waitid's WNOWAIT) until it is no longer named, so no other
+    process that took its pid gets them, and to its process group when it leads one (timeout's),
+    so a grandchild there does not outlive it. (3) A signal while main runs an undo itself (a trap
+    dropped on a refusal or at the end: check run's downs, monitor add's remove) waits for that
+    undo: Drop, forget and run_undos share one lock (trap::undoing), where the thread had found the
+    trap list empty and ended the process halfway through it (so before this wave too). (4)
+    shot --no-pointer's release waits for the foreground child the same bounded way. Tests:
+    the_stop_reaches_the_childs_group, a_signal_waits_for_an_undo_main_runs.
 
 454. **What an INT sent to omabox alone did depended on how bash's line was written** (2026-10-24,
     #324 wave 4c; decided by Diogo 2026-10-23). Bash, given `kill -INT` of its own pid while a
@@ -9496,11 +9512,16 @@ from them.
     process (si_code not SI_KERNEL: an agent's `kill -INT`, a harness's `kill -INT -PGID` too) stops
     the command as TERM does (finding 453's bounded wait for the foreground child, the undo), exit
     130. A Ctrl-C from the terminal (SI_KERNEL, read with SA_SIGINFO) does too, unless the
-    foreground child is one that takes a Ctrl-C itself (sig::takes_ctrl_c: gdb's run, check run's
-    scenario) and outlives it: then the command goes on, as before and as bash's. Every other child
-    a Ctrl-C does not kill (one under `timeout`, a process group of its own the terminal never
-    reaches; hyprctl in the box) no longer lets the command go on: it stops after that child, 130,
-    where bash went on after a plain command and ended after a `$(...)`. An interactive `monitor add`
+    foreground child is one that takes a Ctrl-C itself (sig::takes_ctrl_c: check run's scenario)
+    and outlives it: then the command goes on, as before and as bash's. While it waits for that
+    child it still reads its signals: a TERM, HUP, a process's INT or a second Ctrl-C meanwhile stops
+    the command (the review's fix round: the wait first held them unread till the child's end).
+    Every other child a Ctrl-C does not kill no longer lets the command go on: it stops after that
+    child, 130, where bash went on after a plain command and ended after a `$(...)`. That includes
+    gdb's backtrace run (`timeout 120 ... gdb -batch`): timeout puts itself and gdb in a process
+    group of their own, which the terminal's Ctrl-C never reached, so the mark it had at first only
+    held the Ctrl-C for gdb's whole run; now the stop's TERM reaches gdb through timeout (finding
+    453's group signal), and the command ends 130. An interactive `monitor add`
     still ends at any INT (finding 437), now by that rule. The `$(...)` marks are gone (plain
     run_output, plain calls), and trap::sleep sleeps in-process, parked at once by a stop. Seen by a
     caller: `kill -INT` of omabox during `cpu`, `gpu`, `peek --focus`, `gdb`, `record`, `check run`
@@ -9509,8 +9530,28 @@ from them.
     pty of their own, which type a real Ctrl-C: ctrl_c_a_marked_child_outlives_goes_on,
     ctrl_c_a_marked_child_dies_of_stops, ctrl_c_another_child_outlives_stops (they replace
     subst_step_and_int_alone, foreground_step_and_int_alone, undo_on_main_and_a_term and
-    undo_on_main_with_a_subst, which pinned the marks); parity: the INT-alone cases below are
-    expected differences.
+    undo_on_main_with_a_subst, which pinned the marks), ctrl_c_then_a_term_stops; parity: the
+    INT-alone cases (cpu, gpu, peek --focus, gdb, record --for, check run's scenario) are expected
+    differences. The suite's signal wrapper (rp-sig) now starts its command with INT and QUIT at
+    their defaults: a test running as a parallel job (job control off) inherited both ignored, and
+    omabox keeps an ignored signal ignored, so three check run INT cases had passed with neither half
+    seeing the INT (the review's fix round). Run for real, the group INTs end both halves alike; the
+    INT to omabox alone is an expected difference (bash compares, 1; Rust 130).
+
+455. **`record --for` or `record -- ACTION` stopped by a signal left the recording running**
+    (2026-10-24, #324 wave 4c's review). Once the recording runs, bash sets `trap - EXIT INT TERM
+    HUP` (finding 320: `record start` leaves it to `record stop`), and --for and -- ACTION kept
+    that: an INT, TERM or HUP during the hold or the action ended omabox with wf-recorder still
+    recording in the box, the pointer hidden, `$D/record` and `record.geo` kept, and nothing said;
+    the Rust half did the same (and, since finding 454, for an INT sent by a process too). **Change**
+    (Rust over bash): from a successful start on, --for and -- ACTION hold a code trap whose undo is
+    their own end, `record stop` with the plain options: wf-recorder stopped, the video so far made
+    and said, the pointer given back; then 130, 143 or 129. It is forgotten before their own stop
+    (and on an error before it, which leaves the recording as before). Plain `record start` is
+    unchanged. Tests: t_unit_rust_parity4b ("record --for 2s and group-INT|TERM|group-TERM|HUP", now
+    sent 1.2 s into the hold, where they had landed before the start was over: expected
+    differences, the video made in Rust and the recording's state gone; "... and INT": both make the
+    video, bash at the hold's end with 0, Rust at once with 130, finding 454).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -3014,7 +3014,8 @@ t_unit_rust_handoff() {
 # or state. Both name the same fields, which must differ between the sides (or it is no difference)
 # and are checked against each side's own; what a named field holds beyond them (all but its lines
 # a ~ took, none after an =) must still be the same both ways; the other fields are compared as
-# ever. The case is said
+# ever. The Rust half's "omabox: stopping once the step in progress ends" line (finding 453) is taken out
+# of err on both sides before any of this. The case is said
 # as "LABEL (expected difference: finding N)", and the three are reset after it. Under --installed
 # (no binary: both sides bash) both are checked against rp_bash.
 rp_dir=/ rp_rt="" rp_env=() rp_prep="" rp_snap=1 rp_wrap=() rp_in=/dev/null rp_sed="" rp_also="" rp_check="" rp_mask=""
@@ -3080,6 +3081,9 @@ parity() {
     rp_state > "$d/$side.state"
     [ -z "$rp_check" ] || "$rp_check" "$side" "$d/$side.out" "$d/$side.err"
     if [ -n "$rp_sed" ]; then local f; for f in out err; do sed -i -E "$rp_sed" "$d/$side.$f"; done; fi
+    # (the Rust half's word that a stop waits for the step in progress, finding 453: said where that
+    # wait passes a second, which is timing; sig.rs's a_child_that_will_not_end_is_stopped holds it)
+    sed -i '/^omabox: stopping once the step in progress ends (at most 20 s)$/d' "$d/$side.err"
   done
   [ -z "${RP_SHOW:-}" ] || { echo "== $label: rc $(cat "$d/bash.rc")"; cat "$d/bash.out" "$d/bash.err"; } >> "$RP_SHOW"
   local f diffs="" differ=" "
@@ -6554,13 +6558,18 @@ while time.time() < end:
   # Signals while it records for 2 s: to omabox alone and to the group.
   # (rp-sig's own line for its job, where it noticed the death: its line number left out)
   rp_sed="$rp_sed"'; s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line N: PID \2 /'
+  # (1.2 s after wf-recorder starts: in the hold. Bash leaves the recording running, the pointer
+  # hidden, and says nothing; the Rust half stops it as --for's end would, the video made, then
+  # 130/143/129: finding 455. An INT to omabox alone: bash goes on, the video made at the end; the
+  # Rust half stops then, the video made the same way, 130: finding 454.)
   for i in INT group-INT TERM group-TERM HUP; do
-    rp_wrap=(env RP_LINGER=2 "$r/rp-sig" "$i" "$st/wf.log")
-    # (an INT to omabox alone: bash goes on, the video made; the Rust half stops as on a TERM, 130,
-    # the recording left running as a TERM leaves it, both ways: finding 454)
-    [ "$i" != INT ] || { rp_why=454
-      rp_bash=(rc=0 'out~/co/v\.mp4$' 'err~^omabox: record: ' 'state~^\. d [0-9]+$' 'state~^\./v\.mp4 f ' 'state~^== ff\.log$' 'state~^ff(probe|mpeg) ')
-      rp_rust=(rc=130 out= err= 'state~^\. d [0-9]+$' 'state~^-- rc/record(\.geo)?$' 'state~^P HEADLESS-2 30 N ' 'state~^0 0 1\.0$'); }
+    rp_wrap=(env RP_LINGER=2 RP_WAIT=1.2 "$r/rp-sig" "$i" "$st/wf.log")
+    if [ "$i" = INT ]; then rp_why=454 rp_bash=(rc=0) rp_rust=(rc=130); else
+      rp_why=455
+      rp_bash=(out= 'err!~^omabox: record: 1920x1080' 'state~^\. d [0-9]+$' 'state~^-- rc/record(\.geo)?$' 'state~^P HEADLESS-2 30 N ' 'state~^0 0 1\.0$' 'state!~^\./v\.mp4 ')
+      rp_rust=('out~/co/v\.mp4$' 'err~^omabox: record: 1920x1080, ' 'state~^\. d [0-9]+$' 'state~^\./v\.mp4 f ' 'state~^== ff\.log$' 'state~^ff(probe|mpeg) ' 'state!~^-- rc/record')
+      [ "$i" != HUP ] || { rp_bash+=('err~ line N: PID Hangup '); rp_rust+=('err!~Hangup'); }
+    fi
     parity "record --for 2s and $i" record -b rc --for 2s -o "$r/co/v.mp4"
   done
   rp_wrap=() rp_sed="" rp4b_pre=() rp_snap=1 rp_also=rp4b_also rp_env=("${rp_env4b[@]}")

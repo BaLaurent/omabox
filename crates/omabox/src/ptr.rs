@@ -491,10 +491,9 @@ pub fn hold_until_exit(ctx: &Ctx, tag: &[u8]) -> Res<()> {
                 let _g = GATE
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                // Nor while a child runs in the foreground: bash's trap waits for it.
-                let _f = crate::sig::FOREGROUND
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // Nor while a child runs in the foreground: waited for as a trap's stop waits, bounded
+                // (finding 453).
+                let _f = crate::trap::foreground_over();
                 // The hold given back already (release_at_exit, at the command's end): nothing left
                 // to release; the signal's exit, as bash's trap gives it there.
                 if HOLD.lock().map(|h| h.is_none()).unwrap_or(true) {

@@ -4,8 +4,9 @@
 //! trap's (on_exit_code) ends with the signal's 128+N instead. Before the undo, main's foreground
 //! child is waited for, bounded (foreground_over: bash ran its EXIT trap at once on TERM and HUP,
 //! the child left running, finding 453). An INT stops the command as TERM does (finding 454), but
-//! for a Ctrl-C from the terminal while a child that takes one runs (sig::takes_ctrl_c: gdb, check
-//! run's scenario): when that child outlives it, the command goes on, as bash's does. The first
+//! for a Ctrl-C from the terminal while a child that takes one runs (sig::takes_ctrl_c: check run's
+//! scenario): when that child outlives it, the command goes on, as bash's does; another signal
+//! meanwhile stops it (ctrl_c_wait). The first
 //! signal decides: once its undo begins, another INT, TERM or HUP changes nothing, and the undo
 //! finishes (bash's second signal cut its trap short, or ran the lowest-numbered pending trap's
 //! code: finding 452). Nothing new starts meanwhile (sig::run_child). A signal ignored when omabox
@@ -50,27 +51,46 @@ pub fn on_exit_code(f: impl FnOnce() + Send + 'static) -> Trap {
 
 /// Every undo still pending, the last made first (bash's EXIT trap on the way out).
 pub fn run_undos() {
-    // (one at a time: main's at the command's end and a signal's on its thread, so the process
-    // never ends halfway through them)
-    static UNDOING: Mutex<()> = Mutex::new(());
+    undoing(|| {
+        let all: Vec<(u64, Undo)> = TRAPS
+            .lock()
+            .map(|mut t| std::mem::take(&mut *t))
+            .unwrap_or_default();
+        for (_, u) in all.into_iter().rev() {
+            u();
+        }
+    });
+}
+
+static UNDOING: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    /// This thread runs undos (UNDOING is its): an undo that drops a trap of its own runs it there.
+    static IN_UNDO: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// F, which takes undos off TRAPS and runs them, one such at a time: a signal's thread and main (a
+/// trap dropped at its end or on a refusal) never both, so a signal during main's undo waits for it
+/// to finish rather than finding TRAPS empty and ending the process halfway through it. Main's undos
+/// run their children plainly, never parked (sig::UNDO_MAIN).
+fn undoing(f: impl FnOnce()) {
+    if IN_UNDO.with(std::cell::Cell::get) {
+        f();
+        return;
+    }
     let _u = UNDOING
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let all: Vec<(u64, Undo)> = TRAPS
-        .lock()
-        .map(|mut t| std::mem::take(&mut *t))
-        .unwrap_or_default();
-    // (main's undos run their children plainly, never parked: sig::UNDO_MAIN)
+    IN_UNDO.with(|c| c.set(true));
     let main = crate::sig::on_main();
     if main {
         crate::sig::UNDO_MAIN.store(true, Ordering::SeqCst);
     }
-    for (_, u) in all.into_iter().rev() {
-        u();
-    }
+    f();
     if main {
         crate::sig::UNDO_MAIN.store(false, Ordering::SeqCst);
     }
+    IN_UNDO.with(|c| c.set(false));
 }
 
 /// Whether an on_exit_code trap is on (a `trap 'exit 143' TERM` of bash's is set).
@@ -90,16 +110,24 @@ impl Drop for CodeCount {
 impl Trap {
     /// Done with it: nothing left to undo.
     pub fn forget(self) {
-        take(self.0);
+        // (under UNDOING: a signal's undo of it already under way finishes first, and ends this)
+        let id = self.0;
+        undoing(|| {
+            take(id);
+        });
         std::mem::forget(self);
     }
 }
 
 impl Drop for Trap {
     fn drop(&mut self) {
-        if let Some(f) = take(self.0) {
-            f();
-        }
+        let id = self.0;
+        // (taken under UNDOING: a signal's thread then either runs it, or waits for it)
+        undoing(|| {
+            if let Some(f) = take(id) {
+                f();
+            }
+        });
     }
 }
 
@@ -159,7 +187,9 @@ const FG_GRACE: [std::time::Duration; 3] = [
 /// most FG_GRACE[0], then the child is sent a TERM (not at once: a child that is itself omabox would
 /// get the signal in its own cleanup), FG_GRACE[1] more, then a KILL. None when even then main has not
 /// let go (what the child left running holds its pipes): the undo goes on regardless (finding 453).
-fn foreground_over() -> Option<std::sync::MutexGuard<'static, ()>> {
+pub(crate) fn foreground_over() -> Option<std::sync::MutexGuard<'static, ()>> {
+    let t0 = std::time::Instant::now();
+    let mut said = false;
     for (i, grace) in FG_GRACE.iter().enumerate() {
         let end = std::time::Instant::now() + *grace;
         loop {
@@ -168,20 +198,69 @@ fn foreground_over() -> Option<std::sync::MutexGuard<'static, ()>> {
                 Err(std::sync::TryLockError::Poisoned(p)) => return Some(p.into_inner()),
                 Err(std::sync::TryLockError::WouldBlock) => {}
             }
+            // (said once the wait is felt: the stop is on its way)
+            if !said && t0.elapsed() >= SAY_AFTER {
+                said = true;
+                let _ = std::io::Write::write_all(&mut std::io::stderr(), STOPPING_LINE.as_bytes());
+            }
             if std::time::Instant::now() >= end {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        let pid = crate::sig::FG_PID.load(Ordering::SeqCst);
-        if let (true, Some(s)) = (pid > 0, [libc::SIGTERM, libc::SIGKILL].get(i)) {
-            // SAFETY: a signal to main's foreground child (run_child clears FG_PID once it reaps it).
-            unsafe {
-                libc::kill(pid, *s);
-            }
+        if let Some(s) = [libc::SIGTERM, libc::SIGKILL].get(i) {
+            crate::sig::signal_foreground(*s);
         }
     }
     None
+}
+
+/// What a stop says once it has waited SAY_AFTER for the step in progress (finding 453).
+pub(crate) const STOPPING_LINE: &str =
+    "omabox: stopping once the step in progress ends (at most 20 s)\n";
+const SAY_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// What a Ctrl-C a marked child may outlive comes to (ctrl_c_wait).
+enum CtrlC {
+    /// The child is over and did not die of it: the command goes on.
+    GoesOn,
+    /// The child died of it: the command stops (FOREGROUND held).
+    Stops(std::sync::MutexGuard<'static, ()>),
+    /// Another INT, TERM or HUP came first: that one stops the command.
+    Then(libc::c_int),
+}
+
+/// The marked child's end, waited for as long as it runs, while F, the handler's pipe, is still read:
+/// a signal meanwhile is not left unread behind the wait.
+fn ctrl_c_wait(f: &std::fs::File) -> CtrlC {
+    use std::os::fd::AsRawFd;
+    loop {
+        let got = match crate::sig::FOREGROUND.try_lock() {
+            Ok(g) => Some(g),
+            Err(std::sync::TryLockError::Poisoned(p)) => Some(p.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        };
+        if let Some(g) = got {
+            return if crate::sig::FG_INT.load(Ordering::SeqCst) {
+                CtrlC::Stops(g)
+            } else {
+                CtrlC::GoesOn
+            };
+        }
+        let mut p = libc::pollfd {
+            fd: f.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd of ours, 20 ms at most.
+        if unsafe { libc::poll(&mut p, 1, 20) } == 1 && p.revents & libc::POLLIN != 0 {
+            let mut b = [0u8; 1];
+            // SAFETY: a one-byte read into b from the pipe poll said is readable.
+            if unsafe { libc::read(f.as_raw_fd(), b.as_mut_ptr().cast(), 1) } == 1 {
+                return CtrlC::Then(libc::c_int::from(b[0] & !FROM_TTY));
+            }
+        }
+    }
 }
 
 /// The handlers and the thread that undoes on a signal, once.
@@ -204,7 +283,7 @@ fn arm() {
             if std::io::Read::read_exact(&mut f, &mut b).is_err() {
                 return;
             }
-            let sig = libc::c_int::from(b[0] & !FROM_TTY);
+            let mut sig = libc::c_int::from(b[0] & !FROM_TTY);
             // A Ctrl-C from the terminal while a child that takes one ran (sig::takes_ctrl_c):
             // waited for as long as that child runs; when it did not die of it, the command goes on,
             // as bash's does. With a code trap on (bash's `trap 'exit 130' INT`) never.
@@ -214,15 +293,18 @@ fn arm() {
                 && CODE_TRAPS.load(Ordering::SeqCst) == 0;
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
             let fg = if ctrl_c {
-                let g = crate::sig::FOREGROUND
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if !crate::sig::FG_INT.load(Ordering::SeqCst) {
-                    crate::sig::STOPPING.store(false, Ordering::SeqCst);
-                    drop(g);
-                    continue;
+                match ctrl_c_wait(&f) {
+                    CtrlC::GoesOn => {
+                        crate::sig::STOPPING.store(false, Ordering::SeqCst);
+                        continue;
+                    }
+                    CtrlC::Stops(g) => Some(g),
+                    // (another signal meanwhile, a second Ctrl-C too: it stops the command)
+                    CtrlC::Then(s) => {
+                        sig = s;
+                        foreground_over()
+                    }
                 }
-                Some(g)
             } else {
                 // Every other INT, TERM or HUP stops the command: its foreground child waited for,
                 // bounded (an INT sent by a process, `kill -INT`, among them: finding 454).

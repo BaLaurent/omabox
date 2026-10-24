@@ -41,17 +41,25 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
-- **An INT sent to omabox by another process (`kill -INT PID`) stops the command like TERM**: what
-  it started is undone and it exits 130, once the step in progress is over. The bash omabox went on
-  or stopped depending on the step it was in (`cpu`, `gpu`, `peek --focus`, `gdb`, `record --for`
-  and `check run` went on to their end). A Ctrl-C at the terminal is unchanged where a program takes
-  it (the scenario of `check run`, `gdb`'s run): if that program carries on, so does omabox; any
-  other step it lands on now stops the command. Scripts that sent INT to omabox expecting it to go
-  on: send nothing, or send it to the child.
+- **An INT sent to omabox by another process (`kill -INT PID`) stops the command like TERM**, once
+  the step in progress is over, with what a TERM would leave (a temporary file removed, a monitor
+  half made removed, a `record --for` stopped), exit 130. The bash omabox went on or stopped
+  depending on the step it was in (`cpu`, `gpu`, `peek --focus`, `gdb`, `record --for` and `check
+  run` went on to their end). A Ctrl-C at the terminal is unchanged where a program takes it (the
+  scenario of `check run`): if that program carries on, so does omabox; any other step it lands on,
+  `gdb`'s among them, now stops the command (gdb's runs in a process group of its own, which a
+  Ctrl-C never reached). Scripts that sent INT to omabox expecting it to go on: send nothing, or send
+  it to the child.
 - **A TERM or HUP lets the step in progress end before omabox undoes its work** (at most ~20 s,
-  then that step is stopped): `check run` stopped during a scenario takes down its boxes once the
-  scenario's step is over, where the bash omabox took them down under it and left the scenario
-  running; nothing omabox started is left running. Exit codes unchanged.
+  then that step, with its process group, is stopped; after a second omabox says "stopping once the
+  step in progress ends (at most 20 s)"): `check run` stopped during a scenario takes down its boxes
+  once the scenario's step is over, where the bash omabox took them down under it and left the
+  scenario running. Exit codes unchanged.
+- **`record --for` and `record -- ACTION` stopped by INT, TERM or HUP stop their recording**: the
+  video so far is made and said, the pointer shown again, then omabox exits 130, 143 or 129. The
+  bash omabox left the recording running in the box, the pointer hidden, and said nothing (`record
+  stop` ended it later). Scripts that ran `record stop` after such a signal: it now says the box is
+  not recording; the video is already where `-o` said.
 - **The first INT, TERM or HUP decides how omabox ends**, and what it was undoing finishes: a
   second signal no longer cuts its cleanup short, and the exit code is the first signal's (TERM then
   INT: 143; the bash omabox gave the lowest-numbered one's, 130). A signal during `record stop`
