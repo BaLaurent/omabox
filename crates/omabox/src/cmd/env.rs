@@ -64,8 +64,11 @@ fn socket_link(d: &[u8], wd: &[u8]) -> Result<Vec<u8>, &'static str> {
         let _ = std::fs::remove_file(shell::path(&tmp));
         return Err("is not a socket");
     }
-    if std::fs::rename(shell::path(&tmp), shell::path(&dst)).is_err() {
-        let _ = std::fs::remove_file(shell::path(&tmp));
+    let moved = std::fs::rename(shell::path(&tmp), shell::path(&dst)).is_ok();
+    // (rename between two links to one inode does nothing and succeeds: the link of an earlier env
+    // to this same socket leaves TMP where it was)
+    let _ = std::fs::remove_file(shell::path(&tmp));
+    if !moved {
         return Err("cannot be linked");
     }
     Ok(dst)
@@ -92,6 +95,19 @@ mod tests {
         assert_eq!(socket_link(&db, b"wayland-1"), Ok(cat!(&db, "/wayland")));
         let ino = |p: &str| std::fs::metadata(d.join(p)).expect(p).ino();
         assert_eq!(ino("run/wayland-1"), ino("wayland"));
+        // Again, the link there already: the same, and nothing else left in the dir.
+        assert_eq!(socket_link(&db, b"wayland-1"), Ok(cat!(&db, "/wayland")));
+        let mut names: Vec<String> = std::fs::read_dir(&d)
+            .expect("the dir")
+            .map(|e| {
+                e.expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, ["host.sock", "run", "wayland"]);
         let _ = std::fs::remove_dir_all(&d);
     }
 }

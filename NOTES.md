@@ -9868,7 +9868,9 @@ from them.
     so only a socket a box process bound (always the box's own) is ever named there. A run dir whose
     socket is not one is refused ("env: box 'B': its Wayland socket (run/wayland-1) is not a socket:
     refused ..."), exit 1. A path given earlier keeps naming the box's own socket whatever the box
-    does to its run dir later. Tests: env.rs's a_link_in_the_sockets_place_is_refused; t_hostile (the
+    does to its run dir later. The temporary link is removed after the rename, whatever it did (a
+    rename between two links to one inode does nothing: each env after the first left a
+    `.wayland.PID` in the box dir until the review's fix round, finding 494). Tests: env.rs's a_link_in_the_sockets_place_is_refused; t_hostile (the
     refusal, and a host grim on the earlier path captures that box's own screen); t_pointer (the path);
     t_unit_rust_parity ("env of a box whose socket is a link now" and the live boxes' env: expected
     differences).
