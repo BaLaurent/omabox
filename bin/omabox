@@ -27,9 +27,9 @@ TREE=$ROOT/tools/tree/omabox-tree
 EVENTS=$ROOT/tools/events/omabox-events
 WLFD=$ROOT/tools/wlfd/omabox-wlfd
 RELAY=$ROOT/tools/relay/omabox-relay
-# The Rust half (#324, crates/omabox, built into build/bin): the commands it has taken over run there
+# The Rust half (#324, crates/omabox, built into build/omabox): the commands it has taken over run there
 # (rust_handoff). OMABOX_BASH=1 keeps every command here, to compare the two.
-RUST=$ROOT/build/bin/omabox
+RUST=$ROOT/build/omabox
 RUST_CMDS=" _rust path env which hyprctl lua run log logs events wait windows tree pixel keys keys-to-box click scroll pointer drag shot screenshot calibrate monitor output mode gpu cpu audio ports clip peek gdb check record up down ls list save saves version -V --version _reap config brief reload restart-shell host broker guard setup help -h --help "
 NO_RUST=${OMABOX_BASH:-}; unset OMABOX_BASH   # for this call only, not what it starts
 # aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
@@ -2031,10 +2031,11 @@ box_home_file() {
 
 # The selected box's reaper, unless that is us: nothing may be left running for a box that is gone. One
 # that exited since pgrep (it saw the box dead) is gone already: no failure (#115, finding 178). Bash's
-# or the Rust half's (#324: rust_handoff exec'd it, as build/bin/omabox _reap NAME ...).
+# or the Rust half's (#324: rust_handoff exec'd it, as build/omabox _reap NAME ..., in build's bin/ before
+# wave 6-front).
 kill_reapers() {
   local p
-  for p in $(pgrep -f "^((/usr/bin/)?bash $(re_quote "$ROOT/bin/omabox")|$(re_quote "$ROOT/build/bin/omabox")) _reap $(re_quote "$NAME") "); do
+  for p in $(pgrep -f "^((/usr/bin/)?bash $(re_quote "$ROOT/bin/omabox")|$(re_quote "$ROOT/build")(/bin)?/omabox) _reap $(re_quote "$NAME") "); do
     [ "$p" = $$ ] || [ "$p" = "$BASHPID" ] || kill "$p" 2>/dev/null || true
   done
 }

@@ -5,10 +5,18 @@ use crate::cat;
 use crate::exit::{Ctx, Exit, Res};
 use crate::shell::strip_nl;
 
-/// The options of each command ported here, as bin/omabox's CMD_OPTS has them: `=` takes a value,
-/// `?` may take one.
-fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
+/// Each command's options, as bin/omabox's CMD_OPTS has them (t_unit_rust_front compares the two):
+/// `=` takes a value, `?` may take one. One table for eq_split, unknown_opt and its nearest. None
+/// for a command that takes none (help, guard, host, broker, version as such).
+pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
     match cmd {
+        b"up" => Some(concat!(
+            "-b= --box= --json --workspace= --new --confirm-close --no-confirm-close --interactive ",
+            "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
+            "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
+            "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --xwayland ",
+            "--autoreload --no-shell --no-pointer"
+        )),
         b"path" => Some("-b= --box= --logs --run --home --json"),
         b"env" | b"brief" | b"reload" | b"restart-shell" => Some("-b= --box="),
         b"which" => Some("--json"),

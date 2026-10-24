@@ -240,7 +240,7 @@ pub fn kill_box(ctx: &Ctx) -> bool {
 }
 
 /// kill_reapers: the selected box's reaper (`bash $ROOT/bin/omabox _reap NAME ...`, or this half's
-/// `$ROOT/build/bin/omabox _reap NAME ...` that bash's hand-off exec'd), unless that is us: nothing
+/// `$ROOT/build/omabox _reap NAME ...` that bash's hand-off exec'd), unless that is us: nothing
 /// may be left running for a box that is gone (#115, finding 178). pgrep -f's match of its command
 /// line (its words joined by spaces), looked for in /proc here.
 pub fn kill_reapers(ctx: &Ctx) {
@@ -275,8 +275,8 @@ pub fn reaper_pids(root: &[u8], name: &[u8]) -> Vec<Vec<u8>> {
 }
 
 /// Whether CMDLINE (NUL-ended words) is box NAME's reaper: `(/usr/bin/)?bash ROOT/bin/omabox _reap
-/// NAME ` at its start, or this half's, `ROOT/build/bin/omabox _reap NAME ` (bash's hand-off exec'd
-/// it).
+/// NAME ` at its start, or this half's, `ROOT/build(/bin)?/omabox _reap NAME ` (bash's hand-off
+/// exec'd it; in build's bin/ before wave 6-front).
 fn reaper_line(cmdline: &[u8], root: &[u8], name: &[u8]) -> bool {
     let words = cmdline.strip_suffix(b"\0").unwrap_or(cmdline);
     let line: Vec<u8> = words
@@ -287,7 +287,10 @@ fn reaper_line(cmdline: &[u8], root: &[u8], name: &[u8]) -> bool {
     [b"bash ".as_slice(), b"/usr/bin/bash "]
         .iter()
         .any(|pre| line.starts_with(&cat!(pre, tail)))
-        || line.starts_with(&cat!(root, "/build/bin/omabox _reap ", name, " "))
+        || line
+            .strip_prefix(cat!(root, "/build").as_slice())
+            .map(|l| l.strip_prefix(b"/bin").unwrap_or(l))
+            .is_some_and(|l| l.starts_with(&cat!("/omabox _reap ", name, " ")))
 }
 
 /// rm_box: the box dir and its HOME; only a dir under BOXES.
@@ -1258,18 +1261,18 @@ mod tests {
         // (the name the last word: no space after it in pgrep's line)
         assert!(!reaper_line(b"bash\0/r/bin/omabox\0_reap\0b1\0", r, n));
         // (the Rust half's, which bash's hand-off exec'd)
-        assert!(reaper_line(
-            b"/r/build/bin/omabox\0_reap\0b1\x00123\x00",
-            r,
-            n
-        ));
+        for sub in [&b""[..], b"/bin"] {
+            let b = cat!("/r/build", sub);
+            assert!(reaper_line(&cat!(b, "/omabox\0_reap\0b1\x00123\x00"), r, n));
+            assert!(!reaper_line(
+                &cat!(b, "/omabox\0_reap\0b10\x00123\x00"),
+                r,
+                n
+            ));
+        }
+        assert!(!reaper_line(b"/x/build/omabox\0_reap\0b1\x00123\x00", r, n));
         assert!(!reaper_line(
-            b"/r/build/bin/omabox\0_reap\0b10\x00123\x00",
-            r,
-            n
-        ));
-        assert!(!reaper_line(
-            b"/x/build/bin/omabox\0_reap\0b1\x00123\x00",
+            b"/r/build/lib/omabox\0_reap\0b1\x00123\x00",
             r,
             n
         ));

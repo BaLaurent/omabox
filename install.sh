@@ -52,10 +52,10 @@ for t in pointer keyboard wlfd peek still burst tree relay events; do
   make -s -C "$ROOT/tools/$t" || die "building tools/$t failed"
   echo "tools/$t"
 done
-# The commands the Rust half has taken over (#324): build/bin/omabox, which bin/omabox hands them to.
+# The commands the Rust half has taken over (#324): build/omabox, which bin/omabox hands them to.
 cargo build --release --locked -q --manifest-path "$ROOT/Cargo.toml" || die "building crates/omabox failed"
-install -Dm755 "$ROOT/target/release/omabox" "$ROOT/build/bin/omabox"
-echo "build/bin/omabox"
+install -Dm755 "$ROOT/target/release/omabox" "$ROOT/build/omabox"
+echo "build/omabox"
 
 # What each user needs (links: omabox, the agent skill, the bar widget; the settings dir; the agent
 # guard, asked for): `omabox setup`, which a package's users run themselves (finding 126).

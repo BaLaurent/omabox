@@ -70,11 +70,11 @@ tools_ready() {
           "$([ ! -f "$ROOT/.git" ] || echo ", run from the main checkout, not this worktree")" "$out"; return 1; }
     echo "built tools/$t (it was missing or older than its sources)"
   done
-  # The Rust half (#324): cargo's own check says whether it is current; build/bin/omabox is where
+  # The Rust half (#324): cargo's own check says whether it is current; build/omabox is where
   # bin/omabox hands its commands. Not part of an install yet: there every command runs in bash.
   [ "${1:-}" = installed ] && return 0
   out=$(flock "$ROOT/tools" sh -c 'cargo build --release --locked -q --manifest-path "$1/Cargo.toml" &&
-    install -Dm755 "$1/target/release/omabox" "$1/build/bin/omabox"' _ "$ROOT" 2>&1) ||
+    install -Dm755 "$1/target/release/omabox" "$1/build/omabox"' _ "$ROOT" 2>&1) ||
     { printf 'building crates/omabox failed (cargo, from rust or rustup):\n%s\n' "$out"; return 1; }
 }
 
@@ -1833,7 +1833,7 @@ t_unit_config() {
   cfg() { HOME=$h "$CLI" config "$@" 2>&1; }
   # (protect-ports: the Rust half's key, finding 480; bash's half lists the first five)
   local dflt="workspace=9 confirm-close=off bar-icon=always gpu=auto shot-fit=off protect-ports="
-  [ -x "$ROOT/build/bin/omabox" ] || dflt=${dflt% protect-ports=}
+  [ -x "$ROOT/build/omabox" ] || dflt=${dflt% protect-ports=}
   check_eq "defaults" "$dflt" "$(cfg | tr '\n' ' ' | sed 's/ $//')"
   check_eq "set a workspace" workspace=4 "$(cfg workspace 4)"
   # Omarchy 4.5's scratchpad is its Quake console (#292, finding 423): `special` still works, saying
@@ -1863,7 +1863,7 @@ t_unit_config() {
   # protect-ports (finding 480, the Rust half's): what config writes is what up reads. up's reader
   # (net.rs's) on the file it wrote: an isolated box's --allow of a port it lists is refused before
   # anything is made. A config that cannot be read refuses every up (finding 482: S10 fails closed).
-  if [ -x "$ROOT/build/bin/omabox" ]; then
+  if [ -x "$ROOT/build/omabox" ]; then
     local pph=$TMP/conf-pp prt=$TMP/conf-pp-rt; mkdir -p "$pph" "$prt"
     check_eq "config protect-ports ' 8080, 5432': its normal form" protect-ports=5432,8080 "$(HOME=$pph "$CLI" config protect-ports ' 8080, 5432' 2>&1)"
     check_eq "...written so in the file" protect-ports=5432,8080 "$(grep protect-ports "$pph/.config/omabox/config")"
@@ -1878,7 +1878,7 @@ t_unit_config() {
       check_fails "...nothing of the box made" test -e "$prt/omabox/$P-pp"
       chmod 600 "$pph/.config/omabox/config"
     else skip "a config that cannot be read refuses up" "root reads it"; fi
-  else skip "config protect-ports, as up reads it" "no build/bin/omabox (protect-ports is the Rust half's)"; fi
+  else skip "config protect-ports, as up reads it" "no build/omabox (protect-ports is the Rust half's)"; fi
   check_eq "default removes it" workspace=9 "$(cfg workspace default)"
   check_eq "the rest of the file is kept" "confirm-close=on bar-icon=auto" "$(grep -v '^#' "$h/.config/omabox/config" | tr '\n' ' ' | sed 's/ $//')"
   echo "workspace=9'); os.execute('x" >> "$h/.config/omabox/config"
@@ -3099,7 +3099,17 @@ print(p.pid, flush=True); time.sleep(60)' "$1" env OMABOX_OWN_SESSION="${2-1}" "
   kill -KILL "$parent" "$pid" 2>/dev/null || true
 }
 
-# The Rust half (#324): bin/omabox hands the commands in RUST_CMDS to build/bin/omabox with main's
+# The Rust half's binary (#324), for a parity test: in a checkout the suite built it (tools_ready), so
+# one missing fails, never skips (that would hide a thousand cases); an install has none, every command
+# running in bash there.
+rust_built() {
+  [ -x "$ROOT/build/omabox" ] && return 0
+  if [ "$INSTALLED" = 1 ]; then skip "$1" "no build/omabox (an install: every command runs in bash)"
+  else no "$1" "no build/omabox in this checkout (the suite builds it: tools_ready)"; fi
+  return 1
+}
+
+# The Rust half (#324): bin/omabox hands the commands in RUST_CMDS to build/omabox with main's
 # words (-b after the command, a command's --opt=value split); OMABOX_BASH=1 keeps them in bash; a command the
 # binary lacks (one older than its bash) goes back to bash, told not to hand it over again.
 t_unit_rust_handoff() {
@@ -3107,8 +3117,23 @@ t_unit_rust_handoff() {
   check_eq "a taken-over command runs in Rust, with main's words" "rust -b b1 x" "$("$CLI" _rust -b b1 x 2>&1)"
   out=$(OMABOX_BASH=1 "$CLI" _rust 2>&1); rc=$?
   check_eq "OMABOX_BASH=1: bash keeps it (it has no _rust: exit 2)" "2 omabox: unknown command: _rust (omabox help lists the commands and their options)" "$rc $out"
-  out=$("$ROOT/build/bin/omabox" _rust-nosuch 2>&1); rc=$?
+  out=$(OMABOX_ROOT=$ROOT "$ROOT/build/omabox" _rust-nosuch 2>&1); rc=$?
   check_eq "a command the binary lacks goes back to bash" "2 omabox: unknown command: _rust-nosuch (omabox help lists the commands and their options)" "$rc $out"
+  # Never to itself (wave 6-front, A2): with bin/omabox the binary (a copy, or the flip's link to
+  # ../build/omabox), a word it lacks is one line and 126, not a loop (timeout: 124 if it loops).
+  local t=$TMP/rh
+  rm -rf "$t"; mkdir -p "$t/a/bin" "$t/b/bin" "$t/b/build"
+  cp "$ROOT/build/omabox" "$t/a/bin/omabox"; cp "$ROOT/build/omabox" "$t/b/build/omabox"; ln -s ../build/omabox "$t/b/bin/omabox"
+  out=$(OMABOX_ROOT=$t/a timeout 10 "$t/a/bin/omabox" _rust-nosuch 2>&1); rc=$?
+  check_eq "...not to itself: bin/omabox this binary, one line, exit 126" \
+    "126 omabox: this omabox has no command _rust-nosuch, and no bash omabox to hand it to ($t/a/bin/omabox is this binary)" "$rc $out"
+  out=$(OMABOX_ROOT=$t/b timeout 10 "$t/b/build/omabox" _rust-nosuch 2>&1); rc=$?
+  check_eq "...nor through bin/omabox linked to it" \
+    "126 omabox: this omabox has no command _rust-nosuch, and no bash omabox to hand it to ($t/b/bin/omabox is this binary)" "$rc $out"
+  # Called straight, the binary runs its own front: the words as a user gives them.
+  check_eq "called straight: its own front (-b moved after the command)" "rust -b b1 x" "$("$ROOT/build/omabox" _rust -b b1 x 2>&1)"
+  out=$("$ROOT/build/omabox" _rust-nosuch 2>&1); rc=$?
+  check_eq "...and an unknown word is the front's unknown command" "2 omabox: unknown command: _rust-nosuch (omabox help lists the commands and their options)" "$rc $out"
 }
 
 # The Rust half's parity (#324), which every wave reuses: `parity LABEL ARGS...` runs `omabox ARGS` both
@@ -3147,11 +3172,12 @@ rp_state() {
   fi
   [ -z "$rp_also" ] || "$rp_also"
 }
-# rp_differs DIR: the expected difference's checks over DIR's bash.* and rust.* (see above): the fields
-# named into rp_fields, what failed into rp_bad.
+# rp_differs DIR [SIDE...]: the expected difference's checks over DIR's bash.* and each SIDE's files
+# (rust.* when none is named; see above): the fields named into rp_fields, what failed into rp_bad.
 rp_differs() {
-  local d=$1 side w f op want re='^(rc|out|err|state)(=|~|!~)(.*)$' fb="" fr=""
-  local -a ws
+  local d=$1 side o w f op want re='^(rc|out|err|state)(=|~|!~)(.*)$' fb="" fr=""
+  local -a ws others=("${@:2}")
+  [ ${#others[@]} -gt 0 ] || others=(rust)
   rp_bad="" rp_fields=""
   rm -f "$d"/*.rest
   for w in "${rp_bash[@]}"; do [[ $w =~ $re ]] && fb+="${BASH_REMATCH[1]}"$'\n'; done
@@ -3159,8 +3185,8 @@ rp_differs() {
   fb=$(LC_ALL=C sort -u <<<"$fb" | xargs) fr=$(LC_ALL=C sort -u <<<"$fr" | xargs)
   [ -n "$fb" ] && [ "$fb" = "$fr" ] || rp_bad+="the expected difference names fields [$fb] for bash, [$fr] for Rust: one set, both sides; "
   rp_fields=$fb
-  for side in bash rust; do
-    ws=("${rp_bash[@]}"); [ "$side" = bash ] || [ ! -x "$ROOT/build/bin/omabox" ] || ws=("${rp_rust[@]}")
+  for side in bash "${others[@]}"; do
+    ws=("${rp_bash[@]}"); [ "$side" = bash ] || [ ! -x "$ROOT/build/omabox" ] || ws=("${rp_rust[@]}")
     for w in "${ws[@]}"; do
       [[ $w =~ $re ]] || { rp_bad+="$side: '$w' is not FIELD=TEXT, FIELD~ERE or FIELD!~ERE; "; continue; }
       f=$d/$side.${BASH_REMATCH[1]} op=${BASH_REMATCH[2]} want=${BASH_REMATCH[3]}
@@ -3175,27 +3201,47 @@ rp_differs() {
       esac
     done
   done
-  for f in $rp_fields; do
-    cmp -s "$d/bash.$f.rest" "$d/rust.$f.rest" ||
-      rp_bad+="$f beyond what is stated: bash [$(head -c 400 "$d/bash.$f.rest" 2>&1)] rust [$(head -c 400 "$d/rust.$f.rest" 2>&1)]; "
+  for o in "${others[@]}"; do
+    for f in $rp_fields; do
+      cmp -s "$d/bash.$f.rest" "$d/$o.$f.rest" ||
+        rp_bad+="$f beyond what is stated: bash [$(head -c 400 "$d/bash.$f.rest" 2>&1)] $o [$(head -c 400 "$d/$o.$f.rest" 2>&1)]; "
+    done
   done
   rm -f "$d"/*.rest
-  [ -x "$ROOT/build/bin/omabox" ] || return 0
-  for f in $rp_fields; do cmp -s "$d/bash.$f" "$d/rust.$f" && rp_bad+="$f: the same both ways, so no difference; "; done
+  [ -x "$ROOT/build/omabox" ] || return 0
+  for o in "${others[@]}"; do
+    for f in $rp_fields; do cmp -s "$d/bash.$f" "$d/$o.$f" && rp_bad+="$f: the same both ways ($o), so no difference; "; done
+  done
   return 0
 }
+# The legs (wave 6-front, A2): bash (OMABOX_BASH=1), rust (bin/omabox handing the command to
+# build/omabox, the words shaped by bash's front) and direct (build/omabox called as users will call
+# it once it is bin/omabox: its own front, no OMABOX_ROOT, no environ fd). Each of rust and direct
+# is compared with bash, and an expected difference's rp_rust is both's. RP_LEGS="rust" (or
+# "direct") runs fewer, for a local run. Under --installed (no binary) rust alone, bash there too.
+rp_legs() {
+  if [ ! -x "$ROOT/build/omabox" ]; then echo rust
+  else echo "${RP_LEGS:-rust direct}"; fi
+}
 parity() {
-  local label=$1 side d=$TMP/rp-out.$BASHPID; shift
+  local label=$1 side d=$TMP/rp-out.$BASHPID legs cli; shift
+  local -a legenv
+  read -ra legs <<<"$(rp_legs)"
   # (RP_ONLY=RE: only the cases whose label matches, to work on a few; RP_DIFF=FILE: a failing case's
   # whole difference appended there)
   [ -z "${RP_ONLY:-}" ] || [[ $label =~ $RP_ONLY ]] || { rp_why="" rp_bash=() rp_rust=(); return 0; }
   mkdir -p "$d"
-  for side in bash rust; do
+  for side in bash "${legs[@]}"; do
     [ -z "$rp_prep" ] || "$rp_prep"
-    local how=OMABOX_BASH=1; [ "$side" = bash ] || how=OMABOX_BASH=
-    (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL -u OMABOX_RELAY_DEFAULT -u SELECT_PLAIN \
-      ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
-      ${rp_wrap[@]+"${rp_wrap[@]}"} "$CLI" "$@" >"$d/$side.out" 2>"$d/$side.err" <"$rp_in"; echo $? > "$d/$side.rc")
+    cli=$CLI
+    case $side in
+      bash) legenv=(OMABOX_BASH=1) ;;
+      rust) legenv=(OMABOX_BASH=) ;;
+      *) legenv=() cli=$ROOT/build/omabox ;;
+    esac
+    (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL -u OMABOX_RELAY_DEFAULT -u SELECT_PLAIN -u OMABOX_BASH \
+      ${rp_env[@]+"${rp_env[@]}"} ${legenv[@]+"${legenv[@]}"} XDG_RUNTIME_DIR="$rp_rt" \
+      ${rp_wrap[@]+"${rp_wrap[@]}"} "$cli" "$@" >"$d/$side.out" 2>"$d/$side.err" <"$rp_in"; echo $? > "$d/$side.rc")
     rp_state > "$d/$side.state"
     [ -z "$rp_check" ] || "$rp_check" "$side" "$d/$side.out" "$d/$side.err"
     if [ -n "$rp_sed" ]; then local f; for f in out err; do sed -i -E "$rp_sed" "$d/$side.$f"; done; fi
@@ -3204,15 +3250,17 @@ parity() {
     sed -i '/^omabox: stopping once the step in progress ends (at most 20 s)$/d' "$d/$side.err"
   done
   [ -z "${RP_SHOW:-}" ] || { echo "== $label: rc $(cat "$d/bash.rc")"; cat "$d/bash.out" "$d/bash.err"; } >> "$RP_SHOW"
-  local f diffs="" differ=" "
-  [ -z "$rp_why" ] || { rp_differs "$d"; differ=" $rp_fields "; diffs=$rp_bad; label+=" (expected difference: finding $rp_why)"; }
+  local f o diffs="" differ=" "
+  [ -z "$rp_why" ] || { rp_differs "$d" "${legs[@]}"; differ=" $rp_fields "; diffs=$rp_bad; label+=" (expected difference: finding $rp_why)"; }
   rp_why="" rp_bash=() rp_rust=()
-  for f in rc out err state; do
-    [[ $differ != *" $f "* ]] || continue
-    cmp -s "$d/bash.$f" "$d/rust.$f" || diffs+="$f: bash [$(head -c 400 "$d/bash.$f")] rust [$(head -c 400 "$d/rust.$f")]; "
+  for o in "${legs[@]}"; do
+    for f in rc out err state; do
+      [[ $differ != *" $f "* ]] || continue
+      cmp -s "$d/bash.$f" "$d/$o.$f" || diffs+="$f: bash [$(head -c 400 "$d/bash.$f")] $o [$(head -c 400 "$d/$o.$f")]; "
+    done
   done
   if [ -z "$diffs" ]; then ok "$label"; else
-    [ -z "${RP_DIFF:-}" ] || { echo "== $label: omabox $*"; for f in rc out err state; do diff "$d/bash.$f" "$d/rust.$f"; done; } >> "$RP_DIFF" 2>&1
+    [ -z "${RP_DIFF:-}" ] || { echo "== $label: omabox $*"; for o in "${legs[@]}"; do for f in rc out err state; do diff "$d/bash.$f" "$d/$o.$f"; done; done; } >> "$RP_DIFF" 2>&1
     no "$label" "omabox $* -> $diffs"
   fi
 }
@@ -3267,7 +3315,7 @@ EOF
 # process in a pid namespace of its own, straight or behind a stand-in pasta), a session's boxes
 # (finding 88, #136), an agent resumed (take_over, finding 93) and early ends of run -d jobs (job_note).
 t_unit_rust_parity() {
-  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  rust_built "rust parity" || return 0
   local r=$TMP/rp sid=0123456789abcdef s8=89abcdef
   # (a locale whose `[0-9]` and `[A-Za-z]` take more than ASCII in glibc's regex, bash's `=~`: where
   # the system has one, omabox's own ASCII patterns differ there, finding 445)
@@ -3299,7 +3347,7 @@ t_unit_rust_parity() {
   rp_bash=('err=omabox: bad -n: x') rp_rust=('err!~^more'); rp_differs "$r/ed"
   check_match "...a side not as stated, each said" "^bash err: .*rust err: a line matches /\^more/" "$rp_bad"
   rp_bash=('rc=1') rp_rust=('rc=1'); rp_differs "$r/ed"
-  check_eq "...a field the same both ways: no difference" "rc: the same both ways, so no difference; " "$rp_bad"
+  check_eq "...a field the same both ways: no difference" "rc: the same both ways (rust), so no difference; " "$rp_bad"
   rp_bash=('err~bad' 'state~a') rp_rust=('err~bad'); rp_differs "$r/ed"
   check_match "...fields named for one side only" "^the expected difference names fields \[err state\] for bash, \[err\] for Rust" "$rp_bad"
   rp_bash=() rp_rust=() rp_fields="" rp_bad=""
@@ -3379,7 +3427,7 @@ t_unit_rust_parity() {
   rp_prep=rp_fixture
   rp_fixture
   check_eq "path runs in the binary, no bash behind it" "$r/rt/omabox/dead1" \
-    "$(cd "$r/norepo" && XDG_RUNTIME_DIR=$r/rt OMABOX_ROOT=/nonexistent "$ROOT/build/bin/omabox" path dead1 2>&1)"
+    "$(cd "$r/norepo" && XDG_RUNTIME_DIR=$r/rt OMABOX_ROOT=/nonexistent "$ROOT/build/omabox" path dead1 2>&1)"
   parity "path: the default box's dir" path
   parity "path NAME" path dead1
   parity "path -b NAME" path -b dead1
@@ -3668,19 +3716,19 @@ t_unit_rust_parity() {
   # stand-ins' Hyprland that does not answer.
   local v
   for v in LAYER_SPAN_JQ WIN_JQ WIN_SEL_JQ WIN_DESC_JQ DESK_FACTS_JQ DESK_TARGET_JQ LAYER_LIST_JQ JQ_MON CLIP_BOX_COPY CLIP_BOX_TYPES AGENT_MARKS; do
-    check_eq "the Rust half's $v is bash's" "$(lib eval "printf %s \"\$$v\"")" "$("$ROOT/build/bin/omabox" _rust-jq "$v")"
+    check_eq "the Rust half's $v is bash's" "$(lib eval "printf %s \"\$$v\"")" "$("$ROOT/build/omabox" _rust-jq "$v")"
   done
   # Its programs that are inline in bash's functions: each in bin/omabox as it is (a path, .[0] and
   # length aside).
   local script p missing="" n=0; script=$(cat "$ROOT/bin/omabox")
-  while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"$p"* ]] || missing+="[$p] "; done < <("$ROOT/build/bin/omabox" _rust-jq --inline)
+  while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"$p"* ]] || missing+="[$p] "; done < <("$ROOT/build/omabox" _rust-jq --inline)
   check_eq "the Rust half's $n inline jq programs are in bin/omabox, byte for byte" "" "$missing"
   # record's (recprog.rs, wave 4b): each as bin/omabox has it between its quotes, and what
   # gen_recprog.py takes out of bin/omabox now.
   n=0 missing=""
-  while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"'$p'"* ]] || missing+="[$p] "; done < <("$ROOT/build/bin/omabox" _rust-jq --recprog)
+  while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"'$p'"* ]] || missing+="[$p] "; done < <("$ROOT/build/omabox" _rust-jq --recprog)
   check_eq "record's $n programs are in bin/omabox, quoted as they are there" "" "$missing"
-  check "...and recprog.rs is what gen_recprog.py takes out of bin/omabox" cmp -s <("$ROOT/build/bin/omabox" _rust-jq --recprog) <(python3 -I "$ROOT/crates/omabox/gen_recprog.py" "$ROOT" --list)
+  check "...and recprog.rs is what gen_recprog.py takes out of bin/omabox" cmp -s <("$ROOT/build/omabox" _rust-jq --recprog) <(python3 -I "$ROOT/crates/omabox/gen_recprog.py" "$ROOT" --list)
   rp_w3() {
     rp_w2
     local d=$r/rt/omabox c
@@ -4633,7 +4681,7 @@ while True:
 # their own and host listeners on throwaway ports of the test's (never a service of the user's, nor
 # 8080). Its own stand-ins (not t_unit_rust_parity's): their monitors change with each case.
 t_unit_rust_parity4() {
-  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity 4a" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  rust_built "rust parity 4a" || return 0
   local r=$TMP/rp4 st i
   rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/bin" "$r/hostbin" "$r/st/host" "$r/tmpd" "$r/norepo"
   st=$r/st
@@ -5636,7 +5684,7 @@ PYEOF
 )
     local tf=$r/rt/omabox/fki/run/omabox.appid.WAYLAND-2 tok=${rp4_tok:-}
     # (BASH:RUST, where the halves differ on purpose; both bash's under --installed)
-    case $tok in *:*) if [ "$1" = bash ] || [ ! -x "$ROOT/build/bin/omabox" ]; then tok=${tok%%:*}; else tok=${tok#*:}; fi ;; esac
+    case $tok in *:*) if [ "$1" = bash ] || [ ! -x "$ROOT/build/omabox" ]; then tok=${tok%%:*}; else tok=${tok#*:}; fi ;; esac
     case $tok in
       gone) [ ! -e "$tf" ] || why+="${why:+; }its class token left" ;;
       kept) [ -e "$tf" ] || why+="${why:+; }its class token gone" ;;
@@ -5710,7 +5758,7 @@ PYEOF
   rp_wrap=(env RP_LINGER=2 "$r/rp-sig" group-TERM "$st/create-sent")
   rp_why=453 rp_bash=('state~^output remove WAYLAND-2') rp_rust=('state~^output remove WAYLAND-2')
   parity "monitor add, interactive, and group-TERM before the create reaches the box: removed after it, the token gone (finding 429)" monitor -b fki add 800x600
-  local rp4_rm="remove create remove"; [ ! -x "$ROOT/build/bin/omabox" ] || rp4_rm="create remove"
+  local rp4_rm="remove create remove"; [ ! -x "$ROOT/build/omabox" ] || rp4_rm="create remove"
   check_eq "...a remove before the create, then one after it (bash); one after it (Rust)" "$rp4_rm" \
     "$(grep -oE '^output (create|remove)' "$st/hypr.log" | sed 's/output //' | paste -sd' ')"
   rp_wrap=(env RP_LINGER=2 "$r/rp-sig" group-HUP "$st/create-sent") rp4_want="" rp4_tok=""
@@ -5757,7 +5805,7 @@ PYEOF
   # token stays, for a box that has yet to read it (there is none to read it here).
   rp4_hang() { rp4_imain; echo 12 > "$st/create.arrive"; }
   rp_wrap=() rp4_pre=(rp4_hang) rp4_want=none rp4_tok=kept
-  local rp4_rm2=2; [ ! -x "$ROOT/build/bin/omabox" ] || rp4_rm2=1
+  local rp4_rm2=2; [ ! -x "$ROOT/build/omabox" ] || rp4_rm2=1
   parity "monitor add, interactive, the create past timeout 10: unclear, removed, nothing made (finding 429)" monitor -b fki add 800x600
   check_eq "...the box never got it, the remove sent (twice in bash, once in Rust)" "0 $rp4_rm2" \
     "$(grep -c '^output create' "$st/hypr.log" 2>/dev/null || true) $(grep -c '^output remove WAYLAND-2' "$st/hypr.log" 2>/dev/null || true)"
@@ -5882,7 +5930,7 @@ PYEOF
 # (help.txt, the same bytes as usage_text's), and `help`, `help CMD`, `CMD --help` cut as bash's usage
 # cuts it, for every command and alias.
 t_unit_rust_front() {
-  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust front" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  rust_built "rust front" || return 0
   local r=$TMP/rpf c
   rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/norepo"
   check "help.txt is bin/omabox's usage_text, byte for byte" cmp -s <(lib usage_text) "$ROOT/crates/omabox/src/help.txt"
@@ -5913,6 +5961,56 @@ t_unit_rust_front() {
     [ "$c" != hyprctl ] || continue
     parity "$c --help" "$c" --help
   done
+  # A2, the front: -b before the command, --opt=value, an unknown command; the direct leg runs the
+  # binary's own front (front.rs), the other two bash's.
+  local k want got bad=""
+  for k in $(lib eval 'echo "${!CMD_OPTS[@]}"') $(lib eval 'echo $COMMANDS') screenshot logs list _reap; do
+    want=$(lib cmd_opts "$k" 2>/dev/null | xargs) got=$("$ROOT/build/omabox" _rust-opts "$k" 2>/dev/null | xargs)
+    [ "$want" = "$got" ] || bad+="$k: bash [$want] rust [$got]; "
+  done
+  check_eq "each command's options are bash's CMD_OPTS" "" "$bad"
+  parity "-b with nothing" -b
+  parity "-b with an empty name" -b '' path
+  parity "--box= with nothing" --box= path
+  parity "-b N alone" -b rpf
+  parity "-b N and an empty command" -b rpf ''
+  parity "-b twice, the last taken" -b rpa --box=rpb path
+  parity "--box=N path" --box=rpf path
+  for c in ls list which saves config guard host broker; do parity "-b N $c: not about one box" -b rpf "$c"; done
+  for c in help -h --help version -V --version; do parity "-b N $c: dropped" -b rpf "$c"; done
+  parity "-b N nosuch" -b rpf nosuch
+  parity "-b N _reap: not a command" -b rpf _reap
+  parity "an unknown command" nosuch
+  parity "an unknown command's nearest" shto
+  parity "an empty command: help" ''
+  parity "no command: help" 
+  # (every command's unknown option and its nearest, from the one table: t_unit_exit_codes' cases,
+  # three legs; not clip, which refuses an agent first, naming its comm)
+  for k in $(lib eval 'echo "${!CMD_OPTS[@]}"'); do
+    [ "$k" != clip ] || continue
+    parity "$k: an unknown option" "$k" --bogus-opt
+    parity "$k: an unknown --x=y" "$k" --jsno=1
+  done
+  parity "path --box=N" path --box=rpf
+  parity "path --json=1: takes no value" path --json=1
+  parity "path --jsno=1: unknown, its nearest" path --jsno=1
+  parity "path --=x" path --=x
+  parity "path -b=N: a word" path -b=rpf
+  parity "events --mark=M (may take a value)" events --mark=m1
+  parity "events --since= (empty value)" events --since=
+  parity "run --json=1: run's 125" run --json=1 -- true
+  parity "run --bogus=1 -- true: the command's words from there" run --bogus=1 -- true
+  parity "lua --json=1" lua --json=1 1
+  parity "hyprctl --box=N clients" hyprctl --box=rpf clients
+  parity "pointer --steps=3 -- move 1 1" pointer --steps=3 -- move 1 1
+  parity "up --sizee 1: its nearest" up --sizee 1
+  parity "up --interactiv: its nearest" up --interactiv
+  parity "config --json=1" config --json=1
+  parity "version --json=1: version has no table" version --json=1
+  parity "--version --json=1" --version --json=1
+  # (bash's first line refuses it in bash's words, the hand-off's too; the direct leg in omabox's)
+  rp_why=501 rp_bash=(err~'^.*bin/omabox: line [0-9]+: XDG_RUNTIME_DIR: XDG_RUNTIME_DIR is not set$') rp_rust=('err=omabox: XDG_RUNTIME_DIR is not set')
+  RP_LEGS=direct rp_rt="" rp_snap=0 parity "an empty XDG_RUNTIME_DIR" help
   parity "-b N shot --help" -b rpf shot --help
   parity "-b N run -h" -b rpf run -h
   parity "shot -b N --help" shot -b rpf --help
@@ -5925,7 +6023,7 @@ t_unit_rust_front() {
 }
 
 t_unit_rust_parity5() {
-  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity 5" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  rust_built "rust parity 5" || return 0
   local r=$TMP/rp5 u1="" l1="" ns1 i
   rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/norepo" "$r/pl/good" "$r/pl/badid" "$r/pl/noid" "$r/th/mytheme" "$r/th2/mytheme" \
     "$r/th/.hidden" "$r/glob/fonts" "$r/hypr" "$r/desk-none" "$r/bin"
@@ -6519,7 +6617,7 @@ protect-ports=')
 }
 
 t_unit_rust_parity4b() {
-  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity 4b" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  rust_built "rust parity 4b" || return 0
   local r=$TMP/rp4b st i weird=$'w\nx\x1by:z'
   rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/bin" "$r/st/host" "$r/tmpd" "$r/norepo" "$r/home/.config/omabox" "$r/om/default/hypr"
   st=$r/st
@@ -8788,6 +8886,7 @@ EOF
   check_fails "the jail swapping a hidden file's folder with its own while up runs: never in a box" grep -q '^/' <<<"$(awk '/^race up/ {getline; print}' "$TMP/jailmask.out")"
   check_fails "...each up either came up or was refused for it" grep -q '^race other' "$TMP/jailmask.out"
 }
+
 
 # Every test runs: a t_* function left out of UNIT and BOX would never run, and nobody would notice.
 t_unit_registry() {
@@ -13990,7 +14089,7 @@ t_unit_install() {
   # cargo under this HOME has no toolchain (rustup's, or mise's shim, which refuses a config it has
   # not been told to trust): the Rust half's build (#324) is this checkout's binary put where cargo
   # would leave it.
-  printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --manifest-path ] && m=$2; shift; done\nd=$(dirname "$m")/target/release\nmkdir -p "$d" && cp "%s/build/bin/omabox" "$d/omabox"\n' "$ROOT" > "$stub/cargo"
+  printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --manifest-path ] && m=$2; shift; done\nd=$(dirname "$m")/target/release\nmkdir -p "$d" && cp "%s/build/omabox" "$d/omabox"\n' "$ROOT" > "$stub/cargo"
   chmod +x "$stub/sudo" "$stub/pacman" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell" "$stub/cargo"
   echo omabox-no-such-package > "$stub/missing"
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); local rc=$?
@@ -14187,7 +14286,7 @@ t_own_processes() {
 # (durations evened out) and what it leaves in the box dir: launch.sh as written (every bwrap, pasta
 # and env word), box.json without its times and pids, and the files there.
 t_rust_parity_up() {
-  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity up" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  rust_built "rust parity up" || return 0
   local U=$P-rpu r=$TMP/rpu
   rm -rf "$r"; mkdir -p "$r/td/rp-theme" "$r/norepo"; echo seeded > "$r/seed.txt"; echo 'name = "rp"' > "$r/td/rp-theme/colors.toml"
   # A HOME of the test's own, so the user's own ~/.config/omabox/config (protect-ports, a gpu) cannot

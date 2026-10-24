@@ -7,7 +7,7 @@ If `.local/AGENTS.md` exists, read it first: this checkout's private notes (git-
 add to the ones here).
 
 Read first: `NOTES.md`: architecture, reproduce steps, what was verified, findings, dead ends,
-open gaps. `bin/omabox` is the CLI, being ported to Rust (#324): `crates/omabox`, built into `build/bin/omabox`,
+open gaps. `bin/omabox` is the CLI, being ported to Rust (#324): `crates/omabox`, built into `build/omabox` (run that or `bin/omabox`, never cargo's `target/`: the binary finds its checkout from where it is),
 runs the commands in `RUST_CMDS`, which `bin/omabox` hands it; `share/` runs inside the box, `tools/` holds the C helpers (pointer,
 keyboard, wlfd, peek, still, relay, events), `install.sh` sets a machine up, `skill/` is the agent skill (linked for Claude
 Code, Codex, OpenCode, pi and Hermes), `skill-feedback/` the opt-in `omabox-feedback` skill (`omabox setup --feedback-skill`), `plugin/` is the bar widget, `test/run.sh` is the regression

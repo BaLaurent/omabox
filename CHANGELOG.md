@@ -77,6 +77,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **Without `XDG_RUNTIME_DIR`, omabox says so in its own words**: "omabox: XDG_RUNTIME_DIR is not
+  set" (exit 1, as before), where the bash omabox printed "bin/omabox: line 13: XDG_RUNTIME_DIR:
+  XDG_RUNTIME_DIR is not set". Scripts matching that line: match "XDG_RUNTIME_DIR is not set".
 - **`help WORD` takes WORD as written**: `omabox help 'u\160'` is an unknown command (exit 2). The
   bash omabox handed the word to awk, which read escapes in it, so it printed `up`'s help. Scripts:
   nothing to change.

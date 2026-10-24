@@ -9936,6 +9936,29 @@ from them.
     CMD and help CMD --long for every command and alias, CMD --help for each, after -b, mid-argument;
     the escape an expected difference), help.rs's every_command_has_help.
 
+501. **The front in the Rust half, and the build at build/omabox** (2026-10-24, #324 wave 6-front, A2).
+    A call that comes to the binary straight (no OMABOX_ROOT: build/omabox now, bin/omabox once it is
+    the binary) runs front.rs, bash's main up to its dispatch: global_box (`-b NAME` before the
+    command moved after it; not-one-box commands and unknown ones said in bash's words), eq_split
+    over args.rs's cmd_opts, now every command's (t_unit_rust_front compares it with CMD_OPTS; up's
+    was missing, so the Rust half's `up --sizee` named no nearest option, a wave 5a slip fixed here),
+    the guard's mark, run's 125, `CMD --help`; bash's hand-off still passes shaped words, which skip
+    it. The binary moved from `build/bin/omabox` to `build/omabox` (install.sh, the suite,
+    bin/omabox's RUST; kill_reapers takes either, a reaper of a box started before the move
+    included), and `root()` is the parent of the binary's own folder, found once at the start (D1).
+    `back_to_bash` runs only for a call bash handed over and never to this binary itself: with
+    bin/omabox this binary (a copy, or the flip's link), a word it lacks is one line, exit 126, not
+    an exec loop. Parity runs three legs (bash, the hand-off, direct); a parity test whose binary is
+    missing fails in a checkout and skips only in an install. **Change** (Rust over bash): with
+    XDG_RUNTIME_DIR unset or empty the direct front says "omabox: XDG_RUNTIME_DIR is not set" (exit
+    1, as before), where bash said "bin/omabox: line 13: XDG_RUNTIME_DIR: ..." (CHANGELOG). Tests:
+    t_unit_rust_front (the front's cases, three legs; the empty XDG_RUNTIME_DIR an expected
+    difference on the direct leg), t_unit_rust_handoff (exit 126 from a copy and from a link, under
+    timeout), front.rs's and ready.rs's unit tests.
+
+
+
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
