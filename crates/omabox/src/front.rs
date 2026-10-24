@@ -258,8 +258,9 @@ pub fn front(boxes: &[u8], argv: &[Vec<u8>]) -> Res<Option<Call>> {
     if !crate::shell::env_or_empty("OMABOX_BROKER_PEER").is_empty() {
         crate::broker_side::serve(&mut ctx, &cmd, &rest)?;
     } else if cmd != b"calibrate" && relay_wanted(boxes) {
-        say("a jailed caller's relay to the broker is bin/omabox's until this build has it");
-        return Err(Exit(126));
+        // A jailed caller: the command goes to the broker (relay.rs), never on from here.
+        crate::relay::call(&mut ctx, &cmd, &rest)?;
+        return Ok(None);
     }
     Ok(Some(Call { cmd, args: rest }))
 }

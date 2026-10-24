@@ -5926,6 +5926,138 @@ PYEOF
 # in a pid namespace of its own). No case starts a box: every one is refused, or finds its box up.
 # Wave 5b: down, ls, save, saves, version and _reap on boxes of the test's own, dead ones and
 # stand-ins taken down for real, their HOMEs and saves in the test's cache and data dirs.
+# Wave 6-front (#324), A4: a jailed caller's omabox, which cannot make a user namespace (a stand-in
+# unshare that fails) and finds the broker's socket, so hands its command to the broker through
+# omabox-relay. Two fixtures:
+# - the checkout's real relay against a stand-in broker (omabox-relay listen running a script that
+#   says what reached it: the words, the OMABOX_RELAY_ entries, the files passed, and writes what a
+#   broker writes into them), compared with bash's relay_call on the direct leg (bash's front
+#   relays before any hand-off, so the hand-off leg is bash's);
+# - "alone": omabox copied alone to a HOME's .local/bin, as ai-jail maps it (the bash file, and the
+#   binary), with a recording omabox-relay on PATH: the relay's words, the files open in it and what
+#   it reads from --env-fd. There a --pass or --env-file value is on bash's relay command line,
+#   which every process reads in /proc, and on an fd in the binary's (finding 503).
+t_unit_rust_jailed() {
+  rust_built "rust jailed caller" || return 0
+  local r=$TMP/rj R=$ROOT/tools/relay/omabox-relay
+  [ -x "$R" ] || { no "rust jailed caller" "tools/relay is not built (tools_ready builds it)"; return 0; }
+  rm -rf "$r"; mkdir -p "$r/rt/omabox/.broker" "$r/bin" "$r/proj" "$r/out" "$r/rec"
+  printf '#!/bin/sh\nexit 1\n' > "$r/bin/unshare"; chmod +x "$r/bin/unshare"
+  # The stand-in broker: the words (one a line), the caller's entries, each file passed (its first
+  # line, or what it writes there: fd 3 and up, as --to-fd and its kin name them).
+  cat > "$r/broker.sh" <<'EOF'
+#!/bin/bash
+printf 'broker: [%s]\n' "$@"
+env | grep '^OMABOX_RELAY_' | LC_ALL=C sort | sed 's/^/env: /'
+a=("$@")
+for ((i = 0; i < ${#a[@]}; i++)); do
+  case ${a[i]} in
+    --to-fd|--marks-fd|--vtt-fd) echo "${a[i]} data" >&"${a[i+1]}" ;;
+    --from-fd|--marks-from-fd|--in) f=${a[i+1]}; f=${f#/dev/fd/}; echo "${a[i]} reads: $(head -n1 <&"$f")" ;;
+  esac
+done
+case " $* " in *" status --file "*) echo "$RJ_VIDEO" ;; esac
+case " $* " in *"/f.png "*) exit 3 ;; esac
+exit 0
+EOF
+  chmod +x "$r/broker.sh"
+  RJ_VIDEO=$r/out/v.mp4 HOME=$r/home "$R" listen --socket "$r/rt/omabox/.broker/sock" -- /usr/bin/env RJ_VIDEO="$r/out/v.mp4" /usr/bin/bash "$r/broker.sh" >/dev/null 2>&1 & SERVERS+=($!)
+  until_ok 5 test -S "$r/rt/omabox/.broker/sock" >/dev/null
+  echo "a shot" > "$r/proj/in.png"; echo "a video" > "$r/out/old.mp4"; printf 'old\t1\n' > "$r/out/old.marks.tsv"
+  printf 'KEY_ONE=one\nexport KEY_TWO="two"\n' > "$r/proj/dev.env"
+  rp_rt=$r/rt rp_dir=$r/proj rp_env=(PATH="$r/bin:$PATH" RJ_SECRET="s3cret-$P") rp_snap=0 rp_prep="" rp_sed="" rp_wrap=()
+  rp_also() { (cd "$r/out" && command find . -printf '%p %m\n' | LC_ALL=C sort && command find . -type f -exec md5sum {} + | LC_ALL=C sort); }
+  rp_also=rp_also
+  rp_rj_prep() { rm -rf "$r/out"; mkdir -p "$r/out"; echo "a video" > "$r/out/old.mp4"; printf 'old\t1\n' > "$r/out/old.marks.tsv"; }
+  rp_prep=rp_rj_prep
+  local -x RP_LEGS=direct
+  parity "jailed: ls goes to the broker, with the caller's default box and PATH" ls
+  parity "jailed: -b N path" -b rjx path
+  parity "jailed: run --pass, its value as an entry (the real relay reads --env-fd)" run --pass RJ_SECRET -- env
+  parity "jailed: run --pass of a name not set" run --pass RJ_NONE -- env
+  parity "jailed: run --env-file, read here" run --env-file dev.env -- env
+  parity "jailed: run --env-file not there: run's 125" run --env-file nosuch.env -- env
+  parity "jailed: keys --pass" keys --pass RJ_SECRET
+  # shellcheck disable=SC2088 # (a ~ as the caller wrote it, for the broker to read)
+  parity "jailed: up --plugin of a relative folder made absolute" up rjx --plugin . --ro-bind .:/x --seed dev.env:.config/d --seed '~/x:y'
+  parity "jailed: shot -o FILE, filled by the broker, placed" shot -o "$r/out/s.png"
+  parity "jailed: shot FILE as a word" shot "$r/out/s2.png" --fit 2
+  parity "jailed: shot, two files" shot "$r/out/a.png" -o "$r/out/b.png"
+  parity "jailed: shot --since: refused" shot --since x.png
+  parity "jailed: shot -o in a folder it makes" shot -o "$r/out/new/s.png"
+  parity "jailed: shot the broker fails: nothing placed, its status" shot -o "$r/out/f.png"
+  parity "jailed: click --in SHOT, opened here" click --in in.png 1 1
+  parity "jailed: pixel --in SHOT" pixel --in in.png 1 1
+  parity "jailed: click --in a file not there" click --in nosuch.png 1 1
+  parity "jailed: pointer -- move (no --in)" pointer -- move 1 1
+  parity "jailed: record status, as it is" record status
+  parity "jailed: record start -o FILE" record start -o "$r/out/v.mp4"
+  parity "jailed: record stop: the video, its marks and captions placed" record stop
+  parity "jailed: record sheet VIDEO" record sheet "$r/out/old.mp4"
+  parity "jailed: record sheet of no video" record sheet "$r/out/nosuch.mp4"
+  parity "jailed: record --to-fd: omabox's own" record stop --to-fd 3
+  parity "jailed: record --hold too long" record --hold 2m -- keys a
+  parity "jailed: record --for not a duration" record --for soon
+  parity "jailed: record start --sheet: the broker's to refuse" record start --sheet
+  parity "jailed: calibrate stays here" calibrate --answer "A 1,1"
+  # (no broker there: the relay's own failure, run's 125)
+  mv "$r/rt/omabox/.broker/sock" "$r/rt/omabox/.broker/sock.away"; python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$r/rt/omabox/.broker/sock"
+  parity "jailed: run, no broker on the socket: 125" run -- true
+  parity "jailed: ls, no broker on the socket: 1" ls
+  rm -f "$r/rt/omabox/.broker/sock"; mv "$r/rt/omabox/.broker/sock.away" "$r/rt/omabox/.broker/sock"
+
+  # Alone, as ai-jail maps it: bash's file and the binary, each alone in a HOME's .local/bin.
+  mkdir -p "$r/a-bash/.local/bin" "$r/a-rust/.local/bin" "$r/abin"
+  cp "$CLI" "$r/a-bash/.local/bin/omabox"; cp "$ROOT/build/omabox" "$r/a-rust/.local/bin/omabox"
+  cp "$r/bin/unshare" "$r/abin/unshare"
+  cat > "$r/abin/omabox-relay" <<'EOF'
+#!/bin/bash
+# What omabox ran its relay with: each word, each file passed (by where it leads, not its number),
+# what --env-fd holds, and the files open in it beyond 0-2 (but this script's own).
+fds=()
+for f in /proc/$$/fd/*; do n=${f##*/}; [ "$n" -gt 2 ] && [ "$n" != 255 ] && l=$(readlink "$f") && fds+=("$l"); done
+{
+  a=("$@")
+  for ((i = 0; i < ${#a[@]}; i++)); do
+    case ${a[i]} in
+      --fd) echo "arg: --fd -> $(readlink "/proc/$$/fd/${a[i+1]}" | sed -E 's/\.omabox-([a-z]+)\.[A-Za-z0-9]{6}$/.omabox-\1.TMP/')"; i=$((i + 1)) ;;
+      --env-fd) echo "arg: --env-fd"; tr '\0' '\n' < "/proc/$$/fd/${a[i+1]}" | sed 's/^/env-fd: /'; i=$((i + 1)) ;;
+      --env) echo "arg: --env ${a[i+1]}"; i=$((i + 1)) ;;
+      *) echo "arg: ${a[i]}" ;;
+    esac
+  done
+  for f in "${fds[@]}"; do echo "open: $f"; done | sed -E 's/\.omabox-([a-z]+)\.[A-Za-z0-9]{6}$/.omabox-\1.TMP/; s/^open: (pipe|socket):.*/open: \1/; s#/proc/[0-9]+/#/proc/PID/#' | LC_ALL=C sort
+  echo "OMABOX_RELAY_FAIL=${OMABOX_RELAY_FAIL-unset}"
+} >> "$RJ_REC"
+case " $* " in *" status --file "*) echo "$RJ_VIDEO" ;; esac
+exit 0
+EOF
+  chmod +x "$r/abin/omabox-relay"
+  printf '%s\n' '#!/bin/bash' \
+    'w=a-rust; [ "${OMABOX_BASH:-}" != 1 ] || w=a-bash' \
+    'shift; exec env HOME="$RJ_DIR/$w" "$RJ_DIR/$w/.local/bin/omabox" "$@"' > "$r/alone"
+  chmod +x "$r/alone"
+  rp_alone_rec() { cat "$r/rec/log" 2>/dev/null; rm -f "$r/rec/log"; }
+  rp_also=rp_alone_rec rp_snap=0 rp_wrap=(env RJ_DIR="$r" RJ_REC="$r/rec/log" RJ_VIDEO="$r/out/v.mp4" "$r/alone")
+  rp_env=(PATH="$r/abin:/usr/bin" RJ_SECRET="s3cret-$P")
+  parity "alone: ls, the relay's words" ls
+  parity "alone: run -- CMD: OMABOX_RELAY_FAIL=125" run -- true
+  parity "alone: shot -o FILE: the file passed, by where it leads" shot -o "$r/out/al.png"
+  parity "alone: click --in SHOT" click --in in.png 1 1
+  parity "alone: record stop: three files passed" record stop
+  parity "alone: record sheet VIDEO" record sheet "$r/out/old.mp4"
+  # (the value on the relay's command line in bash's, read from an fd in the binary's)
+  rp_why=503 rp_bash=("state~^arg: --env PASS_RJ_SECRET=s3cret-$P\$") rp_rust=('state~^arg: --env-fd$' "state~^env-fd: PASS_RJ_SECRET=s3cret-$P\$" 'state~^open: /memfd:omabox-relay-env' "state!~^arg: --env PASS_")
+  parity "alone: run --pass VAR, its value off the relay's command line" run --pass RJ_SECRET -- env
+  rp_why=503 rp_bash=('state~^arg: --env PASS_KEY_(ONE=one|TWO=two)$') rp_rust=('state~^arg: --env-fd$' 'state~^env-fd: PASS_KEY_(ONE=one|TWO=two)$' 'state~^open: /memfd:omabox-relay-env' "state!~^arg: --env PASS_")
+  parity "alone: run --env-file, its values off the relay's command line" run --env-file dev.env -- env
+  rp_why=503 rp_bash=("state~^arg: --env PASS_RJ_SECRET=s3cret-$P\$") rp_rust=('state~^arg: --env-fd$' "state~^env-fd: PASS_RJ_SECRET=s3cret-$P\$" 'state~^open: /memfd:omabox-relay-env' "state!~^arg: --env PASS_")
+  parity "alone: keys --pass VAR, its value off the relay's command line" keys --pass RJ_SECRET
+  rp_env=(PATH="$r/bin:/usr/bin")
+  parity "alone: no omabox-relay in reach" ls
+  rp_also="" rp_wrap=() rp_env=() rp_dir=/
+}
+
 # Wave 6-front (#324): the front of the CLI in the Rust half. A1, the help: bin/omabox's text compiled in
 # (help.txt, the same bytes as usage_text's), and `help`, `help CMD`, `CMD --help` cut as bash's usage
 # cuts it, for every command and alias.
@@ -8967,6 +9099,56 @@ EOF
   check_fails "...each up either came up or was refused for it" grep -q '^race other' "$TMP/jailmask.out"
 }
 
+# Wave 6-front (#324), A4: a jailed agent's omabox as users map it: exactly the four maps `omabox
+# broker on` prints (broker_recipe: omabox, its relay, the skill, the broker's socket dir), with the
+# binary where bin/omabox will link to it (proposal D1: bwrap binds what a link leads to), and nothing
+# else of the checkout. t_jail maps the whole checkout and runs bash's omabox in the jail.
+t_jail_recipe() {
+  command -v ai-jail >/dev/null || { skip "omabox in ai-jail with the recipe's maps" "ai-jail is not installed"; return; }
+  [ "${OMABOX_TEST_INSTALLED:-0}" = 0 ] ||
+    { skip "omabox in ai-jail with the recipe's maps" "--installed: ai-jail trusts no bwrap in a user namespace"; return; }
+  rust_built "omabox in ai-jail with the recipe's maps" || return 0
+  local R=$ROOT/tools/relay/omabox-relay br=$TMP/brr repo out B=$P-rcp
+  [ -x "$R" ] || { no "omabox in ai-jail with the recipe's maps" "tools/relay not built"; return; }
+  mkdir -p "$br"; repo=$(tmp_repo jrecipe); echo hi > "$repo/README"
+  env -i HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" LANG="${LANG:-C.UTF-8}" USER="$USER" \
+    systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$ROOT/build/omabox" >"$br/log" 2>&1 & SERVERS+=($!)
+  until_ok 5 test -S "$br/sock" >/dev/null
+  cat > "$repo/t.sh" <<EOF
+export PATH=\$HOME/.local/bin:/usr/bin
+r() { echo "== \$1"; shift; "\$@" 2>&1; echo "rc=\$?"; }
+r which sh -c 'command -v omabox; command -v omabox-relay; ls $ROOT/bin $ROOT/share 2>&1 | head -1'
+r version omabox --version
+r help omabox help path
+r up omabox up $B
+r ls omabox ls
+r pwd omabox run -b $B -- sh -c 'pwd; cat README'
+r pass env RCP_SECRET=s3cret-$P omabox run -b $B --pass RCP_SECRET -- sh -c 'echo "got \$RCP_SECRET"'
+r shot omabox shot -b $B -o ./s.png
+r usage omabox windows -b $B --jsno
+r host omabox host -- true
+r down omabox down $B
+EOF
+  out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$ROOT/build/omabox:$HOME/.local/bin/omabox" \
+    --map "$R:$HOME/.local/bin/omabox-relay" --map "$ROOT/skill" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
+  printf '%s\n' "$out" > "$TMP/jail-recipe.out"
+  sect() { awk -v s="== $1" '$0 == s {on = 1; next} /^== / {on = 0} on' "$TMP/jail-recipe.out" | tr '\n' ' '; }
+  check_match "the jail has omabox and its relay where the recipe maps them, nothing else of the checkout" \
+    "^$HOME/.local/bin/omabox $HOME/.local/bin/omabox-relay ls: cannot access" "$(sect which)"
+  check_match "--version there: the version built in" "^omabox $(cat "$ROOT/VERSION") .*rc=0 $" "$(sect version)"
+  check_match "help there, from the binary alone" "^  omabox path .*rc=0 $" "$(sect help)"
+  check_match "up from the jail" "box '$B' up .*rc=0 $" "$(sect up)"
+  check_match "...listed there" "^NAME .*$B .*rc=0 $" "$(sect ls)"
+  check_eq "run in the jail's project, mounted" "$repo hi rc=0 " "$(sect pwd)"
+  check_eq "run --pass: the value reaches the box's command" "got s3cret-$P rc=0 " "$(sect pass)"
+  check_match "shot -o into the jail's project" "rc=0 $" "$(sect shot)"
+  check "...there, on the host too" test -s "$repo/s.png"
+  check_match "a usage error: 2, with the nearest option" "did you mean --json.* rc=2 $" "$(sect usage)"
+  check_match "host is not a jailed agent's" "not for an agent inside ai-jail rc=1 $" "$(sect host)"
+  check_match "down from the jail" "rc=0 $" "$(sect down)"
+  check_fails "...the box gone" test -d "$XDG_RUNTIME_DIR/omabox/$B"
+  ob down "$B" >/dev/null 2>&1 || true
+}
 
 # Every test runs: a t_* function left out of UNIT and BOX would never run, and nobody would notice.
 t_unit_registry() {
@@ -20520,9 +20702,9 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

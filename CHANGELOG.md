@@ -77,6 +77,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **A jailed agent's `--pass` and `--env-file` values reach omabox-relay on a file descriptor, not its
+  command line**, as values everywhere else in omabox do. `omabox-relay call` takes `--env-fd N`. A
+  jail started before the upgrade keeps its old relay: restart it.
 - **A jailed agent's `config` leaves `protect-ports` out**, and `config protect-ports` from inside
   ai-jail is refused saying why ("protect-ports is not for a jailed agent"), not as a change of
   settings: which host ports are protected is the user's to know. Scripts: nothing to change.

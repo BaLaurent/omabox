@@ -571,7 +571,7 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<Opts> {
 }
 
 /// record_action_check: -- ACTION's action, one that acts, on the recorded box.
-fn action_check(ctx: &Ctx, ract: &[Vec<u8>]) -> Res<()> {
+pub fn action_check(ctx: &Ctx, ract: &[Vec<u8>]) -> Res<()> {
     let first = ract.first().cloned().unwrap_or_default();
     match first.as_slice() {
         b"keys" | b"click" | b"scroll" | b"drag" | b"pointer" | b"run" | b"hyprctl" | b"lua"

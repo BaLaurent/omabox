@@ -39,6 +39,7 @@ mod procfs;
 mod ptr;
 mod ready;
 mod recprog;
+mod relay;
 mod render;
 mod repo;
 mod screen;

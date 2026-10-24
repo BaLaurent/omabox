@@ -80,7 +80,7 @@ pub fn env_reserved(k: &[u8]) -> bool {
 
 /// run --env-file FILE (#30): its KEY=VAL lines. `export ` and # comment lines allowed, a value in
 /// matching quotes loses them; nothing expanded; a bad line refused with its number, never its text.
-fn envfile_read(ctx: &Ctx, f: &[u8]) -> Res<Vec<Vec<u8>>> {
+pub fn envfile_read(ctx: &Ctx, f: &[u8]) -> Res<Vec<Vec<u8>>> {
     let p = shell::path(f);
     let readable = std::ffi::CString::new(f.to_vec()).is_ok_and(|c| {
         // SAFETY: c is a valid C string for the call.

@@ -1,12 +1,14 @@
 // omabox-relay: carry an omabox command from inside a sandbox (ai-jail) to the broker outside it.
 //
-//   omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... -- ARG...     (in the sandbox)
+//   omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... [--env-fd N] -- ARG...   (in the sandbox)
 //   omabox-relay listen [--socket PATH] -- OMABOX [ARG...]                   (the broker, outside)
 //   omabox-relay copy                                                        (bin/omabox's stdio relay)
 //
 // A sandboxed agent cannot enter a box's namespaces (its seccomp filter refuses setns and unshare),
 // so `omabox` there hands its command to the broker: `call` sends its working directory, the
-// arguments, the environment entries it was given and its stdin, stdout and stderr (plus any --fd)
+// arguments, the environment entries it was given (--env, or NUL-ended NAME=VALUE entries read from
+// --env-fd N, which keeps a value off the command line every process can read in /proc: a --pass
+// value) and its stdin, stdout and stderr (plus any --fd)
 // over the socket (SCM_RIGHTS), then waits for the exit status. The broker's `listen` accepts the
 // connection, forks, and runs OMABOX ARG... in a session of its own with those fds as 0, 1, 2, 3...,
 // so output goes straight to the caller and files the caller opened are the only files the command
@@ -108,7 +110,7 @@ static int good_name(const char *s, size_t n) {
 static int cmd_call(int argc, char **argv) {
     const char *f = getenv("OMABOX_RELAY_FAIL");
     if (f) { char *e; long v = strtol(f, &e, 10); if (*f && !*e && v >= 1 && v <= 255) own_fail = (int)v; }
-    if (argc < 2) { fprintf(stderr, "usage: omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... -- ARG...\n"); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... [--env-fd N] -- ARG...\n"); return 2; }
     const char *path = argv[1];
     // A broker at its cap closes the connection as soon as it accepts it (#197): a write after that
     // is EPIPE, said below, not a SIGPIPE ending the caller with 141.
@@ -140,6 +142,32 @@ static int cmd_call(int argc, char **argv) {
             const char *kv = argv[++i], *eq = strchr(kv, '=');
             if (!eq || !good_name(kv, (size_t)(eq - kv))) { fprintf(stderr, "omabox-relay: bad --env %s\n", kv); return 2; }
             PUT('E', kv);
+        } else if (strcmp(argv[i], "--env-fd") == 0 && i + 1 < argc) {
+            // Entries read here and the fd closed: it is not one the broker gets.
+            char *end;
+            long fd = strtol(argv[++i], &end, 10);
+            if (*end || fd < 3 || fcntl((int)fd, F_GETFD) < 0) { fprintf(stderr, "omabox-relay: bad --env-fd %s\n", argv[i]); return 2; }
+            char *buf = malloc(MAX_PAYLOAD);
+            size_t n = 0;
+            if (!buf) die("malloc");
+            for (;;) {
+                ssize_t r = read((int)fd, buf + n, MAX_PAYLOAD - n);
+                if (r < 0 && errno == EINTR) continue;
+                if (r < 0) die("--env-fd");
+                if (r == 0) break;
+                n += (size_t)r;
+                if (n == MAX_PAYLOAD) { fprintf(stderr, "omabox-relay: too long\n"); return 2; }
+            }
+            close((int)fd);
+            if (n > 0 && buf[n - 1] != '\0') { fprintf(stderr, "omabox-relay: bad --env-fd %s: an entry not NUL-ended\n", argv[i]); return 2; }
+            for (size_t o = 0; o < n;) {
+                const char *kv = buf + o, *eq = strchr(kv, '=');
+                // (the name only: never a value on stderr either)
+                if (!eq || !good_name(kv, (size_t)(eq - kv))) { fprintf(stderr, "omabox-relay: bad --env-fd %s: an entry with no good NAME=\n", argv[i]); return 2; }
+                PUT('E', kv);
+                o += strlen(kv) + 1;
+            }
+            free(buf);
         } else {
             fprintf(stderr, "omabox-relay: unknown option %s\n", argv[i]);
             return 2;
@@ -458,7 +486,7 @@ int main(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "copy") == 0) return cmd_copy();
     if (argc >= 2 && strcmp(argv[1], "call") == 0) return cmd_call(argc - 1, argv + 1);
     if (argc >= 2 && strcmp(argv[1], "listen") == 0) return cmd_listen(argc - 1, argv + 1);
-    fprintf(stderr, "usage: omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... -- ARG...\n"
+    fprintf(stderr, "usage: omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... [--env-fd N] -- ARG...\n"
                     "       omabox-relay listen [--socket PATH] -- /ABSOLUTE/omabox [ARG...]\n"
                     "       omabox-relay copy\n");
     return 2;

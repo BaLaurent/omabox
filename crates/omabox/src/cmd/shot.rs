@@ -43,7 +43,7 @@ pub fn on_path(name: &str) -> bool {
 }
 
 /// `$(... | cut -c1-10)` of `date +%H%M%S-%N`: the local time to the ms, for a default name.
-fn hms_ms() -> Vec<u8> {
+pub fn hms_ms() -> Vec<u8> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();

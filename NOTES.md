@@ -9976,6 +9976,24 @@ from them.
     and mounts fixture read both ways through `_rust-jail`), broker_side.rs's unit tests, t_jail (the
     real ai-jail, its broker running the binary straight).
 
+503. **A jailed caller's omabox in the Rust half, its values off the relay's command line** (2026-10-24,
+    #324 wave 6-front, A4). Called straight inside ai-jail (no user namespace there, the broker's
+    socket in reach: relay_wanted), the binary hands its command to the broker as bash's relay_call
+    did (relay.rs): the default box and PATH as entries, paths made absolute, `run --env-file` read in
+    the jail, shot's and record's files made beside where they go and filled through fds, `--in`'s
+    shot opened and passed, `record -- ACTION` and `--for` run from the jail, each step through
+    bin/omabox. **Change** (Rust over bash): bash put each `--pass` and `--env-file` value on
+    omabox-relay's command line (`--env PASS_NAME=VALUE`), against finding 66's rule that a value is
+    never on a command line; the binary hands them over on an fd instead, a memfd the relay reads and closes
+    (`omabox-relay call --env-fd N`, NUL-ended NAME=VALUE entries, added to the relay; `--env` stays
+    for the entries that are not the caller's values). What reaches the broker is the same. A jail
+    started before an upgrade keeps its old relay and must be restarted (the clean break's release
+    notes). Tests: t_unit_rust_jailed (a stand-in unshare that fails, the real relay against a
+    stand-in broker on the direct leg, and omabox alone in a HOME's .local/bin as ai-jail maps it,
+    bash's file and the binary, with a recording relay: the words, the files passed, what --env-fd
+    holds; the values an expected difference: on bash's relay command line, on an fd in the
+    binary's), t_jail_recipe (a real ai-jail with exactly the recipe's four maps, the binary in
+    bin/omabox's place: up, run --pass, shot, a usage error, a refusal, down).
 
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
