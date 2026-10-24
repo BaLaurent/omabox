@@ -30,7 +30,7 @@
 # skipped, saying so. A peek from an omabox older than this suite has no mark and fails the run, as
 # does one any command of the suite's opens. Pointer motion
 # has no event: each box test reads the host's pointer (hyprctl cursorpos) at its start and end, and
-# fails if it moved (S8, #355: OMABOX_TEST_CURSOR=off for a run you use the mouse during). At the
+# notes it if it moved (S8, #355: OMABOX_TEST_CURSOR=strict fails the test instead). At the
 # end, every box of the run still up is taken down, and no process of any of them may be left (S6).
 # Needs a Hyprland session and python3; builds the
 # checkout's tools first when one is missing or older than its sources (make, as install.sh does). The
@@ -7162,11 +7162,16 @@ t_unit_parallel() {
   check_match "par_done adds a test's counts and LEAK_PROVEN (one that stopped midway's too)" "^pass=2 fail=2 proven=1" "$out"
   check_match "...a test that stops midway fails, said so" "t_fake_dies: the test ran to its end" "$out"
   check_match "...one that ran no check too" "t_fake_none: the test ran checks" "$out"
-  # S8's check (#355) on a made-up pointer: silent where it stayed, a failure where it moved.
+  # S8's check (#355) on a made-up pointer: silent where it stayed; where it moved, a note, or under
+  # OMABOX_TEST_CURSOR=strict a failure.
   out=$(hostctl() { echo "${PTR:-0, 0}"; }; evidence() { :; }; pass=0 fail=0 failed=() CUR=t_fake
-    cursor_same "0, 0"; PTR="5, 7" cursor_same "0, 0"; echo "pass=$pass fail=$fail")
-  check_match "S8: a pointer that moved during a test fails it, one that stayed says nothing" \
+    cursor_same "0, 0"; OMABOX_TEST_CURSOR=strict PTR="5, 7" cursor_same "0, 0"; echo "pass=$pass fail=$fail")
+  check_match "S8: a pointer that moved during a test fails it under strict, one that stayed says nothing" \
     "it was at 0, 0, now at 5, 7 .*pass=0 fail=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+  out=$(hostctl() { echo "5, 7"; }; evidence() { :; }; pass=0 fail=0 failed=() CUR=t_fake; NOTES=$(mktemp)
+    cursor_same "0, 0"; notes; rm -f "$NOTES"; echo "pass=$pass fail=$fail")
+  check_match "...by default only a note (the suite runs while you use the mouse)" \
+    "pointer moved during this test, 0, 0 to 5, 7.*pass=0 fail=0$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
 }
 
 # A throwaway run takes up's options (#111, finding 180): --overlay (the box writes over the folder,
@@ -19821,14 +19826,20 @@ slowest_tests() {
 }
 
 # S8 (#355): the host's pointer, read (hyprctl cursorpos, a read: it moves nothing) at a box test's
-# start and end; one that moved fails the test, said only then (a check that passes every test would
-# change no test's count). You moving the mouse meanwhile moves it too: OMABOX_TEST_CURSOR=off leaves
-# the check out of such a run.
+# start and end; one that moved is noted on that test, said only then (a check that passes every test
+# would change no test's count). Only a note by default: you moving the mouse during a run moves it too,
+# and the suite runs while you work. OMABOX_TEST_CURSOR=strict fails the test instead (a run you keep
+# your hands off), =off leaves the check out.
 cursor_at() { [ "${OMABOX_TEST_CURSOR:-}" = off ] || hostctl cursorpos 2>/dev/null; }
 cursor_same() {
   [ "${OMABOX_TEST_CURSOR:-}" != off ] || return 0
   local now; now=$(cursor_at)
-  [ "$1" = "$now" ] || no "S8: the host's pointer is where it was (#355)" "it was at $1, now at $now (if you moved the mouse during the run, that is why: run again without touching it, or with OMABOX_TEST_CURSOR=off)"
+  [ "$1" != "$now" ] || return 0
+  if [ "${OMABOX_TEST_CURSOR:-}" = strict ]; then
+    no "S8: the host's pointer is where it was (#355)" "it was at $1, now at $now (if you moved the mouse during the run, that is why: run again without touching it)"
+  else
+    note "S8: the host's pointer moved during this test, $1 to $now: you, or the test (#355; OMABOX_TEST_CURSOR=strict fails on it)"
+  fi
 }
 # S6 (#355): the processes of this run's boxes (PREFIX*) still running, one a line: what names a box
 # of it in its command line (a box dir, a reaper) or its environment (OMABOX_BOX, the box session's;
