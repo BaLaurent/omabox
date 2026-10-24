@@ -19202,6 +19202,17 @@ provenance() {
     "$(bwrap --version | awk '{print $2}')" "${rn:-no render node}" "${drv##*/}" "$(uname -r)"
 }
 
+# Each test's wall time (#324 wave 5a): `test_time TEST US` adds "SECONDS<TAB>TEST" to the run's
+# times.tsv (written by the runner alone: the parallel tests hand theirs back), and slowest_tests
+# prints the 10 slowest at the end. now_us: the wall clock in µs, whatever the locale's decimal point.
+now_us() { local t=${EPOCHREALTIME/[.,]/}; echo "$((10#$t))"; }
+test_time() { printf '%d.%03d\t%s\n' $(($2 / 1000000)) $(($2 % 1000000 / 1000)) "$1" >> "$EVID/times.tsv"; }
+slowest_tests() {
+  [ -s "$EVID/times.tsv" ] || return 0
+  echo "slowest:"
+  LC_ALL=C sort -t $'\t' -k1,1nr "$EVID/times.tsv" | head -n 10 | while IFS=$'\t' read -r s t; do printf '  %8ss %s\n' "$s" "${t#t_}"; done
+}
+
 # par_run JOBS TEST...: the tests, JOBS at a time, t_leak_control and the SLOW ones first. Each runs
 # in a subshell (par_test) with counts of its own, which it hands back in a file; the runner shows its
 # output whole when it ends, adds its counts and scans the host's events of its time (host_scan: the
@@ -19234,7 +19245,7 @@ par_run() {
 # it started (cleanup, in the runner, never sees them); hands back its counts, also when it stops
 # midway (an exit, an unset variable), saying whether it reached its end.
 par_test() {
-  CUR=$1 pass=0 fail=0 failed=() skips=() SERVERS=() HELD="" LEAK_PROVEN="" PAR_T0=$SECONDS PAR_END=0
+  CUR=$1 pass=0 fail=0 failed=() skips=() SERVERS=() HELD="" LEAK_PROVEN="" PAR_T0=$SECONDS PAR_END=0 PAR_US=$(now_us)
   NOTES=$TMP/par/$1.notes UNTIL=$TMP/par/$1.until
   trap par_handback EXIT
   "$CUR"; notes
@@ -19244,11 +19255,11 @@ par_test() {
 par_handback() {
   local _f=("${failed[@]}") _s=("${skips[@]}")
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
-  { echo "_rp=$pass _rf=$fail _rl=${LEAK_PROVEN:-} _rt=$((SECONDS - PAR_T0)) _re=$PAR_END"; declare -p _f _s; } > "$TMP/par/$CUR.res"
+  { echo "_rp=$pass _rf=$fail _rl=${LEAK_PROVEN:-} _rt=$((SECONDS - PAR_T0)) _re=$PAR_END _ru=$(($(now_us) - PAR_US))"; declare -p _f _s; } > "$TMP/par/$CUR.res"
 }
 # par_done TEST (in the runner): its output, its counts, its host scan.
 par_done() {
-  local _rp=0 _rf=0 _rl="" _rt="?" _re=0 _f=() _s=()
+  local _rp=0 _rf=0 _rl="" _rt="?" _re=0 _ru="" _f=() _s=()
   CUR=$1
   if [ -f "$TMP/par/$1.res" ]; then
     # shellcheck disable=SC1090 # written by par_test
@@ -19257,6 +19268,7 @@ par_done() {
   echo "${1#t_}"
   cat "$TMP/par/$1.out"
   echo "       (${1#t_}: ${_rt}s)"
+  [ -z "$_ru" ] || test_time "$1" "$_ru"
   pass=$((pass + _rp)) fail=$((fail + _rf))
   failed+=("${_f[@]}") skips+=("${_s[@]}")
   [ -z "$_rl" ] || LEAK_PROVEN=$_rl
@@ -19334,11 +19346,11 @@ main() {
   # under a name the suite uses (note, check, ...) stays redefined for every test after it, the parallel
   # ones forked later too (#189, finding 252: t_unit_theme_dir's note() failed every slow wait after it).
   # Each such test fails, and the suite's are put back.
-  local _t0 _fns _fdefs _f _was _chg
+  local _t0 _us _fns _fdefs _f _was _chg
   mapfile -t _fns < <(compgen -A function)
   _fdefs=$(declare -f "${_fns[@]}")
   for CUR in "${_one[@]}"; do
-    _n=$((pass + fail + ${#skips[@]})) _t0=$SECONDS
+    _n=$((pass + fail + ${#skips[@]})) _t0=$SECONDS _us=$(now_us)
     rm -f "$UNTIL"
     printf '%s == %s\n' "$(date +%s.%3N)" "$CUR" >> "$EVID/host-events.log"
     echo "${CUR#t_}"; HELD=""; "$CUR"; notes
@@ -19350,6 +19362,7 @@ main() {
       no "the test leaves the suite's functions as they were" "it redefined ${_chg[*]} (put back for the tests after it)"
     fi
     [[ $CUR == t_unit_* ]] || echo "       (${CUR#t_}: $((SECONDS - _t0))s)"
+    test_time "$CUR" $(($(now_us) - _us))
     [ $((pass + fail + ${#skips[@]})) -gt "$_n" ] || no "the test ran checks" "none: it returned before its first"
     [[ $CUR != t_unit_* ]] || _unit_n=$((_unit_n + pass + fail + ${#skips[@]} - _n))
     host_scan "$CUR"
@@ -19375,6 +19388,7 @@ main() {
   fi
 
   echo
+  slowest_tests
   echo "$pass passed, $fail failed, ${#skips[@]} skipped"
   for f in "${skips[@]}"; do echo "  skip $f"; done
   for f in "${failed[@]}"; do echo "  FAIL $f"; done
