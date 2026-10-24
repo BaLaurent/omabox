@@ -9586,6 +9586,18 @@ from them.
     one of the list (CHANGELOG). Tests: t_unit_rust_parity5 ("up --no-seed with a glob character:
     taken as written"), an expected difference.
 
+458. **A plugin's settings in extensions/ went into the box HOME unchecked** (2026-10-24, #324 wave
+    5a). seed_extensions copies the desk's ~/.config/omarchy/extensions (plugins' settings) into
+    every box, a jailed caller's too, with seed_copy alone: --desk-shell's own files went through
+    desk_content_refused, extensions/ did not, so a plugin that keeps a token or a password in its
+    settings had it seeded into every box. **Fix** (the Rust half; bash's half of up is no longer
+    run): each regular file seed_copy would copy from extensions/ is read by desk_content_refused
+    first, as the desk's files are; one that holds what looks like a key, token or password stays on
+    the desk, said by its name and never its value ("up: not seeded: extensions/NAME from your desk
+    (it holds what looks like a key, token or password)"). A file that only names one (`maxTokens`,
+    `tokenizer`) still goes in. Tests: t_extensions_secret (fails on the bash half: the token and the
+    password are seeded).
+
 461. **`up --clean --from SAVE` wrote its wallpaper through a link the save left** (2026-10-24, #324
     wave 5a; finding 168's class). seed_home clears the links on the way to what it writes, but
     --clean's `base64 -d > .config/omabox/clean-wallpaper.png` cleared the folder's, not the file's:

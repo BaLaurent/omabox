@@ -20,6 +20,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **Plugin settings that held what looks like a key, token or password were copied into every box**:
+  `~/.config/omarchy/extensions` went into the box HOME without the check your desk's other files
+  get under `--desk-shell`. Such a file now stays on your desk, and `up` names it ("not seeded:
+  extensions/NAME ..."); a setting that only mentions one (`maxTokens`) still goes in.
 - **`up --clean --from SAVE` could write its wallpaper outside the box**, onto the file a link the
   save left at `~/.config/omabox/clean-wallpaper.png` led to. It is written in the box HOME.
 - **A monitor window of an interactive box could open on your workspace and take focus**: when the

@@ -790,11 +790,63 @@ fn re_escape(n: &[u8]) -> Vec<u8> {
     o
 }
 
-/// What of the desk's extensions/ (SRC) stays out of the box by what it holds, as seed_copy's SKIP
-/// (`NAME/...` from its top): the one place a content check of it goes. None yet: bash's copies it
-/// whole.
-fn extensions_held_back(_src: &[u8]) -> Vec<Vec<u8>> {
-    Vec::new()
+/// What of the desk's extensions/ (SRC) stays out of the box by what it holds (finding 458): each
+/// regular file seed_copy would copy (no hidden name, no node_modules or api-keys.env on its way; a
+/// link is copied as the link, its target never read) that desk_content_refused refuses, as
+/// (`NAME/...` from its top, why). seed_copy's SKIP takes the paths. 4096 files at most are looked at;
+/// past that the rest are held back too (a plugin's settings are a handful).
+fn extensions_held_back(src: &[u8]) -> Vec<(Vec<u8>, &'static str)> {
+    const MAX: usize = 4096;
+    let Some(root) = readlink_f(src).filter(|r| p(r).is_dir()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut seen = 0usize;
+    let mut todo: Vec<Vec<u8>> = vec![Vec::new()];
+    while let Some(rel) = todo.pop() {
+        let dir = if rel.is_empty() {
+            root.clone()
+        } else {
+            cat!(root, "/", rel)
+        };
+        let Ok(rd) = std::fs::read_dir(p(&dir)) else {
+            continue;
+        };
+        let mut names: Vec<Vec<u8>> = rd
+            .flatten()
+            .map(|e| std::os::unix::ffi::OsStringExt::into_vec(e.file_name()))
+            .collect();
+        names.sort();
+        for n in names {
+            if n.starts_with(b".") || n == b"node_modules" || n == b"api-keys.env" {
+                continue;
+            }
+            let r = if rel.is_empty() {
+                n.clone()
+            } else {
+                cat!(rel, "/", n)
+            };
+            let full = cat!(root, "/", r);
+            let Ok(m) = std::fs::symlink_metadata(p(&full)) else {
+                continue;
+            };
+            if m.file_type().is_dir() {
+                todo.push(r);
+            } else if m.file_type().is_file() {
+                seen += 1;
+                let why = if seen > MAX {
+                    Some("past the 4096 files looked at")
+                } else {
+                    desk_content_refused(&full)
+                };
+                if let Some(why) = why {
+                    out.push((r, why));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// seed_extensions HOME: the desk's extensions/ (plugins' settings) into the box HOME, unless
@@ -809,7 +861,31 @@ pub fn seed_extensions(ctx: &Ctx, look: &Look, plan: &SeedPlan, h: &[u8]) -> Res
         return Ok(());
     };
     let d = Dest::of(".config/omarchy/extensions");
-    seed_copy(ctx, &src, h, &d, &extensions_held_back(src.path()))?;
+    // (what looks like a key, token or password stays on the desk, said by its name: finding 458)
+    let held = extensions_held_back(src.path());
+    let skip: Vec<Vec<u8>> = held.iter().map(|(r, _)| r.clone()).collect();
+    seed_copy(ctx, &src, h, &d, &skip)?;
+    let held_shown = if src.path()
+        == cat!(shell::env_or_empty("HOME"), "/.config/omarchy/extensions").as_slice()
+    {
+        b"your desk".to_vec()
+    } else {
+        src.path()
+            .strip_suffix(b"/extensions")
+            .unwrap_or(src.path())
+            .to_vec()
+    };
+    for (r, why) in &held {
+        say(cat!(
+            "up: not seeded: extensions/",
+            r,
+            " from ",
+            held_shown,
+            " (",
+            why,
+            ")"
+        ));
+    }
     let Some(s) = readlink_f(src.path()).filter(|s| p(s).is_dir()) else {
         return Ok(());
     };
