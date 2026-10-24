@@ -5504,6 +5504,9 @@ PYEOF
   # (and rp-sig's own line for its child, whose line number is where it noticed: its wait, or RP_TWICE's)
   rp_sed+='; s/rp-sig: line [0-9]+: PID /rp-sig: line N: PID /'
   rp_sed+='; s/ line ([0-9]+): +[0-9]+ Killed / line \1: PID Killed /'
+  # (rp-sig's own Killed line too: which of its lines it was on when the group-KILL came is timing,
+  # #358)
+  rp_sed+='; s/rp-sig: line [0-9]+: PID Killed /rp-sig: line N: PID Killed /'
   rp4_nowin() { rp4_imain; : > "$st/nohostwin"; }; rp4_pre=(rp4_nowin) rp4_want=none rp4_tok=gone
   for sg in group-INT group-TERM; do
     rp_wrap=("$r/rp-sig" "$sg" "$st/creating")
