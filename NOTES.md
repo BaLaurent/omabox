@@ -10006,6 +10006,17 @@ from them.
     a child). Tests: t_unit_rust_front ("a host child's SHLVL and _", an expected difference on the
     direct leg), t_unit_rust_handoff (a build in a tree whose VERSION differs says its own).
 
+505. **The suite calls the binary straight** (2026-10-24, #324 wave 6-front, A7). test/run.sh's CLI is
+    build/omabox, the binary the suite builds (tools_ready), called as users will call it once
+    bin/omabox is it: its own front, no hand-off, nested boxes and the jailed caller in t_jail too.
+    BASH_CLI is bash's bin/omabox, for parity's bash leg, `lib` (the functions sourced from its text),
+    the fixtures a parity case makes with bash's half (`obb`) and the tests of bash itself (its
+    hand-off, its text, a live edit). Parity compares two legs, bash and the binary; the hand-off leg
+    (A2's third) runs only with RP_LEGS="rust direct". Under --installed there is no binary: CLI is the
+    install's bin/omabox, every command in bash, as before. Tests: the unit tier and the box tests run
+    this way.
+
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

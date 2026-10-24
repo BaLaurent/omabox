@@ -109,11 +109,17 @@ if [ "${1:-}" = --installed ]; then
   ' _ "$inst" "$(id -u)" "$(id -g)" "$@"
   exit $?
 fi
-CLI=$ROOT/bin/omabox
 # An installed omabox: a package's /usr/lib/omabox, or --installed's stand-in. Both are read-only, a
 # checkout never is, so the suite tells them apart by itself (it once failed 13 checks run from a real
 # install, which sets no OMABOX_TEST_INSTALLED: that marks --installed's user namespace only).
 INSTALLED=0; [ -w "$ROOT" ] || INSTALLED=1
+# The CLI under test (#324 wave 6-front, A7): the binary, called as users will call it once
+# bin/omabox is it (its own front, no hand-off), the suite's own build (tools_ready). BASH_CLI is bash's
+# bin/omabox: parity's bash leg, lib, and the tests of bash itself (its hand-off, its text). An install
+# has no binary: both are its bin/omabox, every command in bash.
+BASH_CLI=$ROOT/bin/omabox
+CLI=$ROOT/build/omabox
+[ "$INSTALLED" = 0 ] || CLI=$BASH_CLI
 P=t$$                      # box name prefix
 export OMABOX_SUITE=$P     # marks what the suite starts on the host, for the leak detector
 TMP=$(mktemp -d)
@@ -147,6 +153,8 @@ trap 'exit 143' TERM
 descendants() { local c; for c in $(pgrep -P "$1"); do descendants "$c"; echo "$c"; done; }
 
 ob() { "$CLI" "$@"; }
+# obb ARGS: bash's omabox, all of the call in bash (a parity fixture made by bash's half).
+obb() { OMABOX_BASH=1 "$BASH_CLI" "$@"; }
 # up_ok ARGS: `ob up ARGS`, its output kept in UP_OUT for the no() of a failed start, which prints its end
 # (#289: a bare "failed" under load named no cause).
 up_ok() { UP_OUT=$(ob up "$@" 2>&1); }
@@ -340,7 +348,7 @@ tmp_repo() { local r=$TMP/$P-$1; mkdir -p "$r" && git -C "$r" init -q && echo "$
 # The CLI's functions without its dispatch at the end, for the pure ones (a file: it finds its ROOT
 # from its own path).
 mkdir -p "$TMP/lib/bin"
-sed '/^main "\$@"; exit$/d' "$CLI" > "$TMP/lib/bin/omabox"
+sed '/^main "\$@"; exit$/d' "$BASH_CLI" > "$TMP/lib/bin/omabox"
 lib() { bash -c 'source "$1"; shift; "$@"' lib "$TMP/lib/bin/omabox" "$@"; }
 
 # --- the leak detector (finding 80) --------------------------------------------------------------
@@ -597,7 +605,7 @@ t_unit_parse_mode() {
 
 t_unit_rec_ff() {
   local out calls t0 f=$TMP/recff-once
-  out=$(python3 -c "$REC_FF" "$CLI"); calls=${out##*$'\n'}; out=${out%"$calls"}
+  out=$(python3 -c "$REC_FF" "$BASH_CLI"); calls=${out##*$'\n'}; out=${out%"$calls"}
   check_eq "every ffmpeg and ffprobe a recording runs in the box goes through rec_ff: bounded, run once more on a timeout (finding 356)" "" "$out"
   check "...the check read them ($calls)" test "${calls% calls}" -ge 14
   if git -C "$ROOT" cat-file -e 7416abd:bin/omabox 2>/dev/null; then
@@ -1564,7 +1572,7 @@ while True:
 '
 t_unit_ns_fds() {
   local out n
-  out=$(python3 -c "$NS_FDS" "$CLI")
+  out=$(python3 -c "$NS_FDS" "$BASH_CLI")
   n=$(tail -n 1 <<<"$out"); n=${n%% *}
   check_eq "every call into the box's pid namespace runs through fds_only (finding 345)" "" "$(sed '$d' <<<"$out")"
   check "...the check read them ($n calls)" test "$n" -ge 9
@@ -1817,7 +1825,7 @@ t_unit_down_jail_race() {
 # what that command runs. A copy with a pause, rewritten in place mid-run, as an editor would.
 t_unit_live_edit() {
   mkdir -p "$TMP/live/bin"
-  sed 's/^main() {$/main() { sleep 1/' "$CLI" > "$TMP/live/bin/omabox"; chmod +x "$TMP/live/bin/omabox"
+  sed 's/^main() {$/main() { sleep 1/' "$BASH_CLI" > "$TMP/live/bin/omabox"; chmod +x "$TMP/live/bin/omabox"
   "$TMP/live/bin/omabox" help > "$TMP/live/out" 2>&1 & local p=$!
   until_ok 5 pgrep -P "$p" -x sleep >/dev/null   # mid-run: in main's pause (a fixed 0.3 s could come first)
   python3 -c 'import sys; p = sys.argv[1]; n = len(open(p).read()); open(p, "w").write("#!/bin/bash\n" + "q\n" * n)' "$TMP/live/bin/omabox"
@@ -3115,8 +3123,8 @@ rust_built() {
 # binary lacks (one older than its bash) goes back to bash, told not to hand it over again.
 t_unit_rust_handoff() {
   local out rc
-  check_eq "a taken-over command runs in Rust, with main's words" "rust -b b1 x" "$("$CLI" _rust -b b1 x 2>&1)"
-  out=$(OMABOX_BASH=1 "$CLI" _rust 2>&1); rc=$?
+  check_eq "a taken-over command runs in Rust, with main's words" "rust -b b1 x" "$("$BASH_CLI" _rust -b b1 x 2>&1)"
+  out=$(OMABOX_BASH=1 "$BASH_CLI" _rust 2>&1); rc=$?
   check_eq "OMABOX_BASH=1: bash keeps it (it has no _rust: exit 2)" "2 omabox: unknown command: _rust (omabox help lists the commands and their options)" "$rc $out"
   out=$(OMABOX_ROOT=$ROOT "$ROOT/build/omabox" _rust-nosuch 2>&1); rc=$?
   check_eq "a command the binary lacks goes back to bash" "2 omabox: unknown command: _rust-nosuch (omabox help lists the commands and their options)" "$rc $out"
@@ -3218,14 +3226,14 @@ rp_differs() {
   done
   return 0
 }
-# The legs (wave 6-front, A2): bash (OMABOX_BASH=1), rust (bin/omabox handing the command to
-# build/omabox, the words shaped by bash's front) and direct (build/omabox called as users will call
-# it once it is bin/omabox: its own front, no OMABOX_ROOT, no environ fd). Each of rust and direct
-# is compared with bash, and an expected difference's rp_rust is both's. RP_LEGS="rust" (or
-# "direct") runs fewer, for a local run. Under --installed (no binary) rust alone, bash there too.
+# The legs (wave 6-front): bash (BASH_CLI, OMABOX_BASH=1) and direct ($CLI, the binary called as users
+# will call it once it is bin/omabox: its own front, no OMABOX_ROOT, no environ fd), compared. The
+# hand-off leg (bash's front handing the command over, A2) went at A7; RP_LEGS="rust direct" runs it
+# too, for a local look; an expected difference's rp_rust is every leg's. Under --installed (no
+# binary) $CLI is bash's bin/omabox: bash both ways.
 rp_legs() {
-  if [ ! -x "$ROOT/build/omabox" ]; then echo rust
-  else echo "${RP_LEGS:-rust direct}"; fi
+  if [ ! -x "$ROOT/build/omabox" ]; then echo direct
+  else echo "${RP_LEGS:-direct}"; fi
 }
 parity() {
   local label=$1 side d=$TMP/rp-out.$BASHPID legs cli; shift
@@ -3237,11 +3245,11 @@ parity() {
   mkdir -p "$d"
   for side in bash "${legs[@]}"; do
     [ -z "$rp_prep" ] || "$rp_prep"
-    cli=$CLI
+    cli=$BASH_CLI
     case $side in
       bash) legenv=(OMABOX_BASH=1) ;;
       rust) legenv=(OMABOX_BASH=) ;;
-      *) legenv=() cli=$ROOT/build/omabox ;;
+      *) legenv=() cli=$CLI ;;
     esac
     (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL -u OMABOX_RELAY_DEFAULT -u SELECT_PLAIN -u OMABOX_BASH \
       ${rp_env[@]+"${rp_env[@]}"} ${legenv[@]+"${legenv[@]}"} XDG_RUNTIME_DIR="$rp_rt" \
@@ -4456,8 +4464,8 @@ EOF
   # --changed and --since: the last whole shot of the same thing, or the one named.
   rp_ref() {
     rp_grimback
-    OMABOX_BASH=1 XDG_RUNTIME_DIR=$r/rt "$CLI" shot -b fk -o "$o3/ref.png" >/dev/null 2>&1
-    OMABOX_BASH=1 XDG_RUNTIME_DIR=$r/rt "$CLI" shot -b fk --window title:one -o "$o3/refw.png" >/dev/null 2>&1
+    OMABOX_BASH=1 XDG_RUNTIME_DIR=$r/rt "$BASH_CLI" shot -b fk -o "$o3/ref.png" >/dev/null 2>&1
+    OMABOX_BASH=1 XDG_RUNTIME_DIR=$r/rt "$BASH_CLI" shot -b fk --window title:one -o "$o3/refw.png" >/dev/null 2>&1
   }
   rp3_pre=(rp_ref)
   parity "shot --changed: nothing changed" shot -b fk --changed -o "$o3/c.png" --json
@@ -4530,7 +4538,7 @@ while True:
   rp_env=("${rp_env3[@]}") rp3_pre=()
   # calibrate --answer: a card made once, its marks read from its comment and given back as a harness
   # would (1:1, scaled, past the marks, one mark off), and the readings it refuses.
-  OMABOX_BASH=1 XDG_RUNTIME_DIR=$r/rt "$CLI" calibrate --size 1600x900 -o "$r/card.png" >/dev/null 2>&1
+  OMABOX_BASH=1 XDG_RUNTIME_DIR=$r/rt "$BASH_CLI" calibrate --size 1600x900 -o "$r/card.png" >/dev/null 2>&1
   local cm one="" half="" up="" off="" few="" k=0 l x y
   local cmw; cm=$(magick identify -format '%c' "$r/card.png"); read -ra cmw <<<"${cm#omabox-calibrate 1 1600 900 }"; set -- "${cmw[@]}"
   while [ $# -ge 3 ]; do
@@ -5701,9 +5709,9 @@ PYEOF
     local label=$1 side bad=0; shift
     for side in bash rust; do
       "$rp_prep"
-      local how=OMABOX_BASH=1; [ "$side" = bash ] || how=OMABOX_BASH=
+      local how=OMABOX_BASH=1 cli=$BASH_CLI; [ "$side" = bash ] || how=OMABOX_BASH= cli=$CLI
       (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
-        ${rp_wrap[@]+"${rp_wrap[@]}"} "$CLI" "$@" >/dev/null 2>&1 </dev/null) || true
+        ${rp_wrap[@]+"${rp_wrap[@]}"} "$cli" "$@" >/dev/null 2>&1 </dev/null) || true
       rp4_safe "$side" || bad=1
     done
     [ "$bad" = 1 ] || ok "$label"
@@ -5715,9 +5723,9 @@ PYEOF
     for side in bash rust; do
       want=$wb; [ "$side" = bash ] || want=$wr
       "$rp_prep"
-      local how=OMABOX_BASH=1; [ "$side" = bash ] || how=OMABOX_BASH=
+      local how=OMABOX_BASH=1 cli=$BASH_CLI; [ "$side" = bash ] || how=OMABOX_BASH= cli=$CLI
       rc=0; (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
-        ${rp_wrap[@]+"${rp_wrap[@]}"} "$CLI" "$@" >/dev/null 2>&1 </dev/null) || rc=$?
+        ${rp_wrap[@]+"${rp_wrap[@]}"} "$cli" "$@" >/dev/null 2>&1 </dev/null) || rc=$?
       [ "$rc" = "${want%% *}" ] || { bad=1 why+="${why:+; }$side: exit $rc, not ${want%% *}"; }
       rp4_want=${want#* } rp4_safe "$side" || bad=1
     done
@@ -6012,7 +6020,7 @@ EOF
 
   # Alone, as ai-jail maps it: bash's file and the binary, each alone in a HOME's .local/bin.
   mkdir -p "$r/a-bash/.local/bin" "$r/a-rust/.local/bin" "$r/abin"
-  cp "$CLI" "$r/a-bash/.local/bin/omabox"; cp "$ROOT/build/omabox" "$r/a-rust/.local/bin/omabox"
+  cp "$BASH_CLI" "$r/a-bash/.local/bin/omabox"; cp "$ROOT/build/omabox" "$r/a-rust/.local/bin/omabox"
   cp "$r/bin/unshare" "$r/abin/unshare"
   cat > "$r/abin/omabox-relay" <<'EOF'
 #!/bin/bash
@@ -6158,8 +6166,8 @@ t_unit_rust_front() {
     mkdir -p "$r/aj" "$r/proj/hidden" "$r/home"
     cp "$(command -v bash)" "$r/aj/ai-jail"
     for leg in bash rust direct; do
-      local bcmd=(/usr/bin/env OMABOX_BASH=1 "$CLI")
-      [ "$leg" != rust ] || bcmd=(/usr/bin/env OMABOX_BASH= "$CLI")
+      local bcmd=(/usr/bin/env OMABOX_BASH=1 "$BASH_CLI")
+      [ "$leg" != rust ] || bcmd=(/usr/bin/env OMABOX_BASH= "$BASH_CLI")
       [ "$leg" != direct ] || bcmd=("$ROOT/build/omabox")
       HOME=$r/home XDG_RUNTIME_DIR=$r/rt "$R" listen --socket "$r/b-$leg.sock" -- "${bcmd[@]}" >/dev/null 2>&1 & SERVERS+=($!)
     done
@@ -7532,7 +7540,7 @@ while time.time() < end:
   rp4b_pre=(rp4b_recfix)
   parity "record start --monitor all: the layout of two" record -b rc start --monitor all -o "$r/co/v.mp4" --fps 25 --glide 300ms
   # (bash's half starts it, in this test's runtime dir and environment, as the cases run)
-  rp4b_cli() { env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL ${rp_env[@]+"${rp_env[@]}"} OMABOX_BASH=1 XDG_RUNTIME_DIR="$r/rt" "$CLI" "$@"; }
+  rp4b_cli() { env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL ${rp_env[@]+"${rp_env[@]}"} OMABOX_BASH=1 XDG_RUNTIME_DIR="$r/rt" "$BASH_CLI" "$@"; }
   rp4b_started() { rp4b_recfix; rp4b_cli -b rc record start -o "$r/co/v.mp4" >/dev/null 2>&1; sleep 0.5
     [ -f "$r/rt/omabox/rc/record" ] || no "the case's recording started (its prep)" "no $r/rt/omabox/rc/record"; }
   rp4b_pre=(rp4b_started)
@@ -9564,7 +9572,7 @@ t_unit_keys_to_box() {
   if command -v luac >/dev/null; then check "passthrough.lua compiles" luac -p "$ROOT/share/passthrough.lua"
   else skip "passthrough.lua compiles" "no luac"; fi
   # (#110: each side a number first; two empty extractions compared equal)
-  local lv cv; lv=$(sed -n 's/^local VERSION = \([0-9]*\)$/\1/p' "$ROOT/share/passthrough.lua"); cv=$(sed -n 's/^PASS_VERSION=\([0-9]*\) .*/\1/p' "$CLI")
+  local lv cv; lv=$(sed -n 's/^local VERSION = \([0-9]*\)$/\1/p' "$ROOT/share/passthrough.lua"); cv=$(sed -n 's/^PASS_VERSION=\([0-9]*\) .*/\1/p' "$BASH_CLI")
   check_match "passthrough.lua's VERSION read" '^[0-9]+$' "$lv"
   check_match "PASS_VERSION read" '^[0-9]+$' "$cv"
   check_eq "PASS_VERSION is passthrough.lua's VERSION" "$lv" "$cv"
@@ -12617,7 +12625,7 @@ echo "%s $*" >> "$HOME/stub.log"
         rm -rf "$sh2"; mkdir -p "$sh2"
         printf '%s
 ' "$a" | env -u CLAUDE_CONFIG_DIR -u CODEX_HOME HOME="$sh2" XDG_DATA_HOME="$sh2/.local/share" XDG_CACHE_HOME="$sh2/.cache" \
-          XDG_CONFIG_HOME="$sh2/.config" PATH="$sst:$PATH" "OMABOX_BASH=$hf" script -qec "$CLI setup" /dev/null >/dev/null 2>&1
+          XDG_CONFIG_HOME="$sh2/.config" PATH="$sst:$PATH" "OMABOX_BASH=$hf" script -qec "$([ -n "$hf" ] && printf %q "$BASH_CLI" || printf %q "$CLI") setup" /dev/null >/dev/null 2>&1
         check "setup in a terminal, answer [${a}]$([ -z "$hf" ] || echo ' (bash)'): a no, remembered" test -e "$sh2/.config/omabox/widget-declined"
         check_fails "...and no widget enabled" grep -q "plugin enable" "$sh2/stub.log"
       done
@@ -14572,7 +14580,10 @@ t_rust_parity_up() {
   cp "$st/theme.name" "$h/.local/state/omarchy/current/" 2>/dev/null
   # (and the user's bar, as the halves seed it from the desk)
   mkdir -p "$h/.config/omarchy"; cp "$HOME/.config/omarchy/shell.json" "$HOME/.config/omarchy/shell.toml" "$h/.config/omarchy/" 2>/dev/null
-  rpu_down() { HOME=$h ob down "$U" >/dev/null 2>&1; true; }
+  # (bash's down: one through the binary is over within the clock tick an up started right after it
+  # starts in, and bash's up takes that tie, its .down- marker a start in ticks, for a down that came
+  # while it was starting)
+  rpu_down() { HOME=$h obb down "$U" >/dev/null 2>&1; true; }
   rpu_state() {
     local d=$XDG_RUNTIME_DIR/omabox/$U
     echo "== launch.sh"; sed -E "s/omabox-$U-[0-9]+/omabox-$U-PID/" "$d/launch.sh" 2>/dev/null
@@ -14726,7 +14737,7 @@ t_rust_parity() {
   parity "run -d -q: a 0 at once is not said" run -b "$B" -d -q -- true
   parity "run -d: a host path the box has not" run -b "$B" -d -- ls "$TMP"
   parity "run -d --print-log: started" run -b "$B" -d --print-log -- sleep 610
-  rp_jobs() { ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1; OMABOX_BASH=1 ob run -b "$B" -d -q -- sleep 611 >/dev/null 2>&1; }
+  rp_jobs() { ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1; obb run -b "$B" -d -q -- sleep 611 >/dev/null 2>&1; }
   rp_prep=rp_jobs
   parity "run -d --replace: the earlier job stopped" run -b "$B" -d --replace -- sleep 611
   parity "run -d --replace: another job of the program named" run -b "$B" -d --replace -- sleep 612
@@ -14775,8 +14786,8 @@ t_rust_parity() {
   parity "tree: two match, 2" tree -b "$B" --window rp-a
   parity "pixel --window" pixel -b "$B" --window 'title:"one' 5 5 20 20
   parity "pixel --window: outside it" pixel -b "$B" --window 'title:"one' 5000 5
-  OMABOX_BASH=1 ob shot -b "$B" -o "$TMP/rp-s.png" >/dev/null 2>&1
-  OMABOX_BASH=1 ob shot -b "$B" --window 'title:"one' -o "$TMP/rp-w.png" >/dev/null 2>&1
+  obb shot -b "$B" -o "$TMP/rp-s.png" >/dev/null 2>&1
+  obb shot -b "$B" --window 'title:"one' -o "$TMP/rp-w.png" >/dev/null 2>&1
   parity "pixel --in: a shot's pixel" pixel -b "$B" --in "$TMP/rp-s.png" 920 320
   parity "pixel --in: a window shot's" pixel -b "$B" --in "$TMP/rp-w.png" 5 5
   parity "pixel --in: outside the image" pixel -b "$B" --in "$TMP/rp-s.png" 99999 1
@@ -14865,7 +14876,7 @@ t_rust_parity() {
   # (each side's pointer from the same place: the bash side's click left it at the point, so the
   # second side's made no move and no cursor change to ignore, a difference of the order, not of
   # the halves; seen twice in wave 4a's runs)
-  rp_ptr_home() { rp_live3_prep; OMABOX_BASH=1 ob pointer -b "$B" -- move 5 5 >/dev/null 2>&1; OMABOX_BASH=1 ob wait -b "$B" still --quiet 300ms >/dev/null 2>&1; }
+  rp_ptr_home() { rp_live3_prep; obb pointer -b "$B" -- move 5 5 >/dev/null 2>&1; obb wait -b "$B" still --quiet 300ms >/dev/null 2>&1; }
   rp_prep=rp_ptr_home
   parity "click --wait --json --window" click -b "$B" --wait --json --window rp-k 40 40
   rp_prep=rp_live3_prep
@@ -14886,7 +14897,7 @@ t_rust_parity() {
   parity "shot --zoom" shot -b "$B" --zoom 4 -g '0,0 40x30' -o "$o3/z.png"
   parity "shot --monitor" shot -b "$B" --monitor HEADLESS-2 --json -o "$o3/m.png"
   parity "shot --monitor: none such" shot -b "$B" --monitor rp-none -o "$o3/m.png"
-  rp_live3_ref() { rp_live3_prep; OMABOX_BASH=1 ob shot -b "$B" --window rp-k -o "$o3/ref.png" >/dev/null 2>&1; rp_live3_prep_keep; }
+  rp_live3_ref() { rp_live3_prep; obb shot -b "$B" --window rp-k -o "$o3/ref.png" >/dev/null 2>&1; rp_live3_prep_keep; }
   rp_live3_prep_keep() { rp_shots0=$(cat "$bd/shots.tsv" 2>/dev/null | wc -l); }
   rp_prep=rp_live3_ref
   parity "shot --changed --window: nothing changed" shot -b "$B" --changed --window rp-k --json -o "$o3/c.png"
@@ -14906,17 +14917,17 @@ t_rust_parity() {
   up_ok "$B" --no-shell --net isolated || { no "up (wave 4a)" "$UP_OUT"; return; }
   local mon_d=$XDG_RUNTIME_DIR/omabox/$B
   rp_lay() {
-    local n; for n in $(OMABOX_BASH=1 ob monitor -b "$B" list --json 2>/dev/null | jq -r '.[] | select(.name != "HEADLESS-2") | .name'); do
-      if [ "$(jq -r --arg n "$n" 'any(.[]; .name == $n and .dropped)' < <(OMABOX_BASH=1 ob monitor -b "$B" list --json))" = true ]; then OMABOX_BASH=1 ob output -b "$B" back "$n" >/dev/null 2>&1; fi
-      OMABOX_BASH=1 ob monitor -b "$B" remove "$n" >/dev/null 2>&1
+    local n; for n in $(obb monitor -b "$B" list --json 2>/dev/null | jq -r '.[] | select(.name != "HEADLESS-2") | .name'); do
+      if [ "$(jq -r --arg n "$n" 'any(.[]; .name == $n and .dropped)' < <(obb monitor -b "$B" list --json))" = true ]; then obb output -b "$B" back "$n" >/dev/null 2>&1; fi
+      obb monitor -b "$B" remove "$n" >/dev/null 2>&1
     done
-    [ ! -s "$mon_d/output.dropped" ] || OMABOX_BASH=1 ob output -b "$B" back >/dev/null 2>&1
-    [ "$(OMABOX_BASH=1 ob mode -b "$B" 2>/dev/null)" = "HEADLESS-2 1920x1080@60" ] || OMABOX_BASH=1 ob mode -b "$B" 1920x1080 >/dev/null 2>&1
+    [ ! -s "$mon_d/output.dropped" ] || obb output -b "$B" back >/dev/null 2>&1
+    [ "$(obb mode -b "$B" 2>/dev/null)" = "HEADLESS-2 1920x1080@60" ] || obb mode -b "$B" 1920x1080 >/dev/null 2>&1
   }
-  rp_lay_m() { rp_lay; OMABOX_BASH=1 ob monitor -b "$B" add 800x600 >/dev/null 2>&1; }
+  rp_lay_m() { rp_lay; obb monitor -b "$B" add 800x600 >/dev/null 2>&1; }
   rp_lay_also() {
     jq -c '{size, scale, monitors}' "$mon_d/box.json"; cat "$mon_d/run/omabox.monitors" "$mon_d/run/omabox.mode" "$mon_d/output.dropped" 2>/dev/null
-    OMABOX_BASH=1 ob hyprctl -b "$B" -j monitors | jq -c '[.[] | {name, width, height, x, y, scale}]'
+    obb hyprctl -b "$B" -j monitors | jq -c '[.[] | {name, width, height, x, y, scale}]'
   }
   rp_prep=rp_lay rp_also=rp_lay_also
   parity "mode (both ways)" mode -b "$B"
@@ -15043,7 +15054,7 @@ EOF
   rp_prep=rp_ckr rp_env=(OMABOX_CHECK_NAME="$P-rpc") rp_also=rp_ckls
   rp_sed='s/box up in [0-9]+ s/box up in N s/; s/(the runs. largest stray part was) [0-9]+ px/\1 N px/; s/(under|was) [0-9]+ px/\1 N px/g'
   parity "check run --approve --runs 2 (both ways)" check run --approve --runs 2 --base "$ck/base" -o "$ck/o" -- "$ck/scen"
-  rp_ckr; OMABOX_BASH=1 OMABOX_CHECK_NAME="$P-rpc" ob check run --approve --runs 2 --base "$ck/base" -o "$ck/o" -- "$ck/scen" >/dev/null 2>&1
+  rp_ckr; OMABOX_CHECK_NAME="$P-rpc" obb check run --approve --runs 2 --base "$ck/base" -o "$ck/o" -- "$ck/scen" >/dev/null 2>&1
   rm -rf "$ck/base0"; cp -a "$ck/base" "$ck/base0"
   rp_ckc() { rm -rf "$ck/base" "$ck/o"; cp -a "$ck/base0" "$ck/base"; }
   rp_prep=rp_ckc
@@ -15144,9 +15155,9 @@ EOF
   # record on the box: wf-recorder and ffmpeg for real (the numbers of a take's length, its
   # times and sizes left out: they are the take's).
   local rv=$TMP/rp-rec; rm -rf "$rv"; mkdir -p "$rv"
-  rp_recx() { OMABOX_BASH=1 ob record -b "$B" stop >/dev/null 2>&1 || true; rm -rf "$rv"; mkdir -p "$rv"; }
-  rp_recs() { rp_recx; OMABOX_BASH=1 ob record -b "$B" start -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
-  rp_recm() { rp_recs; OMABOX_BASH=1 ob record -b "$B" mark 'scene one' >/dev/null 2>&1; }
+  rp_recx() { obb record -b "$B" stop >/dev/null 2>&1 || true; rm -rf "$rv"; mkdir -p "$rv"; }
+  rp_recs() { rp_recx; obb record -b "$B" start -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
+  rp_recm() { rp_recs; obb record -b "$B" mark 'scene one' >/dev/null 2>&1; }
   rp_recls() { (cd "$rv" && command find . -printf '%p %y\n' | LC_ALL=C sort; for f in *.tsv *.vtt; do [ -f "$f" ] && { echo "== $f"; sed -E 's/[0-9]+/N/g' "$f"; }; done 2>/dev/null); }
   rp_also=rp_recls
   rp_sed='s/[0-9]+(\.[0-9]+)?/N/g'
@@ -15164,7 +15175,7 @@ EOF
   rp_recptr() { rp_recls; echo "== pointer"; sed -E 's/[0-9]+/N/g' "$XDG_RUNTIME_DIR/omabox/$B/pointer" 2>/dev/null; }
   rp_also=rp_recptr rp_prep=rp_recx
   parity "record start --no-pointer: the hold kept (both ways)" record -b "$B" start --no-pointer -o "$rv/v.mp4"
-  rp_recnp() { rp_recx; OMABOX_BASH=1 ob record -b "$B" start --no-pointer -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
+  rp_recnp() { rp_recx; obb record -b "$B" start --no-pointer -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
   rp_prep=rp_recnp
   parity "record stop: the --no-pointer hold given back (both ways)" record -b "$B" stop
   rp_recx
