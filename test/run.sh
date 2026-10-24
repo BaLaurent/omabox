@@ -5934,7 +5934,7 @@ t_unit_rust_parity5() {
       sleep 0.05
     done
     # (its PID 1 too: unshare's end leaves its child running, the namespace with it)
-    echo "$p $l" >> "$b/kids"
+    echo "$p $l" >> "$b/kids"; echo "$n $l" >> "$b/pid1s"
     rp5b_box "$n" "{pidns: \"$(readlink "/proc/$l/ns/pid")\"} + ${2:-{\}}"
     echo "{\"child-pid\": $l}" > "$d/info.json"
   }
@@ -5949,6 +5949,7 @@ t_unit_rust_parity5() {
   }
   rp5b_fix() {
     [ ! -f "$b/kids" ] || { xargs -r kill -KILL < "$b/kids" 2>/dev/null; rm -f "$b/kids"; }
+    rm -f "$b/pid1s"
     rm -rf "$b/rt" "$b/cache" "$b/data"; mkdir -p "$b/rt/omabox" "$b/cache" "$b/data/omabox/saves"
     rp5b_box dead '{pidns: "pid:[1]"}'
     rp5b_box mon '{monitors: [{}, {}], plugins: ["p.one", "p.two"]}'
@@ -5965,7 +5966,14 @@ t_unit_rust_parity5() {
     printf '[keyring]\ndisplay-name=login\n\n[1]\nsecret=x\n' > "$s/sv1/home/.local/share/keyrings/login.keyring"
     printf '{\n  "box": "live",\n  "saved": "2026-10-24T10:11:12+01:00",\n  "version": "1.0.1"\n}\n' > "$s/sv1/save.json"
   }
-  rp5b_saves() { (cd "$b/data/omabox/saves" && command find . -printf '%p %y\n' | LC_ALL=C sort; jq -S 'del(.saved)' ./*/save.json 2>/dev/null); }
+  # What rp_snap (the runtime dir) does not hold: the saves, the box HOMEs (down removes them) and
+  # whether each stand-in's PID 1 still runs (down kills it).
+  rp5b_saves() {
+    (cd "$b/data/omabox/saves" && command find . -printf '%p %y\n' | LC_ALL=C sort; jq -S 'del(.saved)' ./*/save.json 2>/dev/null)
+    echo "== homes"; (cd "$b/cache" && command find . -printf '%p %y\n' | LC_ALL=C sort)
+    echo "== PID 1s"; [ ! -f "$b/pid1s" ] || LC_ALL=C sort "$b/pid1s" | while read -r n l; do
+      if kill -0 "$l" 2>/dev/null; then echo "$n up"; else echo "$n gone"; fi; done
+  }
   rp_rt=$b/rt rp_dir=$r/norepo rp_snap=1 rp_prep=rp5b_fix rp_sed="" rp_wrap=() rp_also=rp5b_saves
   rp_mask='s/"child-pid": [0-9]+/"child-pid": N/; s/pid:\[[0-9]+\]/pid:[N]/; s/^[0-9]+$/N/'
   local rp5b_env=(XDG_CACHE_HOME="$b/cache" XDG_DATA_HOME="$b/data" HYPRLAND_INSTANCE_SIGNATURE=rp-none)
@@ -13749,8 +13757,11 @@ t_rust_parity_up() {
   rp_sed=""; rpu_resave() { rpu_nosave; ob save rp5b-save -b "$U" >/dev/null 2>&1; }
   rp_prep=rpu_resave; parity "saves rm" saves rm rp5b-save
   rp_env=() rp_prep=""
-  rpu_up() { ob up "$U" --no-shell --net isolated >/dev/null 2>&1; }
-  rpu_gone() { echo "== dir $(test -e "$XDG_RUNTIME_DIR/omabox/$U" && echo there || echo gone)"; echo "== reaper $(pgrep -fc "omabox _reap $U " || true)"; }
+  rpu_up() { ob up "$U" --no-shell --net isolated >/dev/null 2>&1; bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$U" > "$r/rpu-pid1"; }
+  # (its PID 1 recorded before each side's down, in rpu_up: gone after it, or not)
+  rpu_gone() { echo "== dir $(test -e "$XDG_RUNTIME_DIR/omabox/$U" && echo there || echo gone)"; echo "== reaper $(pgrep -fc "omabox _reap $U " || true)"
+    echo "== HOME $(test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$U" && echo there || echo gone)"
+    echo "== PID 1 $(kill -0 "$(cat "$r/rpu-pid1" 2>/dev/null)" 2>/dev/null && echo up || echo gone)"; }
   rp_prep=rpu_up rp_also=rpu_gone; parity "down of the box up" down "$U"
   rpu_down
   rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/ rp_check="" rp_env=()
