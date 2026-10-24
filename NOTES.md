@@ -9569,11 +9569,14 @@ from them.
     --seed, the desk's files under --desk-shell and a --from save the only other sources (S2). The
     host's Hyprland is reached only through host::HostSilent, which starts the launch script
     `silent` on a workspace ws_check gave, with no focus, and nothing else (S8). The isolated mode
-    carries its allow list (net.rs's Net::Isolated, S5). And the started box is read back: its
-    mountinfo, through its PID 1, must hold none of the seat's paths (a card node that is the
-    placeholder file is fine), nor /dev/input, /run/seatd.sock or /run/dbus, and its runtime dir must
-    not be the user's own; one there ends the box, "up: box 'B' has ... (S1: never the seat's paths):
-    not started" (up_box.rs's seat_check), so every box any test starts is checked. Box entry is
+    carries its allow list (net.rs's Net::Isolated, S5). And the started box is read back once its
+    Hyprland is up (bwrap names its PID 1 before it makes its mounts: read at once, its root was
+    still the host's, /dev/input there, 30 times in 30 in the wave's review): its mountinfo, through
+    its PID 1, must hold none of the seat's paths (a card node that is the placeholder file is fine),
+    nor /dev/input, /run/seatd.sock or /run/dbus, and its runtime dir must not be the user's own; one
+    there, or a mountinfo or root that cannot be read (fails closed), ends the box, "up: box 'B' has
+    ... (S1: never the seat's paths, checked on its own mounts): not started" (up_box.rs's
+    seat_check), so every box any test starts is checked. Box entry is
     still nsenter. Tests: bwrap.rs's no_seat_path_gets_through (proptest: arbitrary paths at every
     bind method), net.rs's pasta_opens_what_it_should (proptest), upspec.rs's refuse_dest proptest,
     render.rs's, seed.rs's every_allowed_source_says_what_it_is; t_unit_rust_parity5 (96 refusal and
@@ -9627,9 +9630,17 @@ from them.
     (trap.rs's on_exit_code) whose undo ends the box (and removes a dir that has no box.json yet):
     a failure runs it, and an INT, TERM or HUP at any step waits for the step's child (bounded,
     finding 453), runs the undos (the monitor add's own, which removes its output, first), then exits
-    130, 143 or 129, whatever the step returned meanwhile (main parks once the signal is in). Tests:
-    t_up_signals (group and alone, while it waits for the shell), t_up_signals_window (during the
-    interactive monitor's add, in a box standing in for the host).
+    130, 143 or 129, whatever the step returned meanwhile (main parks once the signal is in). That includes the ~5 ms between the
+    launch's hand-off and the box's first pid (the wave's review: the undo found no box, exited 143,
+    and the box came up after, adopted by its reaper), and an interactive box whose launch the host's
+    Hyprland was asked for: the launch and its mark for the undo are made under one lock (a stop
+    already on its way launches nothing), and the undo of a launched box waits, at most 10 s as up's
+    own wait, until it shows (its PID 1, its pasta or bwrap's info file) or its launcher is gone,
+    then ends it and the launcher. Tests: t_up_signals (group and alone, while it waits for the
+    shell, while it seeds the HOME, once bwrap has started, and with the launcher held 2 s by the
+    suite's seam OMABOX_TEST_LAUNCH_DELAY, the signal inside that hold: no box left once it is over;
+    without the undo's wait and its kill of the launcher a box was left running),
+    t_up_signals_window (during the interactive monitor's add, in a box standing in for the host).
 
 461. **`up --clean --from SAVE` wrote its wallpaper through a link the save left** (2026-10-24, #324
     wave 5a; finding 168's class). seed_home clears the links on the way to what it writes, but

@@ -11152,6 +11152,20 @@ t_up_signals() {
       done
     done
   done
+  # Between the launch's hand-off and the box's first pid (finding 460): the launcher held 2 s (the
+  # suite's seam, OMABOX_TEST_LAUNCH_DELAY), the signal sent to up once it has handed the launch off.
+  # The box comes up after the stop began: it is waited for and ended, none left once the hold is over.
+  for sig in TERM HUP; do
+    i=$((i + 1)) B=$P-usig$i
+    bd=$(ob path "$B")
+    rc=0; OMABOX_TEST_LAUNCH_DELAY=2 RP_WAIT=0.3 RP_DEADLINE=90 "$r/rp-sig" "$sig" "$bd/starting" env --default-signal=INT,TERM,HUP "$CLI" up "$B" --net isolated --no-shell >/dev/null 2>"$r/err.$i" || rc=$?
+    check_eq "up and $sig after the launch's hand-off, before the box's pid: the signal's code" "$(( 128 + $(kill -l "$sig") ))" "$rc"
+    sleep 4
+    check_eq "...no box of it left running once the launcher's hold is over" "" "$(pgrep -f "pasta .* $bd/pasta\.pid" | tr '\n' ' ')"
+    st=$(ob ls --json 2>/dev/null | jq -r --arg n "$B" 'first(.[] | select(.name == $n) | .state) // "gone"')
+    check "...the box not up ($st)" test "$st" != up
+    ob down "$B" >/dev/null 2>&1
+  done
 }
 
 # The same during `up --interactive --monitor`'s add (finding 434; finding 435's stopgap held it on

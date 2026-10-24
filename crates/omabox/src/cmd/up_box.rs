@@ -25,6 +25,7 @@ use crate::shell::{self, quote_q};
 use serde_json::{Map, Value};
 use std::cell::RefCell;
 use std::os::unix::fs::PermissionsExt;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Where a box sees omabox's own tools (bash's BOX_* globals).
@@ -53,8 +54,24 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     // up's refusal points at can be read; before that it goes (finding 163). Whatever ends up:
     // a failure, or an INT, TERM or HUP at any step (finding 434, #356).
     let undo_ctx = ctx.clone();
+    let launched: Arc<Mutex<Launched>> = Arc::default();
+    let undo_launched = Arc::clone(&launched);
     let trap = RefCell::new(Some(crate::trap::on_exit_code(move || {
+        // (a box handed off but not yet showing its pid is waited for, then ended: H1 of the
+        // review, finding 460)
+        let mut l = undo_launched
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if l.child.is_some() || l.asked {
+            launched_wait(&undo_ctx, &mut l.child);
+        }
         crate::exit::muted(|| ready::kill_box(&undo_ctx));
+        if let Some(c) = l.child.as_mut()
+            && matches!(c.try_wait(), Ok(None))
+        {
+            let _ = c.kill();
+        }
+        drop(l);
         let _ = std::fs::remove_file(undo_ctx.at("starting"));
         if !undo_ctx.at("box.json").is_file() {
             ready::rm_box(&undo_ctx);
@@ -256,19 +273,58 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         start_reaper(ctx);
     }
     // From here a box may be running.
+    // What is launched is marked for the undo under one lock with the launch itself: a signal's undo
+    // either finds it marked (and waits for the box to show, then ends it) or comes first, and then
+    // nothing is launched (main parks; the stop ends this process).
     if u.interactive {
         let host = crate::host::HostSilent::new(ctx);
         host.passthrough()?;
+        {
+            let mut l = launched
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if stopping() {
+                drop(l);
+                stop_parks();
+            }
+            l.asked = true;
+        }
         host.exec_silent(&cat!(d, "/launch.sh"), &u.ws)?;
     } else {
-        let mut c = crate::sig::command("bash");
-        c.arg(os(&cat!(d, "/launch.sh")))
-            .stdin(std::process::Stdio::null());
+        let script = cat!(d, "/launch.sh");
+        let mut c = match launch_delay() {
+            // (the suite's seam: the launcher held this long before it runs launch.sh, so a signal
+            // lands between the hand-off and the box's first pid)
+            Some(secs) => {
+                let mut c = crate::sig::command("sh");
+                c.args(["-c", "sleep \"$1\"; exec bash \"$0\""])
+                    .arg(os(&script))
+                    .arg(os(&secs));
+                c
+            }
+            None => {
+                let mut c = crate::sig::command("bash");
+                c.arg(os(&script));
+                c
+            }
+        };
+        c.stdin(std::process::Stdio::null());
         // (`bash launch.sh &`: INT and QUIT ignored in it and stdin /dev/null, as bash starts what
         // it puts in the background with job control off; the box is not waited for)
         crate::exec::background(&mut c);
-        if c.spawn().is_err() {
-            return Err(ctx.die("up: could not run the box's launch.sh"));
+        let mut l = launched
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if stopping() {
+            drop(l);
+            stop_parks();
+        }
+        match c.spawn() {
+            Ok(ch) => l.child = Some(ch),
+            Err(_) => {
+                drop(l);
+                return Err(ctx.die("up: could not run the box's launch.sh"));
+            }
         }
     }
     let r_owner = owner;
@@ -319,9 +375,11 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     if !u.cover_srcs.is_empty() {
         covers_check(ctx, &u, &r)?;
     }
-    // S1 (#355): the started box's own mounts read back; one of the seat's paths there ends it.
-    seat_check(ctx, &pid)?;
     ready::wait_hyprland(ctx, &r)?;
+    // S1 (#355): the started box's own mounts read back; one of the seat's paths there ends it. Once
+    // its Hyprland is up: bwrap names its PID 1 before it makes its mounts, and a root read before
+    // that is still the host's (/dev/input there).
+    seat_check(ctx, &pid)?;
     install::hypr_version(ctx);
     install::qs_version(ctx);
     ready::wait_ready(ctx, &mut r, u.shell)?;
@@ -452,6 +510,53 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         return Err(Exit(1));
     }
     Ok(())
+}
+
+/// What up launched, for its undo: the headless box's launcher (`bash launch.sh`, which becomes
+/// pasta, or bwrap without it), or that the host Hyprland was asked to run it (interactive).
+#[derive(Default)]
+struct Launched {
+    child: Option<std::process::Child>,
+    asked: bool,
+}
+
+/// Main, about to launch under the lock, finds a stop already on its way: it launches nothing and
+/// waits here for the stop to end this process.
+fn stop_parks() -> ! {
+    loop {
+        crate::sig::sleep(Duration::from_secs(1));
+    }
+}
+
+fn stopping() -> bool {
+    crate::sig::STOPPING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The undo of a box launched but perhaps not showing yet: at most 10 s (up's own wait for its
+/// pid) until it shows (its PID 1, its pasta, or bwrap's info file) or its launcher is gone, so
+/// kill_box then finds it (H1: a signal in the ~5 ms between the hand-off and pasta.pid, or while an
+/// interactive box's Hyprland runs it, left a box up that the reaper adopted).
+fn launched_wait(ctx: &Ctx, child: &mut Option<std::process::Child>) {
+    let end = crate::settle::after(10);
+    loop {
+        let shown = matches!(box_pid(&ctx.d), BoxPid::Pid(_))
+            || crate::boxes::box_pasta(&ctx.d).is_some()
+            || std::fs::metadata(ctx.at("info.json")).is_ok_and(|m| m.len() > 0);
+        let gone = child
+            .as_mut()
+            .is_some_and(|c| !matches!(c.try_wait(), Ok(None)));
+        if shown || gone || crate::settle::past(end) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// OMABOX_TEST_LAUNCH_DELAY: the suite's hold of a headless launcher, whole seconds 1-30.
+fn launch_delay() -> Option<Vec<u8>> {
+    let v = shell::env("OMABOX_TEST_LAUNCH_DELAY")?;
+    let n = shell::dec(&v).filter(|n| (1..=30).contains(n) && v.iter().all(u8::is_ascii_digit))?;
+    Some(n.to_string().into_bytes())
 }
 
 /// The cover file and folder, 444 and 555, the go pipe and covers-pending (#210).
@@ -1410,7 +1515,7 @@ fn seat_check(ctx: &Ctx, pid: &[u8]) -> Res<()> {
             ctx.name,
             "' has ",
             why,
-            " (S1: never the seat's paths): not started"
+            " (S1: never the seat's paths, checked on its own mounts): not started"
         )));
     }
     Ok(())
@@ -1418,11 +1523,30 @@ fn seat_check(ctx: &Ctx, pid: &[u8]) -> Res<()> {
 
 /// What of the seat the box whose PID 1 is PID has, or None. Each mount point of its mountinfo, as
 /// the box sees it: a DRM card node there must be the box's empty placeholder file (finding 294),
-/// none of /dev/input, /run/seatd.sock or /run/dbus may be one; and the runtime dir at its path must
-/// not be the user's own (the same file).
+/// none of /dev/input, /run/seatd.sock or /run/dbus may be one or be there; and the runtime dir at its
+/// path must not be the user's own (the same file). What cannot be read is no pass (fail closed).
 pub fn seat_visible(pid: &[u8], runtime: &[u8]) -> Option<Vec<u8>> {
     let root = cat!("/proc/", pid, "/root");
-    let info = std::fs::read(shell::path(&cat!("/proc/", pid, "/mountinfo"))).ok()?;
+    let mi = cat!("/proc/", pid, "/mountinfo");
+    let info = match std::fs::read(shell::path(&mi)) {
+        Ok(i) => i,
+        Err(e) => {
+            return Some(cat!(
+                "mounts that cannot be read (",
+                mi,
+                ": ",
+                e.to_string(),
+                ")"
+            ));
+        }
+    };
+    // (`there`: Some(true) when the path exists in the box, Some(false) when it does not, None when
+    // the look itself fails)
+    let there = |p: &[u8]| match std::fs::symlink_metadata(shell::path(&cat!(root, p))) {
+        Ok(_) => Some(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(false),
+        Err(_) => None,
+    };
     for mp in mount_points(&info) {
         if let Some(why) = crate::bwrap::seat_path(&mp, b"") {
             if mp.starts_with(b"/dev/dri/card") {
@@ -1435,8 +1559,10 @@ pub fn seat_visible(pid: &[u8], runtime: &[u8]) -> Option<Vec<u8>> {
         }
     }
     for p in ["/dev/input", "/run/seatd.sock", "/run/dbus"] {
-        if std::fs::symlink_metadata(shell::path(&cat!(root, p))).is_ok() {
-            return Some(cat!(p, " in it"));
+        match there(p.as_bytes()) {
+            Some(false) => {}
+            Some(true) => return Some(cat!(p, " in it")),
+            None => return Some(cat!("a root that cannot be read (", root, p, ")")),
         }
     }
     if !runtime.is_empty() {
@@ -1444,10 +1570,14 @@ pub fn seat_visible(pid: &[u8], runtime: &[u8]) -> Option<Vec<u8>> {
         let host = std::fs::metadata(shell::path(runtime)).map(|m| (m.dev(), m.ino()));
         let inbox =
             std::fs::metadata(shell::path(&cat!(root, runtime))).map(|m| (m.dev(), m.ino()));
-        if let (Ok(a), Ok(b)) = (host, inbox)
-            && a == b
-        {
-            return Some(cat!("your runtime dir (", runtime, ") in it"));
+        match (host, inbox) {
+            (Ok(a), Ok(b)) if a == b => {
+                return Some(cat!("your runtime dir (", runtime, ") in it"));
+            }
+            (Ok(_), Err(e)) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Some(cat!("a root that cannot be read (", root, runtime, ")"));
+            }
+            _ => {}
         }
     }
     None
