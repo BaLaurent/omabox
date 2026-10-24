@@ -147,10 +147,11 @@ fn string(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// A JSON number literal in standard form (finding 449): as read when it has no exponent (`1.50`,
-/// `-0`, `100000000000000000000`; zeros in front of the point dropped); with one, its digits written out plain while the point stays
-/// within 21 places of them (`1e3` is `1000`, `1.5e-7` `0.00000015`), else in exponent form (`1e+21`,
-/// `1.5e-8`), as JavaScript writes a number. jq 1.8 wrote decNumber's (`1E+3`, `1.5E-7`).
+/// A JSON number literal in standard form (finding 449), as JavaScript writes a number: as read when
+/// it has no exponent (`1.50`, `-0`, `100000000000000000000`; zeros in front of the point dropped);
+/// with one, its digits written out plain from 1e-6 to below 1e21 (`1e3` is `1000`, `1.5e-6`
+/// `0.0000015`), else in exponent form (`1e+21`, `1.5e-7`); an exponent past 64 bits, as read. jq
+/// 1.8 wrote decNumber's (`1E+3`, `1.5E-7`).
 pub fn number(lit: &str) -> String {
     let (neg, rest) = match lit.strip_prefix('-') {
         Some(r) => (true, r),
@@ -171,7 +172,11 @@ pub fn number(lit: &str) -> String {
             None => format!("{sign}{int}"),
         };
     };
-    let (mant, exp) = (&rest[..e], rest[e + 1..].parse::<i64>().unwrap_or(0));
+    // (an exponent past 64 bits: the literal as read)
+    let Ok(exp) = rest[e + 1..].parse::<i64>() else {
+        return lit.to_string();
+    };
+    let mant = &rest[..e];
     let (int, frac) = mant.split_once('.').unwrap_or((mant, ""));
     let mut digits: String = format!("{int}{frac}");
     let exp = exp.saturating_sub(i64::try_from(frac.len()).unwrap_or(0));
@@ -183,7 +188,7 @@ pub fn number(lit: &str) -> String {
     }
     let n = i64::try_from(digits.len()).unwrap_or(0);
     let adjusted = exp.saturating_add(n - 1);
-    if (-7..21).contains(&adjusted) {
+    if (-6..21).contains(&adjusted) {
         if exp >= 0 {
             let zeros = "0".repeat(usize::try_from(exp).unwrap_or(0));
             return format!("{sign}{digits}{zeros}");
@@ -233,8 +238,9 @@ mod tests {
             ("1E+3", "1000"),
             ("-2.5e2", "-250"),
             ("1.0E-5", "0.000010"),
-            ("1.5e-7", "0.00000015"),
-            ("1.5e-8", "1.5e-8"),
+            ("1.5e-6", "0.0000015"),
+            ("1.5e-7", "1.5e-7"),
+            ("1e99999999999999999999", "1e99999999999999999999"),
             ("1e20", "100000000000000000000"),
             ("1e21", "1e+21"),
             ("1e300", "1e+300"),

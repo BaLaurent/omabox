@@ -9387,9 +9387,9 @@ from them.
     (a box.json rewritten for a resumed agent, `lua --json`'s values, a job record's numbers) came
     in a form many JSON readers accept but few write. The Rust half copied it (json::number).
     **Change** (Rust over bash): a number with no exponent is written as read (`1.50`, `-0`); one
-    with an exponent in standard form, its digits written out while the point stays within 21
-    places of them (`1e3` is `1000`, `1.5e-7` `0.00000015`), else as JavaScript writes it (`1e+300`,
-    `1.5e-8`). What the jq programs omabox still runs print is jq's, as before (CHANGELOG). Tests:
+    with an exponent as JavaScript writes it: plain from 1e-6 to below 1e21 (`1e3` is `1000`,
+    `1.5e-6` `0.0000015`), else in exponent form (`1e+300`, `1.5e-7`); one whose exponent is past
+    64 bits as read. What the jq programs omabox still runs print is jq's, as before (CHANGELOG). Tests:
     t_unit_rust_parity ("a resumed session takes its box over": its box.json), t_rust_parity
     ("lua --json: its values"): expected differences; json.rs's numbers_in_standard_form.
 
