@@ -47,6 +47,20 @@ pub fn conf_raw(key: &str) -> (Vec<u8>, Vec<u8>) {
     (config, v)
 }
 
+/// The config's path and why, when it is there (a file, or a link to one) but cannot be read: a
+/// mode that does not let this user read it, say (finding 482).
+pub fn unreadable() -> Option<(Vec<u8>, String)> {
+    let config = cat!(shell::env_or_empty("HOME"), "/.config/omabox/config");
+    let p = shell::path(&config);
+    if !p.is_file() {
+        return None;
+    }
+    match std::fs::File::open(&p) {
+        Ok(_) => None,
+        Err(e) => Some((config, crate::shots::why(&e))),
+    }
+}
+
 /// conf_get KEY with KEY's check (conf_check) and default (conf_default): a value that does not
 /// check out is said and ignored.
 pub fn conf_get(key: &str, check: fn(&[u8]) -> Option<Vec<u8>>, default: &[u8]) -> Vec<u8> {
@@ -138,6 +152,10 @@ pub fn confirm_check(v: &[u8]) -> Option<Vec<u8>> {
 pub fn get(key: &[u8]) -> Vec<u8> {
     let k = String::from_utf8_lossy(key);
     if key == b"protect-ports" {
+        if let Some((config, why)) = unreadable() {
+            say(crate::net::protect_unread(&config, &why));
+            return Vec::new();
+        }
         let (config, v) = conf_raw("protect-ports");
         if v.is_empty() {
             return v;
@@ -161,6 +179,28 @@ pub fn get(key: &[u8]) -> Vec<u8> {
     default(key).unwrap_or_default().to_vec()
 }
 
+/// FILE through a link to its target (`[ ! -L FILE ] || FILE=$(readlink -f FILE)`), FILE itself
+/// when it is no link. A link that cannot be followed (into a folder not there yet, a loop) is
+/// refused, its words naming it (finding 482): bash's readlink failed there and set -e ended the
+/// change; writing at the link's own path would replace the user's link with a plain file.
+pub fn link_target(file: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
+    if !std::fs::symlink_metadata(shell::path(file)).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Ok(file.to_vec());
+    }
+    crate::repo::readlink_f(file).ok_or_else(|| {
+        let to = std::fs::read_link(shell::path(file))
+            .map(|t| shell::bytes(&t).to_vec())
+            .unwrap_or_default();
+        cat!(
+            "cannot follow the link ",
+            file,
+            " (to ",
+            to,
+            "): a folder on its way is not there, or it loops; not touched"
+        )
+    })
+}
+
 /// conf_set KEY [VALUE]: KEY's line set to VALUE (none: removed, back to the default), the rest of
 /// the file kept, comments included; through a link to its target (a config kept in a dotfiles repo
 /// stays a link), one change at a time (the widget and the CLI may set at once). False, with its
@@ -169,10 +209,13 @@ pub fn set(key: &[u8], value: Option<&[u8]>) -> bool {
     let config = cat!(shell::env_or_empty("HOME"), "/.config/omabox/config");
     let dir = cat!(shell::env_or_empty("HOME"), "/.config/omabox");
     let _ = std::fs::create_dir_all(shell::path(&dir));
-    let mut file = config.clone();
-    if std::fs::symlink_metadata(shell::path(&file)).is_ok_and(|m| m.file_type().is_symlink()) {
-        file = crate::repo::readlink_f(&file).unwrap_or(file);
-    }
+    let file = match link_target(&config) {
+        Ok(f) => f,
+        Err(m) => {
+            say(cat!("config: ", m));
+            return false;
+        }
+    };
     // (flock -w 10 || true: a lock not had in 10 s does not stop the change)
     let _lock = crate::boxes::lock_file(
         &shell::path(&cat!(dir, "/.config.lock")),

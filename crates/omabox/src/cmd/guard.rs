@@ -123,13 +123,11 @@ fn codex_home() -> Vec<u8> {
         .unwrap_or_else(|| cat!(shell::env_or_empty("HOME"), "/.codex"))
 }
 
-/// A settings file through a link to its target (one kept in a dotfiles repo stays a link).
-fn resolved(file: Vec<u8>) -> Vec<u8> {
-    if std::fs::symlink_metadata(shell::path(&file)).is_ok_and(|m| m.file_type().is_symlink()) {
-        crate::repo::readlink_f(&file).unwrap_or(file)
-    } else {
-        file
-    }
+/// A settings file through a link to its target (one kept in a dotfiles repo stays a link). A link
+/// that cannot be followed (into a folder not there, a loop) is refused (finding 482): written to
+/// in its place, it would be replaced by a plain file, the user's link lost.
+fn resolved(file: Vec<u8>) -> Result<Vec<u8>, Vec<u8>> {
+    crate::conf::link_target(&file)
 }
 
 /// An agent's state line, or why it cannot be read (the refusal's words).
@@ -141,12 +139,12 @@ fn state(g: &Guard, agent: &str) -> Result<Vec<u8>, Vec<u8>> {
     }
 }
 
-fn claude_file() -> Vec<u8> {
+fn claude_file() -> Result<Vec<u8>, Vec<u8>> {
     resolved(cat!(claude_dir(), "/settings.json"))
 }
 
 fn claude_state(g: &Guard) -> Result<Vec<u8>, Vec<u8>> {
-    let file = claude_file();
+    let file = claude_file()?;
     let h = hooks_state(&file, &g.hook())?;
     let mut line = cat!("Claude Code (", file, "): ", h);
     // A hook written from a checkout that is gone (a removed worktree) no longer stops xdg-open.
@@ -203,7 +201,7 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// The JSON hooks file's text as guard_hooks reads it (`cur=$(cat FILE)`): '{}' when there is none;
 /// refused when it cannot be read or is not a JSON object.
 fn hooks_read(file: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
-    let file = resolved(file.to_vec());
+    let file = resolved(file.to_vec())?;
     let p = shell::path(&file);
     if !p.exists() {
         return Ok(b"{}".to_vec());
@@ -232,7 +230,7 @@ fn hooks_state(file: &[u8], hook: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
 /// out, the rest of the file as it was.
 fn hooks_set(file: &[u8], hook: &[u8], act: &str) -> Result<(), Vec<u8>> {
     let cur = hooks_read(file)?;
-    let file = resolved(file.to_vec());
+    let file = resolved(file.to_vec())?;
     let a = Args::new(&[]).kv("--arg", "g", GUARD);
     let a = if act == "on" {
         a.kv("--arg", "c", hook).arg(cat!(GUARD_JQ, ON_JQ))
@@ -318,12 +316,12 @@ fn copy_p(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
 }
 
 fn claude_set(g: &Guard, act: &str) -> Result<(), Vec<u8>> {
-    hooks_set(&claude_file(), &g.hook(), act)
+    hooks_set(&claude_file()?, &g.hook(), act)
 }
 
-fn codex_paths() -> (Vec<u8>, Vec<u8>) {
+fn codex_paths() -> Result<(Vec<u8>, Vec<u8>), Vec<u8>> {
     let h = codex_home();
-    (resolved(cat!(h, "/config.toml")), cat!(h, "/hooks.json"))
+    Ok((resolved(cat!(h, "/config.toml"))?, cat!(h, "/hooks.json")))
 }
 
 /// guard_codex's python (CODEX_PY) on MODE: its answer (STATE ..., SAME, WANT\n...), or its refusal.
@@ -357,7 +355,7 @@ fn codex_py(g: &Guard, mode: &str, file: &[u8]) -> Result<Vec<u8>, Vec<u8>> {
 }
 
 fn codex_state(g: &Guard) -> Result<Vec<u8>, Vec<u8>> {
-    let (file, hooks) = codex_paths();
+    let (file, hooks) = codex_paths()?;
     let o = codex_py(g, "state", &file)?;
     let Some(line) = o.strip_prefix(b"STATE ") else {
         return Ok(Vec::new());
@@ -380,7 +378,7 @@ fn codex_state(g: &Guard) -> Result<Vec<u8>, Vec<u8>> {
 }
 
 fn codex_set(g: &Guard, act: &str) -> Result<(), Vec<u8>> {
-    let (file, hooks) = codex_paths();
+    let (file, hooks) = codex_paths()?;
     if act == "on" {
         hooks_read(&hooks)?;
     }

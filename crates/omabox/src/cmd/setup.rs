@@ -96,7 +96,18 @@ fn ask_no(prompt: &str) -> Res<bool> {
         }
         line.push(b[0]);
     }
-    Ok(matches!(line.first(), Some(b'n' | b'N')))
+    Ok(answer_no(&line))
+}
+
+/// `read -r yn` then `[[ $yn = [nN]* ]]`: the answer is a no when it starts with n or N once read
+/// has taken the blanks (space, tab) off its start, as bash's default IFS does: " n" is a no
+/// (finding 482).
+fn answer_no(line: &[u8]) -> bool {
+    let start = line
+        .iter()
+        .position(|&c| c != b' ' && c != b'\t')
+        .unwrap_or(line.len());
+    matches!(line.get(start), Some(b'n' | b'N'))
 }
 
 /// `PROGRAM ARGS...` with this process's stdio, its status (127 when it cannot run).
@@ -848,4 +859,19 @@ fn command_v(name: &[u8]) -> Option<Vec<u8>> {
         .split(|&c| c == b':')
         .map(|d| cat!(if d.is_empty() { b".".as_slice() } else { d }, "/", name))
         .find(|p| crate::exec::executable(p) && shell::path(p).is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn answers_read_as_bash_reads_them() {
+        for no in ["n", "N", "no", " n", "\tn", "n ", "  No  "] {
+            assert!(answer_no(no.as_bytes()), "{no:?}");
+        }
+        for yes in ["", "y", " y", "yes", "  ", "x n", "\u{a0}n"] {
+            assert!(!answer_no(yes.as_bytes()), "{yes:?}");
+        }
+    }
 }

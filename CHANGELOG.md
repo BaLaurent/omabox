@@ -58,6 +58,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **`config` and `guard` refuse a settings link they cannot follow** (into a folder not there yet,
+  or a loop), saying so and naming it; the bash omabox exited 1 there without a word. The link is
+  kept. A config that cannot be read stops every `up` (exit 2) and `config` says so; the bash
+  omabox read it as empty, protecting no port. Scripts: nothing to change.
 - **`down` of a box it cannot see from this user namespace** (a sandbox's) **refuses**, as `up` does:
   "cannot tell whether box 'B' is up from this user namespace ...", exit 1, the box left running and
   listed. The bash omabox said "box 'B' down", exited 0 and removed the box's dir while it ran on.

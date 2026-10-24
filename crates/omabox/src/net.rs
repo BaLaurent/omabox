@@ -195,7 +195,13 @@ pub fn protect_rules(protect: &Ports, v4: &[String], v6: &[String]) -> Option<St
 /// (`8080, 5432`); anything else that is not a list of ports 1-65535 is refused, exit 2, where every
 /// other setting's bad value is said and ignored: ignored, it would let boxes reach the ports the
 /// user meant to keep from them (S10 fails closed).
+/// A config that is there but cannot be read (finding 482) is refused the same way: what it says of
+/// protect-ports cannot be known, and read as none it would let boxes reach those ports.
 pub fn conf_protect(ctx: &crate::exit::Ctx) -> crate::exit::Res<Ports> {
+    if let Some((config, why)) = crate::conf::unreadable() {
+        crate::exit::say(protect_unread(&config, &why));
+        return Err(crate::exit::Exit(ctx.die_rc.unwrap_or(2)));
+    }
     let (config, v) = crate::conf::conf_raw("protect-ports");
     if v.is_empty() {
         return Ok(Ports::default());
@@ -207,6 +213,16 @@ pub fn conf_protect(ctx: &crate::exit::Ctx) -> crate::exit::Res<Ports> {
             Err(crate::exit::Exit(ctx.die_rc.unwrap_or(2)))
         }
     }
+}
+
+/// What up says of a config it cannot read, for protect-ports (`config` too).
+pub fn protect_unread(config: &[u8], why: &str) -> Vec<u8> {
+    cat!(
+        config,
+        " cannot be read (",
+        why,
+        "): no box starts until it can, as protect-ports there cannot be kept (a box would reach the ports it means to keep)"
+    )
 }
 
 /// What up says of a protect-ports value V in CONFIG that is not a list of ports (`config` too).

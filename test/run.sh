@@ -1860,6 +1860,25 @@ t_unit_config() {
   done
   check_eq "...and nothing changed" special:omabox "$(cfg workspace)"
   check_fails "unknown key refused" env HOME="$h" "$CLI" config nope 1
+  # protect-ports (finding 480, the Rust half's): what config writes is what up reads. up's reader
+  # (net.rs's) on the file it wrote: an isolated box's --allow of a port it lists is refused before
+  # anything is made. A config that cannot be read refuses every up (finding 482: S10 fails closed).
+  if [ -x "$ROOT/build/bin/omabox" ]; then
+    local pph=$TMP/conf-pp prt=$TMP/conf-pp-rt; mkdir -p "$pph" "$prt"
+    check_eq "config protect-ports ' 8080, 5432': its normal form" protect-ports=5432,8080 "$(HOME=$pph "$CLI" config protect-ports ' 8080, 5432' 2>&1)"
+    check_eq "...written so in the file" protect-ports=5432,8080 "$(grep protect-ports "$pph/.config/omabox/config")"
+    local ppo ppr; ppo=$(HOME=$pph XDG_RUNTIME_DIR=$prt "$CLI" up "$P-pp" --no-shell --net isolated --allow 9,5432 2>&1); ppr=$?
+    check_eq "...and up reads that value: --allow 5432 refused, exit 1" "1 omabox: up: --allow 5432: a protected port (protect-ports in ~/.config/omabox/config), which no box reaches" "$ppr $ppo"
+    check_fails "...nothing of the box made" test -e "$prt/omabox/$P-pp"
+    if [ "$(id -u)" != 0 ]; then
+      chmod 000 "$pph/.config/omabox/config"
+      ppo=$(HOME=$pph XDG_RUNTIME_DIR=$prt "$CLI" up "$P-pp" --no-shell 2>&1); ppr=$?
+      check_eq "a config that cannot be read: up refused, exit 2" 2 "$ppr"
+      check_match "...saying why" "config cannot be read \(Permission denied\): no box starts until it can" "$ppo"
+      check_fails "...nothing of the box made" test -e "$prt/omabox/$P-pp"
+      chmod 600 "$pph/.config/omabox/config"
+    else skip "a config that cannot be read refuses up" "root reads it"; fi
+  else skip "config protect-ports, as up reads it" "no build/bin/omabox (protect-ports is the Rust half's)"; fi
   check_eq "default removes it" workspace=9 "$(cfg workspace default)"
   check_eq "the rest of the file is kept" "confirm-close=on bar-icon=auto" "$(grep -v '^#' "$h/.config/omabox/config" | tr '\n' ' ' | sed 's/ $//')"
   echo "workspace=9'); os.execute('x" >> "$h/.config/omabox/config"
@@ -6203,6 +6222,22 @@ protect-ports=')
   parity "config shot-fit default: its line gone, the rest kept" config shot-fit default
   rp5c_linked() { rp5c_conf; mv "$ch/.config/omabox/config" "$ch/dotconfig"; ln -s "$ch/dotconfig" "$ch/.config/omabox/config"; }
   rp_prep=rp5c_linked; parity "config through a linked config: the link kept" config workspace 5
+  # A link that cannot be followed (into a folder not there yet, a loop): refused, the user's link
+  # kept; bash's readlink -f failed there and set -e ended it unsaid (finding 482).
+  rp5c_dangle() { rp5c_fix; mkdir -p "$ch/.config/omabox"; ln -s "$ch/dots/omabox/config" "$ch/.config/omabox/config"; }
+  rp5c_loop() { rp5c_fix; mkdir -p "$ch/.config/omabox"; ln -s "$ch/.config/omabox/loop" "$ch/.config/omabox/config"; ln -s "$ch/.config/omabox/config" "$ch/.config/omabox/loop"; }
+  for i in dangle loop; do
+    rp_prep=rp5c_$i rp_why=482 rp_bash=('err=') rp_rust=('err~^omabox: config: cannot follow the link .*/\.config/omabox/config \(to .*\): a folder on its way is not there, or it loops; not touched$')
+    parity "config workspace 5 through a link that cannot be followed ($i): refused, the link kept" config workspace 5
+  done
+  # A config there that cannot be read (finding 482): config says protect-ports cannot be kept.
+  rp5c_unread() { rp5c_fix; mkdir -p "$ch/.config/omabox"; echo protect-ports=8080 > "$ch/.config/omabox/config"; chmod 000 "$ch/.config/omabox/config"; }
+  if [ "$(id -u)" != 0 ]; then
+    rp_prep=rp5c_unread rp_why=482 rp_bash=('out!~protect-ports' 'err!~cannot be read') rp_rust=('out~^protect-ports=$' 'err~config cannot be read \(Permission denied\): no box starts until it can')
+    parity "config: a config that cannot be read, protect-ports said unknown" config
+  else
+    rp_why="" rp_bash=() rp_rust=(); skip "config: a config that cannot be read" "root reads it"
+  fi
   # confirm-close follows into the running interactive boxes that took it from the config.
   rp5c_inter() {
     rp5c_fix; mkdir -p "$c/rt/omabox/ib/run" "$c/rt/omabox/pin/run" "$c/rt/omabox/noaq/run"
@@ -6214,7 +6249,8 @@ protect-ports=')
   parity "config confirm-close on: the boxes that took it from the config follow" config confirm-close on
   parity "config confirm-close off" config confirm-close off
   rp_prep=rp5c_fix
-  rp_why=480 rp_bash=('rc=2' 'err~^omabox: config: unknown key protect-ports ' 'out=' 'state!~\./\.config') rp_rust=('rc=0' 'err=' 'out=protect-ports=5432,8080' 'state~\./\.config')
+  # (what it writes, compared: the file's sum, protect-ports=5432,8080 and its newline)
+  rp_why=480 rp_bash=('rc=2' 'err~^omabox: config: unknown key protect-ports ' 'out=' 'state!~\./\.config') rp_rust=('rc=0' 'err=' 'out=protect-ports=5432,8080' 'state~^\./\.config' "state~^$(printf 'protect-ports=5432,8080\n' | md5sum | cut -d' ' -f1)  \\./\\.config/omabox/config\$" 'state~^d41d8cd98f00b204e9800998ecf8427e  \./\.config/omabox/\.config\.lock$')
   parity "config protect-ports 8080,5432: set, sorted (finding 480)" config protect-ports 8080,5432
   rp_why=480 rp_bash=('err~^omabox: config: unknown key protect-ports ') rp_rust=('err~^omabox: config: bad protect-ports: 8080, 0 \(host ports no connected box reaches')
   parity "config protect-ports with a port 0: refused" config protect-ports '8080, 0'
@@ -6313,6 +6349,19 @@ protect-ports=')
   parity "guard on codex: refused before anything is written" guard on codex
   rp5c_link() { rp5c_on; mv "$ch/.claude/settings.json" "$ch/real.json"; ln -s "$ch/real.json" "$ch/.claude/settings.json"; }
   rp_prep=rp5c_link; parity "guard off: a linked settings file stays a link" guard off claude
+  # Settings links that cannot be followed: refused, each link kept (finding 482); bash's guard
+  # state read the file as "" and called it off, its on and off ended unsaid.
+  rp5c_gdangle() { rp5c_fix; mkdir -p "$ch/.claude" "$ch/.codex"; ln -s "$ch/dots/claude/settings.json" "$ch/.claude/settings.json"; ln -s "$ch/dots/codex/config.toml" "$ch/.codex/config.toml"; }
+  rp5c_gloop() { rp5c_fix; mkdir -p "$ch/.claude"; ln -s "$ch/.claude/loop" "$ch/.claude/settings.json"; ln -s "$ch/.claude/settings.json" "$ch/.claude/loop"; }
+  local gfol='cannot follow the link .* \(to .*\): a folder on its way is not there, or it loops; not touched$'
+  rp_prep=rp5c_gdangle rp_why=482 rp_bash=('err=') rp_rust=("err~^omabox: $gfol")
+  parity "guard on claude through a settings link that cannot be followed" guard on claude
+  rp_prep=rp5c_gdangle rp_why=482 rp_bash=('err=') rp_rust=("err~^omabox: $gfol")
+  parity "guard on codex through a config.toml link that cannot be followed" guard on codex
+  rp_prep=rp5c_gloop rp_why=482 rp_bash=('err=') rp_rust=("err~^omabox: $gfol")
+  parity "guard off claude through a link loop" guard off claude
+  rp_prep=rp5c_gdangle rp_why=482 rp_bash=('out~^Claude Code \(\): off$' 'out~^Codex \(\): off$') rp_rust=("out~^claude: $gfol" "out~^codex: $gfol")
+  parity "guard: links that cannot be followed, each said for its agent" guard
   rp5c_alt() { rp5c_fix; mkdir -p "$ch/alt"; }
   rp_prep=rp5c_alt rp_env=("${rp5c_env[@]}" CLAUDE_CONFIG_DIR="$ch/alt"); parity "guard on: CLAUDE_CONFIG_DIR" guard on claude; rp_env=("${rp5c_env[@]}")
   rp5c_toml() { rp5c_fix; mkdir -p "$ch/.codex"; printf '%s\n' "$1" > "$ch/.codex/config.toml"; }
@@ -12021,6 +12070,26 @@ t_unit_setup() {
   check_eq "...and a plain setup does not bring it back" "- - -" "$(fb_links)"
   in_h setup --feedback-skill >/dev/null
   check_eq "setup again: the same (idempotent)" 0 "$(in_h setup >/dev/null; echo $?)"
+  # An answer with blanks around it is read as bash's read takes it (finding 482): " n" and "n " are a
+  # no. In a terminal (script's pty), the widget's question, both halves; omarchy and omarchy-shell
+  # stand-ins that log, on a HOME of its own.
+  if command -v script >/dev/null; then
+    local sh2=$TMP/$P-setup-pty sst=$TMP/$P-setup-stub a hf
+    mkdir -p "$sst"
+    for a in omarchy omarchy-shell; do printf '#!/bin/sh
+echo "%s $*" >> "$HOME/stub.log"
+' "$a" > "$sst/$a"; chmod +x "$sst/$a"; done
+    for a in ' n' 'n ' $'	N'; do
+      for hf in 1 ""; do
+        rm -rf "$sh2"; mkdir -p "$sh2"
+        printf '%s
+' "$a" | env -u CLAUDE_CONFIG_DIR -u CODEX_HOME HOME="$sh2" XDG_DATA_HOME="$sh2/.local/share" XDG_CACHE_HOME="$sh2/.cache" \
+          XDG_CONFIG_HOME="$sh2/.config" PATH="$sst:$PATH" OMABOX_BASH=$hf script -qec "$CLI setup" /dev/null >/dev/null 2>&1
+        check "setup in a terminal, answer [${a}]$([ -z "$hf" ] || echo ' (bash)'): a no, remembered" test -e "$sh2/.config/omabox/widget-declined"
+        check_fails "...and no widget enabled" grep -q "plugin enable" "$sh2/stub.log"
+      done
+    done
+  else skip "setup's answers with blanks" "no script(1)"; fi
   check_match "setup --force alone is refused" "--force is for --aquamarine" "$(in_h setup --force)"
   check_match "...and --aquamarine with --remove" "one of --aquamarine, --remove," "$(in_h setup --aquamarine --remove)"
   check_match "...and --feedback-skill with --remove" "one of --aquamarine, --remove," "$(in_h setup --feedback-skill --remove)"

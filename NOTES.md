@@ -9621,8 +9621,9 @@ from them.
     ignored, which here would let boxes reach the ports). The bash half cannot hold the list, so
     with it set `OMABOX_BASH=1 up` starts no connected box ("up: protect-ports is set in CONFIG, which
     only omabox's Rust half keeps a box off"). nft is needed only with
-    a list ("up: protect-ports ... needs nft"); a rule nft refuses ends the box's start. Not covered: an
-    address the host gains after the box started. Tests: net.rs's pasta_opens_what_it_should
+    a list ("up: protect-ports ... needs nft"); a rule nft refuses ends the box's start. A config that
+    is there but cannot be read refuses every `up` too, exit 2 (finding 482; it was read as none
+    protected). Not covered: an address the host gains after the box started. Tests: net.rs's pasta_opens_what_it_should
     (proptest: every host-bound rule leaves out each protected port) and rules; t_protect_ports
     (throwaway servers on a port of the test's own, on 127.0.0.1 and 0.0.0.0, tried from a box by
     loopback and by each host address; and nothing in the box can remove the rule: nft refuses it,
@@ -9744,8 +9745,11 @@ from them.
     it is one") and shows it as it is, since every `up` refuses it (S10 fails closed). The refusal of
     an unknown key lists it among the keys. Under `OMABOX_BASH=1`, `config protect-ports` is an
     unknown key, as before; a jailed agent's `config protect-ports` (reading) is still refused by
-    bash's broker_check, whose key list is bash's (wave 6). Tests: t_unit_rust_parity5 (the cases
-    with protect-ports are expected differences, finding 480), t_unit_config.
+    bash's broker_check, whose key list is bash's (wave 6). A config that cannot be read: `config`
+    says protect-ports cannot be kept there, and every `up` refuses (finding 482). Tests:
+    t_unit_rust_parity5 (the cases with protect-ports are expected differences, finding 480),
+    t_unit_config (`config protect-ports ' 8080, 5432'` writes `protect-ports=5432,8080`, and `up`'s
+    reader takes that: `--allow 5432` refused).
 
 481. **`config`, `brief`, `reload`, `restart-shell`, `host`, `broker`, `guard` and `setup` in the
     Rust half** (2026-10-24, #324 wave 5c). cmd/config.rs (with conf.rs's key table: each key's check,
@@ -9769,6 +9773,26 @@ from them.
     with stand-ins for systemctl, omarchy, omarchy-shell, a Hyprland session for host and failing
     build tools for setup --aquamarine), t_rust_parity_up (brief, reload and restart-shell on a box
     up), and the suite's tests of each command, which now run the Rust half.
+
+482. **Wave 5c's fix round: links, answers and an unreadable config** (2026-10-24, #324 wave 5c).
+    Three faults of the Rust half's first port, found in review. **(a)** `config` and `guard` write a
+    settings file through a link to its target; a link that cannot be followed (into a folder not
+    there yet, a loop) fell back to its own path, and the rename replaced the user's link with a plain
+    0600 file, exit 0 (Claude Code's settings.json, Codex's config.toml and hooks.json, omabox's
+    config). Bash's `readlink -f` failed there and set -e ended it, exit 1, saying nothing. Now
+    refused, exit 1, naming the link and where it leads, the link kept (conf.rs's link_target);
+    `guard`'s state says it for that agent. **(b)** setup's [Y/n] questions took " n" as a yes (it
+    looked at the first byte) and so enabled the widget or wrote the guard hook against a no; bash's
+    `read` takes the blanks off first. Now read as bash does (setup.rs's answer_no). **(c)** S10 failed
+    open: a config that is there but cannot be read (mode 000) was read as empty, so `up` started
+    connected boxes with nothing protected and `config` showed `protect-ports=`. Now `up` refuses,
+    exit 2, as for a bad value ("CONFIG cannot be read (...): no box starts until it can"), and
+    `config` says so (net.rs's conf_protect, conf.rs's unreadable). Bash's half, a fallback, still
+    reads such a config as none (bash fixes are Rust-only during the port). Tests:
+    t_unit_rust_parity5 (a dangling link and a loop for config and guard, the unreadable config:
+    expected differences, finding 482), t_unit_config (up refused on an unreadable config, nothing
+    made), t_unit_setup (" n", "n " and a tab before N through script's pty, both halves),
+    setup.rs's answers_read_as_bash_reads_them.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
