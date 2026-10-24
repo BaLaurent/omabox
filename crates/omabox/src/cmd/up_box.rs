@@ -263,9 +263,9 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     } else {
         let mut c = crate::sig::command("bash");
         c.arg(os(&cat!(d, "/launch.sh")))
-            .stdin(std::process::Stdio::inherit());
-        // (`bash launch.sh &`: INT and QUIT ignored in it, as bash starts what it puts in the
-        // background; the box is not waited for)
+            .stdin(std::process::Stdio::null());
+        // (`bash launch.sh &`: INT and QUIT ignored in it and stdin /dev/null, as bash starts what
+        // it puts in the background with job control off; the box is not waited for)
         crate::exec::background(&mut c);
         if c.spawn().is_err() {
             return Err(ctx.die("up: could not run the box's launch.sh"));
