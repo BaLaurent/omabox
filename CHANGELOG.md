@@ -55,6 +55,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   the point past its end, or a signal ended it; a failed update of a box's `box.json` left
   `box.json.tmp` in the box's folder, and `output` its `output.dropped.tmp`. Scripts: nothing to
   change ([#357](https://github.com/diogochaves/omabox/issues/357)).
+- **A command in a box had your terminal as its controlling terminal** when it had no terminal of
+  its own (its output piped or in a file, from a terminal): it, and what it left running, could open
+  `/dev/tty` and read what you typed there, write to it or signal its session. It now leads a session
+  of its own, with no controlling terminal; a Ctrl-C, Ctrl-\ or Ctrl-Z at your terminal still reaches
+  it. A command run at your terminal keeps the pseudo-terminal of its own it had.
 
 ### Changes from the bash omabox
 
@@ -62,6 +67,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   or a loop), saying so and naming it; the bash omabox exited 1 there without a word. The link is
   kept. A config that cannot be read stops every `up` (exit 2) and `config` says so; the bash
   omabox read it as empty, protecting no port. Scripts: nothing to change.
+- **Entering a box is omabox's own**, not `nsenter`'s (`omabox run -b B -- true` takes about a third
+  less time). What a failed entry says is in omabox's words, "omabox: cannot enter the box: REASON",
+  where nsenter's own line was printed (and "dropped N bytes of other output on the box entry's
+  stderr" where it said "nsenter's stderr"). A TERM sent to the process that waits for a box command
+  (`pkill -f 'omabox run'` reaches it) is passed on to the command, where nsenter died and left the
+  command running; that process is named `omabox-enter`, and `pgrep -f 'omabox run ...'` finds it
+  besides omabox. Scripts that matched `nsenter` lines or processes: match these.
+- **A command in a box has no controlling terminal** unless it runs at yours (then it has a
+  pseudo-terminal of its own, as before): `/dev/tty` there is "No such device or address", and it
+  leads a session of its own. A command that needs a terminal while its output is piped: run it as
+  `script -qc CMD /dev/null` in the box.
 - **`down` of a box it cannot see from this user namespace** (a sandbox's) **refuses**, as `up` does:
   "cannot tell whether box 'B' is up from this user namespace ...", exit 1, the box left running and
   listed. The bash omabox said "box 'B' down", exited 0 and removed the box's dir while it ran on.

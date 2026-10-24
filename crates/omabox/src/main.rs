@@ -9,6 +9,7 @@ mod cmd;
 mod conf;
 mod desk;
 mod deskwin;
+mod enter;
 mod exec;
 mod exit;
 mod gpu;
@@ -73,13 +74,19 @@ fn main() -> ExitCode {
             libc::signal(libc::SIGPIPE, libc::SIG_DFL);
         }
     }
+    // The native box entry for a command line script runs (exec.rs's box_pty): before anything else,
+    // as nsenter was (one thread, nothing caught).
+    if std::env::args_os().nth(1).is_some_and(|a| a == "_enter") {
+        let rest: Vec<OsString> = std::env::args_os().skip(2).collect();
+        return enter::main(&rest);
+    }
     // Bash ignores SIGQUIT for itself (a Ctrl-\ does not end the script), and what it runs in the
     // foreground gets the default back: a handler that does nothing is that (reset at exec). One
     // that came ignored stays ignored, for it and its children (sig::catch leaves it).
     sig::catch(libc::SIGQUIT, quit_ignored);
     sig::set_main();
     // What bash's hand-off adds to the environment is this call's, not its children's (bin/omabox up
-    // and down, nsenter, git): kept here and taken out, before any thread.
+    // and down, a box's command, git): kept here and taken out, before any thread.
     let _ = HANDOFF.set((
         std::env::var_os("OMABOX_ROOT"),
         std::env::var_os("OMABOX_CALL_US"),

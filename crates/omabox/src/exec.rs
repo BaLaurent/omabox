@@ -1,10 +1,11 @@
-//! Entering a box, as bin/omabox does it: on_box (a tool against the box's compositor, in its user
-//! and mount namespaces, finding 63) and box_exec (a command in all of its namespaces, with the
-//! session's environment). Both through nsenter for now (#324: entering natively is a later step,
-//! the pid namespace applying only to children made after setns). What nsenter itself says is held
-//! apart from the command's own stderr and said after it (ns_held, ns_said: #166); a command in the
-//! box's pid namespace gets no fd of the host's a box process could open again (finding 325: the
-//! relays, a terminal of its own) and none but the ones it is given (finding 345: fds_only).
+//! Entering a box: on_box (a tool against the box's compositor, in its user and mount namespaces,
+//! finding 63) and box_exec (a command in all of its namespaces, with the session's environment).
+//! Both natively, through enter.rs (setns where bash ran nsenter: #324, finding 490). What the entry
+//! says when it fails is held apart from the command's own stderr and said after it (ns_held,
+//! ns_said: #166); the command's stderr is the caller's from the exec on, so no box process ever
+//! holds that pipe. A command in the box's pid namespace gets no fd of the host's a box process
+//! could open again (finding 325: the relays, a terminal of its own), none but the ones it is given
+//! (finding 345: fds_only), and no controlling terminal of the caller's (finding 491).
 
 use crate::boxes::{self, BoxPid, box_env, box_pid, covers_held, run_read};
 use crate::cat;
@@ -13,7 +14,7 @@ use crate::jail;
 use crate::jobs::job_how;
 use crate::json;
 use crate::procfs;
-use crate::shell::{self, strip_nl};
+use crate::shell;
 use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -25,7 +26,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-/// What ns_held keeps of nsenter's stderr, and how long it waits for the rest once the command is
+/// What ns_held keeps of the entry's stderr, and how long it waits for the rest once the command is
 /// over (a box process that keeps it open does not hold the call).
 const NS_HELD_MAX: usize = 4096;
 const NS_HELD_WAIT: Duration = Duration::from_secs(1);
@@ -188,6 +189,8 @@ pub struct Fds {
     /// SIGQUIT ignored, so a Ctrl-C or Ctrl-\ at the terminal leaves it running; a tool holding a
     /// key or a button lets go once its stdin closes (finding 112).
     pub bg: bool,
+    /// Started inside a box (enter.rs), first of all, before the fds are closed.
+    pub enter: Option<crate::enter::Plan>,
 }
 
 /// What bash's `&` does to a child's signals (no job control): SIGINT and SIGQUIT ignored.
@@ -205,6 +208,9 @@ pub fn background(c: &mut Command) {
 pub fn command(argv: &[Vec<u8>], fds: Fds) -> Command {
     let mut c = crate::sig::command(OsStr::from_bytes(argv.first().map_or(&b""[..], |a| a)));
     c.args(argv.iter().skip(1).map(|a| OsStr::from_bytes(a)));
+    if let Some(p) = fds.enter {
+        p.apply(&mut c);
+    }
     let open = if fds.only { open_fds() } else { Vec::new() };
     let nocore = fds.nocore && !core_hard_zero();
     // SAFETY: the closure only makes async-signal-safe calls (dup2, close, fcntl, signal,
@@ -295,7 +301,7 @@ pub fn read_all(r: OwnedFd, limit: Option<usize>) -> Vec<u8> {
 
 // --- ns_held / ns_said -------------------------------------------------------------------------------
 
-/// nsenter's own words, kept apart from the command's (#166): its stderr goes to a pipe read here
+/// The entry's own words, kept apart from the command's (#166): its stderr goes to a pipe read here
 /// by a thread, the first NS_HELD_MAX bytes kept, the rest read into nothing, until its writers are
 /// gone, or NS_HELD_WAIT after the command ended (then whatever came).
 struct Held {
@@ -366,9 +372,9 @@ pub enum ErrTo {
     Fd(RawFd),
 }
 
-/// The words ns_said says, given what nsenter's stderr held and the command's end RC: its own lines
+/// The words ns_said says, given what the entry's stderr held and the command's end RC: its own lines
 /// whole (at most 3, printable ASCII, 400 at most), then, with KILLED (run's own command, #303), how
-/// the command was killed, then how many bytes of anything else were dropped. Only what nsenter's
+/// the command was killed, then how many bytes of anything else were dropped. Only what the entry's
 /// stderr held is counted (bash's own job line for a killed command was counted too, and its
 /// "killed by" said only when that line was its own: finding 440).
 pub fn said_text(held: &[u8], rc: i32, killed: bool) -> Vec<u8> {
@@ -400,18 +406,18 @@ pub fn said_text(held: &[u8], rc: i32, killed: bool) -> Vec<u8> {
     let dropped = held.len().saturating_sub(kept);
     if dropped > 0 {
         out.extend_from_slice(
-            format!("omabox: dropped {dropped} bytes of other output on nsenter's stderr\n")
+            format!("omabox: dropped {dropped} bytes of other output on the box entry's stderr\n")
                 .as_bytes(),
         );
     }
     out
 }
 
-/// ns_own_line: nsenter's own, or prlimit's and env's on the way in.
+/// ns_own_line: the entry's own (enter.rs's FAIL). Nothing else writes there now (bash's held
+/// nsenter's, prlimit's and env's, and a box process could reach it: finding 490).
 fn own_line(l: &[u8]) -> bool {
-    ["nsenter: ", "prlimit: ", "env: "]
-        .iter()
-        .any(|p| l.starts_with(p.as_bytes()) && l.len() > p.len())
+    let p = crate::enter::FAIL.as_bytes();
+    l.starts_with(p) && l.len() > p.len()
 }
 
 /// What a sink gets: this process's stderr, nothing, or the capture (BUF).
@@ -530,7 +536,7 @@ pub fn on_box(ctx: &Ctx, args: &[Vec<u8>], stdin_null: bool, out: Out, err: ErrT
     on_box_io(ctx, args, stdin, out, err, None)
 }
 
-/// on_box with its stdin any fd (settle_begin's pipe), and its nsenter's pid said in PID (`$!` of a
+/// on_box with its stdin any fd (settle_begin's pipe), and its tool's pid said in PID (`$!` of a
 /// background on_box).
 pub fn on_box_io(
     ctx: &Ctx,
@@ -615,43 +621,50 @@ fn on_box_with(
     let lang = shell::env("LANG")
         .filter(|l| !l.is_empty())
         .unwrap_or(b"C.UTF-8".to_vec());
-    let mut argv: Vec<Vec<u8>> = vec![
-        b"nsenter".to_vec(),
-        b"-t".to_vec(),
-        pid,
-        b"-U".to_vec(),
-        b"-m".to_vec(),
-        b"--preserve-credentials".to_vec(),
-        b"--".to_vec(),
-        b"env".to_vec(),
-        b"-i".to_vec(),
-        b"PATH=/usr/bin".to_vec(),
-        format!("XDG_RUNTIME_DIR=/run/user/{}", procfs::uid()).into_bytes(),
-        cat!("WAYLAND_DISPLAY=", wd),
-        cat!("HYPRLAND_INSTANCE_SIGNATURE=", sig),
-        cat!("LANG=", lang),
-        EFD_WORD.to_vec(),
-        b"/usr/bin/sh".to_vec(),
-        b"-c".to_vec(),
-        ON_BOX_SH.to_vec(),
-        b"sh".to_vec(),
+    // The tool itself, with a clean environment (no env -i, no sh between: the entry does the rest).
+    let env: Vec<(Vec<u8>, Vec<u8>)> = vec![
+        (b"PATH".to_vec(), b"/usr/bin".to_vec()),
+        (
+            b"XDG_RUNTIME_DIR".to_vec(),
+            format!("/run/user/{}", procfs::uid()).into_bytes(),
+        ),
+        (b"WAYLAND_DISPLAY".to_vec(), wd),
+        (b"HYPRLAND_INSTANCE_SIGNATURE".to_vec(), sig),
+        (b"LANG".to_vec(), lang),
     ];
-    argv.extend(args.iter().cloned());
     let fds = Fds {
         pid: pid_to,
         bg,
         ..Fds::default()
     };
-    let r = match held_run(&argv, stdin, out, err, fds) {
+    let r = match crate::enter::Entry::open(&ctx.d, &pid, crate::enter::TOOL) {
+        Err(words) => Ok(HeldRun {
+            rc: 1,
+            sig: None,
+            out: Vec::new(),
+            held: words,
+        }),
+        Ok(entry) => held_run(&entry, args, Some(env), stdin, out, err, fds),
+    };
+    let r = match r {
         Ok(r) => r,
         Err(e) => {
+            let (why, rc) = exec_failed(args.first().map_or(&b""[..], |a| a), &e);
             say_to(
                 err,
                 &mut buf,
-                format!("omabox: could not run nsenter: {e}\n").as_bytes(),
+                &cat!(
+                    "omabox: cannot run ",
+                    args.first().cloned().unwrap_or_default(),
+                    " in box '",
+                    ctx.name,
+                    "': ",
+                    why,
+                    "\n"
+                ),
             );
             return Ran {
-                rc: 126,
+                rc: i32::from(rc),
                 out: buf,
                 refused: false,
                 gone_said: false,
@@ -693,11 +706,6 @@ fn on_box_with(
     }
 }
 
-/// The inner sh of on_box: the caller's stderr (OMABOX_EFD) made the command's first thing.
-const ON_BOX_SH: &[u8] = b"case $OMABOX_EFD in *[!0-9]*) ;; *) eval \"exec 2>&$OMABOX_EFD $OMABOX_EFD>&-\" ;; esac\n      unset OMABOX_EFD; exec \"$@\"";
-/// The word ns_held puts the caller's stderr's number in (the first one only).
-const EFD_WORD: &[u8] = b"OMABOX_EFD=@EFD";
-
 /// A command's stdin.
 pub enum In {
     Inherit,
@@ -706,7 +714,7 @@ pub enum In {
 }
 
 /// What held_run gives back: the status, the signal that ended it, what was captured (and said
-/// to ErrTo::Out), what nsenter's stderr held.
+/// to ErrTo::Out), what the entry's stderr held.
 struct HeldRun {
     rc: i32,
     sig: Option<i32>,
@@ -714,10 +722,12 @@ struct HeldRun {
     held: Vec<u8>,
 }
 
-/// ns_held ARGV: ARGV with its stderr held (hold), the caller's stderr (ERR) given it as the fd its
-/// first OMABOX_EFD=@EFD word names.
+/// ns_held ARGV: ARGV run in the box ENTRY names (with ENV alone, when given), its stderr held (hold)
+/// until it is in, then the caller's (ERR).
 fn held_run(
+    entry: &crate::enter::Entry,
     argv: &[Vec<u8>],
+    env: Option<Vec<(Vec<u8>, Vec<u8>)>>,
     stdin: In,
     out: Out,
     err: ErrTo,
@@ -740,14 +750,18 @@ fn held_run(
         (ErrTo::Fd(fd), _) => dup_hi(fd)?,
         _ => dup_hi(2)?,
     };
-    let mut argv = argv.to_vec();
-    if let Some(w) = argv.iter_mut().find(|w| w.as_slice() == EFD_WORD) {
-        *w = format!("OMABOX_EFD={}", efd.as_raw_fd()).into_bytes();
-    }
-    fds.keep.push(efd.as_raw_fd());
+    // (on_box's tools stay on the caller's terminal: not in the box's pid namespace, finding 307)
+    fds.enter = Some(entry.plan(false, false, Some(efd.as_raw_fd())));
     let pid_to = fds.pid.take();
     let bg = fds.bg;
-    let mut c = command(&argv, fds);
+    let mut c = command(argv, fds);
+    if let Some(env) = env {
+        c.env_clear();
+        c.envs(
+            env.iter()
+                .map(|(k, v)| (OsStr::from_bytes(k), OsStr::from_bytes(v))),
+        );
+    }
     c.stdin(match stdin {
         In::Inherit => Stdio::inherit(),
         In::Null => Stdio::null(),
@@ -785,10 +799,12 @@ fn held_run(
 
 // --- box_exec ---------------------------------------------------------------------------------------
 
-/// The inner bash of box_exec: the caller's stderr (OMABOX_EFD) first, --pass's values from their fd,
-/// the caller's dir, then the PATH the session has (findings 47, 57, 135, 358). Byte for byte bash's.
+/// The inner bash of box_exec: --pass's values from their fd, the caller's dir, then the PATH the
+/// session has (findings 47, 57, 135, 358). Bash's, but for its first line, where the caller's
+/// stderr was swapped in: it is the command's before the exec now (enter.rs, finding 490). That line
+/// is a comment, so bash's own words for the command keep their line numbers.
 const BOX_EXEC_SH: &str = r#"
-      case $OMABOX_EFD in *[!0-9]*) ;; *) eval "exec 2>&$OMABOX_EFD $OMABOX_EFD>&-" ;; esac; unset OMABOX_EFD
+      # (the caller's stderr is the command's already: omabox's entry made it so)
       if [ -n "${OMABOX_PASS_FD:-}" ]; then
         while IFS= read -r -d "" kv <&"$OMABOX_PASS_FD"; do export "$kv"; done
         eval "exec $OMABOX_PASS_FD<&-"; unset OMABOX_PASS_FD
@@ -903,13 +919,6 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
     } else {
         box_cwd(&ctx.d, &pid, &wd)
     };
-    // The box's own network namespace (every box has one since finding 89); one started before that
-    // shares the host's, which is not ours to join.
-    let mut ns: Vec<&[u8]> = vec![b"-U", b"-m", b"-p", b"-u", b"-i"];
-    let net = |p: &[u8]| std::fs::read_link(shell::path(&cat!("/proc/", p, "/ns/net"))).ok();
-    if net(&pid) != net(b"self") {
-        ns.push(b"-n");
-    }
     // run --pass (finding 66): the caller's values through a pipe, never on a command line;
     // --env-file's entries first, so a --pass of the same name wins.
     let mut keep: Vec<RawFd> = Vec::new();
@@ -932,15 +941,7 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
         pass_word = format!("OMABOX_PASS_FD={}", r.as_raw_fd()).into_bytes();
         pfd = Some(r);
     }
-    let mut nsline: Vec<Vec<u8>> = vec![b"nsenter".to_vec(), b"-t".to_vec(), pid];
-    nsline.extend(ns.iter().map(|s| s.to_vec()));
-    nsline.extend([
-        b"--preserve-credentials".to_vec(),
-        b"--".to_vec(),
-        b"/usr/bin/env".to_vec(),
-        b"-i".to_vec(),
-        EFD_WORD.to_vec(),
-    ]);
+    let mut nsline: Vec<Vec<u8>> = vec![b"/usr/bin/env".to_vec(), b"-i".to_vec()];
     nsline.extend(env);
     nsline.extend([
         b"OMABOX=1".to_vec(),
@@ -981,31 +982,47 @@ pub fn box_exec(ctx: &mut Ctx, args: &[Vec<u8>], o: ExecOpts) -> Res<i32> {
         keep.push(3);
     }
     let fd3 = o.fd3.as_ref().map(AsRawFd::as_raw_fd);
-    let rc;
-    let mut held = Vec::new();
-    let mut sig = None;
-    if !o.sys && isatty(src[0]) && isatty(src[1]) && fg_tty() && executable(b"/usr/bin/script") {
-        rc = box_pty(&nsline, keep, fd3).map_err(|_| Exit(1))?;
-    } else {
-        let relays = Relays::new(src, !o.sys).map_err(|_| Exit(1))?;
-        let fds = Fds {
-            keep,
-            fd3,
-            only: true,
-            nocore: true,
-            pid: None,
-            bg: o.bg,
-        };
-        let r = relays.run(&nsline, fds);
-        match r {
-            Ok(r) => {
-                rc = r.rc;
-                held = r.held;
-                sig = r.sig;
+    // (all of the box's namespaces, its network when it has its own: enter::all)
+    let (rc, held, sig) = match crate::enter::Entry::open(&ctx.d, &pid, crate::enter::all(&pid)) {
+        Err(words) => (1, words, None),
+        Ok(entry) => {
+            let pty = !o.sys
+                && isatty(src[0])
+                && isatty(src[1])
+                && fg_tty()
+                && executable(b"/usr/bin/script");
+            let r = if pty {
+                box_pty(&entry, &nsline, keep, fd3).map(|rc| HeldRun {
+                    rc,
+                    sig: None,
+                    out: Vec::new(),
+                    held: Vec::new(),
+                })
+            } else {
+                let relays = Relays::new(src, !o.sys).map_err(|_| Exit(1))?;
+                let fds = Fds {
+                    keep,
+                    fd3,
+                    only: true,
+                    nocore: true,
+                    pid: None,
+                    bg: o.bg,
+                    enter: None,
+                };
+                let shield = args.first().map(Vec::as_slice);
+                relays.run(&entry, shield, &nsline, fds)
+            };
+            match r {
+                Ok(r) => (r.rc, r.held, r.sig),
+                Err(e) => {
+                    // (bash's nsenter or env said why; std's spawn says it here)
+                    let (why, code) = exec_failed(b"/usr/bin/env", &e);
+                    crate::exit::say(cat!("cannot enter box '", ctx.name, "': ", why));
+                    return Err(Exit(code));
+                }
             }
-            Err(_) => return Err(Exit(1)),
         }
-    }
+    };
     drop(pfd);
     drop(o.fd3);
     let mut sink = Vec::new();
@@ -1116,20 +1133,8 @@ pub fn box_cwd(d: &[u8], pid: &[u8], wd: &[u8]) -> Vec<u8> {
     let here = std::fs::metadata(shell::path(wd))
         .map(|m| format!("{}:{}", m.dev(), m.ino()).into_bytes())
         .unwrap_or_default();
-    let there = crate::sig::command("nsenter")
-        .args([
-            OsStr::new("-t"),
-            OsStr::from_bytes(pid),
-            OsStr::new("-U"),
-            OsStr::new("-m"),
-        ])
-        .args(["--preserve-credentials", "stat", "-c", "%d:%i", "--"])
-        .arg(OsStr::from_bytes(wd))
-        .stderr(Stdio::null())
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| strip_nl(&o.stdout))
+    let there = stat_in_box(d, pid, wd)
+        .map(|st| format!("{}:{}", st.st_dev, st.st_ino).into_bytes())
         .unwrap_or_default();
     if !here.is_empty() && here == there {
         return wd.to_vec();
@@ -1138,6 +1143,36 @@ pub fn box_cwd(d: &[u8], pid: &[u8], wd: &[u8]) -> Vec<u8> {
         return wd.to_vec();
     }
     b"/home/sbx".to_vec()
+}
+
+/// `stat -L WD` as the box sees it, with no process started (bash ran nsenter and stat): looked up
+/// from the box's root (/proc/PID/root), where its mounts are, links resolved inside that root
+/// (openat2's RESOLVE_IN_ROOT, as they resolve in the box). PID is the box's PID 1 as box_pid gave
+/// it, asked again once the root is open, so a pid reused meanwhile is never read.
+fn stat_in_box(d: &[u8], pid: &[u8], wd: &[u8]) -> Option<libc::stat> {
+    let root = std::fs::File::open(shell::path(&cat!("/proc/", pid, "/root"))).ok()?;
+    if !matches!(box_pid(d), BoxPid::Pid(p) if p == pid) {
+        return None;
+    }
+    let path = std::ffi::CString::new(wd.to_vec()).ok()?;
+    // SAFETY: open_how is plain data; zeroed, then the fields set.
+    let mut how: libc::open_how = unsafe { std::mem::zeroed() };
+    how.flags = (libc::O_PATH | libc::O_CLOEXEC) as u64;
+    how.resolve = libc::RESOLVE_IN_ROOT;
+    // SAFETY: openat2 reads the path and how (its size given) and returns a new fd of ours, or -1.
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            root.as_raw_fd(),
+            path.as_ptr(),
+            &how,
+            std::mem::size_of::<libc::open_how>(),
+        )
+    };
+    let fd = RawFd::try_from(fd).ok().filter(|&f| f >= 0)?;
+    // SAFETY: just opened, ours alone.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    fstat(fd.as_raw_fd())
 }
 
 /// `jq -e --arg p WD/ 'any(.overlays[]?; . as $o | $p | startswith($o + "/"))' box.json`.
@@ -1178,10 +1213,17 @@ fn fg_tty() -> bool {
 }
 
 /// box_pty: the command on a pseudo-terminal of its own, for a caller at a terminal (finding 325):
-/// util-linux `script` holds the caller's terminal and the pty's master; the box gets the slave. A
-/// stderr that is not the terminal stays where it was (relayed if a box could reach it), given to
-/// the inner bash as OMABOX_EFD.
-fn box_pty(nsline: &[Vec<u8>], mut keep: Vec<RawFd>, fd3: Option<RawFd>) -> std::io::Result<i32> {
+/// util-linux `script` holds the caller's terminal and the pty's master; the box gets the slave, its
+/// controlling terminal (finding 491: the box reaches only that one; what it writes there the
+/// caller's terminal shows, as any program's). Script runs this binary's `_enter` there, with the
+/// entry's pidfd (enter::main). A stderr that is not the terminal stays where it was (relayed if a
+/// box could reach it), made the command's by the entry.
+fn box_pty(
+    entry: &crate::enter::Entry,
+    inner: &[Vec<u8>],
+    mut keep: Vec<RawFd>,
+    fd3: Option<RawFd>,
+) -> std::io::Result<i32> {
     let mut efd: Option<OwnedFd> = None;
     let mut relay: Option<Child> = None;
     if !isatty(2) {
@@ -1196,19 +1238,20 @@ fn box_pty(nsline: &[Vec<u8>], mut keep: Vec<RawFd>, fd3: Option<RawFd>) -> std:
     if let Some(e) = &efd {
         keep.push(e.as_raw_fd());
     }
-    let efd_word = efd.as_ref().map_or("OMABOX_EFD=-".to_string(), |e| {
-        format!("OMABOX_EFD={}", e.as_raw_fd())
-    });
-    let mut words: Vec<Vec<u8>> = Vec::new();
-    let mut set = false;
-    for a in nsline {
-        if !set && a.as_slice() == EFD_WORD {
-            words.push(shell::quote_at(efd_word.as_bytes()));
-            set = true;
-        } else {
-            words.push(shell::quote_at(a));
-        }
-    }
+    keep.push(entry.pidfd());
+    // (this process's own binary while it runs, whatever has become of the file since)
+    let mut words: Vec<Vec<u8>> = vec![
+        format!("/proc/{}/exe", std::process::id()).into_bytes(),
+        b"_enter".to_vec(),
+        entry.pidfd().to_string().into_bytes(),
+        entry.ns().to_string().into_bytes(),
+        efd.as_ref()
+            .map_or("-".to_string(), |e| e.as_raw_fd().to_string())
+            .into_bytes(),
+        b"--".to_vec(),
+    ];
+    words.extend(inner.iter().cloned());
+    let words: Vec<Vec<u8>> = words.iter().map(|w| shell::quote_at(w)).collect();
     let script = cat!("exec ", words.join(&b' '));
     let argv = vec![
         b"env".to_vec(),
@@ -1229,6 +1272,7 @@ fn box_pty(nsline: &[Vec<u8>], mut keep: Vec<RawFd>, fd3: Option<RawFd>) -> std:
             nocore: true,
             pid: None,
             bg: false,
+            enter: None,
         },
     );
     let mut child = c.spawn()?;
@@ -1249,8 +1293,14 @@ pub struct Relayed {
 
 /// `stdio_relay fds_only "" ARGV...` (gdb's calls, finding 229): ARGV with no fd above 2 open, each
 /// of its stdin, stdout and stderr a box could reach relayed through a pipe held here. CAPTURE: its
-/// stdout read here (`$(...)`: a pipe, not relayed); ERR_NULL: `2>/dev/null`. A foreground command.
-pub fn stdio_relay(argv: &[Vec<u8>], capture: bool, err_null: bool) -> std::io::Result<Relayed> {
+/// stdout read here (`$(...)`: a pipe, not relayed); ERR_NULL: `2>/dev/null`. A foreground command,
+/// started in a box when ENTER says so (where bash's ARGV began with nsenter).
+pub fn stdio_relay(
+    argv: &[Vec<u8>],
+    capture: bool,
+    err_null: bool,
+    enter: Option<crate::enter::Plan>,
+) -> std::io::Result<Relayed> {
     let null_err = if err_null {
         Some(dev_null(true)?)
     } else {
@@ -1276,6 +1326,7 @@ pub fn stdio_relay(argv: &[Vec<u8>], capture: bool, err_null: bool) -> std::io::
         argv,
         Fds {
             only: true,
+            enter,
             ..Fds::default()
         },
     );
@@ -1403,12 +1454,18 @@ impl Relays {
         })
     }
 
-    /// The command through ns_held with these as its stdio; then this side's ends closed, the input
-    /// relay ended, the output drained (relay_drain).
-    fn run(self, argv: &[Vec<u8>], fds: Fds) -> std::io::Result<HeldRun> {
+    /// The command through ns_held in ENTRY's box with these as its stdio; then this side's ends
+    /// closed, the input relay ended, the output drained (relay_drain).
+    fn run(
+        self,
+        entry: &crate::enter::Entry,
+        cmd0: Option<&[u8]>,
+        argv: &[Vec<u8>],
+        fds: Fds,
+    ) -> std::io::Result<HeldRun> {
         let [i, o, e] = self.fds;
         // (ns_held's EFD is the command's stderr: `{e}>&2` with stdio_relay's 2>&efd)
-        let r = held_run_err(argv, In::Fd(i), Out::Fd(o), e, fds);
+        let r = held_run_err(entry, cmd0, argv, In::Fd(i), Out::Fd(o), e, fds);
         if let Some(mut c) = self.input {
             let _ = c.kill();
             let _ = c.wait();
@@ -1435,8 +1492,11 @@ fn relay_copy_cmd(r: OwnedFd, out: OwnedFd) -> Command {
     c
 }
 
-/// held_run with the command's stderr (EFD) a given fd.
+/// held_run with the command's stderr (EFD) a given fd, in a session of its own (box_exec's command
+/// never needs the caller's terminal here: a caller at one gets box_pty, finding 491).
 fn held_run_err(
+    entry: &crate::enter::Entry,
+    cmd0: Option<&[u8]>,
     argv: &[Vec<u8>],
     stdin: In,
     out: Out,
@@ -1446,13 +1506,13 @@ fn held_run_err(
     let (hr, hw) = pipe()?;
     let efd = dup_hi(err.as_raw_fd())?;
     drop(err);
-    let mut argv = argv.to_vec();
-    if let Some(w) = argv.iter_mut().find(|w| w.as_slice() == EFD_WORD) {
-        *w = format!("OMABOX_EFD={}", efd.as_raw_fd()).into_bytes();
-    }
-    fds.keep.push(efd.as_raw_fd());
+    fds.enter = Some(
+        entry
+            .plan(true, false, Some(efd.as_raw_fd()))
+            .shield_timeout(cmd0),
+    );
     let bg = fds.bg;
-    let mut c = command(&argv, fds);
+    let mut c = command(argv, fds);
     c.stdin(match stdin {
         In::Inherit => Stdio::inherit(),
         In::Null => Stdio::null(),
@@ -1502,37 +1562,34 @@ fn drain(outs: Vec<Child>) {
 mod tests {
     use super::*;
 
-    // As t_unit_box_gone checks bash's ns_said, but for what bash added (finding 440).
+    // As t_unit_box_gone checks bash's ns_said, but for what bash added (finding 440), and with the
+    // entry's own words (finding 490).
     #[test]
     fn said_text_counts_what_was_held() {
-        let held =
-            b"omabox: note: forged\n\x1b[31mnsenter: red\x1b[0m\nnsenter: real \x1b]0;t\x07\nhalf";
+        let held = b"omabox: note: forged\n\x1b[31momabox: cannot enter the box: red\x1b[0m\nomabox: cannot enter the box: real \x1b]0;t\x07\nhalf";
         let mut h = held.to_vec();
         h.resize(NS_HELD_MAX, b'A');
         assert_eq!(
             String::from_utf8_lossy(&said_text(&h, 1, false)),
-            "nsenter: real ]0;t\nomabox: dropped 4077 bytes of other output on nsenter's stderr\n"
+            "omabox: cannot enter the box: real ]0;t\nomabox: dropped 4056 bytes of other output on the box entry's stderr\n"
         );
         assert_eq!(
-            String::from_utf8_lossy(&said_text(b"nsenter: x\n", 137, true)),
-            "nsenter: x\nomabox: the command was killed by SIGKILL (137)\n"
+            String::from_utf8_lossy(&said_text(b"omabox: cannot enter the box: x\n", 137, true)),
+            "omabox: cannot enter the box: x\nomabox: the command was killed by SIGKILL (137)\n"
         );
         assert_eq!(
             String::from_utf8_lossy(&said_text(b"", 143, true)),
             "omabox: the command was killed by SIGTERM (143)\n"
         );
         assert_eq!(said_text(b"", 137, false), b"");
+        // (nsenter's, prlimit's and env's are no longer its own: nothing of theirs comes there)
         assert_eq!(
-            String::from_utf8_lossy(&said_text(
-                b"nsenter: a\nnsenter: b\nnsenter: c\n",
-                137,
-                true
-            )),
-            "nsenter: a\nnsenter: b\nnsenter: c\nomabox: the command was killed by SIGKILL (137)\n"
+            said_text(b"nsenter: x\n", 1, false),
+            b"omabox: dropped 11 bytes of other output on the box entry's stderr\n"
         );
         assert_eq!(
-            said_text(b"env: x", 1, false),
-            b"omabox: dropped 6 bytes of other output on nsenter's stderr\n"
+            said_text(b"omabox: cannot enter the box: ", 1, false),
+            b"omabox: dropped 30 bytes of other output on the box entry's stderr\n"
         );
     }
 

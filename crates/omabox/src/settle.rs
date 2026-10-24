@@ -232,7 +232,7 @@ impl Lines {
 }
 
 /// The tool running: its stdin held here (SETTLE_IN: its end, --tied), its output read here
-/// (SETTLE_OUT), the background on_box that runs it, and that one's nsenter's pid (SETTLE_PID's
+/// (SETTLE_OUT), the background on_box that runs it, and that one's pid (SETTLE_PID's
 /// tree).
 struct Tool {
     input: Option<OwnedFd>,

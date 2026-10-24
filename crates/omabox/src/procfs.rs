@@ -120,6 +120,27 @@ pub fn pidns(pid: &[u8]) -> Option<Vec<u8>> {
         .map(|p| shell::bytes(&p).to_vec())
 }
 
+/// The processes that entered the box whose PID 1 is PID from outside (finding 490): in its user
+/// namespace, not in its pid namespace. An on_box tool, the process outside that waits for a command
+/// in the box (enter.rs), and an nsenter of bash's once it is in; never this one.
+pub fn entered(pid: &[u8]) -> Vec<Vec<u8>> {
+    let ns = |p: &[u8], n: &str| std::fs::read_link(proc(p, n)).ok();
+    let (Some(user), Some(pidns)) = (ns(pid, "ns/user"), ns(pid, "ns/pid")) else {
+        return Vec::new();
+    };
+    let me = std::process::id().to_string().into_bytes();
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    rd.flatten()
+        .map(|e| e.file_name().into_encoded_bytes())
+        .filter(|p| shell::is_num(p) && *p != me)
+        .filter(|p| {
+            ns(p, "ns/user").as_ref() == Some(&user) && ns(p, "ns/pid").is_some_and(|n| n != pidns)
+        })
+        .collect()
+}
+
 /// `stat -c %u /proc/PID`.
 pub fn owner(pid: &[u8]) -> Option<u32> {
     std::fs::symlink_metadata(shell::path(&crate::cat!("/proc/", pid)))

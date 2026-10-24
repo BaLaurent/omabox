@@ -8,6 +8,7 @@
 use crate::args::{optarg, unexpected, unknown_opt_hint};
 use crate::boxes::{BoxPid, box_pid, covers_held, need_box};
 use crate::cat;
+use crate::enter::Plan;
 use crate::exec::{Relayed, stdio_relay};
 use crate::exit::{Ctx, Res, say};
 use crate::select::select_box;
@@ -35,10 +36,10 @@ fn w(v: &[&str]) -> Vec<Vec<u8>> {
     v.iter().map(|s| s.as_bytes().to_vec()).collect()
 }
 
-/// `stdio_relay fds_only "" ARGV...` as a foreground step of bash's: its failure to start one is
-/// bash's 1 (a fork that failed).
-fn relay(argv: &[Vec<u8>], capture: bool, err_null: bool) -> Relayed {
-    stdio_relay(argv, capture, err_null).unwrap_or(Relayed {
+/// `stdio_relay fds_only "" ARGV...` as a foreground step of bash's, in the box when ENTER says so:
+/// its failure to start one is bash's 1 (a fork that failed).
+fn relay(argv: &[Vec<u8>], capture: bool, err_null: bool, enter: Option<Plan>) -> Relayed {
+    stdio_relay(argv, capture, err_null, enter).unwrap_or(Relayed {
         rc: 1,
         out: Vec::new(),
     })
@@ -126,24 +127,30 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         BoxPid::None => return Err(ctx.die(cat!("box '", ctx.name, "' is not up"))),
     };
     covers_held(ctx)?;
-    // Every namespace of the box, its network too (finding 229). A box started before finding 89
-    // shares the host's, which is not ours to join.
-    let mut ns = w(&["nsenter", "-t"]);
-    ns.push(bp.clone());
-    ns.extend(w(&["-U", "-m", "-p", "-u", "-i"]));
-    let net = |p: &[u8]| std::fs::read_link(shell::path(&cat!("/proc/", p, "/ns/net"))).ok();
-    if net(&bp).unwrap_or_default() != net(b"self").unwrap_or_default() {
-        ns.push(b"-n".to_vec());
-    }
-    ns.push(b"--preserve-credentials".to_vec());
-    let with = |tail: &[&[u8]]| {
-        let mut v = ns.clone();
-        v.extend(tail.iter().map(|t| t.to_vec()));
-        v
+    // Every namespace of the box, its network too (finding 229; enter::all), entered natively
+    // (finding 490), in a session of its own (finding 491). The box went as it was entered: as
+    // nsenter's failure was, a step that fails (1).
+    let entry = crate::enter::Entry::open(&ctx.d, &bp, crate::enter::all(&bp)).ok();
+    // (a step that is `timeout ...` keeps the caller's INT and QUIT from it, as its own process
+    // group did: enter::Plan::shield_timeout)
+    let inside = |keep_caps: bool, argv0: &[u8]| {
+        entry
+            .as_ref()
+            .map(|e| e.plan(true, keep_caps, None).shield_timeout(Some(argv0)))
+    };
+    let step = |tail: &[&[u8]], capture: bool, err_null: bool| -> Relayed {
+        let argv: Vec<Vec<u8>> = tail.iter().map(|t| t.to_vec()).collect();
+        match inside(false, argv.first().map_or(&b""[..], |a| a)) {
+            Some(p) => relay(&argv, capture, err_null, Some(p)),
+            None => Relayed {
+                rc: 1,
+                out: Vec::new(),
+            },
+        }
     };
     match target {
         Target::Hyprland => {
-            let r = relay(&with(&[b"pgrep", b"-xo", b"Hyprland"]), true, false);
+            let r = step(&[b"pgrep", b"-xo", b"Hyprland"], true, false);
             if r.rc != 0 {
                 return Err(ctx.die(cat!("gdb: box '", ctx.name, "' has no Hyprland running")));
             }
@@ -166,7 +173,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         Target::Pid => {
             let d = cat!("/proc/", pid);
-            if relay(&with(&[b"test", b"-d", &d]), false, false).rc != 0 {
+            if step(&[b"test", b"-d", &d], false, false).rc != 0 {
                 return Err(ctx.die(cat!(
                     "gdb: box '",
                     ctx.name,
@@ -179,7 +186,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             }
         }
     }
-    let comm = relay(&with(&[b"cat", &cat!("/proc/", pid, "/comm")]), true, true);
+    let comm = step(&[b"cat", &cat!("/proc/", pid, "/comm")], true, true);
     let mut what = if comm.rc == 0 {
         tame_comm(&shell::strip_nl(&comm.out))
     } else {
@@ -191,8 +198,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // A traced process's tracer, 0 for none (`$(tracer_of PID) || tracer=0`).
     let status = cat!("/proc/", pid, "/status");
     let tracer_of = || {
-        let r = relay(
-            &with(&[b"sed", b"-n", b"s/^TracerPid:[[:space:]]*//p", &status]),
+        let r = step(
+            &[b"sed", b"-n", b"s/^TracerPid:[[:space:]]*//p", &status],
             true,
             true,
         );
@@ -221,16 +228,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             " ends that"
         )));
     }
-    let mut caps = ns.clone();
-    caps.extend(w(&[
-        "--keep-caps",
-        "--",
+    // (nsenter's --keep-caps: Plan's keep_caps, for setpriv to narrow)
+    let caps = w(&[
         "setpriv",
         "--inh-caps=-all,+sys_ptrace",
         "--ambient-caps=-all,+sys_ptrace",
         "--bounding-set=-all,+sys_ptrace",
         "--",
-    ]));
+    ]);
     let lang = shell::env("LANG")
         .filter(|l| !l.is_empty())
         .unwrap_or(b"C.UTF-8".to_vec());
@@ -253,6 +258,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         if extra.is_empty() {
             extra = w(&["-ex", "thread apply all bt"]);
         }
+        // (timeout in the box too, as the step's first word: it is what the entry starts)
         let mut argv = w(&["timeout", "120"]);
         argv.extend(caps);
         argv.extend(gdb);
@@ -262,7 +268,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // (not a step that takes a Ctrl-C: `timeout` puts itself and gdb in a process group of their
         // own, which the terminal's never reaches; a Ctrl-C stops the command, gdb sent a TERM if it
         // runs on, which timeout passes on: finding 454)
-        let rc = relay(&argv, false, false).rc;
+        let rc = match inside(true, argv.first().map_or(&b""[..], |a| a)) {
+            Some(p) => relay(&argv, false, false, Some(p)).rc,
+            None => 1,
+        };
         if rc == 124 {
             return Err(ctx.die(cat!(
                 "gdb: no answer in 120 s: the process may be hung in a way gdb cannot stop (omabox log -b ",
@@ -288,12 +297,16 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         " in the box), ",
         date
     );
-    let mut argv = w(&["timeout", "10"]);
-    argv.extend(ns.clone());
-    argv.extend(w(&["sh", "-c", GDB_LOG_SH, "sh"]));
+    let mut argv = w(&["timeout", "10", "sh", "-c", GDB_LOG_SH, "sh"]);
     argv.push(log.clone());
     argv.push(head);
-    if relay(&argv, false, false).rc != 0 {
+    if step(
+        &argv.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        false,
+        false,
+    )
+    .rc != 0
+    {
         return Err(ctx.die("gdb: cannot write the box's gdb log"));
     }
     let mut argv = caps;
@@ -323,7 +336,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         "echo == omabox: end\\n",
     ]));
     // (A failure here said, 1: bash's set -e ended it with the step's status, unsaid, finding 442.)
-    let rc = relay(&argv, false, false).rc;
+    let rc = match inside(true, argv.first().map_or(&b""[..], |a| a)) {
+        Some(p) => relay(&argv, false, false, Some(p)).rc,
+        None => 1,
+    };
     if rc != 0 {
         return Err(ctx.die(cat!(
             "gdb: cannot start gdb in box '",

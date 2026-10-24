@@ -201,16 +201,14 @@ pub fn kill_box(ctx: &Ctx) -> bool {
         BoxPid::None | BoxPid::Unknown => Vec::new(),
     };
     if !pid.is_empty() {
+        // A launcher stopped along with its command can't reap it, and PID 1 can't exit until it does:
+        // each process that entered the box from outside (enter.rs's, bash's nsenter) is continued.
+        // (found while PID 1 is there to compare namespaces with)
+        let entered = crate::procfs::entered(&pid);
         signal_ok(&pid, libc::SIGKILL);
-        // A launcher stopped along with its command can't reap it, and PID 1 can't exit until it does.
-        let mut c = crate::sig::command("pkill");
-        c.arg("-CONT")
-            .arg("-f")
-            .arg(os(&cat!("^nsenter -t ", pid, " ")))
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let _ = crate::sig::run_status(c);
+        for p in entered {
+            signal_ok(&p, libc::SIGCONT);
+        }
     }
     // A box whose pid was never found: pasta's own pid namespace holds it, end that instead.
     if let Some(pasta) = box_pasta(&ctx.d) {

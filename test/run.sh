@@ -3541,6 +3541,9 @@ t_unit_rust_parity() {
     printf 'A=1\nexport B="two words"\n# c\n\nC='"'"'q'"'"'\r\n' > "$r/envf"; printf 'A=1\nnot a line\n' > "$r/envbad"; printf 'PATH=/x\n' > "$r/envres"
   }
   rp_prep=rp_w2 rp_env=() rp_dir=$r/norepo
+  # The stand-in shares the host's UTS and IPC namespaces, which neither half may join: a command for
+  # it fails to enter, said in the entry's own words (finding 490; nsenter's in bash).
+  rp490() { rp_why=490 rp_bash=('err~^nsenter: reassociate to namespaces failed: Operation not permitted$') rp_rust=('err~^omabox: cannot enter the box: Operation not permitted$'); }
   parity "hyprctl: the default box, none up" hyprctl version
   parity "hyprctl -b with no value" hyprctl -b
   parity "hyprctl of a dead box" hyprctl -b dead1 version
@@ -3581,22 +3584,22 @@ t_unit_rust_parity() {
   parity "run of a box this namespace cannot read" run -b unk -- true
   parity "run of a box still starting (covers)" run -b cov -- true
   parity "run -b of no box (no throwaway)" run -b nobox -- true
-  parity "run: a command, its status and both outputs" run -b own -- sh -c 'echo out; echo err >&2; exit 3'
-  parity "run: the session's marker left out (finding 424), the rest kept" run -b own -- sh -c 'echo "${OMABOX_OWN_SESSION:-none} $RPX $OMABOX $OMABOX_NAME"'
-  parity "run: the caller's dir, the same in the box" run -b own -- pwd
-  parity "run: up options on a box up, ignored" run -b own --size 800x600 --clean -- true
-  rp_env=(ROOT="/x y"); parity "run --pass ROOT: the caller's, not bin/omabox's own (finding 74)" run -b own --pass ROOT -- sh -c 'echo "$ROOT"'
+  rp490; parity "run: a command, its status and both outputs" run -b own -- sh -c 'echo out; echo err >&2; exit 3'
+  rp490; parity "run: the session's marker left out (finding 424), the rest kept" run -b own -- sh -c 'echo "${OMABOX_OWN_SESSION:-none} $RPX $OMABOX $OMABOX_NAME"'
+  rp490; parity "run: the caller's dir, the same in the box" run -b own -- pwd
+  rp490; parity "run: up options on a box up, ignored" run -b own --size 800x600 --clean -- true
+  rp_env=(ROOT="/x y"); rp490; parity "run --pass ROOT: the caller's, not bin/omabox's own (finding 74)" run -b own --pass ROOT -- sh -c 'echo "$ROOT"'
   parity "...and bash's when it takes the call back (-h after the options)" run -b own --pass ROOT -h
-  rp_env=(RPP=p1); parity "run --env-file, --env, --pass" run -b own --env-file "$r/envf" --env A=9 --pass RPP -- sh -c 'echo "$A|$B|$C|$RPP"'
+  rp_env=(RPP=p1); rp490; parity "run --env-file, --env, --pass" run -b own --env-file "$r/envf" --env A=9 --pass RPP -- sh -c 'echo "$A|$B|$C|$RPP"'
   rp_env=()
-  parity "run: a command not there" run -b own -- rp-no-such-command
-  parity "run: a command killed by SIGKILL" run -b own -- sh -c 'kill -KILL $$'
-  parity "run: by SIGTERM (bash's line for it is no own line)" run -b own -- sh -c 'kill -TERM $$'
-  parity "run: by SIGINT (bash says nothing)" run -b own -- sh -c 'kill -INT $$'
-  parity "run: exit 137 of its own" run -b own -- sh -c 'exit 137'
-  rp_in=$r/envf; parity "run: stdin passed through" run -b own -- cat; rp_in=/dev/null
+  rp490; parity "run: a command not there" run -b own -- rp-no-such-command
+  rp490; parity "run: a command killed by SIGKILL" run -b own -- sh -c 'kill -KILL $$'
+  rp490; parity "run: by SIGTERM (bash's line for it is no own line)" run -b own -- sh -c 'kill -TERM $$'
+  rp490; parity "run: by SIGINT (bash says nothing)" run -b own -- sh -c 'kill -INT $$'
+  rp490; parity "run: exit 137 of its own" run -b own -- sh -c 'exit 137'
+  rp_in=$r/envf; rp490; parity "run: stdin passed through" run -b own -- cat; rp_in=/dev/null
   rp_sed='s/run-[0-9]+\.log/run-N.log/g'
-  parity "run -d: its log cannot be made (the stand-in has no /home/sbx)" run -b own -d -- true
+  rp490; parity "run -d: its log cannot be made (the stand-in has no /home/sbx)" run -b own -d -- true
   rp_sed=""
   parity "log: an unknown log" log -b dl bogus
   parity "log -n x" log -b dl -n x
@@ -6714,6 +6717,9 @@ PYEOF
   parity "gdb -h after a word" gdb -b fk -h
   parity "gdb of no box" gdb -b nobox
   parity "gdb of a dead box" gdb -b dead1
+  # (the stand-in shares the host's UTS and IPC namespaces, which neither half may join: its entry's
+  # failure said in the entry's words, finding 490; nsenter's in bash)
+  rp_why=490 rp_bash=('err~^nsenter: reassociate to namespaces failed: Operation not permitted$') rp_rust=('err~^omabox: cannot enter the box: Operation not permitted$')
   parity "gdb: no Hyprland in the box" gdb -b plain
   parity "gdb --shell: none (box.json says none)" gdb -b fk --shell
   parity "gdb --shell: gone" gdb -b fks --shell
@@ -7980,6 +7986,19 @@ t_run_stdio() {
     check "...another one" test "$bpts" != "$hpts"
     out=$( (sleep 3) | script -q -e -c "$CLI run -b $B -- sh -c 'echo out; echo err >&2; exit 5' 2>$d/e3" /dev/null 2>&1 | tr -d '\r'; echo "rc=${PIPESTATUS[1]}")
     check_eq "...its stderr to a file stays in the file, the status kept" "out rc=5|err" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')|$(cat "$d/e3")"
+    # A caller at a terminal whose output goes on through a pipe (no terminal of its own for the
+    # command): the caller's terminal is not the command's either, nor of what it leaves running, so
+    # nothing in the box reads what is typed there, writes to it or signals its session (finding 491;
+    # bash's kept it the controlling terminal: /dev/tty read the line typed).
+    # shellcheck disable=SC2016 # the box's sh expands them
+    local t491='if read -r l </dev/tty; then echo "got:$l"; else echo none; fi
+      [ "$(ps -o sid= -p $$ | tr -d " ")" = $$ ] && echo own session'
+    out=$( (sleep 1.5; echo t491-typed; sleep 2) | T=$t491 script -q -e -c "$CLI run -b $B -- sh -c \"\$T\" 2>/dev/null | cat" /dev/null 2>&1 | tr -d '\r' | grep -v '^t491-typed$')
+    check_eq "a caller at a terminal, the command's output piped: what is typed there is not the box's to read" none "$(sed -n 1p <<<"$out")"
+    check_eq "...the command leads a session of its own (no controlling terminal)" "own session" "$(sed -n 2p <<<"$out")"
+    t491='(sleep 1; if (: 3<>/dev/tty) 2>/dev/null; then echo reached; else echo none; fi > /tmp/t491) >/dev/null 2>&1 &'
+    (sleep 3) | T=$t491 script -q -e -c "$CLI run -b $B -- sh -c \"\$T\" 2>/dev/null | cat; sleep 2" /dev/null >/dev/null 2>&1
+    check_eq "...nor of what it leaves running" none "$(ob run -b "$B" -- cat /tmp/t491 2>&1)"
   fi
   rc=0; out=$(printf 'echo typed\nexit 3\n' | ob run -b "$B" -- bash 2>&1) || rc=$?
   check_eq "a shell fed by a pipe (no terminal): runs it, its status" "typed|3" "$out|$rc"
@@ -8034,7 +8053,12 @@ signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGURG}); os.execv(sys.argv[1],
     cat "$d/held.$i" >> "$d/held.err"
   done
   hits=$(ob run -b "$B" -- sh -c 'wc -l < /tmp/held-hits' 2>/dev/null) || hits=0
-  if [ "${hits:-0}" -gt 0 ]; then
+  # The Rust half's entry makes the command's stderr the caller's before the exec, so no box process
+  # holds that stderr at all (finding 490; bash's nsenter left it to the inner bash's first line).
+  if [ -x "$ROOT/build/bin/omabox" ]; then
+    check_eq "a box process looking for the entry's stderr in 10 runs: never finds it" "0|0000000000" "${hits:-0}|$rcs"
+    check_fails "...nothing of its in any stderr" grep -q 'forged' "$d/held.err"
+  elif [ "${hits:-0}" -gt 0 ]; then
     check_eq "a box process writing to nsenter's stderr ($hits times in 10 runs): every run's status 0" 0000000000 "$rcs"
     check_fails "...no line in omabox's words from it" grep -q 'forged-in-box' "$d/held.err"
     check_fails "...no escape" grep -q $'\e' "$d/held.err"
@@ -9312,8 +9336,8 @@ t_agent_session() {
   pid_of() { bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$1"; }
   # Busy until told (#116: a fixed sleep 15 that took 9 s to start under load ended before the check).
   ob run -b "$b3" -- sh -c 'until [ -e /tmp/t116-done ]; do sleep 0.2; done' & local busy=$!
-  # The run is use once its nsenter is up; a check before that would find the box unused.
-  until_ok 10 pgrep -f "^nsenter -t $(pid_of "$b3") "; kill "$a3" 2>/dev/null
+  # The run is use once its command is in the box; a check before that would find the box unused.
+  until_ok 10 pgrep -f "^sh -c until \[ -e /tmp/t116-done \]"; kill "$a3" 2>/dev/null
   local pid4; pid4=$(pid_of "$b4")
   kill -KILL "$pid4" 2>/dev/null; kill "$a4" 2>/dev/null
   sleep 10

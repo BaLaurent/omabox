@@ -38,17 +38,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             _ => Vec::new(),
         };
         covers_held(ctx)?;
-        if !bp.is_empty() {
+        // (entered natively, finding 490; the box gone meanwhile: nothing to kill)
+        let entry = crate::enter::Entry::open(&ctx.d, &bp, crate::enter::PIDS).ok();
+        if let Some(e) = entry {
             let argv: Vec<Vec<u8>> = [
-                b"nsenter".as_slice(),
-                b"-t",
-                &bp,
-                b"-U",
-                b"-m",
-                b"-p",
-                b"--preserve-credentials",
-                b"--",
-                b"/usr/bin/sh",
+                b"/usr/bin/sh".as_slice(),
                 b"-c",
                 KILL_SH.as_bytes(),
                 b"sh",
@@ -57,7 +51,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .iter()
             .map(|w| w.to_vec())
             .collect();
-            let _ = crate::exec::stdio_relay(&argv, false, true);
+            let _ = crate::exec::stdio_relay(&argv, false, true, Some(e.plan(true, false, None)));
         }
         say(cat!(
             "box '",

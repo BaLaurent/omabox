@@ -256,39 +256,17 @@ fn poll(ctx: &mut Ctx, r: &mut Reap) -> Res<bool> {
     Ok(retry(ctx, r))
 }
 
-/// In use: a peek window on it, or an `omabox run` (an nsenter into its PID 1) still running.
+/// In use: a peek window on it, or a command entered into it from outside still running (`omabox
+/// run`, a tool of omabox's: bash looked for an nsenter into its PID 1 by its command line; the
+/// native entry has none, finding 490).
 fn in_use(ctx: &Ctx) -> bool {
     if crate::marks::peek_open(ctx) {
         return true;
     }
-    let pid = match box_pid(&ctx.d) {
-        BoxPid::Pid(p) => p,
-        _ => Vec::new(),
-    };
-    nsenter_running(&cat!("nsenter -t ", pid, " "))
-}
-
-/// `pgrep -f "^PREFIX"`: a process (not this one) whose command line starts so.
-fn nsenter_running(prefix: &[u8]) -> bool {
-    let me = std::process::id().to_string().into_bytes();
-    let Ok(rd) = std::fs::read_dir("/proc") else {
-        return false;
-    };
-    rd.flatten().any(|e| {
-        let n = e.file_name().into_encoded_bytes();
-        if !shell::is_num(&n) || n == me {
-            return false;
-        }
-        let Ok(cl) = std::fs::read(e.path().join("cmdline")) else {
-            return false;
-        };
-        let words = cl.strip_suffix(b"\0").unwrap_or(&cl);
-        let line: Vec<u8> = words
-            .iter()
-            .map(|&c| if c == 0 { b' ' } else { c })
-            .collect();
-        line.starts_with(prefix)
-    })
+    match box_pid(&ctx.d) {
+        BoxPid::Pid(p) => !crate::procfs::entered(&p).is_empty(),
+        _ => false,
+    }
 }
 
 /// A file's modification time, in seconds since the epoch (`stat -c %Y`).

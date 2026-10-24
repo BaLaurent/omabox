@@ -459,7 +459,7 @@ pub fn follow_on() {
     }
 }
 
-/// A child just started (held_run's nsenter): one of the follower's while it follows.
+/// A child just started (held_run's, entering a box): one of the follower's while it follows.
 pub fn spawned(pid: u32) {
     if FOLLOWING.load(Ordering::Relaxed) {
         follower(pid);

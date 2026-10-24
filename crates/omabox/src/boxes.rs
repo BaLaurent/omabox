@@ -302,7 +302,7 @@ pub fn hypr_end(d: &[u8]) -> Option<String> {
 }
 
 /// A box whose covers (#210) jail_verify has not passed: its PID 1 is held, and nothing may enter it
-/// (a command's nsenter would see its mounts before they are checked). The file is made before the
+/// (a command entering it would see its mounts before they are checked). The file is made before the
 /// box is launched and only ever goes once the check has passed.
 pub fn covers_held(ctx: &Ctx) -> Res<()> {
     if !ctx.d.is_empty() && ctx.at("covers-pending").exists() {

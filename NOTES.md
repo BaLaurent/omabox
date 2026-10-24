@@ -9794,6 +9794,57 @@ from them.
     made), t_unit_setup (" n", "n " and a tab before N through script's pty, both halves),
     setup.rs's answers_read_as_bash_reads_them.
 
+490. **The Rust half enters a box natively: setns where bash ran nsenter** (2026-10-24, #324, the
+    native-entry step). enter.rs: the child of every command that goes into a box (on_box's tools,
+    box_exec's command, gdb's steps, restart-shell's kill) joins the box's namespaces between fork and
+    exec with one setns(2) on a pidfd of the box's PID 1, opened by the parent and checked against
+    box_pid once it is open (a pid reused meanwhile is never entered). For the box's pid namespace it
+    forks once more, as nsenter did: the process left outside (named `omabox-enter`, its command line
+    omabox's) closes every fd, waits for the command, stops while it is stopped, passes HUP, INT, QUIT,
+    TERM, USR1 and USR2 on to it (a terminal's own only when the command does not share that
+    terminal), and dies of the command's death (not dumpable first: never a core of its own), so the
+    caller still sees 128+N; the command gets PR_SET_PDEATHSIG KILL, so a KILL to that process (the
+    bounded stop's last step, finding 453) leaves nothing running in the box. A command that is
+    `timeout` (gdb's runs, record's ffmpeg, the other bounded steps of omabox's) gets neither INT nor
+    QUIT from it, as its own process group kept them from it under nsenter; a stop's TERM reaches it. The caller's stderr is
+    made the command's before the exec: the held pipe (ns_held, #166) carries only the entry's own
+    failure, "omabox: cannot enter the box: REASON", and no box process ever holds it (bash's inner
+    bash swapped it on its first line, after a box process could open it: t_run_stdio's writer found it
+    in each run; now never). on_box runs its tool directly, with its five variables (no `env -i`, no
+    `sh -c`). box_cwd's stat is made through /proc/PID/root with openat2's RESOLVE_IN_ROOT, no process
+    started. gdb's `--keep-caps` is the entry's (inheritable and ambient, for setpriv to narrow), its
+    `timeout` now starts inside the box. A command with a terminal of its own (box_pty) is entered by
+    `script` running this binary's `_enter` on its pseudo-terminal (`/proc/PID/exe`, the pidfd passed
+    open). `_reap`'s "in use" and `down`'s SIGCONT for a stopped launcher find what entered a box by
+    its namespaces (procfs::entered: in the box's user namespace, not in its pid namespace) where they
+    read nsenter's command line. Measured on this machine (median of 40): `omabox run -b B -- true`
+    35.1 ms before, 24.2 ms after; `omabox hyprctl -b B version` 25.3 ms, 24.5 ms. **Changes** (Rust
+    over bash): an entry that fails says so in those words, where nsenter's own line was said
+    ("dropped N bytes of other output" now names "the box entry's stderr"); a TERM to the process that
+    waits (as `pkill -f 'omabox run'` sends it) reaches the command in the box, where nsenter died and
+    the command ran on; `pgrep -f 'omabox run'` finds that process too. Bash's half keeps nsenter.
+    Tests: enter.rs's and exec.rs's unit tests, t_run_stdio (no box process finds the entry's stderr),
+    t_agent_session (a run in use waited for by its command, not by nsenter's), the suite's box tests
+    of every command that enters a box.
+
+491. **A box command had the caller's terminal as its controlling terminal** (2026-10-24, #324, the
+    native-entry step). nsenter started it in the caller's session, so where it had no terminal of its
+    own (its output piped, `run -- cmd | less`, `> file` from a terminal), the command and what it left
+    running could open /dev/tty: read what was typed there, write to it, or signal its session (the
+    first confirmed on the bash half by t_run_stdio's check). **Fix** (Rust
+    only): the command leads a session of its own (setsid after the entry), so /dev/tty is "No such
+    device or address" there, for it and for what it leaves; gdb's steps and restart-shell's kill too.
+    The process that waits outside the box stays in the caller's session and passes a Ctrl-C, Ctrl-\
+    and a hang-up on to it, as the terminal did; a Ctrl-Z stops it (SIGSTOP: the kernel will not stop
+    an orphaned process group for SIGTSTP) and that process with it, `fg` continues both. A caller at
+    a terminal still gets box_pty (finding 325): the command's controlling terminal is the
+    pseudo-terminal `script` holds, never the caller's. What the box can do with that one, kept: type
+    into its own input (TIOCSTI), signal its own session, and write to the caller's terminal what any
+    program run there writes, escape sequences included (as `cat` of a file would); it reads only what
+    is typed while it runs. Tests: t_run_stdio ("what is typed there is not the box's to read", "the
+    command leads a session of its own", "nor of what it leaves running": each fails with
+    OMABOX_BASH=1).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
