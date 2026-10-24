@@ -3,11 +3,13 @@
 //! INT, TERM or HUP, the signal then raised again, as bash dies of it after its EXIT trap. A code
 //! trap's (on_exit_code) ends with the signal's 128+N instead. Before the undo, main's foreground
 //! child is waited for, bounded (foreground_over: bash ran its EXIT trap at once on TERM and HUP,
-//! the child left running, finding 453); an INT to omabox alone that this child outlives lets the
-//! command go on, as bash does. The first signal decides: once its undo begins, another INT, TERM
-//! or HUP changes nothing, and the undo finishes (bash's second signal cut its trap short, or ran
-//! the lowest-numbered pending trap's code: finding 452). Nothing new starts meanwhile
-//! (sig::run_child). A signal ignored when omabox started stays ignored (sig::catch).
+//! the child left running, finding 453). An INT stops the command as TERM does (finding 454), but
+//! for a Ctrl-C from the terminal while a child that takes one runs (sig::takes_ctrl_c: gdb, check
+//! run's scenario): when that child outlives it, the command goes on, as bash's does. The first
+//! signal decides: once its undo begins, another INT, TERM or HUP changes nothing, and the undo
+//! finishes (bash's second signal cut its trap short, or ran the lowest-numbered pending trap's
+//! code: finding 452). Nothing new starts meanwhile (sig::run_child). A signal ignored when omabox
+//! started stays ignored (sig::catch).
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -16,7 +18,7 @@ type Undo = Box<dyn FnOnce() + Send>;
 
 static TRAPS: Mutex<Vec<(u64, Undo)>> = Mutex::new(Vec::new());
 static NEXT: AtomicU64 = AtomicU64::new(1);
-/// The signal thread holds sig::FOREGROUND while it undoes (an INT's, which waited for that child).
+/// The signal thread holds sig::FOREGROUND while it undoes (it waited for that child).
 static FG_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SIG_W: AtomicI32 = AtomicI32::new(-1);
 
@@ -50,8 +52,8 @@ pub fn on_exit_code(f: impl FnOnce() + Send + 'static) -> Trap {
 
 /// Every undo still pending, the last made first (bash's EXIT trap on the way out).
 pub fn run_undos() {
-    // (one at a time: main's int_deferred_end waits for a signal's undos the thread runs, so the
-    // process never ends of its INT halfway through them)
+    // (one at a time: main's at the command's end and a signal's on its thread, so the process
+    // never ends halfway through them)
     static UNDOING: Mutex<()> = Mutex::new(());
     let _u = UNDOING
         .lock()
@@ -129,19 +131,24 @@ fn take(id: u64) -> Option<Undo> {
 /// at once: the safe side).
 static SIG_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-extern "C" fn on_signal(sig: libc::c_int) {
+/// The pipe's byte for a signal the kernel sent (SI_KERNEL: a terminal's Ctrl-C to its foreground
+/// process group), beside the signal's number; one a process sent (kill) has it clear.
+const FROM_TTY: u8 = 0x80;
+
+extern "C" fn on_signal(sig: libc::c_int, info: *mut libc::siginfo_t, _: *mut libc::c_void) {
     let _e = crate::sig::Errno::save();
-    let _ = sig;
     SIG_BUSY.store(
         crate::sig::FG_ACTIVE.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
-    // Nothing new starts from here (the thread lets main go on where bash would: an INT to omabox
-    // alone; it clears this then).
+    // Nothing new starts from here (the thread lets main go on after a Ctrl-C its child outlived;
+    // it clears this then).
     crate::sig::STOPPING.store(true, Ordering::SeqCst);
+    // SAFETY: the kernel's siginfo for this delivery (SA_SIGINFO), read only.
+    let tty = !info.is_null() && unsafe { (*info).si_code } == libc::SI_KERNEL;
     let fd = SIG_W.load(Ordering::Relaxed);
     if fd >= 0 {
-        let b = [u8::try_from(sig).unwrap_or(0)];
+        let b = [u8::try_from(sig).unwrap_or(0) | if tty { FROM_TTY } else { 0 }];
         // SAFETY: write is async-signal-safe; b outlives the call.
         unsafe {
             libc::write(fd, b.as_ptr().cast(), 1);
@@ -205,7 +212,7 @@ fn arm() {
     use std::os::fd::IntoRawFd;
     SIG_W.store(w.into_raw_fd(), Ordering::SeqCst);
     for s in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-        crate::sig::catch(s, on_signal);
+        crate::sig::catch_info(s, on_signal);
     }
     std::thread::spawn(move || {
         let mut f = std::fs::File::from(r);
@@ -214,51 +221,35 @@ fn arm() {
             if std::io::Read::read_exact(&mut f, &mut b).is_err() {
                 return;
             }
-            let sig = libc::c_int::from(b[0]);
-            // (judged by what ran when it came: a foreground child, or main in-process)
-            let busy_at = SIG_BUSY.swap(false, Ordering::SeqCst);
-            let busy = sig == libc::SIGINT && busy_at;
-            let code = CODE_TRAPS.load(Ordering::SeqCst) > 0;
-            let lock_fg = || {
-                crate::sig::FOREGROUND
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-            };
+            let sig = libc::c_int::from(b[0] & !FROM_TTY);
+            // A Ctrl-C from the terminal while a child that takes one ran (sig::takes_ctrl_c):
+            // waited for as long as that child runs; when it did not die of it, the command goes on,
+            // as bash's does. With a code trap on (bash's `trap 'exit 130' INT`) never.
+            let ctrl_c = sig == libc::SIGINT
+                && b[0] & FROM_TTY != 0
+                && SIG_BUSY.swap(false, Ordering::SeqCst)
+                && CODE_TRAPS.load(Ordering::SeqCst) == 0;
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
-            // (an INT that may yet let main go on waits for the child as long as it runs: its end
-            // says; every other signal stops the command, the child waited for a bounded time)
-            let fg = if sig == libc::SIGINT && busy && !code {
-                Some(lock_fg())
+            let fg = if ctrl_c {
+                let g = crate::sig::FOREGROUND
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !crate::sig::FG_INT.load(Ordering::SeqCst) {
+                    crate::sig::STOPPING.store(false, Ordering::SeqCst);
+                    drop(g);
+                    continue;
+                }
+                Some(g)
             } else {
+                // Every other INT, TERM or HUP stops the command: its foreground child waited for,
+                // bounded (an INT sent by a process, `kill -INT`, among them: finding 454).
                 foreground_over()
             };
-            // An INT to omabox alone while a child ran that did not die of it: bash goes on (probed:
-            // `kill -INT` of the script during a sleep, the rest of it ran, its EXIT trap at its end).
-            // In a DEFER_INT step (bash's `$(...)` subshell) only the first: bash's main has ended of
-            // it, so a second one can only have reached the subshell, which ends of it, its EXIT trap
-            // run (an interactive monitor add's remove, finding 429). Judged when it comes, a group
-            // INT whose child outlives it (timeout's hyprctl, a group of its own) looks like one to
-            // omabox alone; the second one ends the step here, the safe side.
-            let second = crate::sig::DEFER_INT.load(Ordering::SeqCst)
-                && crate::sig::INT_DEFERRED.load(Ordering::SeqCst);
-            // (never in an interactive monitor add: sig::INT_ENDS)
-            if !code
-                && !second
-                && !crate::sig::INT_ENDS.load(Ordering::SeqCst)
-                && sig == libc::SIGINT
-                && busy
-                && !crate::sig::FG_INT.load(Ordering::SeqCst)
-            {
-                if crate::sig::DEFER_INT.load(Ordering::SeqCst) {
-                    crate::sig::INT_DEFERRED.store(true, Ordering::SeqCst);
-                }
-                crate::sig::STOPPING.store(false, Ordering::SeqCst);
-                drop(fg);
-                continue;
-            }
             // From here a second INT, TERM or HUP changes nothing: the thread reads no more of
             // them, and the undo finishes (finding 452).
             FG_HELD.store(fg.is_some(), Ordering::SeqCst);
+            // (read before the undo, which drops the code traps' count with them)
+            let code = CODE_TRAPS.load(Ordering::SeqCst) > 0;
             run_undos();
             if code {
                 // (bash's `exit 130|143|129`, its EXIT trap run on the way: the first signal's)
@@ -282,22 +273,24 @@ fn arm() {
     });
 }
 
-/// No trap, but bash's way with a signal: TERM and HUP end this process at once, an INT once the
-/// foreground child is over, and not at all when that child did not die of it (an INT to omabox
-/// alone while gdb or a scenario runs: bash waits and goes on).
-pub fn int_as_bash() {
+/// No trap, but this module's way with a signal: INT, TERM and HUP stop the command once its
+/// foreground step is over (bounded), and end it of the signal; a Ctrl-C a child that takes one
+/// outlives lets it go on.
+pub fn stop_on_signals() {
     arm();
     // (once more, over another module's handlers: `trap - INT TERM HUP` after record start)
     for s in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-        crate::sig::catch(s, on_signal);
+        crate::sig::catch_info(s, on_signal);
     }
 }
 
-/// `sleep SECS` as bash runs it: a child in the foreground (a signal's trap waits for it).
-pub fn sleep(secs: &[u8]) -> i32 {
-    use std::os::unix::ffi::OsStrExt;
-    // (made before the foreground step: sig::command parks, which must not hold FOREGROUND)
-    let mut c = crate::sig::command("sleep");
-    c.arg(std::ffi::OsStr::from_bytes(secs));
-    crate::sig::run_status(c).unwrap_or(127)
+/// `sleep SECS` (decimal seconds, as omabox's durations are written), in-process: a signal's stop
+/// parks main at once (sig::sleep), where bash's `sleep` was a child it waited for.
+pub fn sleep(secs: &[u8]) {
+    let s = std::str::from_utf8(secs)
+        .ok()
+        .and_then(|t| t.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(0.0);
+    crate::sig::sleep(std::time::Duration::from_secs_f64(s.min(1e9)));
 }

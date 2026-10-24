@@ -70,9 +70,10 @@ pub fn set_main() {
 }
 
 /// Whether this thread is main's, and not running a trap's undo (UNDO_MAIN): what parks and
-/// takes FOREGROUND. An undo main runs (int_deferred_end's) runs its children plainly, as a trap's
-/// thread does: the thread, on its way to the same undos, waits for that one (trap::run_undos' lock)
-/// and must find main neither parked nor waiting for FOREGROUND, which the thread may hold.
+/// takes FOREGROUND. An undo main runs (at the command's end, its traps dropped) runs its children
+/// plainly, as a trap's thread does: the thread, on its way to the same undos, waits for that one
+/// (trap::run_undos' lock) and must find main neither parked nor waiting for FOREGROUND, which the
+/// thread may hold.
 fn main_step() -> bool {
     MAIN.get() == Some(&std::thread::current().id()) && !UNDO_MAIN.load(Ordering::SeqCst)
 }
@@ -92,10 +93,10 @@ pub static GATED: AtomicBool = AtomicBool::new(false);
 
 /// C run as bash runs a foreground command (every child of main's waited for goes through here):
 /// C made before (sig::command parks, never under FOREGROUND), then with FOREGROUND held: spawned
-/// (nothing once a trap is on its way), FG_ACTIVE raised only once it exists (unless it was
-/// started with SIGINT ignored, INT_IGNORED: a group Ctrl-C reaches no child then, and is no INT
-/// to omabox alone, finding 112's `<(...)`), WITH run on it (feeding or reading its pipes), its end
-/// read and recorded (exec::status: FG_INT) before the lock drops. C is dropped right after
+/// (nothing once a trap is on its way), FG_ACTIVE raised once it exists when it takes a Ctrl-C
+/// (takes_ctrl_c; never one started with SIGINT ignored, INT_IGNORED: a Ctrl-C reaches no child
+/// then, finding 112's `<(...)`), its pid in FG_PID, WITH run on it (feeding or reading its pipes),
+/// its end read and recorded (exec::status: FG_INT) before the lock drops. C is dropped right after
 /// the spawn, so the pipe ends it held close. Its status and signal, or the spawn's error.
 pub fn run_child<T>(
     c: Command,
@@ -138,7 +139,10 @@ pub fn run_child<T>(
                 break Err(e);
             }
         };
-        FG_ACTIVE.store(!int_ignored, Ordering::SeqCst);
+        FG_ACTIVE.store(
+            !int_ignored && TAKES_INT.load(Ordering::SeqCst),
+            Ordering::SeqCst,
+        );
         FG_PID.store(i32::try_from(ch.id()).unwrap_or(0), Ordering::SeqCst);
         let t = with(&mut ch);
         let st = end(&mut ch);
@@ -169,13 +173,6 @@ pub fn run_output(mut c: Command) -> std::io::Result<(i32, Vec<u8>)> {
     .map(|(out, (rc, _))| (rc, out))
 }
 
-/// run_output for a `$(...)` of bash's: a substitution's step (subst), so an INT to omabox alone
-/// during it ends this process of it once the step is over (bash: 130 at once; the subshell's child
-/// runs on), where a foreground child's lets main go on.
-pub fn run_subst(c: Command) -> std::io::Result<(i32, Vec<u8>)> {
-    subst(|| run_output(c))
-}
-
 /// Main waits here while a trap is on its way (it ends this process, or lets main go on); another
 /// thread (a trap's undo) never does.
 fn park_while_stopping() {
@@ -187,58 +184,39 @@ fn park_while_stopping() {
     }
 }
 
-/// A foreground child is running (FG_ACTIVE), and one of the children it waited for died of SIGINT
-/// (FG_INT, exec::status): bash's test for an INT to itself alone, which it lets pass when the child
-/// it waited for did not die of it.
+/// A foreground child that takes a Ctrl-C is running (FG_ACTIVE, takes_ctrl_c), and one of the
+/// children it waited for died of SIGINT (FG_INT, exec::status): bash's test for a Ctrl-C the child
+/// handled, which lets the command go on when that child did not die of it.
 pub static FG_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static FG_INT: AtomicBool = AtomicBool::new(false);
 /// The pid of main's foreground child while it runs (0: none), for a signal's stop that waited
 /// for it long enough (trap.rs's foreground_over).
 pub static FG_PID: AtomicI32 = AtomicI32::new(0);
 
-/// DEFER_INT: main runs what bash runs in a `$(...)` subshell (monitor_add_window): an INT to omabox
-/// alone ends bash's main at once (its read of the substitution is cut short, 130) while the subshell,
-/// which got no signal, finishes the step. INT_DEFERRED: one came; the step goes on, then this ends
-/// of it, having said nothing more.
-pub static DEFER_INT: AtomicBool = AtomicBool::new(false);
-pub static INT_DEFERRED: AtomicBool = AtomicBool::new(false);
-/// An interactive monitor add (cmd/monitor.rs, finding 437): any INT ends it, its trap removing the
-/// output, where bash's main ends of one to itself alone while its subshell finishes the add. A
-/// group Ctrl-C during the create looks like one to omabox alone (timeout's hyprctl, a group of its
-/// own, outlives it), and was taken for that: the add finished, its monitor kept, exit 130.
-pub static INT_ENDS: AtomicBool = AtomicBool::new(false);
-
-/// F as a step bash runs in a `$(...)`: its main waits for the substitution, so an INT to omabox
-/// alone meanwhile lets the step finish, then ends this process of it (int_deferred_end).
-pub fn subst<T>(f: impl FnOnce() -> T) -> T {
-    // (a trap's undo, on its thread or main's, runs it plainly: an undo's `$(...)` must neither
-    // judge main's INT nor end the process from inside the undos, whose lock it holds)
-    if !main_step() {
-        return f();
-    }
-    let outer = DEFER_INT.swap(true, Ordering::SeqCst);
+/// While main runs F, its foreground child is one that takes a Ctrl-C itself (gdb's run, check run's
+/// scenario): a terminal's INT that the child outlives lets the command go on (trap.rs), as bash goes
+/// on when the child it waited for did not die of it. Any other child is just waited for, then the
+/// command stops (finding 454).
+pub fn takes_ctrl_c<T>(f: impl FnOnce() -> T) -> T {
+    let was = TAKES_INT.swap(true, Ordering::SeqCst);
     let r = f();
-    if !outer {
-        DEFER_INT.store(false, Ordering::SeqCst);
-        int_deferred_end();
-    }
+    TAKES_INT.store(was, Ordering::SeqCst);
     r
 }
 
-/// An INT deferred (INT_DEFERRED) ends this process now, of SIGINT, as bash's main did.
-pub fn int_deferred_end() {
-    if INT_DEFERRED.load(Ordering::SeqCst) {
-        // (a trap on its way ends this process itself; else bash's EXIT trap runs on the way, its
-        // undos: a temp file of record stop's, finding 432)
+static TAKES_INT: AtomicBool = AtomicBool::new(false);
+
+/// D asleep on main, in-process: a trap on its way parks main here at once (STOPPING), so it has no
+/// child to wait for (bash's `sleep` was one, a process per poll).
+pub fn sleep(d: std::time::Duration) {
+    let end = std::time::Instant::now() + d;
+    loop {
         park_while_stopping();
-        crate::trap::run_undos();
-        // SAFETY: the default disposition back, then the signal to this process: it ends of it.
-        unsafe {
-            libc::signal(libc::SIGINT, libc::SIG_DFL);
-            libc::kill(libc::getpid(), libc::SIGINT);
+        let now = std::time::Instant::now();
+        if now >= end {
+            return;
         }
-        std::thread::sleep(std::time::Duration::from_secs(5));
-        std::process::exit(130);
+        std::thread::sleep((end - now).min(std::time::Duration::from_millis(20)));
     }
 }
 
@@ -294,6 +272,25 @@ pub fn catch(sig: libc::c_int, handler: extern "C" fn(libc::c_int)) {
     // SAFETY: the handlers given here only make async-signal-safe calls.
     unsafe {
         libc::signal(sig, handler as *const () as libc::sighandler_t);
+    }
+}
+
+/// catch for a handler that reads its siginfo_t (SA_SIGINFO): whether the kernel sent it (a
+/// terminal's Ctrl-C) or a process (kill).
+pub fn catch_info(
+    sig: libc::c_int,
+    handler: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void),
+) {
+    if ignored(sig) {
+        return;
+    }
+    // SAFETY: a zeroed sigaction of ours, its handler async-signal-safe; SA_RESTART as signal()'s.
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = handler as *const () as libc::sighandler_t;
+        sa.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+        libc::sigemptyset(&mut sa.sa_mask);
+        libc::sigaction(sig, &sa, std::ptr::null_mut());
     }
 }
 
@@ -424,26 +421,65 @@ mod signal_cases {
 
     const CASE: &str = "OMABOX_SIG_CASE";
 
-    /// Some((code or 128+signal, stderr)) from the parent; None in the child alone, which runs the
+    /// Some((code or 128+signal, stderr, "[killed by signal N]" after it)) from the parent; None in the child alone, which runs the
     /// case (a child that cannot be started fails the test, never runs the case in the parent).
     fn in_child(name: &str) -> Option<Option<(i32, String)>> {
+        in_child_tty(name, None)
+    }
+
+    /// in_child, the child with a terminal of its own (a pty, the child its session's leader) when
+    /// CTRL_C_AT is given: a Ctrl-C typed there that many ms from its start, which the kernel sends
+    /// to the child's whole process group (SI_KERNEL), as a user's would.
+    fn in_child_tty(name: &str, ctrl_c_at: Option<u64>) -> Option<Option<(i32, String)>> {
         if std::env::var(CASE).as_deref() == Ok(name) {
             return None;
         }
         let exe = std::env::current_exe().expect("the test binary's path");
-        let mut ch = std::process::Command::new(exe)
-            .args([
-                &format!("sig::signal_cases::{name}"),
-                "--exact",
-                "--nocapture",
-            ])
-            .args(["--test-threads=1"])
-            .env(CASE, name)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .expect("the case's child");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args([
+            &format!("sig::signal_cases::{name}"),
+            "--exact",
+            "--nocapture",
+        ])
+        .args(["--test-threads=1"])
+        .env(CASE, name)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+        let mut master = None;
+        if ctrl_c_at.is_some() {
+            let (mut m, mut sl) = (-1, -1);
+            // SAFETY: openpty fills two fds of ours; no name, termios or size asked for.
+            let r = unsafe {
+                libc::openpty(
+                    &mut m,
+                    &mut sl,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                )
+            };
+            assert_eq!(r, 0, "openpty");
+            // SAFETY: setsid and ioctl are async-signal-safe; sl is the pty's slave, open here.
+            unsafe {
+                std::os::unix::process::CommandExt::pre_exec(&mut cmd, move || {
+                    libc::setsid();
+                    libc::ioctl(sl, libc::TIOCSCTTY, 0);
+                    Ok(())
+                });
+            }
+            master = Some((m, sl));
+        }
+        let mut ch = cmd.spawn().expect("the case's child");
+        if let (Some((m, sl)), Some(at)) = (master, ctrl_c_at) {
+            // SAFETY: the slave is the child's now; ours closed.
+            unsafe { libc::close(sl) };
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(at));
+                // SAFETY: one byte, ^C, to the pty's master, which stays open (ours till we exit).
+                unsafe { libc::write(m, b"\x03".as_ptr().cast(), 1) };
+            });
+        }
         let err = ch.stderr.take().expect("the case's stderr");
         let reader = std::thread::spawn(move || {
             let mut s = String::new();
@@ -463,11 +499,13 @@ mod signal_cases {
             std::thread::sleep(std::time::Duration::from_millis(50));
         };
         let err = reader.join().unwrap_or_default();
-        Some(st.map(|s| {
-            (
-                s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(0)),
-                err,
-            )
+        // (a death by a signal said in the words too: a code trap exits 128+N, it does not die)
+        Some(st.map(|s| match s.code() {
+            Some(c) => (c, err),
+            None => {
+                let n = s.signal().unwrap_or(0);
+                (128 + n, format!("{err}[killed by signal {n}]"))
+            }
         }))
     }
 
@@ -507,6 +545,7 @@ mod signal_cases {
         };
         let (rc, err) = r.expect("it hung");
         assert_eq!(rc, 143, "{err}");
+        assert!(!err.contains("[killed by signal"), "{err}");
         assert_eq!(err.matches("CASE undo").count(), 1, "{err}");
         assert!(!err.contains("CASE after"), "{err}");
     }
@@ -545,6 +584,7 @@ mod signal_cases {
             return;
         };
         assert_eq!(rc, 143, "{err}");
+        assert!(err.contains("[killed by signal 15]"), "{err}");
         assert!(err.contains("CASE undo over"), "{err}");
         assert!(!err.contains("CASE after"), "{err}");
     }
@@ -555,6 +595,7 @@ mod signal_cases {
             return;
         };
         assert_eq!(rc, 143, "{err}");
+        assert!(!err.contains("[killed by signal"), "{err}");
         assert!(err.contains("CASE undo over"), "{err}");
         assert!(!err.contains("CASE after"), "{err}");
     }
@@ -607,98 +648,107 @@ mod signal_cases {
         let t0 = std::time::Instant::now();
         let (rc, err) = r.expect("it hung");
         assert_eq!(rc, 129, "{err}");
+        assert!(!err.contains("[killed by signal"), "{err}");
         assert!(err.contains("CASE undo"), "{err}");
         assert!(!err.contains("CASE after"), "{err}");
         assert!(t0.elapsed() < std::time::Duration::from_secs(8), "{err}");
     }
 
-    /// monitor add's shape: a DEFER_INT step, an INT to omabox alone in it, int_deferred_end's undo
-    /// on main spawning, a TERM during that undo's first child: it ends (it deadlocked: main parked
-    /// in its undo, the thread waiting for that undo).
+    /// An INT sent by a process (`kill -INT PID`) while a foreground child runs that would take a
+    /// Ctrl-C and outlives this one: the command stops like TERM, once that child is over, 130 (bash
+    /// went on: finding 454).
     #[test]
-    fn undo_on_main_and_a_term() {
-        let Some(r) = in_child("undo_on_main_and_a_term") else {
+    fn int_from_a_process_stops_the_command() {
+        let Some(r) = in_child("int_from_a_process_stops_the_command") else {
             super::set_main();
-            let _t = crate::trap::on_exit(|| {
-                let _ = sleep_child("0.6");
-                let _ = sleep_child("0.1");
-                eprintln!("CASE undo over");
-            });
-            kill_at(&[(200, libc::SIGINT), (800, libc::SIGTERM)]);
-            super::DEFER_INT.store(true, std::sync::atomic::Ordering::SeqCst);
-            let _ = sleep_child("0.5");
-            super::DEFER_INT.store(false, std::sync::atomic::Ordering::SeqCst);
-            super::int_deferred_end();
-            eprintln!("CASE past int_deferred_end");
-            return;
-        };
-        let (rc, err) = r.expect("it hung");
-        assert!(rc == 130 || rc == 143, "{rc} {err}");
-        assert!(err.contains("CASE undo over"), "{err}");
-        assert!(!err.contains("CASE past"), "{err}");
-    }
-
-    /// int_deferred_end's undo on main with a `$(...)` step in it (host_session's, a rule-off's):
-    /// it runs plainly, the undo ends, then 130 (subst's own int_deferred_end there would have
-    /// taken the undos' lock main already held).
-    #[test]
-    fn undo_on_main_with_a_subst() {
-        let Some(r) = in_child("undo_on_main_with_a_subst") else {
-            super::set_main();
-            let _t = crate::trap::on_exit(|| {
-                let mut c = super::command("sleep");
-                c.arg("0.1");
-                let _ = super::run_subst(c);
-                eprintln!("CASE undo over");
-            });
-            kill_at(&[(200, libc::SIGINT)]);
-            super::DEFER_INT.store(true, std::sync::atomic::Ordering::SeqCst);
-            let _ = sleep_child("0.5");
-            super::DEFER_INT.store(false, std::sync::atomic::Ordering::SeqCst);
-            super::int_deferred_end();
-            eprintln!("CASE past int_deferred_end");
-            return;
-        };
-        let (rc, err) = r.expect("it hung");
-        assert_eq!(rc, 130, "{err}");
-        assert!(err.contains("CASE undo over"), "{err}");
-        assert!(!err.contains("CASE past"), "{err}");
-    }
-
-    /// A `$(...)` step (run_subst): an INT to omabox alone during it ends this process of it once
-    /// the step is over (130); run_child's foreground child lets main go on.
-    #[test]
-    fn subst_step_and_int_alone() {
-        let Some(r) = in_child("subst_step_and_int_alone") else {
-            super::set_main();
-            crate::trap::int_as_bash();
-            kill_at(&[(200, libc::SIGINT)]);
-            let mut c = super::command("sleep");
-            c.arg("0.5");
-            let _ = super::run_subst(c);
-            eprintln!("CASE past the substitution");
+            crate::trap::stop_on_signals();
+            kill_at(&[(150, libc::SIGINT)]);
+            let mut c = super::command("sh");
+            c.args(["-c", "trap '' INT; sleep 0.5"]);
+            let _ = super::takes_ctrl_c(|| super::run_status(c));
+            eprintln!("CASE past the step");
             return;
         };
         let (rc, err) = r.expect("it hung");
         assert_eq!(rc, 130, "{err}");
         assert!(!err.contains("CASE past"), "{err}");
-        let Some(r) = in_child("foreground_step_and_int_alone") else {
+    }
+
+    /// An INT sent by a process while main sleeps in-process (trap::sleep): it stops at once, no
+    /// sleep child to wait for.
+    #[test]
+    fn int_during_an_in_process_sleep() {
+        let Some(r) = in_child("int_during_an_in_process_sleep") else {
+            super::set_main();
+            let _t = crate::trap::on_exit(|| eprintln!("CASE undo"));
+            kill_at(&[(150, libc::SIGINT)]);
+            crate::trap::sleep(b"5");
+            eprintln!("CASE past the sleep");
             return;
         };
+        let t0 = std::time::Instant::now();
         let (rc, err) = r.expect("it hung");
+        assert_eq!(rc, 130, "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE past"), "{err}");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(3), "{err}");
+    }
+
+    /// A Ctrl-C from the terminal (SI_KERNEL, to the whole group) during a 1 s foreground child that
+    /// ignores it, after 400 ms: MARKED (sig::takes_ctrl_c, gdb's or a scenario's), the command goes
+    /// on, as before and as bash's; otherwise it stops once the child is over, 130 (finding 454).
+    fn ctrl_c(name: &str, marked: bool, child: &str) -> Option<(i32, String)> {
+        let Some(r) = in_child_tty(name, Some(400)) else {
+            super::set_main();
+            let _t = crate::trap::on_exit(|| eprintln!("CASE undo"));
+            let mut c = super::command("sh");
+            c.args(["-c", child]);
+            let rc = if marked {
+                super::takes_ctrl_c(|| super::run_status(c))
+            } else {
+                super::run_status(c)
+            };
+            eprintln!("CASE past the step {rc:?}");
+            return None;
+        };
+        Some(r.expect("it hung"))
+    }
+
+    /// A child that handles a Ctrl-C (says so) and ends 0.
+    const HANDLES: &str = "trap 'echo CASE child got INT >&2' INT; sleep 1; exit 0";
+
+    #[test]
+    fn ctrl_c_a_marked_child_outlives_goes_on() {
+        let name = "ctrl_c_a_marked_child_outlives_goes_on";
+        let Some((rc, err)) = ctrl_c(name, true, HANDLES) else {
+            return;
+        };
         assert_eq!(rc, 0, "{err}");
-        assert!(err.contains("CASE past the step"), "{err}");
+        assert!(err.contains("CASE child got INT"), "{err}");
+        assert!(err.contains("CASE past the step Ok(0)"), "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
     }
 
     #[test]
-    fn foreground_step_and_int_alone() {
-        if std::env::var(CASE).as_deref() != Ok("foreground_step_and_int_alone") {
+    fn ctrl_c_a_marked_child_dies_of_stops() {
+        let name = "ctrl_c_a_marked_child_dies_of_stops";
+        let Some((rc, err)) = ctrl_c(name, true, "exec sleep 1") else {
             return;
-        }
-        super::set_main();
-        crate::trap::int_as_bash();
-        kill_at(&[(200, libc::SIGINT)]);
-        let _ = sleep_child("0.5");
-        eprintln!("CASE past the step");
+        };
+        assert_eq!(rc, 130, "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE past"), "{err}");
+    }
+
+    #[test]
+    fn ctrl_c_another_child_outlives_stops() {
+        let name = "ctrl_c_another_child_outlives_stops";
+        let Some((rc, err)) = ctrl_c(name, false, HANDLES) else {
+            return;
+        };
+        assert_eq!(rc, 130, "{err}");
+        assert!(err.contains("CASE child got INT"), "{err}");
+        assert!(err.contains("CASE undo"), "{err}");
+        assert!(!err.contains("CASE past"), "{err}");
     }
 }

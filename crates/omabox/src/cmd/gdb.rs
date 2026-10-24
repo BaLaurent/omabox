@@ -105,8 +105,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if watch && !extra.is_empty() {
         return Err(ctx.die("gdb: --watch runs its own commands; -- ARGS go with a backtrace"));
     }
-    // An INT to omabox alone while gdb runs: bash waits for it and goes on (trap.rs).
-    crate::trap::int_as_bash();
+    // (an INT, TERM or HUP stops it once gdb is over, bounded; a Ctrl-C from the terminal that
+    // gdb's run outlives lets it go on: trap.rs)
+    crate::trap::stop_on_signals();
     select_box(ctx, &name)?;
     need_box(ctx)?;
     if !crate::exec::executable(b"/usr/bin/gdb") {
@@ -259,7 +260,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         argv.push(b"-p".to_vec());
         argv.push(pid.clone());
         argv.extend(extra);
-        let rc = relay(&argv, false, false).rc;
+        // (a Ctrl-C from the terminal meanwhile lets it go on if gdb's run outlives it, as before:
+        // sig::takes_ctrl_c)
+        let rc = crate::sig::takes_ctrl_c(|| relay(&argv, false, false).rc);
         if rc == 124 {
             return Err(ctx.die(cat!(
                 "gdb: no answer in 120 s: the process may be hung in a way gdb cannot stop (omabox log -b ",

@@ -73,18 +73,14 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // Whole seconds: the driver samples once a second. Its first sample is the second before.
         via = "nvidia";
         // (`secs=$(awk ...)`, `pci=$(jq ...)`: substitutions' steps)
-        secs = crate::sig::subst(|| {
-            Args::new(&["-v"])
-                .arg(cat!("s=", secs))
-                .arg(crate::jqprog::NV_SECS_AWK)
-                .awk(None, jq::Err::Inherit)
-        })
-        .text();
-        let pci = crate::sig::subst(|| {
-            Args::new(&["-r", ".render.pci // empty"])
-                .arg(cat!(ctx.d, "/box.json"))
-                .run_file(jq::Err::Null)
-        });
+        secs = Args::new(&["-v"])
+            .arg(cat!("s=", secs))
+            .arg(crate::jqprog::NV_SECS_AWK)
+            .awk(None, jq::Err::Inherit)
+            .text();
+        let pci = Args::new(&["-r", ".render.pci // empty"])
+            .arg(cat!(ctx.d, "/box.json"))
+            .run_file(jq::Err::Null);
         let pci = if pci.ok() { pci.text() } else { Vec::new() };
         let n = shell::dec(&secs).unwrap_or(0).saturating_add(1).to_string();
         let mut c = crate::sig::command("nvidia-smi");
@@ -244,12 +240,10 @@ fn snap(ctx: &Ctx) -> Vec<u8> {
 /// control node.
 fn gpu_on_nvidia(ctx: &Ctx) -> bool {
     // (`[ "$(jq ...)" != nvidia ]`)
-    let d = crate::sig::subst(|| {
-        Args::new(&["-r", ".render.driver // empty"])
-            .arg(cat!(ctx.d, "/box.json"))
-            .run_file(jq::Err::Null)
-    })
-    .text();
+    let d = Args::new(&["-r", ".render.driver // empty"])
+        .arg(cat!(ctx.d, "/box.json"))
+        .run_file(jq::Err::Null)
+        .text();
     if d == b"nvidia" {
         return true;
     }
@@ -340,18 +334,14 @@ fn gpu_release(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             continue;
         }
         // (`node=$(jq ...)`, `on=$(jq ...)`)
-        let node = crate::sig::subst(|| {
-            Args::new(&["-r", ".render.node // empty"])
-                .arg(cat!(ctx.d, "/box.json"))
-                .run_file(jq::Err::Null)
-        });
+        let node = Args::new(&["-r", ".render.node // empty"])
+            .arg(cat!(ctx.d, "/box.json"))
+            .run_file(jq::Err::Null);
         let node = if node.ok() { node.text() } else { Vec::new() };
         let on = if !node.is_empty() {
-            let r = crate::sig::subst(|| {
-                Args::new(&["-r", r#".render | "\(.driver) \(.pci)""#])
-                    .arg(cat!(ctx.d, "/box.json"))
-                    .run_file(jq::Err::Inherit)
-            });
+            let r = Args::new(&["-r", r#".render | "\(.driver) \(.pci)""#])
+                .arg(cat!(ctx.d, "/box.json"))
+                .run_file(jq::Err::Inherit);
             crate::cmd::hyprctl::code(r.rc)?;
             let on = r.text();
             let (drv, pci) = crate::cmd::mode::screen_parts(&on);

@@ -41,6 +41,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **An INT sent to omabox by another process (`kill -INT PID`) stops the command like TERM**: what
+  it started is undone and it exits 130, once the step in progress is over. The bash omabox went on
+  or stopped depending on the step it was in (`cpu`, `gpu`, `peek --focus`, `gdb`, `record --for`
+  and `check run` went on to their end). A Ctrl-C at the terminal is unchanged where a program takes
+  it (the scenario of `check run`, `gdb`'s run): if that program carries on, so does omabox; any
+  other step it lands on now stops the command. Scripts that sent INT to omabox expecting it to go
+  on: send nothing, or send it to the child.
 - **A TERM or HUP lets the step in progress end before omabox undoes its work** (at most ~20 s,
   then that step is stopped): `check run` stopped during a scenario takes down its boxes once the
   scenario's step is over, where the bash omabox took them down under it and left the scenario

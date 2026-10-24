@@ -5627,11 +5627,13 @@ PYEOF
   parity "monitor add, interactive, the create answered with nothing: unclear, removed (finding 429)" monitor -b fki add 800x600
   check_eq "...the remove sent twice" 2 "$(grep -c '^output remove WAYLAND-2' "$st/hypr.log" 2>/dev/null || true)"
   rp_check="" rp4_want="" rp4_tok=""
-  # An INT to omabox alone (kill -INT PID) while a child runs that does not die of it: bash goes on,
-  # so does the Rust half: the figures, the monitor made.
+  # An INT to omabox alone (kill -INT PID) while a child runs that does not die of it: bash goes on
+  # (the figures); the Rust half stops as on a TERM, 130, nothing said (finding 454).
   rp_wrap=("$r/rp-sig" INT "$st/sleeping") rp4_pre=()
   rp_sed='s/"pss_kb": [0-9]+/"pss_kb": PSS/g; s/([0-9.]+[MG]) +[0-9.]+[MG]/\1 PSS/'
-  parity "cpu and INT to omabox alone in its window: it goes on" cpu -b fk 2s
+  rp_why=454 rp_bash=(rc=0 'out~.') rp_rust=(rc=130 out=)
+  parity "cpu and INT to omabox alone in its window: bash goes on, the Rust half stops" cpu -b fk 2s
+  rp_why=454 rp_bash=(rc=0 'out~.') rp_rust=(rc=130 out=)
   parity "gpu and INT to omabox alone: the same" gpu -b fk 2s
   rp_sed='s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line \1: PID \2 /'
   # (bash's main ends at once, 130, its subshell finishing the monitor: given the time to. The Rust
@@ -5953,13 +5955,16 @@ PYEOF
   # lands, both seen under load; gdb's long child below holds that case.)
   rp_wrap=("$r/rp-sig" group-INT "$st/spawned")
   parity "peek --focus and INT to the group" peek -b fk --focus
-  # An INT to omabox alone while its hyprctl waits for the host's answer (2 s): both carry on, the
-  # window shows, it is focused (on the stand-in host only).
+  # An INT to omabox alone while its hyprctl waits for the host's answer (2 s): bash carries on, the
+  # window shows, it is focused (on the stand-in host only); the Rust half stops once that step is
+  # over, 130, nothing focused (finding 454).
   rp4b_slowcl() { : > "$st/host/peek.shows"; echo 2 > "$st/host/clients.sleep"; }; rp4b_pre=(rp4b_slowcl)
   rp_wrap=(env RP_LINGER=3 "$r/rp-sig" INT "$st/clients-asked") rp_sed='s/pid:[0-9]+/pid:P/'
-  parity "peek --focus and INT to omabox alone during hyprctl: it carries on and focuses" peek -b fk --focus
+  rp_why=454 rp_bash=(rc=0 'state~hl\.dsp\.focus') rp_rust=(rc=130 'state!~hl\.dsp\.focus')
+  parity "peek --focus and INT to omabox alone during hyprctl: bash carries on and focuses, the Rust half stops" peek -b fk --focus
   # An INT to omabox alone during a step bash runs in a `$(...)`: the step finishes, then 130,
-  # nothing focused (the box's monitors, the host's exec of the window).
+  # nothing focused (the box's monitors, the host's exec of the window); the Rust half alike, now by
+  # its one rule.
   rp4b_slowmon() { : > "$st/host/peek.shows"; : > "$st/mons.sleep"; }; rp4b_pre=(rp4b_slowmon)
   rp_wrap=(env RP_LINGER=3 "$r/rp-sig" INT "$st/mons-asked")
   parity "peek --focus and INT to omabox alone while the box says its monitors: 130, no focus" peek -b fk --focus
@@ -6011,11 +6016,14 @@ PYEOF
   parity "gdb --watch: the log cannot be written" gdb -b fk --watch
   rp4b_noattach() { : > "$st/gdb.noattach"; }; rp4b_pre=(rp4b_noattach)
   parity "gdb --watch: no attach in 10 s" gdb -b fk --watch
-  # Signals while gdb runs (2 s): INT to omabox alone (bash waits and goes on), to the group, TERM, HUP.
+  # Signals while gdb runs (2 s): INT to omabox alone and to the group, TERM, HUP. Bash waits and goes
+  # on after an INT its gdb outlives; the Rust half stops once gdb is over, 130: the INT comes from a
+  # process (rp-sig), not from a terminal's Ctrl-C (finding 454; sig.rs's ctrl_c_* cases hold that).
   rp4b_slow() { echo 2 > "$st/gdb.sleep"; }; rp4b_pre=(rp4b_slow)
   rp_sed='s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line \1: PID \2 /'
   for i in INT group-INT TERM group-TERM HUP; do
     rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/gdb.log")
+    case $i in *INT) rp_why=454 rp_bash=(rc=0) rp_rust=(rc=130) ;; esac
     parity "gdb and $i" gdb -b fk
   done
   rp_wrap=() rp4b_pre=() rp_sed=""
@@ -6542,6 +6550,11 @@ while time.time() < end:
   rp_sed="$rp_sed"'; s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line N: PID \2 /'
   for i in INT group-INT TERM group-TERM HUP; do
     rp_wrap=(env RP_LINGER=2 "$r/rp-sig" "$i" "$st/wf.log")
+    # (an INT to omabox alone: bash goes on, the video made; the Rust half stops as on a TERM, 130,
+    # the recording left running as a TERM leaves it, both ways: finding 454)
+    [ "$i" != INT ] || { rp_why=454
+      rp_bash=(rc=0 'out~/co/v\.mp4$' 'err~^omabox: record: ' 'state~^\. d [0-9]+$' 'state~^\./v\.mp4 f ' 'state~^== ff\.log$' 'state~^ff(probe|mpeg) ')
+      rp_rust=(rc=130 out= err= 'state~^\. d [0-9]+$' 'state~^-- rc/record(\.geo)?$' 'state~^P HEADLESS-2 30 N ' 'state~^0 0 1\.0$'); }
     parity "record --for 2s and $i" record -b rc --for 2s -o "$r/co/v.mp4"
   done
   rp_wrap=() rp_sed="" rp4b_pre=() rp_snap=1 rp_also=rp4b_also rp_env=("${rp_env4b[@]}")

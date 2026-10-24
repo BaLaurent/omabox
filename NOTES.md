@@ -8836,8 +8836,10 @@ from them.
     3b's scroll and keys-to-box too), and
     `run -d --wait` is the Rust half's, on the settle machinery `wait` shares (settle.rs). Tests:
     t_unit_rust_handoff, t_unit_rust_parity, t_rust_parity.
-    Where the halves still differ on signals (wave 4b; 4c): (a) an INT to omabox alone while it works
-    in-process ends the Rust half at once, where bash would finish the step it is in (the safe side);
+    Where the halves still differ on signals (wave 4b; 4c): (a) an INT sent to omabox by a process
+    stops the Rust half as a TERM does, once its foreground step is over (130), where bash went on
+    after a child that outlived it, ended after a `$(...)` step, or at once in-process; a terminal's
+    Ctrl-C lets it go on only past gdb's run or check run's scenario (finding 454);
     (b) a TERM to omabox alone while `record sheet` takes its frames ends both 143, but bash's
     subshell finishes the sheet after its main is gone, where the Rust half makes none (the safe
     side: nothing left behind); (c) a second INT, TERM or HUP while a trap's undo runs ends bash at
@@ -9477,6 +9479,35 @@ from them.
     30 s hang); t_rust_parity ("check run and TERM|HUP during its scenario"), t_unit_rust_parity4
     ("monitor add ... group-TERM before the create reaches the box", "... group-TERM, the box's
     create handled 6 s late"): expected differences.
+
+454. **What an INT sent to omabox alone did depended on how bash's line was written** (2026-10-24,
+    #324 wave 4c; decided by Diogo 2026-10-23). Bash, given `kill -INT` of its own pid while a
+    child runs that does not die of it, goes on (wait-and-continue: it takes the child to have
+    handled it) and ends with the command's own code; during a `$(...)` it ends 130 at once (the
+    Rust half: once the step is over); with no child running, 130. So the same `peek --focus` and
+    the same INT focused a host window or ended 130 with none, by which line it landed on. The
+    Rust half reproduced it: each of ~70 call sites marked by hand as bash's `$(...)` or not
+    (sig::subst and run_subst, DEFER_INT, INT_DEFERRED, int_deferred_end, finding 437's INT_ENDS),
+    and every in-process wait a `sleep` child (trap::sleep), so that the rule could apply there:
+    a process per 50 ms poll. **Change** (Rust over bash, option (c) of the audit): an INT sent by a
+    process (si_code not SI_KERNEL: an agent's `kill -INT`, a harness's `kill -INT -PGID` too) stops
+    the command as TERM does (finding 453's bounded wait for the foreground child, the undo), exit
+    130. A Ctrl-C from the terminal (SI_KERNEL, read with SA_SIGINFO) does too, unless the
+    foreground child is one that takes a Ctrl-C itself (sig::takes_ctrl_c: gdb's run, check run's
+    scenario) and outlives it: then the command goes on, as before and as bash's. Every other child
+    a Ctrl-C does not kill (one under `timeout`, a process group of its own the terminal never
+    reaches; hyprctl in the box) no longer lets the command go on: it stops after that child, 130,
+    where bash went on after a plain command and ended after a `$(...)`. An interactive `monitor add`
+    still ends at any INT (finding 437), now by that rule. The `$(...)` marks are gone (plain
+    run_output, plain calls), and trap::sleep sleeps in-process, parked at once by a stop. Seen by a
+    caller: `kill -INT` of omabox during `cpu`, `gpu`, `peek --focus`, `gdb`, `record`, `check run`
+    ends 130 once the step in progress is over, where bash went on to the command's end. Tests:
+    sig.rs's int_from_a_process_stops_the_command and int_during_an_in_process_sleep, and three on a
+    pty of their own, which type a real Ctrl-C: ctrl_c_a_marked_child_outlives_goes_on,
+    ctrl_c_a_marked_child_dies_of_stops, ctrl_c_another_child_outlives_stops (they replace
+    subst_step_and_int_alone, foreground_step_and_int_alone, undo_on_main_and_a_term and
+    undo_on_main_with_a_subst, which pinned the marks); parity: the INT-alone cases below are
+    expected differences.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

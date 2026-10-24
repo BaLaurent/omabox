@@ -367,7 +367,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         c.stdin(Stdio::inherit())
             .stderr(reopen_w(&e).map_or(Stdio::null(), Stdio::from));
         // (`types=$(host_wl ... wl-paste --list-types ...)`)
-        let o = crate::sig::run_subst(c);
+        let o = crate::sig::run_output(c);
         let (r, out) = o.unwrap_or((127, Vec::new()));
         types = shell::subst(&out);
         if r != 0 {

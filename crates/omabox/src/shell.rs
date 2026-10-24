@@ -456,7 +456,7 @@ pub fn mktemp_args(args: &[&[u8]]) -> Result<(std::fs::File, Vec<u8>), crate::ex
     c.args(args.iter().map(|a| OsStr::from_bytes(a)))
         .stdin(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit());
-    let (rc, out) = crate::sig::run_subst(c).map_err(|_| crate::exit::Exit(1))?;
+    let (rc, out) = crate::sig::run_output(c).map_err(|_| crate::exit::Exit(1))?;
     if rc != 0 {
         return Err(crate::exit::Exit(u8::try_from(rc).unwrap_or(1)));
     }

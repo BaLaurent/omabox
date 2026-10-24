@@ -77,8 +77,7 @@ fn magick(args: &[Vec<u8>]) -> jq::Ran {
 
 /// `$(magick identify -format FMT FILE 2>/dev/null)`.
 fn identify(fmt: &str, f: &[u8]) -> Option<Vec<u8>> {
-    let r =
-        crate::sig::subst(|| magick(&w(&[b"identify".as_slice(), b"-format", fmt.as_bytes(), f])));
+    let r = magick(&w(&[b"identify".as_slice(), b"-format", fmt.as_bytes(), f]));
     r.ok().then(|| r.text())
 }
 
@@ -351,8 +350,7 @@ fn tree_lines_to(src: &[u8], dst: &[u8]) {
 /// then "specks N PIXELS LARGEST"; each MASK ("X Y W H") painted black in both first. None when
 /// magick or check.py fails (never an empty answer read as "same").
 fn check_regions(fa: &[u8], fb: &[u8], speck: &[u8], masks: &[Vec<u8>]) -> Option<Vec<u8>> {
-    // (bash calls it as `$(check_regions ...)`: a substitution, sig::subst)
-    crate::sig::subst(|| check_regions_in(fa, fb, speck, masks))
+    check_regions_in(fa, fb, speck, masks)
 }
 
 fn check_regions_in(fa: &[u8], fb: &[u8], speck: &[u8], masks: &[Vec<u8>]) -> Option<Vec<u8>> {
@@ -430,8 +428,7 @@ fn check_mark(new: &[u8], outp: &[u8], regions: &[Vec<u8>]) -> bool {
 /// check_report PLAN OUT.png [KIND]: the report of a plan (check.py's layout, magick's drawing);
 /// what was left out of it ("" when nothing). None when check.py or magick fails.
 fn check_report(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
-    // (bash calls it as `$(check_report ...)`: a substitution, sig::subst)
-    crate::sig::subst(|| check_report_in(plan, png, kind))
+    check_report_in(plan, png, kind)
 }
 
 fn check_report_in(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
@@ -478,8 +475,7 @@ fn check_report_in(plan: &[u8], png: &[u8], kind: &str) -> Option<Vec<u8>> {
 
 /// check_holes SHOT KIND [REGION]: a shot's holes, "X,Y WxH PIXELS" a hole, then "corners N".
 fn check_holes(f: &[u8], kind: &str, within: &[u8]) -> Option<Vec<u8>> {
-    // (bash calls it as `$(check_holes ...)`: a substitution, sig::subst)
-    crate::sig::subst(|| check_holes_in(f, kind, within))
+    check_holes_in(f, kind, within)
 }
 
 fn check_holes_in(f: &[u8], kind: &str, within: &[u8]) -> Option<Vec<u8>> {
@@ -523,8 +519,7 @@ fn check_holes_in(f: &[u8], kind: &str, within: &[u8]) -> Option<Vec<u8>> {
 
 /// check_holes_off: why a box's screen cannot show holes, or nothing when it can.
 fn check_holes_off(ctx: &Ctx) -> Vec<u8> {
-    // (bash calls it as `$(check_holes_off)`: a substitution, sig::subst)
-    crate::sig::subst(|| check_holes_off_in(ctx))
+    check_holes_off_in(ctx)
 }
 
 fn check_holes_off_in(ctx: &Ctx) -> Vec<u8> {
@@ -615,8 +610,7 @@ fn check_new_holes(base: &[u8], new: &[u8]) -> Vec<Vec<u8>> {
 
 /// check_ids DIR: the IDs a run took, in the order taken (the .point files' times).
 fn check_ids(dir: &[u8]) -> Vec<Vec<u8>> {
-    // (bash calls it as `$(check_ids ...)`: a substitution, sig::subst)
-    crate::sig::subst(|| check_ids_in(dir))
+    check_ids_in(dir)
 }
 
 fn check_ids_in(dir: &[u8]) -> Vec<Vec<u8>> {
@@ -725,7 +719,7 @@ fn check_one(base: &[u8], new: &[u8], id: &[u8], speck: i64, unstable: &[u8]) ->
         let mut a = w(&[b"tree".as_slice(), &bt, &nt, &ign]);
         a.extend(c.tmasks.iter().cloned());
         // (`CHK_TREE=$(python3 ... tree ...)`)
-        let r = crate::sig::subst(|| py(&a, None, false));
+        let r = py(&a, None, false);
         c.tree = r.text();
         if !ign.is_empty() {
             rm(&ign);
@@ -745,8 +739,7 @@ fn change_key(
     nt: &[u8],
     holes: &[Vec<u8>],
 ) -> Vec<u8> {
-    // (bash calls it as `$(check_change_key ...)`: a substitution, sig::subst)
-    crate::sig::subst(|| change_key_in(c, base, new, id, bt, nt, holes))
+    change_key_in(c, base, new, id, bt, nt, holes)
 }
 
 fn change_key_in(
@@ -825,7 +818,7 @@ fn s_unless1(n: usize) -> &'static str {
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     ctx.die_rc = Some(2);
-    crate::trap::int_as_bash();
+    crate::trap::stop_on_signals();
     let mut a: &[Vec<u8>] = args;
     let mut name = Vec::new();
     if a.first().is_some_and(|x| x == b"-b" || x == b"--box") {
@@ -1942,7 +1935,9 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         // The scenario's `omabox` is this one (its bin first), driving this run's box ($OMABOX).
         let path = cat!(root_bin, ":", shell::env_or_empty("PATH"));
         let runlog = cat!(outd, "/run", k.to_string(), ".log");
-        let rc = scenario(&scen, &path, &bname, &rund, &runlog);
+        // (a Ctrl-C from the terminal the scenario outlives lets the run go on, as before:
+        // sig::takes_ctrl_c)
+        let rc = crate::sig::takes_ctrl_c(|| scenario(&scen, &path, &bname, &rund, &runlog));
         let mut c = crate::sig::omabox_cmd();
         c.arg("down")
             .arg(OsStr::from_bytes(&bname))
@@ -2654,18 +2649,16 @@ fn check_compare(
     let cj = cat!(base, "/check.json");
     if shell::path(&cj).is_file() {
         // (`e=$(jq -rn --slurpfile ...)`)
-        let r = crate::sig::subst(|| {
-            jq::tool(
-                "jq",
-                &Args::new(&["-rn"])
-                    .kv("--slurpfile", "a", &cj)
-                    .kv("--slurpfile", "b", &cat!(outd, "/env.json"))
-                    .arg(CHK_SETUP_JQ)
-                    .into_words(),
-                None,
-                jq::Err::Null,
-            )
-        });
+        let r = jq::tool(
+            "jq",
+            &Args::new(&["-rn"])
+                .kv("--slurpfile", "a", &cj)
+                .kv("--slurpfile", "b", &cat!(outd, "/env.json"))
+                .arg(CHK_SETUP_JQ)
+                .into_words(),
+            None,
+            jq::Err::Null,
+        );
         let e = if r.ok() { r.text() } else { Vec::new() };
         if !e.is_empty() {
             out(cat!(
