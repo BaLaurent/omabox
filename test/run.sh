@@ -1734,6 +1734,23 @@ t_unit_lock_markers() {
   check_match "...and holds it alone" "newcomer refused" "$out"
 }
 
+# t_main's S2 checks (#355), on a made-up HOME: they find a planted copy of a secret file and a token,
+# and not the one-word files a box writes itself that a host has too.
+t_unit_home_secrets() {
+  local d=$TMP/hsec
+  rm -rf "$d"; mkdir -p "$d/sec/.ssh" "$d/sec/.gnupg" "$d/sec/keyrings" "$d/home/.local/share/keyrings" "$d/home/.gnupg" "$d/home/x"
+  printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\n%s\n-----END OPENSSH PRIVATE KEY-----\n' "$(head -c 300 /dev/zero | tr '\0' a)" > "$d/sec/.ssh/id_ed25519"
+  printf 'login\n' > "$d/sec/keyrings/default"; printf 'use-keyboxd\n' > "$d/sec/.gnupg/common.conf"
+  printf 'login\n' > "$d/home/.local/share/keyrings/default"; cp "$d/sec/.gnupg/common.conf" "$d/home/.gnupg/"
+  echo 'nothing secret, and long enough to be looked at by content' > "$d/home/x/plain"
+  check_eq "S2's copies: the box's own one-word files, a host has the same, are none" "" "$(home_copies "$d/home" "$d/sec/.ssh" "$d/sec/.gnupg" "$d/sec/keyrings")"
+  check_eq "S2's shapes: nothing in a clean HOME" "" "$(home_shapes "$d/home" leak-t0)"
+  cp "$d/sec/.ssh/id_ed25519" "$d/home/x/renamed"
+  check_eq "...a planted copy of a secret file, renamed, is found" "./x/renamed" "$(home_copies "$d/home" "$d/sec/.ssh" "$d/sec/.gnupg" "$d/sec/keyrings")"
+  printf 'token = ghp_%s\n' "$(head -c 36 /dev/zero | tr '\0' A)" > "$d/home/x/cfg"; echo 'up: leak-t0' > "$d/home/x/env"
+  check_eq "...a private key, a token's shape and up's token are found" "./x/cfg ./x/env ./x/renamed" "$(home_shapes "$d/home" leak-t0 | LC_ALL=C sort | xargs)"
+}
+
 # A jailed caller's down and up check whose the box is again once they hold its name's lock (finding
 # 472): select_box can only check a box.json that is there, and the user's up of the name writes it
 # while it holds the lock. Each case holds the lock as that up does, puts the user's box in place,
@@ -9422,16 +9439,11 @@ print(*r)' 2>&1)"
   check_fails "...nor a token from up's environment in it" grep -q "leak-$P" <<<"$senv"
   # S2 (#355): the whole box HOME read for secrets: no file that is one of yours (by content: every
   # file of your secret stores and keyrings), and none that holds a key or a token's shape, or up's.
-  local sums="" hits
-  for sec in "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.config/gh" "$HOME/.aws" "$HOME/.netrc" "$HOME/.git-credentials" \
-    "$HOME/.config/omarchy/api-keys.env" "$HOME/.local/share/keyrings"; do
-    [ -e "$sec" ] || continue
-    sums+=$(command find "$sec" -type f -size +0 -size -1M -readable -exec md5sum {} + 2>/dev/null | cut -d' ' -f1)$'\n'
-  done
-  hits=$(cd "$D/home/" && command find . -type f -size +0 -size -1M -exec md5sum {} + 2>/dev/null |
-    awk 'NR == FNR { if ($1 != "") s[$1] = 1; next } ($1 in s) { print substr($0, 35) }' <(printf '%s' "$sums") -)
+  local hits
+  hits=$(home_copies "$D/home" "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.config/gh" "$HOME/.aws" "$HOME/.netrc" \
+    "$HOME/.git-credentials" "$HOME/.config/omarchy/api-keys.env" "$HOME/.local/share/keyrings")
   check_eq "S2: no file of the box HOME is one of your secret files or keyrings (#355)" "" "$hits"
-  hits=$(cd "$D/home/" && command grep -rlIE -- "leak-$P|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9_-]{20,}|xox[abprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}" . 2>/dev/null | head -n 5)
+  hits=$(home_shapes "$D/home" "leak-$P")
   check_eq "...and none holds a private key, a token's shape or up's own environment's token" "" "$hits"
   # ...and a box command's environment: what the caller names, never what it only has.
   local cenv; cenv=$(T355_CANARY="c-$P" ob run -b "$B" -- env)
@@ -19778,7 +19790,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
@@ -19840,6 +19852,23 @@ cursor_same() {
   else
     note "S8: the host's pointer moved during this test, $1 to $now: you, or the test (#355; OMABOX_TEST_CURSOR=strict fails on it)"
   fi
+}
+# S2 (#355): the files of box HOME DIR that are, byte for byte, one of the files under SRC... (your
+# secret stores), 32 bytes to 1 MiB: smaller ones are one-word files no secret fits in and a box writes
+# itself (keyrings/default is "login", gnupg's common.conf "use-keyboxd"). Sizes in bytes: find's
+# -size -1M rounds up to whole MiB, and took only empty files. home_copies DIR SRC...
+home_copies() {
+  local dir=$1 sec sums=""; shift
+  for sec; do
+    [ -e "$sec" ] || continue
+    sums+=$(command find "$sec" -type f -size +31c -size -1048576c -readable -exec md5sum {} + 2>/dev/null | cut -d' ' -f1)$'\n'
+  done
+  (cd "$dir/" && command find . -type f -size +31c -size -1048576c -exec md5sum {} + 2>/dev/null |
+    awk 'NR == FNR { if ($1 != "") s[$1] = 1; next } ($1 in s) { print substr($0, 35) }' <(printf '%s' "$sums") -)
+}
+# ...and those that hold a private key, a token's shape, or TOKEN. home_shapes DIR TOKEN
+home_shapes() {
+  (cd "$1/" && command grep -rlIE -- "$2|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9_-]{20,}|xox[abprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}" . 2>/dev/null | head -n 5)
 }
 # S6 (#355): the processes of this run's boxes (PREFIX*) still running, one a line: what names a box
 # of it in its command line (a box dir, a reaper) or its environment (OMABOX_BOX, the box session's;
