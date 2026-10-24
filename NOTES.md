@@ -9598,6 +9598,26 @@ from them.
     `tokenizer`) still goes in. Tests: t_extensions_secret (fails on the bash half: the token and the
     password are seeded).
 
+459. **Protected ports: host ports no connected box reaches** (2026-10-24, #324 wave 5a, #355;
+    decided by Diogo 2026-10-23). A connected box reached every port on the host's loopback (pasta
+    forwards them both ways, finding 156) and, through the host's other addresses (its docker bridge,
+    a VPN), every service listening on all of them. **Added**: `protect-ports=PORT[,PORT...]` in
+    ~/.config/omabox/config (none by default; until `omabox config` is in the Rust half, written
+    there by hand). A connected box gets each excluded (`~PORT`) from both of pasta's `-T` rules and
+    both `-U` rules, and, set by pasta's own shell before anything of the box runs (root in pasta's
+    namespaces; the box's user namespace below maps back to the user with no capability there), an
+    nftables rule in the box's network namespace that rejects a connection from the box to any of
+    the host's own addresses (its routing table's local IPv4 ones and /proc/net/if_inet6's, loopback
+    aside) on those ports, TCP and UDP. Connections that stay in the box (its loopback, the address
+    pasta gave it) are its own and pass. An isolated box reaches only its --allow ports, and a
+    protected one is refused there ("up: --allow P: a protected port ..."). nft is needed only with
+    a list ("up: protect-ports ... needs nft"); a rule nft refuses ends the box's start. Not covered: an
+    address the host gains after the box started. Tests: net.rs's pasta_opens_what_it_should
+    (proptest: every host-bound rule leaves out each protected port) and rules; t_protect_ports
+    (throwaway servers on a port of the test's own, on 127.0.0.1 and 0.0.0.0, tried from a box by
+    loopback and by each host address; and nothing in the box can remove the rule: nft refuses it,
+    no capability in that namespace).
+
 461. **`up --clean --from SAVE` wrote its wallpaper through a link the save left** (2026-10-24, #324
     wave 5a; finding 168's class). seed_home clears the links on the way to what it writes, but
     --clean's `base64 -d > .config/omabox/clean-wallpaper.png` cleared the folder's, not the file's:

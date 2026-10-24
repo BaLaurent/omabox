@@ -5,6 +5,14 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+### Added
+
+- **Protected ports**: `protect-ports=8080,5432` in `~/.config/omabox/config` names host ports no
+  connected box reaches, on the host's loopback or through any of its other addresses (a docker
+  bridge, a VPN), TCP and UDP; an isolated box's `--allow` refuses them. None by default. Needs `nft`
+  (nftables) when set. Until `omabox config` takes the key, write it in the file
+  ([#355](https://github.com/diogochaves/omabox/issues/355)).
+
 ### Changed
 
 - **An interactive box's monitor windows have a class of their own**: `aquamarine-omabox-<token>`

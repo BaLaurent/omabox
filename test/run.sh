@@ -9357,6 +9357,55 @@ new_x11() {
 # opened in the box. A connected box still reaches the internet and host loopback, and the host its
 # servers, on any port. Read-only on the host: no X client, and ports nobody listens on; from the box,
 # one connection to its gateway (the router).
+# Protected ports (finding 459, #355): with protect-ports set (in a HOME of the test's own, never the
+# user's config), a connected box reaches neither a throwaway server on 127.0.0.1 nor one on 0.0.0.0
+# on such a port, by its loopback or by any of the host's own addresses, while a port not protected
+# still forwards; and nothing in the box can take the rule out (no capability in its network
+# namespace, nft refused). Servers on ports of the test's own (free_port), never the user's.
+t_protect_ports() {
+  local B=$P-prot h=$TMP/prot-home p q r w a got reached="" control=""
+  rm -rf "$h"; mkdir -p "$h/.config/omabox"
+  p=$(free_port) q=$(free_port) r=$(free_port) w=$(free_port)
+  while [ "$q" = "$p" ] || [ "$r" = "$p" ] || [ "$r" = "$q" ] || [ "$w" = "$p" ] || [ "$w" = "$q" ] || [ "$w" = "$r" ]; do q=$(free_port) r=$(free_port) w=$(free_port); done
+  printf 'protect-ports=%s,%s\n' "$q" "$p" > "$h/.config/omabox/config"
+  # p: 127.0.0.1 and protected; q: 0.0.0.0 and protected; r: 127.0.0.1, not; w: 0.0.0.0, not.
+  local srv='import socket, sys
+s = socket.socket(socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind((sys.argv[1], int(sys.argv[2]))); s.listen(16)
+while True:
+    c, _ = s.accept(); c.sendall(b"hi\n"); c.close()'
+  python3 -I -c "$srv" 127.0.0.1 "$p" >/dev/null 2>&1 & SERVERS+=($!)
+  python3 -I -c "$srv" 0.0.0.0 "$q" >/dev/null 2>&1 & SERVERS+=($!)
+  python3 -I -c "$srv" 127.0.0.1 "$r" >/dev/null 2>&1 & SERVERS+=($!)
+  python3 -I -c "$srv" 0.0.0.0 "$w" >/dev/null 2>&1 & SERVERS+=($!)
+  sleep 0.5
+  if ! UP_OUT=$(HOME=$h ob up "$B" --no-shell --theme tokyo-night --stock-bar 2>&1); then no "up with protect-ports" "$UP_OUT"; return; fi
+  ok "up with protect-ports"
+  check_match "...pasta leaves both out of its host rules" "-T ~$p,~$q,auto|-T ~$q,~$p,auto" "$(tr '\0' ' ' < "/proc/$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid")/cmdline" 2>/dev/null)"
+  # (bash's /dev/tcp in the box, 3 s at most: "hi" when it reached the server)
+  tcp() { HOME=$h ob run -b "$B" -- timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2" && head -c 2 <&3' _ "$1" "$2" 2>/dev/null; }
+  check "a port not protected forwards (the control)" until_ok 10 bash -c "[ \"\$(HOME='$h' '$CLI' run -b '$B' -- timeout 3 bash -c 'exec 3<>/dev/tcp/127.0.0.1/$r && head -c 2 <&3' 2>/dev/null)\" = hi ]"
+  sleep 1.5   # (pasta's scan of the host's ports: once a second)
+  check_eq "a protected port on 127.0.0.1: not reached by the box's loopback" "" "$(tcp 127.0.0.1 "$p")"
+  check_eq "a protected port on 0.0.0.0: not reached by the box's loopback" "" "$(tcp 127.0.0.1 "$q")"
+  for a in $(ip -o addr show 2>/dev/null | awk '$3 == "inet" || $3 == "inet6" { sub(/\/.*/, "", $4); print $4 }' | grep -v -e '^127\.' -e '^::1$' -e '^fe80:' | LC_ALL=C sort -u); do
+    got=$(tcp "$a" "$q"); [ -z "$got" ] || reached+="$a "
+    [ "$(tcp "$a" "$w")" != hi ] || control+="$a "
+  done
+  check_eq "...nor by any of the host's own addresses" "" "$reached"
+  if [ -n "$control" ]; then ok "...one of which reaches a port not protected there (the control: $control)"
+  else skip "...one of which reaches a port not protected there" "no host address but the one the box shares reaches the host from the box"; fi
+  check_eq "nothing in the box has a capability over its network" "0000000000000000" "$(HOME=$h ob run -b "$B" -- sh -c 'sed -n "s/^CapEff:[[:space:]]*//p" /proc/self/status')"
+  check_fails "...nft cannot flush the rule" env HOME="$h" "$CLI" run -b "$B" -- nft flush ruleset
+  check_fails "...nor from a user namespace of the box's own" env HOME="$h" "$CLI" run -b "$B" -- unshare -Ur nft flush ruleset
+  check_eq "...and the protected ports stay unreached" "" "$(tcp 127.0.0.1 "$p")$(tcp 127.0.0.1 "$q")"
+  HOME=$h ob down "$B" >/dev/null 2>&1
+  # An isolated box's --allow of a protected port is refused.
+  check_match "--allow of a protected port: refused" "up: --allow $q: a protected port" "$(HOME=$h ob up "$B" --no-shell --theme tokyo-night --net isolated --allow "$q" 2>&1)"
+  check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
+}
+
 t_connected() {
   local B=$P-conn D=$XDG_RUNTIME_DIR/omabox/$P-conn before out rc ns port tok hport htok gw got
   before=$(grep -o '@/tmp/\.X11-unix/X[0-9]*' /proc/net/unix | LC_ALL=C sort -u)
@@ -19365,7 +19414,7 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
