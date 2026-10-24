@@ -29,7 +29,10 @@
 # marks its window as yours (finding 121), and a check it holds up (a box you watch is not reaped) is
 # skipped, saying so. A peek from an omabox older than this suite has no mark and fails the run, as
 # does one any command of the suite's opens. Pointer motion
-# has no event: it is only seen when it moves focus. Needs a Hyprland session and python3; builds the
+# has no event: each box test reads the host's pointer (hyprctl cursorpos) at its start and end, and
+# fails if it moved (S8, #355: OMABOX_TEST_CURSOR=off for a run you use the mouse during). At the
+# end, every box of the run still up is taken down, and no process of any of them may be left (S6).
+# Needs a Hyprland session and python3; builds the
 # checkout's tools first when one is missing or older than its sources (make, as install.sh does). The
 # network tests run throwaway HTTP servers on free ports they find, and t_connected makes one
 # connection from a box to its gateway, the router.
@@ -7158,6 +7161,11 @@ t_unit_parallel() {
   check_match "par_done adds a test's counts and LEAK_PROVEN (one that stopped midway's too)" "^pass=2 fail=2 proven=1" "$out"
   check_match "...a test that stops midway fails, said so" "t_fake_dies: the test ran to its end" "$out"
   check_match "...one that ran no check too" "t_fake_none: the test ran checks" "$out"
+  # S8's check (#355) on a made-up pointer: silent where it stayed, a failure where it moved.
+  out=$(hostctl() { echo "${PTR:-0, 0}"; }; evidence() { :; }; pass=0 fail=0 failed=() CUR=t_fake
+    cursor_same "0, 0"; PTR="5, 7" cursor_same "0, 0"; echo "pass=$pass fail=$fail")
+  check_match "S8: a pointer that moved during a test fails it, one that stayed says nothing" \
+    "it was at 0, 0, now at 5, 7 .*pass=0 fail=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
 }
 
 # A throwaway run takes up's options (#111, finding 180): --overlay (the box writes over the folder,
@@ -7165,7 +7173,10 @@ t_unit_parallel() {
 # Two throwaway servers of the suite's own on free ports.
 t_run_options() {
   local repo ov=$TMP/run-ov port other s1 s2 out
-  repo=$(tmp_repo ro); mkdir -p "$ov"; echo host > "$ov/f"
+  repo=$(tmp_repo ro); mkdir -p "$ov/sub"; echo host > "$ov/f"; echo kept > "$ov/sub/g"
+  # (S4, #355: what the folder holds, its modes and contents, before the box writes over it)
+  ovsnap() { (cd "$ov" && command find . -printf '%p %y %m %s\n' | LC_ALL=C sort && command find . -type f -exec md5sum {} + | LC_ALL=C sort); }
+  local ov0; ov0=$(ovsnap)
   read -r port other < <(python3 -c 'import socket
 a, b = socket.socket(), socket.socket(); a.bind(("127.0.0.1", 0)); b.bind(("127.0.0.1", 0))
 print(a.getsockname()[1], b.getsockname()[1])')
@@ -7185,6 +7196,7 @@ print(a.getsockname()[1], b.getsockname()[1])')
   kill "$s1" "$s2" 2>/dev/null || true
   check_eq "run --overlay: the box writes over the folder" box "$(sed -n 1p <<<"$out")"
   check_eq "...the folder itself unchanged" host "$(cat "$ov/f")"
+  check_eq "S4: a removal, a new folder and file, a mode, a link and a rename over it: the host folder as it was (#355)" "$ov0" "$(ovsnap)"
   check_eq "run --net isolated --allow PORT: that port reached" 200 "$(sed -n 2p <<<"$out")"
   check_eq "...another host port not" 000 "$(sed -n 3p <<<"$out")"
   check_eq "run --size 800x600" 800x600 "$(sed -n 4p <<<"$out")"
@@ -9402,6 +9414,27 @@ print(*r)' 2>&1)"
   local senv; senv=$(ob run -b "$B" -- sh -c 'tr "\0" "\n" < /proc/$(pgrep -x Hyprland)/environ')
   check_match "...the session's environment read (--env's variable is there)" "OMABOX_TEST=yes" "$senv"
   check_fails "...nor a token from up's environment in it" grep -q "leak-$P" <<<"$senv"
+  # S2 (#355): the whole box HOME read for secrets: no file that is one of yours (by content: every
+  # file of your secret stores and keyrings), and none that holds a key or a token's shape, or up's.
+  local sums="" hits
+  for sec in "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.config/gh" "$HOME/.aws" "$HOME/.netrc" "$HOME/.git-credentials" \
+    "$HOME/.config/omarchy/api-keys.env" "$HOME/.local/share/keyrings"; do
+    [ -e "$sec" ] || continue
+    sums+=$(command find "$sec" -type f -size +0 -size -1M -readable -exec md5sum {} + 2>/dev/null | cut -d' ' -f1)$'\n'
+  done
+  hits=$(cd "$D/home/" && command find . -type f -size +0 -size -1M -exec md5sum {} + 2>/dev/null |
+    awk 'NR == FNR { if ($1 != "") s[$1] = 1; next } ($1 in s) { print substr($0, 35) }' <(printf '%s' "$sums") -)
+  check_eq "S2: no file of the box HOME is one of your secret files or keyrings (#355)" "" "$hits"
+  hits=$(cd "$D/home/" && command grep -rlIE -- "leak-$P|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9_-]{20,}|xox[abprs]-[0-9A-Za-z-]{10,}|AKIA[0-9A-Z]{16}" . 2>/dev/null | head -n 5)
+  check_eq "...and none holds a private key, a token's shape or up's own environment's token" "" "$hits"
+  # ...and a box command's environment: what the caller names, never what it only has.
+  local cenv; cenv=$(T355_CANARY="c-$P" ob run -b "$B" -- env)
+  hits=""
+  grep -q "c-$P" <<<"$cenv" && hits+="the caller's T355_CANARY; "
+  [ -z "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] || ! grep -qF -- "$HYPRLAND_INSTANCE_SIGNATURE" <<<"$cenv" || hits+="your Hyprland's signature; "
+  ! grep -qE '^(SSH_AUTH_SOCK|GNUPGHOME|GH_TOKEN|GITHUB_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)=' <<<"$cenv" || hits+="a secret's variable; "
+  grep -q "leak-$P" <<<"$cenv" && hits+="up's token; "
+  check_eq "S2: a box command's environment has nothing of the caller's it was not given (#355)" "" "$hits"
   # The box writes the theme.name ls --json reads (finding 159): a FIFO there does not hang it, a link
   # to a host file does not show that file's first line.
   local tn=/home/sbx/.local/state/omarchy/current/theme.name th
@@ -19786,6 +19819,31 @@ slowest_tests() {
   LC_ALL=C sort -t $'\t' -k1,1nr "$EVID/times.tsv" | head -n 10 | while IFS=$'\t' read -r s t; do printf '  %8ss %s\n' "$s" "${t#t_}"; done
 }
 
+# S8 (#355): the host's pointer, read (hyprctl cursorpos, a read: it moves nothing) at a box test's
+# start and end; one that moved fails the test, said only then (a check that passes every test would
+# change no test's count). You moving the mouse meanwhile moves it too: OMABOX_TEST_CURSOR=off leaves
+# the check out of such a run.
+cursor_at() { [ "${OMABOX_TEST_CURSOR:-}" = off ] || hostctl cursorpos 2>/dev/null; }
+cursor_same() {
+  [ "${OMABOX_TEST_CURSOR:-}" != off ] || return 0
+  local now; now=$(cursor_at)
+  [ "$1" = "$now" ] || no "S8: the host's pointer is where it was (#355)" "it was at $1, now at $now (if you moved the mouse during the run, that is why: run again without touching it, or with OMABOX_TEST_CURSOR=off)"
+}
+# S6 (#355): the processes of this run's boxes (PREFIX*) still running, one a line: what names a box
+# of it in its command line (a box dir, a reaper) or its environment (OMABOX_BOX, the box session's;
+# OMABOX_NAME, a run's), this runner and what it runs aside.
+box_procs() {
+  local p c e mine=" $$ $(descendants $$ | xargs) "
+  for p in /proc/[0-9]*; do
+    [[ $mine != *" ${p#/proc/} "* ]] || continue
+    c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
+    e=$(tr '\0' '\n' < "$p/environ" 2>/dev/null) || e=""
+    if [[ $c == *"/omabox/$1"* || $c == *" _reap $1"* ]] || grep -qE "^OMABOX_(BOX|NAME)=$1" <<<"$e"; then
+      echo "${p#/proc/} ${c:0:200}"
+    fi
+  done
+}
+
 # par_run JOBS TEST...: the tests, JOBS at a time, t_leak_control and the SLOW ones first. Each runs
 # in a subshell (par_test) with counts of its own, which it hands back in a file; the runner shows its
 # output whole when it ends, adds its counts and scans the host's events of its time (host_scan: the
@@ -19821,7 +19879,9 @@ par_test() {
   CUR=$1 pass=0 fail=0 failed=() skips=() SERVERS=() HELD="" LEAK_PROVEN="" PAR_T0=$SECONDS PAR_END=0 PAR_US=$(now_us)
   NOTES=$TMP/par/$1.notes UNTIL=$TMP/par/$1.until
   trap par_handback EXIT
+  local c0; c0=$(cursor_at)
   "$CUR"; notes
+  cursor_same "$c0"; notes
   [ $((pass + fail + ${#skips[@]})) -gt 0 ] || no "the test ran checks" "none: it returned before its first"
   PAR_END=1
 }
@@ -19919,14 +19979,17 @@ main() {
   # under a name the suite uses (note, check, ...) stays redefined for every test after it, the parallel
   # ones forked later too (#189, finding 252: t_unit_theme_dir's note() failed every slow wait after it).
   # Each such test fails, and the suite's are put back.
-  local _t0 _us _fns _fdefs _f _was _chg
+  local _t0 _us _fns _fdefs _f _was _chg _c0
   mapfile -t _fns < <(compgen -A function)
   _fdefs=$(declare -f "${_fns[@]}")
   for CUR in "${_one[@]}"; do
     _n=$((pass + fail + ${#skips[@]})) _t0=$SECONDS _us=$(now_us)
     rm -f "$UNTIL"
     printf '%s == %s\n' "$(date +%s.%3N)" "$CUR" >> "$EVID/host-events.log"
-    echo "${CUR#t_}"; HELD=""; "$CUR"; notes
+    echo "${CUR#t_}"; HELD=""
+    [[ $CUR == t_unit_* ]] || _c0=$(cursor_at)
+    "$CUR"; notes
+    [[ $CUR == t_unit_* ]] || { cursor_same "$_c0"; notes; }
     if [ "$(declare -f "${_fns[@]}")" != "$_fdefs" ]; then
       _was=() _chg=()
       for _f in "${_fns[@]}"; do _was+=("$(declare -f "$_f")"); done
@@ -19954,6 +20017,15 @@ main() {
   else echo "       (the leak detector is unproven this run: t_leak_control did not run)"; fi
   host_same "host workspace untouched" "$ws0" "$(hostctl -j activeworkspace | jq .id)" workspace
   host_same "host focused window untouched" "$win0" "$(hostctl -j activewindow | jq -r '.address // ""')" window
+  # S6 (#355): every box this run left up taken down (a test stopped midway), then nothing of any of
+  # its boxes may still run.
+  local _left _procs
+  _left=$("$CLI" ls --json 2>/dev/null | jq -r '.[].name' | grep "^$P-" | xargs)
+  for _t in $_left; do "$CLI" down "$_t" >/dev/null 2>&1; done
+  [ -z "$_left" ] || echo "       (left up at the end, taken down here: $_left)"
+  _procs=$(box_procs "$P-")
+  if [ -z "$_procs" ]; then ok "S6: no process of this run's boxes is left (#355)"
+  else no "S6: no process of this run's boxes is left (#355)" "$_procs"; fi
   if [ $_filtered = 0 ]; then
     [ ${#tests[@]} = ${#UNIT[@]} ] || [ $((pass + fail)) -ge $MIN_CHECKS ] ||
       no "a full run has at least $MIN_CHECKS checks" "$((pass + fail)) ran (a test stopped checking?)"
