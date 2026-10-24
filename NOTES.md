@@ -9695,6 +9695,21 @@ from them.
     real, saves in a data dir of its own; byte order an expected difference under en_US.UTF-8),
     t_rust_parity_up (ls, save, saves and down on a box up), down.rs's and save.rs's unit tests.
 
+471. **The idle reaper in the Rust half** (2026-10-24, #324 wave 5b). `_reap` (started by `up` with
+    setsid) is cmd/reap.rs, with bash's adoption of a box whose `up` ended before it recorded the
+    box's pid namespace (reap_wait_pidns, finding 237) and its retries (finding 162). Bash's hand-off
+    execs it, so its command line is `ROOT/build/bin/omabox _reap NAME CREATED`: kill_reapers, in
+    both halves, now finds that one as well as bash's `bash ROOT/bin/omabox _reap NAME`. It sleeps
+    and waits for the name's lock in-process, where bash ran `sleep` and `flock` children, so the
+    suite's tests that watched those children (t_reap_race, t_agent_session) look for a process with
+    the lock file open (lock_waiter) or read reap.log. A box whose `used` file is gone no longer ends
+    its reaper (bash's arithmetic on an empty stat ended it); its idle limit then waits. **Change**:
+    the reaper says once, in reap.log (`omabox log reap`), how often it looks ("box 'B': watching it
+    every 60 s"), which nothing showed before (CHANGELOG). An interactive box's reaper asks the host
+    whether passthrough's hooks are there through the session it found at its start, as bash did.
+    Tests: t_unit_rust_parity5 ("_reap ..." cases, the line an expected difference), the box tests of
+    the reaper (t_idle, t_reap_race, t_agent_session, t_orphan, t_run_idle).
+
 472. **A jailed caller's down and up check the box again under its name's lock** (2026-10-24, #324
     wave 5b; S9). select_box refuses another jail's or the user's box by its box.json, which an `up`
     writes while it holds the name's lock; a jailed `down` or `up` of that name waits on the lock,

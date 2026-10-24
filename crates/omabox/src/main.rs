@@ -128,6 +128,7 @@ fn main() -> ExitCode {
         Some("record") => Some(cmd::record::run),
         Some("up") => Some(cmd::up::run),
         Some("down") => Some(cmd::down::run),
+        Some("_reap") => Some(cmd::reap::run),
         Some("ls" | "list") => Some(cmd::ls::run),
         Some("save") => Some(cmd::save::save),
         Some("saves") => Some(cmd::save::saves),

@@ -314,6 +314,21 @@ holds() {
 # For until_ok: nothing of box NAME runs any more (its dir in no command line); its reaper is gone.
 none_running() { ! pgrep -f "$XDG_RUNTIME_DIR/omabox/$1/" >/dev/null; }
 reaper_gone() { ! pgrep -f "omabox _reap $1 " >/dev/null; }
+# lock_waiter LOCK PID...: the process that waits for LOCK among PIDS and their children: bash's flock
+# child (lock_file), else one that has LOCK open (the Rust half flocks in-process, #324). The tests
+# hold LOCK while they ask, so open is waiting.
+lock_waiter() {
+  local lk=$1 p c; shift
+  [ $# -gt 0 ] || return 1
+  for p in "$@" $(pgrep -d ' ' -P "$(IFS=,; echo "$*")" 2>/dev/null); do
+    c=$(pgrep -x flock -P "$p" | head -n 1)
+    [ -z "$c" ] || { echo "$c"; return 0; }
+    ! ls -l "/proc/$p/fd" 2>/dev/null | grep -qF -- "-> $lk" || { echo "$p"; return 0; }
+  done
+  return 1
+}
+# reaper_waits NAME: box NAME's reaper waits for the name's lock (its down, after it decided).
+reaper_waits() { local r; r=$(pgrep -f "omabox _reap $1 " | head -n 1) && lock_waiter "$XDG_RUNTIME_DIR/omabox/.lock-$1" "$r" >/dev/null; }
 # A fresh git repo named $P-SUFFIX: a throwaway `run` from it gets a name no box of the user's has
 # (from $ROOT it would be "omabox", which `omabox up` in the checkout also takes).
 tmp_repo() { local r=$TMP/$P-$1; mkdir -p "$r" && git -C "$r" init -q && echo "$r"; }
@@ -6040,6 +6055,16 @@ t_unit_rust_parity5() {
   parity "--version --json" --version --json
   parity "version: an argument" version x
   parity "version --jsn" version --jsn
+  # _reap (started by up with setsid): one with nothing to watch ends at once; a dead box with no
+  # owner, at its first poll (5 s); a dead throwaway box whose run is gone is taken down. The Rust
+  # half says how often it looks, in reap.log (finding 471).
+  rp5b_reap() { rp5b_fix; rp5b_box thr '{pidns: "pid:[1]", idle: 0, owner: 999999999, owner_start: "1"}'; rp5b_box d10 '{pidns: "pid:[1]", idle: 10}'; rp5b_box zero '{idle: 0}'; }
+  rp_prep=rp5b_reap rp_sed='s/^omabox: [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:+-]{14} /omabox: DATE /'
+  parity "_reap: nothing to watch (no idle limit, owner or agent)" _reap zero c-zero
+  rp_why=471 rp_bash=('err=') rp_rust=("err=omabox: DATE box 'd10': watching it every 5 s")
+  parity "_reap of a dead box with no owner: ends at its first poll" _reap d10 c-d10
+  rp_why=471 rp_bash=("err=omabox: box 'thr' down") rp_rust=('err~^omabox: DATE box .thr.: watching it every 5 s$' "err~^omabox: box 'thr' down$")
+  parity "_reap of a dead throwaway box whose run is gone: taken down" _reap thr c-thr
   rp_prep="" rp_sed="" rp_also="" rp_mask="" rp_env=() rp_snap=1
   [ ! -f "$b/kids" ] || xargs -r kill -KILL < "$b/kids" 2>/dev/null
 }
@@ -8892,7 +8917,9 @@ t_agent_session() {
   local s8=11111111-2222-4333-8444-5555${u}08 b8=$P-ag-${u}08 s9=11111111-2222-4333-8444-5555${u}09
   local s10=11111111-2222-4333-8444-5555${u}10 b10=$P-ag-${u}10
   # shellcheck disable=SC2329 # called through until_ok
-  polls_every() { pgrep -fx "sleep $2" -P "$(pgrep -f "omabox _reap $1 " | head -1)" >/dev/null; }
+  # (bash's reaper slept in a child; the Rust half's says how often it looks in reap.log, finding 471)
+  polls_every() { pgrep -fx "sleep $2" -P "$(pgrep -f "omabox _reap $1 " | head -1)" >/dev/null ||
+    grep -q "watching it every $2 s$" "$XDG_RUNTIME_DIR/omabox/$1/reap.log" 2>/dev/null; }
   agent "$s1" & local a1=$!
   agent "$s2" --idle 45m & local a2=$!
   agent "$s7" --idle 0 & local a7=$!
@@ -8977,7 +9004,7 @@ t_agent_session() {
   # until the new agent's command is done.
   local lk=$XDG_RUNTIME_DIR/omabox/.lock-$b10 reaper held rf
   # shellcheck disable=SC2329 # called through until_ok
-  flock_of() { pgrep -x flock -P "$(pgrep -d, -P "$1")"; }   # the flock an agent's command waits in
+  flock_of() { lock_waiter "$lk" $(pgrep -P "$1"); }   # what of an agent's command waits for the lock
   agent "$s10" --idle 20s & local a10=$!
   until_ok 40 test -e "$TMP/ag-$a10"
   reaper=$(pgrep -f "omabox _reap $b10 " | head -1)
@@ -8986,8 +9013,8 @@ t_agent_session() {
   kill "$a10" 2>/dev/null; wait "$a10" 2>/dev/null
   agent "$s10" -- run -- true & local r10=$!
   until_ok 10 flock_of "$r10"                      # its take_over waits for the lock
-  until_ok 15 pgrep -x flock -P "$reaper"          # the reaper said "taking it down"; its down waits
-  rf=$(pgrep -x flock -P "$reaper")
+  until_ok 15 lock_waiter "$lk" "$reaper"          # the reaper said "taking it down"; its down waits
+  rf=$(lock_waiter "$lk" "$reaper")
   [ -z "$rf" ] || kill -STOP "$rf"
   touch "$TMP/release"; wait "$held" 2>/dev/null
   until_ok 20 test -e "$TMP/ag-$r10"
@@ -9003,7 +9030,7 @@ t_agent_session() {
   kill "$r10" 2>/dev/null; wait "$r10" 2>/dev/null
   agent "$s10" -- run -d -- true & local d10=$!
   until_ok 10 flock_of "$d10"
-  until_ok 15 pgrep -x flock -P "$reaper"          # the same reaper, now for r10's exit
+  until_ok 15 lock_waiter "$lk" "$reaper"          # the same reaper, now for r10's exit
   local df; df=$(flock_of "$d10")
   [ -z "$df" ] || kill -STOP "$df"
   touch "$TMP/release"; wait "$held" 2>/dev/null
@@ -9029,9 +9056,9 @@ t_agent_session() {
   (cd "$repo" && exec env -u OMABOX -u OMABOX_IDLE CLAUDE_CODE_SESSION_ID="$s11" "$CLI" up --no-shell \
     --idle 20s) >/dev/null 2>&1 & local u11=$!
   until_ok 10 flock_of "$r11"
-  until_ok 10 pgrep -x flock -P "$u11"
-  until_ok 15 pgrep -x flock -P "$reaper"
-  tf=$(flock_of "$r11"); uf=$(pgrep -x flock -P "$u11")
+  until_ok 10 lock_waiter "$lk" "$u11"
+  until_ok 15 lock_waiter "$lk" "$reaper"
+  tf=$(flock_of "$r11"); uf=$(lock_waiter "$lk" "$u11")
   [ -z "$tf" ] || kill -STOP "$tf"
   [ -z "$uf" ] || kill -STOP "$uf"
   touch "$TMP/release"; wait "$held" 2>/dev/null
@@ -9750,7 +9777,7 @@ t_reap_race() {
   up_ok "$B" --idle 10s --no-shell || { no "up" "$UP_OUT"; return; }
   exec {lock}>"$XDG_RUNTIME_DIR/omabox/.lock-$B"; flock "$lock"   # what an `up` of the name holds
   # This box's reaper's flock (cmd_down runs in the reaper's own process), not any box's up or down.
-  held "$B" check "the idle reaper decides and waits for the lock" until_ok 30 bash -c 'r=$(pgrep -f "omabox _reap $1 ") && pgrep -P "$r" -f "^flock -w 60 [0-9]+$"' _ "$B"
+  held "$B" check "the idle reaper decides and waits for the lock" until_ok 30 reaper_waits "$B"
   local j=$XDG_RUNTIME_DIR/omabox/$B/box.json
   jq '.created = "a new box"' "$j" > "$j.t" && mv "$j.t" "$j"   # the new box, as `up` writes it
   exec {lock}>&-

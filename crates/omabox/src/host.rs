@@ -132,6 +132,31 @@ pub fn host_hyprctl(ctx: &Ctx, args: &[&[u8]], quiet: bool) -> (i32, Vec<u8>) {
     }
 }
 
+/// `$(host_hyprctl eval LUA 2>&1)` on the session SIG (found once by the caller): what hyprctl said,
+/// both streams, without its trailing newlines.
+pub fn host_eval_out(sig: &[u8], lua: &[u8]) -> Vec<u8> {
+    let Ok((r, w)) = crate::exec::pipe() else {
+        return Vec::new();
+    };
+    let Ok(w2) = w.try_clone() else {
+        return Vec::new();
+    };
+    let mut c = crate::sig::command("hyprctl");
+    c.arg("eval")
+        .arg(OsStr::from_bytes(lua))
+        .env("HYPRLAND_INSTANCE_SIGNATURE", OsStr::from_bytes(sig))
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(w))
+        .stderr(Stdio::from(w2));
+    let child = c.spawn();
+    drop(c);
+    let out = crate::exec::read_all(r, None);
+    if let Ok(mut ch) = child {
+        let _ = ch.wait();
+    }
+    shell::strip_nl(&out)
+}
+
 /// host_eval LUA: Lua on the host Hyprland (`out=$(host_hyprctl eval "$1" 2>&1)`); its errors are
 /// ours to report. host_session's refusal is said through it, as the words it got.
 pub fn host_eval(ctx: &Ctx, lua: &[u8]) -> Res<()> {

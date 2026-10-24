@@ -26,6 +26,7 @@ pub mod peek;
 pub mod pixel;
 pub mod pointer;
 pub mod ports;
+pub mod reap;
 pub mod record;
 pub mod record_stop;
 pub mod run;

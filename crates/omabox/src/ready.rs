@@ -241,21 +241,21 @@ pub fn kill_box(ctx: &Ctx) -> bool {
     true
 }
 
-/// kill_reapers: the selected box's reaper (`bash $ROOT/bin/omabox _reap NAME ...`), unless that is
-/// us: nothing may be left running for a box that is gone (#115, finding 178). pgrep -f's match of
-/// its command line (its words joined by spaces), looked for in /proc here.
+/// kill_reapers: the selected box's reaper (`bash $ROOT/bin/omabox _reap NAME ...`, or this half's
+/// `$ROOT/build/bin/omabox _reap NAME ...` that bash's hand-off exec'd), unless that is us: nothing
+/// may be left running for a box that is gone (#115, finding 178). pgrep -f's match of its command
+/// line (its words joined by spaces), looked for in /proc here.
 pub fn kill_reapers(ctx: &Ctx) {
-    let tail = cat!(crate::paths::root(), "/bin/omabox _reap ", ctx.name, " ");
     let me = std::process::id().to_string().into_bytes();
-    for p in reaper_pids(&tail) {
+    for p in reaper_pids(&crate::paths::root(), &ctx.name) {
         if p != me {
             signal_ok(&p, libc::SIGTERM);
         }
     }
 }
 
-/// The pids whose command line is `bash TAIL...` or `/usr/bin/bash TAIL...`, lowest first.
-fn reaper_pids(tail: &[u8]) -> Vec<Vec<u8>> {
+/// The pids of box NAME's reapers (reaper_line), lowest first.
+pub fn reaper_pids(root: &[u8], name: &[u8]) -> Vec<Vec<u8>> {
     let Ok(rd) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
@@ -268,7 +268,7 @@ fn reaper_pids(tail: &[u8]) -> Vec<Vec<u8>> {
         let Ok(cl) = std::fs::read(e.path().join("cmdline")) else {
             continue;
         };
-        if reaper_line(&cl, tail) {
+        if reaper_line(&cl, root, name) {
             out.push(n);
         }
     }
@@ -276,16 +276,20 @@ fn reaper_pids(tail: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-/// Whether CMDLINE (NUL-ended words) is a reaper's: `(/usr/bin/)?bash TAIL` at its start.
-fn reaper_line(cmdline: &[u8], tail: &[u8]) -> bool {
+/// Whether CMDLINE (NUL-ended words) is box NAME's reaper: `(/usr/bin/)?bash ROOT/bin/omabox _reap
+/// NAME ` at its start, or this half's, `ROOT/build/bin/omabox _reap NAME ` (bash's hand-off exec'd
+/// it).
+fn reaper_line(cmdline: &[u8], root: &[u8], name: &[u8]) -> bool {
     let words = cmdline.strip_suffix(b"\0").unwrap_or(cmdline);
     let line: Vec<u8> = words
         .iter()
         .map(|&c| if c == 0 { b' ' } else { c })
         .collect();
+    let tail = cat!(root, "/bin/omabox _reap ", name, " ");
     [b"bash ".as_slice(), b"/usr/bin/bash "]
         .iter()
         .any(|pre| line.starts_with(&cat!(pre, tail)))
+        || line.starts_with(&cat!(root, "/build/bin/omabox _reap ", name, " "))
 }
 
 /// rm_box: the box dir and its HOME; only a dir under BOXES.
@@ -1232,25 +1236,45 @@ mod tests {
 
     #[test]
     fn reapers_by_their_command_line() {
-        let tail = b"/r/bin/omabox _reap b1 ";
+        let (r, n): (&[u8], &[u8]) = (b"/r", b"b1");
         assert!(reaper_line(
             b"bash\0/r/bin/omabox\0_reap\0b1\x00123\x00",
-            tail
+            r,
+            n
         ));
         assert!(reaper_line(
             b"/usr/bin/bash\0/r/bin/omabox\0_reap\0b1\x00123\x00",
-            tail
+            r,
+            n
         ));
         assert!(!reaper_line(
             b"bash\0/r/bin/omabox\0_reap\0b10\x00123\x00",
-            tail
+            r,
+            n
         ));
         assert!(!reaper_line(
             b"sh\0/r/bin/omabox\0_reap\0b1\x00123\x00",
-            tail
+            r,
+            n
         ));
         // (the name the last word: no space after it in pgrep's line)
-        assert!(!reaper_line(b"bash\0/r/bin/omabox\0_reap\0b1\0", tail));
+        assert!(!reaper_line(b"bash\0/r/bin/omabox\0_reap\0b1\0", r, n));
+        // (the Rust half's, which bash's hand-off exec'd)
+        assert!(reaper_line(
+            b"/r/build/bin/omabox\0_reap\0b1\x00123\x00",
+            r,
+            n
+        ));
+        assert!(!reaper_line(
+            b"/r/build/bin/omabox\0_reap\0b10\x00123\x00",
+            r,
+            n
+        ));
+        assert!(!reaper_line(
+            b"/x/build/bin/omabox\0_reap\0b1\x00123\x00",
+            r,
+            n
+        ));
     }
 
     #[test]

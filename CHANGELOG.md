@@ -59,6 +59,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A jailed agent's `down` and `up` check whose the box is again once they hold its name's lock**,
   and a jailed `down` that finds no box cancels only its own jail's `up` of that name, not yours.
   Scripts: nothing to change.
+- **The idle reaper says how often it looks**, once, in the box's `reap.log` (`omabox log reap`):
+  "box 'B': watching it every 60 s". The bash omabox said nothing of it. Scripts: nothing to change.
 - **`save` and `saves rm` say what they could not remove in omabox's words** ("could not remove all
   of save 'S': ..."), where the bash omabox printed `rm`'s own line. Exit codes unchanged.
 - **`up` stopped by INT, TERM or HUP ends with the signal's code at every step** (130, 143, 129),
