@@ -13426,7 +13426,10 @@ EOF
   rp_prep=rp_ckp rp_also=rp_ckls
   parity "check point: the screen (both ways)" check point -b "$B" rp1 -o "$ck/p"
   parity "check point -g, --ignore (both ways)" check point -b "$B" rp2 -o "$ck/p" -g "0,0 300x200" --ignore "10,10 20x20" --ignore "900,900 5x5"
-  parity "check point --ignore 08: left out, as bash's arithmetic ends it (both ways)" check point -b "$B" rp3 -o "$ck/p" --ignore "08,0 10x10" --ignore "010,0 010x10"
+  # (decimal: 08 is 8, the region kept; bash's arithmetic ended at it, and the region was left out
+  # as if outside the shot: finding 448)
+  rp_why=448 rp_bash=('err~: line [0-9]+: 08: value too great for base' 'err~--ignore "08,0 10x10" has nothing in the shot' 'state!~^ignore ') rp_rust=(err= 'state~^ignore 8 0 10 10$')
+  parity "check point --ignore 08: decimal, kept" check point -b "$B" rp3 -o "$ck/p" --ignore "08,0 10x10"
   # (its .point that cannot be written: bash's redirection line and 1, check's "changed"; Rust's words
   # and 2, check's own failure: finding 442)
   rp_ckpd() { rp_ckp; mkdir -p "$ck/p/rpx.point"; }

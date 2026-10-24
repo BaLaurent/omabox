@@ -9377,7 +9377,8 @@ from them.
     pid 123 (bash looked for /proc/0123; `cpu --pid` and `gdb --pid` refuse a 0 in front) (CHANGELOG).
     Tests: t_unit_rust_parity ("which: this shell, a zero in front", "run --ignore with a zero in front", "wait still: a ready size with a zero
     in front", "pixel: a width with a zero in front", "shot -g with zeros in front") and
-    t_unit_rust_parity4b ("check diff --ignore 08,0", "record stop --sheet --frames" 010, 08 and 01,
+    t_rust_parity ("check point --ignore 08: decimal, kept") and t_unit_rust_parity4b ("check diff
+    --ignore 08,0", "record stop --sheet --frames" 010, 08 and 01,
     "record --fps" 08 and 010): expected differences; shell.rs's numbers_are_decimal, shot.rs's
     clip_as_bash, settle.rs's geometry.
 
