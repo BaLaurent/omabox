@@ -3,8 +3,6 @@
 //! jailed caller's files are followed only through a JailView (jailpath.rs's), and git is never run on
 //! them (#198).
 
-#![allow(dead_code)] // (until cmd/up.rs calls it)
-
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, muted, say};
 use crate::jail::in_jail;

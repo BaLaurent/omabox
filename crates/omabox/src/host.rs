@@ -202,3 +202,41 @@ pub fn install_passthrough(ctx: &Ctx) -> Res<()> {
     );
     host_eval(ctx, &lua)
 }
+
+/// The host's Hyprland as `up` reaches it (#355, S8): it only starts a box's launch script with the
+/// window `silent` on a workspace ws_check gave, with no focus and drawn while hidden; nothing here
+/// can focus, move or switch anything of the user's.
+pub struct HostSilent<'a> {
+    ctx: &'a Ctx,
+}
+
+impl<'a> HostSilent<'a> {
+    pub fn new(ctx: &'a Ctx) -> HostSilent<'a> {
+        HostSilent { ctx }
+    }
+
+    /// `hl.exec_cmd('bash SCRIPT', { workspace = 'WS silent', no_initial_focus = true, ... })`:
+    /// launched by the host so its exec rules apply to exactly this process's window (finding 70);
+    /// tiled whatever another rule for aquamarine windows says (finding 136). WS must be one
+    /// ws_check gives back as it is.
+    pub fn exec_silent(&self, script: &[u8], ws: &[u8]) -> Res<()> {
+        if crate::deskwin::ws_check(ws).as_deref() != Some(ws) {
+            return Err(self
+                .ctx
+                .die(cat!("not a workspace for a box's window: ", ws)));
+        }
+        let lua = cat!(
+            "hl.exec_cmd('bash ",
+            lua_str(self.ctx, script),
+            "', { workspace = '",
+            ws,
+            " silent', no_initial_focus = true, render_unfocused = true, float = false })"
+        );
+        host_eval(self.ctx, &lua)
+    }
+
+    /// share/passthrough.lua on the host (install_passthrough).
+    pub fn passthrough(&self) -> Res<()> {
+        install_passthrough(self.ctx)
+    }
+}

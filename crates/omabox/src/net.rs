@@ -10,8 +10,6 @@
 //! of them (0.0.0.0) would otherwise take one through the host's docker bridge or VPN address. An
 //! isolated box reaches only its --allow ports, and a protected one is refused there.
 
-#![allow(dead_code)] // (until cmd/up.rs calls it)
-
 use crate::cat;
 
 /// Ports: sorted, each once, 1-65535 (allow_ports: 8082,8081,8081 is 8081,8082, finding 175).

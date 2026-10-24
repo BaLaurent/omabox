@@ -473,7 +473,9 @@ pub fn monitors_record(ctx: &Ctx) -> Res<()> {
     };
     let m = strip_nl(&m);
     // `up` holds the lock already (UP_LOCKED); anything else takes it.
-    let _lock = if shell::env_or_empty("UP_LOCKED").is_empty() {
+    let _lock = if !UP_LOCKED.load(std::sync::atomic::Ordering::SeqCst)
+        && shell::env_or_empty("UP_LOCKED").is_empty()
+    {
         match lock_file(
             &ctx.in_boxes(cat!(".lock-", ctx.name)),
             Duration::from_secs(60),
@@ -647,6 +649,14 @@ pub fn monitors_without(ctx: &Ctx, name: &[u8]) -> Vec<u8> {
 /// box_file $D/run/omabox.monitors VALUE.
 pub fn monitors_write(ctx: &Ctx, v: &[u8]) -> bool {
     box_file(ctx, &ctx.at("run/omabox.monitors"), v)
+}
+
+/// `up` holds the box's lock while it adds its --monitor ones (bash's UP_LOCKED=1): the add takes
+/// none of its own.
+static UP_LOCKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_up_locked(on: bool) {
+    UP_LOCKED.store(on, std::sync::atomic::Ordering::SeqCst);
 }
 
 #[cfg(test)]

@@ -2,8 +2,6 @@
 //! place_plugin, center_split. jq runs each program as bin/omabox writes it, byte for byte
 //! (JQ_INLINE: the suite checks each is there).
 
-#![allow(dead_code)] // (until cmd/up.rs calls it)
-
 use crate::cat;
 use crate::jq::{self, Args, Ran};
 use crate::shell;

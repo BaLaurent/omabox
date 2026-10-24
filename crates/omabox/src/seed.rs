@@ -8,8 +8,6 @@
 //! is at a `Dest`: a path relative to it with no `..`, its links cleared first (home_unlink, finding
 //! 168). The git identity is the one thing read that is no file: two values of `git config --global`.
 
-#![allow(dead_code)] // (until cmd/up.rs calls it)
-
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, say};
 use crate::jail::in_jail;
@@ -42,6 +40,8 @@ pub enum Base {
 pub struct Allowed {
     pub base: Base,
     pub rel: &'static str,
+    /// What it is, in words: the table's own documentation (its test reads it).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub what: &'static str,
 }
 
@@ -1808,6 +1808,15 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_allowed_source_says_what_it_is() {
+        assert!(
+            SEED_ALLOW
+                .iter()
+                .all(|a| !a.what.is_empty() && !a.rel.is_empty())
+        );
+    }
 
     fn tmp(tag: &str) -> Vec<u8> {
         let d = std::env::temp_dir().join(format!("omabox-seed-{tag}-{}", std::process::id()));

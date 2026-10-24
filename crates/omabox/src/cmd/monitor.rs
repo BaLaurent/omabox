@@ -376,7 +376,7 @@ fn remove(ctx: &mut Ctx, o: &[u8], interactive: bool) -> Res<()> {
 /// WAYLAND-N, a Wayland output: labwc_rc), placed and made; its line as Hyprland made it ("NAME MODE
 /// XxY SCALE"). The scale always set, never left to Hyprland (a new output with no rule came up at
 /// 2). Errexit off in it, as in bash's `$(...)`: only its refusals end it.
-fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u8>> {
+pub(crate) fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u8>> {
     let Ok([mode, scale, place]) = monitor_spec(spec) else {
         return Err(Exit(1));
     };

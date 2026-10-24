@@ -1,7 +1,6 @@
 //! Where omabox keeps things, as bin/omabox's globals name them (#324 wave 5a): box HOMEs, saves,
 //! the tools in the checkout and where a box sees them.
 
-#![allow(dead_code)] // (until cmd/up.rs uses them)
 use crate::cat;
 use crate::shell;
 

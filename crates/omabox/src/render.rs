@@ -8,13 +8,10 @@
 //! card's path to exist (finding 294), which a CardPlaceholder gives as an empty file of the box dir's,
 //! read-only at `/dev/dri/cardN`, never the device.
 
-#![allow(dead_code)] // (until cmd/up.rs calls it)
-
 use crate::cat;
 use crate::exit::{Ctx, Res, say};
 use crate::gpu::{conf_gpu, gpu_is, gpu_kind, render_driver, render_slot};
 use crate::shell;
-use std::path::PathBuf;
 
 /// Where render nodes and their devices are (bash's DRI, SYSDRM, SYSPCI).
 pub const DRI: &str = "/dev/dri";
@@ -32,9 +29,6 @@ impl RenderNode {
     }
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
-    }
-    pub fn path(&self) -> PathBuf {
-        shell::path(&self.0)
     }
     /// Its driver (render_driver).
     pub fn driver(&self) -> Vec<u8> {
@@ -70,9 +64,6 @@ impl NvidiaDev {
     }
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
-    }
-    pub fn path(&self) -> PathBuf {
-        shell::path(&self.0)
     }
 }
 

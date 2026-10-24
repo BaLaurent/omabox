@@ -126,6 +126,7 @@ fn main() -> ExitCode {
         Some("gdb") => Some(cmd::gdb::run),
         Some("check") => Some(cmd::check::run),
         Some("record") => Some(cmd::record::run),
+        Some("up") => Some(cmd::up::run),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.
@@ -169,6 +170,10 @@ fn main() -> ExitCode {
                 .iter()
                 .chain(jqprog::INLINE_4B)
                 .chain(recprog::ALL)
+                .chain(install::JQ_INLINE)
+                .chain(plugins::JQ_INLINE)
+                .chain(ready::JQ_INLINE)
+                .chain(shelljson::JQ_INLINE)
             {
                 print!("{p}\0");
             }

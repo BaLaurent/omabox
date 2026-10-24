@@ -343,7 +343,6 @@ pub fn refuse_src(p: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// refuse_src P look: seed_home's own copies of the user's look (branding/, extensions/) allowed too.
-#[allow(dead_code)]
 pub fn refuse_src_look(p: &[u8]) -> Option<Vec<u8>> {
     refuse_src_as(p, true)
 }
@@ -492,6 +491,56 @@ fn box_root_pid(ctx: &Ctx) -> Option<Vec<u8>> {
     match box_pid(&ctx.d) {
         BoxPid::Pid(p) if shell::path(&cat!("/proc/", p, "/root/usr")).is_dir() => Some(p),
         _ => None,
+    }
+}
+
+/// up_link_notes HOW (#235): each link at the top of the repo `up` mounted that leads out of it to
+/// what the box does not have, said with the mount that gives it (HOW: `up`, or `run` for a
+/// throwaway's); 5 at most. The top only. Not for a jailed caller.
+pub fn up_link_notes(ctx: &Ctx, how: &str) {
+    if in_jail() {
+        return;
+    }
+    let Some(top) = repo_top().filter(|t| refuse_src(t).is_none()) else {
+        return;
+    };
+    let Some(pid) = box_root_pid(ctx) else { return };
+    let (mut n, mut more) = (0, 0);
+    // (`"$top"/* "$top"/.[!.]* "$top"/..?*`: byte order, each group)
+    let mut names: Vec<Vec<u8>> = std::fs::read_dir(shell::path(&top))
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| std::os::unix::ffi::OsStringExt::into_vec(e.file_name()))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    let (dot, plain): (Vec<_>, Vec<_>) = names.into_iter().partition(|e| e.starts_with(b"."));
+    let (two, one): (Vec<_>, Vec<_>) = dot.into_iter().partition(|e| e.starts_with(b".."));
+    for e in plain.into_iter().chain(one).chain(two) {
+        let e = cat!(top, "/", e);
+        if !shell::path(&e).is_symlink() {
+            continue;
+        }
+        let Some([c, r, rp]) = repo_link_out(&top, &e) else {
+            continue;
+        };
+        if !link_dangles(&pid, &c, &rp) {
+            continue;
+        }
+        if n >= 5 {
+            more += 1;
+            continue;
+        }
+        n += 1;
+        link_note(b"", &c, &r, how);
+    }
+    if more > 0 {
+        say(cat!(
+            "note: and ",
+            more.to_string(),
+            " more links at the top of the repo that lead out of the box"
+        ));
     }
 }
 

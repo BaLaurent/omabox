@@ -1,7 +1,6 @@
 //! Plugins and themes for up (#324 wave 5a): --plugin and the desk's resolved, --theme named, and after
 //! up what the shell made of each plugin. As bin/omabox's resolve_plugin, desk_config, desk_plugins,
 //! plugin_check (with shell_warnings), theme_named and tree_dir.
-#![allow(dead_code)] // (until cmd/up.rs calls it)
 
 use crate::boxes::{box_home_file, meta};
 use crate::cat;

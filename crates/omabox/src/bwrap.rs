@@ -14,8 +14,6 @@
 //!
 //! The words come out in bash's order (cmd_up's `args`), so launch.sh is the same both ways.
 
-#![allow(dead_code)] // (until cmd/up.rs calls it)
-
 use crate::cat;
 
 /// Why P is the seat's (S1), or None: a DRM card node, the input devices, seatd's socket, the
@@ -289,11 +287,11 @@ impl Bwrap {
     }
 
     /// NVIDIA's EGL stats the GPU's card node (finding 294): an empty read-only file of the box
-    /// dir's at /dev/dri/cardN, never the device. FILE must be that file, empty and regular.
-    pub fn card_placeholder(&mut self, file: &[u8], card: &[u8]) -> Result<(), Refused> {
+    /// dir's at DEST, /dev/dri/cardN, never the device. FILE must be that file, empty and regular.
+    pub fn card_placeholder(&mut self, file: &[u8], dest: &[u8]) -> Result<(), Refused> {
         let s = lexical(file);
-        let ok_card = card
-            .strip_prefix(b"card".as_slice())
+        let ok_card = dest
+            .strip_prefix(b"/dev/dri/card".as_slice())
             .is_some_and(|n| !n.is_empty() && n.iter().all(u8::is_ascii_digit));
         let ok_file = s.starts_with(&cat!(self.own, "/"))
             && std::fs::symlink_metadata(crate::shell::path(&s))
@@ -302,14 +300,14 @@ impl Bwrap {
             return Err(Refused(cat!(
                 "refusing a card placeholder ",
                 file,
-                " for ",
-                card,
+                " at ",
+                dest,
                 ": not an empty file of the box's"
             )));
         }
         self.args.push(b"--ro-bind".to_vec());
         self.args.push(file.to_vec());
-        self.args.push(cat!("/dev/dri/", card));
+        self.args.push(dest.to_vec());
         Ok(())
     }
 

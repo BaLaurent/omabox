@@ -3,7 +3,6 @@
 //! bar_settle, shell_crash and shell_watch, died_starting, starting_ok and up_owner_check (with
 //! kill_box, kill_reapers, rm_box), sweep_homes, box_held, more_screens, client_render_check and
 //! box_json.
-#![allow(dead_code)] // (until cmd/up.rs calls it)
 
 use crate::boxes::{
     BoxPid, box_alive, box_home_file, box_pasta, box_pid, box_state, meta, run_read,

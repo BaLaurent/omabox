@@ -24,7 +24,7 @@ const AGENT_VARS: [&str; 3] = [
     "CODEX_THREAD_ID",
 ];
 
-fn agent_var() -> Option<&'static str> {
+pub fn agent_var() -> Option<&'static str> {
     for v in AGENT_VARS {
         match env(v) {
             None => continue,

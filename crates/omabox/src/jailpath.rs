@@ -1,6 +1,5 @@
 //! A jailed caller's host paths for up (#324 wave 5a, #198, #210): followed only inside its jail's
 //! folders, refused as written, covers checked.
-#![allow(dead_code)] // (until cmd/up.rs calls it)
 
 use crate::cat;
 use crate::exit::{Ctx, Exit};
@@ -97,10 +96,6 @@ fn root_covered_in(pol: &Value, p: &[u8]) -> Option<Vec<u8>> {
 
 /// jail_hidden P (#210): P (resolved) at or under one of the jail's hidden paths; true when the
 /// policy cannot say which those are.
-pub fn jail_hidden(p: &[u8]) -> bool {
-    hidden_in(&policy().unwrap_or(Value::Null), p)
-}
-
 fn hidden_in(pol: &Value, p: &[u8]) -> bool {
     let Some(ms) = masks(pol) else {
         return true;
@@ -392,6 +387,36 @@ pub fn jail_verify(d: &[u8], bp: &[u8], srcs: &[Vec<u8>]) -> Result<(), Vec<u8>>
         Ok((_, (0, _))) => Ok(()),
         Ok((out, _)) => Err(strip_nl(&out)),
         Err(_) => Err(Vec::new()),
+    }
+}
+
+/// The jail's view of paths, for what install.rs follows in it (git dirs, an --omarchy tree).
+pub struct Jail;
+
+impl crate::install::JailView for Jail {
+    fn path(&self, p: &[u8]) -> Option<Vec<u8>> {
+        jail_path(p)
+    }
+    fn readable(&self, p: &[u8]) -> bool {
+        jail_readable(p)
+    }
+    fn read(&self, p: &[u8]) -> Option<Vec<u8>> {
+        jail_read(p)
+    }
+    fn sees(&self, p: &[u8]) -> Option<Vec<u8>> {
+        jail_sees(p)
+    }
+    fn root_covered(&self, p: &[u8]) -> Option<Vec<u8>> {
+        jail_root_covered(p)
+    }
+}
+
+/// The jail's view when this caller is jailed, else None (the host's paths, as they are).
+pub fn view() -> Option<&'static dyn crate::install::JailView> {
+    if crate::jail::in_jail() {
+        Some(&Jail)
+    } else {
+        None
     }
 }
 

@@ -30,6 +30,7 @@ pub mod run;
 pub mod shot;
 pub mod tree;
 pub mod up;
+pub mod up_box;
 pub mod wait;
 pub mod which;
 pub mod windows;
