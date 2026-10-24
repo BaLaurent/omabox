@@ -196,16 +196,25 @@ fn signal(pid: &[u8], sig: libc::c_int) {
 fn down_mark(ctx: &Ctx, cond: &DownIf) {
     if cond.created.is_none() {
         let me = std::process::id().to_string().into_bytes();
-        if let Some(start) = crate::procfs::proc_start(&me) {
+        let mark = ctx.in_boxes(cat!(".down-", ctx.name));
+        // (a jail's never takes the place of the user's own, which cancels any up)
+        let users = in_jail() && std::fs::read(&mark).is_ok_and(|m| user_marker(&m));
+        if let (Some(start), false) = (crate::procfs::proc_start(&me), users) {
             let mut v = cat!(start, "\n");
             if in_jail() {
                 v.extend(cat!(jail_id(), "\n"));
             }
             let _ = std::fs::create_dir_all(shell::path(&ctx.boxes))
-                .and_then(|()| std::fs::write(ctx.in_boxes(cat!(".down-", ctx.name)), v));
+                .and_then(|()| std::fs::write(&mark, v));
         }
     }
     prune_marks(ctx);
+}
+
+/// A `.down-` marker of the user's own: a time and no jail line.
+fn user_marker(m: &[u8]) -> bool {
+    let t = shell::strip_nl(m);
+    !t.is_empty() && !t.contains(&b'\n')
 }
 
 /// The markers nobody reads any more: a down's after 10 minutes, and an idle box's note
@@ -328,6 +337,13 @@ fn submap_release(ctx: &Ctx) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markers_of_the_user() {
+        assert!(user_marker(b"123\n"));
+        assert!(!user_marker(b"123\nj1\n"));
+        assert!(!user_marker(b""));
+    }
 
     #[test]
     fn programs_are_bash_s() {

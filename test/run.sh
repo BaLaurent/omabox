@@ -1804,6 +1804,12 @@ t_unit_down_jail_race() {
   rp_marker ""; out=$(jx env PATH="$r/nopw" "$CLI" up uc --audio --no-shell --net isolated 2>&1)
   check_match "...a marker of the user's own still does" "up: cancelled: omabox down uc came while it was starting" "$out"
   rm -rf "$r/rt/omabox/uc"
+  # ...and a jailed down after the user's own leaves the user's marker as it was.
+  rp_marker ""; jx env OMABOX_JAIL="$j" "$CLI" down uc >/dev/null 2>&1
+  check_eq "a jailed down keeps the user's own marker" 999999999999 "$(cat "$r/rt/omabox/.down-uc")"
+  out=$(jx env PATH="$r/nopw" "$CLI" up uc --audio --no-shell --net isolated 2>&1)
+  check_match "...which still cancels the user's up" "up: cancelled: omabox down uc came while it was starting" "$out"
+  rm -rf "$r/rt/omabox/uc"
 }
 
 # finding 66: an edit to bin/omabox (linked from ~/.local/bin) while a command runs must not change
