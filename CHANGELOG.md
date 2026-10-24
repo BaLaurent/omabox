@@ -77,6 +77,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **`omabox up B` right after `omabox down B` starts the box**: the bash omabox could cancel it as
+  if the down had come while it was starting, when both began within the same 10 ms. Scripts:
+  nothing to change.
 - **A host command omabox runs gets your `SHLVL` and `_` as they came** (`guard exec`, `host`, a
   `check run` scenario); the bash omabox set its own. Neither is part of omabox's contract. Scripts:
   nothing to change.

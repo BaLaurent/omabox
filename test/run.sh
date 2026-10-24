@@ -14671,6 +14671,16 @@ t_rust_parity_up() {
     no "up of a box with its shell for restart-shell's parity"
   fi
   rpu_down
+  # A down of a box not up, then an up of it at once, from the binary (a few ms each): the down's
+  # .down- marker, its start in clock ticks, ties with the up's start, and that up was cancelled as
+  # one the down came during (finding 506). Never now, a few times over.
+  local i out bad=""
+  for i in 1 2 3; do
+    HOME=$h ob down "$U" >/dev/null 2>&1
+    out=$(HOME=$h ob up "$U" --no-shell --net isolated 2>&1) || bad+="[$out] "
+    HOME=$h ob down "$U" >/dev/null 2>&1
+  done
+  check_eq "down then up at once, from the binary: the up not cancelled (finding 506)" "" "$bad"
   rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/ rp_check="" rp_env=()
 }
 

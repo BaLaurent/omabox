@@ -10016,6 +10016,16 @@ from them.
     install's bin/omabox, every command in bash, as before. Tests: the unit tier and the box tests run
     this way.
 
+506. **An up right after a down of the same name was cancelled** (2026-10-24, #324 wave 6-front,
+    found by A7). A down that finds no box leaves a `.down-NAME` marker with its start in clock ticks
+    (10 ms), and an up cancels when that start is at or after its own (finding 147). From the binary
+    a down takes a few ms, so `omabox down B; omabox up B` started both in one tick, and the up said
+    "cancelled: omabox down B came while it was starting" every time (3 in 3; through bash's hand-off
+    the down took ~50 ms and the tie was rare). **Fix** (the Rust half; bash's up keeps `dt >= t0`): in
+    a tie the up cancels only when the marker was written after it was called (its mtime against
+    CALL_US): a down already over when the up began is not one that came during it. Tests:
+    t_rust_parity_up (down then up at once from the binary, three times, none cancelled; three in three
+    were before), up.rs's a_down_over_before_the_up_is_not_one_that_came.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

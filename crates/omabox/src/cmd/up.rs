@@ -998,11 +998,12 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // A down started since this up was, before it held the lock, found no box and left its start
     // (finding 147): the box it asked to have gone is this one. A jailed down's (its jail on a
     // second line) only for an up of that jail: a jail does not cancel the user's up.
-    let dmark = std::fs::read(ctx.in_boxes(cat!(".down-", ctx.name))).unwrap_or_default();
+    let mpath = ctx.in_boxes(cat!(".down-", ctx.name));
+    let dmark = std::fs::read(&mpath).unwrap_or_default();
     let (dt, djail) = down_marker(&dmark);
     let mine = djail.is_none_or(|j| crate::jail::in_jail() && j == crate::jail::jail_id());
     if let (true, Some(dt), Some(t0)) = (mine, num(&dt), num(&u.t0))
-        && dt >= t0
+        && down_came(dt, t0, marker_us(&mpath), num(&crate::call_us()))
     {
         return Err(ctx.die(cat!(
             "up: cancelled: omabox down ",
@@ -1042,6 +1043,29 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     }
     mounts(ctx, u)?;
     Ok(true)
+}
+
+/// Whether a down whose marker says it started at tick DT came while an up started at tick T0 was
+/// starting (finding 147). Starts are clock ticks (10 ms): in a tie, the down came while the up was
+/// starting only if it ended (its marker written) after the up was called: a down over before the up
+/// began, in the same tick, is not one. Bash's `dt >= t0` took it for one, which a down from the
+/// binary (a few ms) right before an up made common (finding 506).
+fn down_came(dt: i64, t0: i64, marker_us: Option<i64>, call_us: Option<i64>) -> bool {
+    match dt.cmp(&t0) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => match (marker_us, call_us) {
+            (Some(m), Some(c)) => m >= c,
+            _ => true,
+        },
+    }
+}
+
+/// When a marker was written, in µs of the wall clock (as CALL_US is).
+fn marker_us(p: &std::path::Path) -> Option<i64> {
+    let t = std::fs::metadata(p).ok()?.modified().ok()?;
+    let d = t.duration_since(std::time::UNIX_EPOCH).ok()?;
+    i64::try_from(d.as_micros()).ok()
 }
 
 /// A `.down-NAME` marker: the down's start, and the jail of a jailed caller's down (its second line).
@@ -1602,6 +1626,16 @@ pub fn up_already(ctx: &Ctx, u: &Up) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_down_over_before_the_up_is_not_one_that_came() {
+        assert!(down_came(11, 10, None, None));
+        assert!(!down_came(9, 10, Some(5), Some(1)));
+        // (a tie: the marker written after the up was called, or with no times to tell)
+        assert!(down_came(10, 10, Some(2000), Some(1000)));
+        assert!(!down_came(10, 10, Some(999), Some(1000)));
+        assert!(down_came(10, 10, None, Some(1000)));
+    }
 
     #[test]
     fn down_markers() {
