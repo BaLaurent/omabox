@@ -2,8 +2,12 @@
 //! child between fork and exec, where bash ran nsenter. The pidfd pins the box's PID 1 (box_pid
 //! asked again once it is open), so a pid reused meanwhile is never entered. With the box's pid
 //! namespace the child forks once more, as nsenter did: the setns applies to children made after it.
-//! The process left outside waits for the command, passes signals on to it and dies of the same
-//! death; the command dies with it (PR_SET_PDEATHSIG).
+//! The process left outside (the waiter) waits for the command, passes signals on and dies of the
+//! same death. With a session of its own (box_exec, gdb, restart-shell: finding 491) the child in
+//! the box forks once more again: it stays as the session's leader (the keeper) and the command
+//! leads a process group of its own in that session, so every signal passed on reaches the
+//! command's whole group, as the caller's group signals reached everything in it under nsenter, and
+//! the keeper kills that group when the waiter dies (finding 494).
 //!
 //! Everything run in the child is async-signal-safe (the parent may have threads): plain syscalls on
 //! values copied into it before the fork, words for a failure built beforehand.
@@ -91,6 +95,8 @@ impl Entry {
             keep_caps,
             efd: efd.unwrap_or(-1),
             shield: false,
+            // (read here: SIGRTMIN is glibc's, kept apart from what the command may use)
+            pdeath: libc::SIGRTMIN(),
         }
     }
 }
@@ -104,6 +110,9 @@ pub struct Plan {
     keep_caps: bool,
     efd: RawFd,
     shield: bool,
+    /// The keeper's PR_SET_PDEATHSIG: a signal nothing else sends it, caught even where the others
+    /// came ignored.
+    pdeath: libc::c_int,
 }
 
 impl Plan {
@@ -165,8 +174,9 @@ fn errno() -> i32 {
 
 /// The entry itself, between fork and exec. Returns in the process that goes on to exec.
 fn enter(p: &Plan) {
-    // SAFETY: setns, close, fork, setsid, prctl, getppid, dup2 are async-signal-safe syscalls on
-    // numbers of ours; a pidfd's setns joins every namespace in NS at once.
+    // SAFETY: setns, close, fork, setsid, setpgid, prctl, getpid, getppid, dup2 are
+    // async-signal-safe syscalls on numbers of ours; a pidfd's setns joins every namespace in NS at
+    // once.
     unsafe {
         if libc::setns(p.pidfd, p.ns) != 0 {
             die(errno());
@@ -175,24 +185,43 @@ fn enter(p: &Plan) {
         if p.ns & libc::CLONE_NEWPID != 0 {
             // (a SIGCHLD the caller came with ignored would reap the command unseen: nsenter's reset)
             libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+            // (this process becomes the waiter: its parent is the caller's thread)
+            let caller = libc::getppid();
             match libc::fork() {
                 -1 => die(errno()),
                 0 => {
-                    // The command ends with the process outside that waits for it: a KILL to that one
-                    // (a stop that waited long enough, trap.rs) leaves nothing running. Its parent is
-                    // outside the box's pid namespace, so getppid says 0; anything else means it went
-                    // before the line above.
-                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                    // In the box, its parent (the waiter) outside its pid namespace, so getppid
+                    // says 0; anything else means the waiter went before the prctl.
+                    let pdeath = if p.session { p.pdeath } else { libc::SIGKILL };
+                    libc::prctl(libc::PR_SET_PDEATHSIG, pdeath);
                     if libc::getppid() != 0 {
                         libc::_exit(1);
                     }
+                    if p.session {
+                        // No controlling terminal: the caller's is not the box's to read, write or
+                        // signal (finding 491). This process keeps the session; the command gets a
+                        // process group of its own in it (finding 494).
+                        libc::setsid();
+                        let keeper = libc::getpid();
+                        match libc::fork() {
+                            -1 => die(errno()),
+                            0 => {
+                                libc::setpgid(0, 0);
+                                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+                                if libc::getppid() != keeper {
+                                    libc::_exit(1);
+                                }
+                            }
+                            cmd => {
+                                libc::setpgid(cmd, cmd);
+                                keep(cmd, p);
+                            }
+                        }
+                    }
                 }
-                child => wait_as(child, p.session, p.shield),
+                child => wait_as(child, caller, p),
             }
-        }
-        // No controlling terminal: the caller's is not the box's to read, write or signal (finding
-        // 491). A command that has its own pseudo-terminal (box_pty) keeps that one.
-        if p.session {
+        } else if p.session {
             libc::setsid();
         }
         if p.keep_caps {
@@ -247,12 +276,20 @@ unsafe fn keep_caps() {
     }
 }
 
-/// The waiting process's command, and whether it is in a session of its own (every signal of the
-/// caller's terminal goes to it through here).
+/// Who this process (the waiter, or the keeper in the box) passes signals on to: its child, and for
+/// the keeper that child's process group (GROUP). CHILD is 0 once the child is reaped, so nothing
+/// goes to a pid that may be another's by then. OWN_SESSION: the command does not share the
+/// caller's terminal, so the terminal's own signals go through here too. ASKED: a stop was asked for
+/// (a Ctrl-Z), so the child's stop is this process's too; any other stop of the command's (its own,
+/// a box process's, a tracer's) is not.
 static CHILD: AtomicI32 = AtomicI32::new(0);
+static GROUP: AtomicBool = AtomicBool::new(false);
 static OWN_SESSION: AtomicBool = AtomicBool::new(false);
+static ASKED: AtomicBool = AtomicBool::new(false);
+/// This process is the keeper.
+static KEEPER: AtomicBool = AtomicBool::new(false);
 
-/// What the process outside passes on to the command.
+/// What is passed on to the command.
 const PASSED: [libc::c_int; 6] = [
     libc::SIGHUP,
     libc::SIGINT,
@@ -262,89 +299,194 @@ const PASSED: [libc::c_int; 6] = [
     libc::SIGUSR2,
 ];
 
+/// SIG to the child, or the keeper's to the command's group.
+fn send(sig: libc::c_int) {
+    let pid = CHILD.load(Ordering::Relaxed);
+    if pid > 0 {
+        let to = if GROUP.load(Ordering::Relaxed) {
+            -pid
+        } else {
+            pid
+        };
+        // SAFETY: kill is async-signal-safe.
+        unsafe { libc::kill(to, sig) };
+    }
+}
+
 extern "C" fn pass_on(sig: libc::c_int, info: *mut libc::siginfo_t, _: *mut libc::c_void) {
     let _e = crate::sig::Errno::save();
-    let pid = CHILD.load(Ordering::Relaxed);
     // A terminal's (SI_KERNEL) reached the command itself when it shares the terminal; a process's
     // (kill, the stop's pidfd: si_code <= 0) only this one.
     // SAFETY: the kernel's siginfo for this handler (SA_SIGINFO).
     let sent = info.is_null() || unsafe { (*info).si_code } <= 0;
-    if pid > 0 && (sent || OWN_SESSION.load(Ordering::Relaxed)) {
-        // SAFETY: kill is async-signal-safe.
-        unsafe { libc::kill(pid, sig) };
+    if sent || OWN_SESSION.load(Ordering::Relaxed) {
+        send(sig);
     }
 }
 
-/// A terminal's stop (Ctrl-Z) for a command in a session of its own, whose process group the kernel
-/// will not stop for it (an orphaned one): SIGSTOP instead; wait_as then stops too.
+/// The keeper's PR_SET_PDEATHSIG: its waiter is gone (a KILL to it, finding 453's last step, or the
+/// caller's whole group killed), so the command's group is killed, nothing it started left in the
+/// box. (Its getppid cannot tell: the waiter's death hands it to a reaper outside the box's pid
+/// namespace too.)
+extern "C" fn parent_gone(_: libc::c_int) {
+    let _e = crate::sig::Errno::save();
+    send(libc::SIGKILL);
+}
+
+/// A terminal's stop (Ctrl-Z) for a command in a session of its own: the waiter asks the keeper,
+/// the keeper stops the command's group with SIGSTOP (the kernel will not stop an orphaned process
+/// group for SIGTSTP); each then stops with its child.
 extern "C" fn stop_it(_: libc::c_int) {
     let _e = crate::sig::Errno::save();
-    let pid = CHILD.load(Ordering::Relaxed);
-    if pid > 0 {
-        // SAFETY: kill is async-signal-safe.
-        unsafe { libc::kill(pid, libc::SIGSTOP) };
+    ASKED.store(true, Ordering::Relaxed);
+    send(if KEEPER.load(Ordering::Relaxed) {
+        libc::SIGSTOP
+    } else {
+        libc::SIGTSTP
+    });
+}
+
+/// SIG's disposition as this process has it: ignored.
+fn ignored(sig: libc::c_int) -> bool {
+    // SAFETY: a query into a zeroed sigaction of ours.
+    unsafe {
+        let mut old: libc::sigaction = std::mem::zeroed();
+        libc::sigaction(sig, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == libc::SIG_IGN
     }
 }
 
-/// How the process outside the box's pid namespace waits (nsenter's continue_as_child): with no fd
-/// of the command's, passing signals on, stopped while it is; then its exit status, or its death.
-fn wait_as(child: libc::pid_t, own_session: bool, shield: bool) -> ! {
+/// SIG caught by H (one that came ignored stays so, for this process as for the command, unless
+/// ALWAYS), with every signal blocked while H runs.
+fn catch(sig: libc::c_int, h: libc::sighandler_t, info: bool, always: bool) {
+    if !always && ignored(sig) {
+        return;
+    }
+    // SAFETY: a sigaction struct of ours, its handler async-signal-safe.
+    unsafe {
+        let mut sa: libc::sigaction = std::mem::zeroed();
+        sa.sa_sigaction = h;
+        sa.sa_flags = libc::SA_RESTART | if info { libc::SA_SIGINFO } else { 0 };
+        libc::sigfillset(&mut sa.sa_mask);
+        libc::sigaction(sig, &sa, std::ptr::null_mut());
+    }
+}
+
+/// The signal handling of a waiter or a keeper: PASSED passed on (INT and QUIT ignored when SHIELD),
+/// a terminal's stops asked for when OWN_SESSION.
+fn handle(shield: bool, own_session: bool) {
+    for s in PASSED {
+        if shield && (s == libc::SIGINT || s == libc::SIGQUIT) {
+            // SAFETY: signal is async-signal-safe.
+            unsafe { libc::signal(s, libc::SIG_IGN) };
+            continue;
+        }
+        catch(s, pass_on as *const () as libc::sighandler_t, true, false);
+    }
+    if own_session {
+        for s in [libc::SIGTSTP, libc::SIGTTIN, libc::SIGTTOU] {
+            catch(s, stop_it as *const () as libc::sighandler_t, false, false);
+        }
+    }
+}
+
+/// The waiter, outside the box's pid namespace (nsenter's continue_as_child): no fd of the
+/// command's, signals passed on, stopped with it when a stop was asked; ends with the caller
+/// (PR_SET_PDEATHSIG TERM, passed on: finding 494), then as its child ended.
+fn wait_as(child: libc::pid_t, caller: libc::pid_t, p: &Plan) -> ! {
     CHILD.store(child, Ordering::Relaxed);
-    OWN_SESSION.store(own_session, Ordering::Relaxed);
-    // SAFETY: async-signal-safe syscalls only, between fork and exec; sigaction structs of ours.
+    OWN_SESSION.store(p.session, Ordering::Relaxed);
+    // SAFETY: async-signal-safe syscalls only, between fork and exec.
     unsafe {
         libc::syscall(libc::SYS_close_range, 0u32, u32::MAX, 0u32);
         // (its name in ps and pgrep: its command line is still omabox's, a fork's)
         libc::prctl(libc::PR_SET_NAME, c"omabox-enter".as_ptr());
-        let ignored = |s: libc::c_int| {
-            let mut old: libc::sigaction = std::mem::zeroed();
-            libc::sigaction(s, std::ptr::null(), &mut old) == 0 && old.sa_sigaction == libc::SIG_IGN
-        };
-        let catch = |s: libc::c_int, h: libc::sighandler_t, info: bool| {
-            // (one that came ignored stays so, for this process as for the command)
-            if ignored(s) {
-                return;
-            }
-            let mut sa: libc::sigaction = std::mem::zeroed();
-            sa.sa_sigaction = h;
-            sa.sa_flags = libc::SA_RESTART | if info { libc::SA_SIGINFO } else { 0 };
-            libc::sigemptyset(&mut sa.sa_mask);
-            libc::sigaction(s, &sa, std::ptr::null_mut());
-        };
-        for s in PASSED {
-            if shield && (s == libc::SIGINT || s == libc::SIGQUIT) {
-                libc::signal(s, libc::SIG_IGN);
-                continue;
-            }
-            catch(s, pass_on as *const () as libc::sighandler_t, true);
+    }
+    handle(p.shield, p.session);
+    // The caller's end is the command's: its thread that started this one waits for it, so this
+    // fires when the caller is killed (a TERM or KILL to omabox alone).
+    // SAFETY: prctl and getppid take numbers.
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+        if libc::getppid() != caller {
+            libc::kill(libc::getpid(), libc::SIGTERM);
         }
-        if own_session {
-            for s in [libc::SIGTSTP, libc::SIGTTIN, libc::SIGTTOU] {
-                catch(s, stop_it as *const () as libc::sighandler_t, false);
-            }
-        }
-        let mut st = 0;
+    }
+    reap_and_end(child)
+}
+
+/// The keeper, in the box: the session's leader, the command (CMD) leading its group; signals
+/// passed on to that group, the group killed when the waiter goes (P's pdeath); then as the command
+/// ended.
+fn keep(cmd: libc::pid_t, p: &Plan) -> ! {
+    CHILD.store(cmd, Ordering::Relaxed);
+    GROUP.store(true, Ordering::Relaxed);
+    OWN_SESSION.store(true, Ordering::Relaxed);
+    KEEPER.store(true, Ordering::Relaxed);
+    // SAFETY: async-signal-safe syscalls only, between fork and exec.
+    unsafe {
+        libc::syscall(libc::SYS_close_range, 0u32, u32::MAX, 0u32);
+        libc::prctl(libc::PR_SET_NAME, c"omabox-session".as_ptr());
+    }
+    handle(p.shield, true);
+    // (a waiter gone before this, its signal's default action ended this process, and the command
+    // with it, before the command could start anything)
+    catch(
+        p.pdeath,
+        parent_gone as *const () as libc::sighandler_t,
+        false,
+        true,
+    );
+    reap_and_end(cmd)
+}
+
+/// Waits for CHILD's end, a stop it was asked for stopping this one too (and continuing it after);
+/// then this process ends as it did: its exit status, or its death (not dumpable first: never a
+/// core of this process's), so the caller sees 128+N. Signals are blocked from the child's end on,
+/// and CHILD cleared before it is reaped.
+fn reap_and_end(child: libc::pid_t) -> ! {
+    // SAFETY: async-signal-safe syscalls on structs of ours.
+    unsafe {
+        let mut all: libc::sigset_t = std::mem::zeroed();
+        libc::sigfillset(&mut all);
+        let mut none: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut none);
+        let id = libc::id_t::try_from(child).unwrap_or(0);
         loop {
-            let r = libc::waitpid(child, &mut st, libc::WUNTRACED);
-            if r == child {
-                if libc::WIFSTOPPED(st) {
-                    libc::kill(libc::getpid(), libc::SIGSTOP);
-                    libc::kill(child, libc::SIGCONT);
+            let mut info: libc::siginfo_t = std::mem::zeroed();
+            if libc::waitid(
+                libc::P_PID,
+                id,
+                &mut info,
+                libc::WEXITED | libc::WSTOPPED | libc::WNOWAIT,
+            ) != 0
+            {
+                if errno() == libc::EINTR {
                     continue;
                 }
-                break;
+                libc::_exit(1);
             }
-            if r < 0 && errno() == libc::EINTR {
+            libc::sigprocmask(libc::SIG_BLOCK, &all, std::ptr::null_mut());
+            if info.si_code == libc::CLD_STOPPED || info.si_code == libc::CLD_TRAPPED {
+                // (the stop taken, so the next wait sees what comes after it)
+                let mut seen: libc::siginfo_t = std::mem::zeroed();
+                libc::waitid(libc::P_PID, id, &mut seen, libc::WSTOPPED | libc::WNOHANG);
+                if ASKED.swap(false, Ordering::Relaxed) {
+                    libc::kill(libc::getpid(), libc::SIGSTOP);
+                    send(libc::SIGCONT);
+                }
+                libc::sigprocmask(libc::SIG_SETMASK, &none, std::ptr::null_mut());
                 continue;
             }
-            libc::_exit(1);
+            CHILD.store(0, Ordering::Relaxed);
+            break;
         }
+        let mut st = 0;
+        while libc::waitpid(child, &mut st, 0) < 0 && errno() == libc::EINTR {}
         if libc::WIFEXITED(st) {
             libc::_exit(libc::WEXITSTATUS(st));
         }
         if libc::WIFSIGNALED(st) {
             let s = libc::WTERMSIG(st);
-            // Its death again, for the caller's 128+N; never a core of this process's.
             libc::prctl(libc::PR_SET_DUMPABLE, 0);
             libc::signal(s, libc::SIG_DFL);
             let mut set: libc::sigset_t = std::mem::zeroed();
@@ -386,6 +528,7 @@ pub fn main(args: &[OsString]) -> ExitCode {
         keep_caps: false,
         efd,
         shield: false,
+        pdeath: libc::SIGRTMIN(),
     }
     .apply(&mut c);
     let e = c.exec();

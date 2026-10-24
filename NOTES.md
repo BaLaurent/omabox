@@ -9800,11 +9800,13 @@ from them.
     exec with one setns(2) on a pidfd of the box's PID 1, opened by the parent and checked against
     box_pid once it is open (a pid reused meanwhile is never entered). For the box's pid namespace it
     forks once more, as nsenter did: the process left outside (named `omabox-enter`, its command line
-    omabox's) closes every fd, waits for the command, stops while it is stopped, passes HUP, INT, QUIT,
-    TERM, USR1 and USR2 on to it (a terminal's own only when the command does not share that
-    terminal), and dies of the command's death (not dumpable first: never a core of its own), so the
-    caller still sees 128+N; the command gets PR_SET_PDEATHSIG KILL, so a KILL to that process (the
-    bounded stop's last step, finding 453) leaves nothing running in the box. A command that is
+    omabox's) closes every fd, waits for the command, stops with it when a stop was asked for (a
+    Ctrl-Z, not a stop of the command's own: finding 494), passes HUP, INT, QUIT, TERM, USR1 and USR2
+    on to it (a terminal's own only when the command does not share that terminal), and dies of the
+    command's death (not dumpable first: never a core of its own), so the caller still sees 128+N.
+    With a session of its own (finding 491) there is one more process, in the box: its session's
+    leader (`omabox-session`), which passes those signals on to the command's whole process group
+    and kills that group when the waiter dies (finding 494). A command that is
     `timeout` (gdb's runs, record's ffmpeg, the other bounded steps of omabox's) gets neither INT nor
     QUIT from it, as its own process group kept them from it under nsenter; a stop's TERM reaches it. The caller's stderr is
     made the command's before the exec: the held pipe (ns_held, #166) carries only the entry's own
@@ -9822,7 +9824,8 @@ from them.
     over bash): an entry that fails says so in those words, where nsenter's own line was said
     ("dropped N bytes of other output" now names "the box entry's stderr"); a TERM to the process that
     waits (as `pkill -f 'omabox run'` sends it) reaches the command in the box, where nsenter died and
-    the command ran on; `pgrep -f 'omabox run'` finds that process too. Bash's half keeps nsenter.
+    the command ran on; `pgrep -f 'omabox run'` finds that process too; `ps` in the box shows
+    `omabox-session` above the command. Bash's half keeps nsenter.
     Tests: enter.rs's and exec.rs's unit tests, t_run_stdio (no box process finds the entry's stderr),
     t_agent_session (a run in use waited for by its command, not by nsenter's), the suite's box tests
     of every command that enters a box.
@@ -9832,17 +9835,19 @@ from them.
     own (its output piped, `run -- cmd | less`, `> file` from a terminal), the command and what it left
     running could open /dev/tty: read what was typed there, write to it, or signal its session (the
     first confirmed on the bash half by t_run_stdio's check). **Fix** (Rust
-    only): the command leads a session of its own (setsid after the entry), so /dev/tty is "No such
-    device or address" there, for it and for what it leaves; gdb's steps and restart-shell's kill too.
-    The process that waits outside the box stays in the caller's session and passes a Ctrl-C, Ctrl-\
-    and a hang-up on to it, as the terminal did; a Ctrl-Z stops it (SIGSTOP: the kernel will not stop
-    an orphaned process group for SIGTSTP) and that process with it, `fg` continues both. A caller at
+    only): the command runs in a session of its own (setsid after the entry, its leader a process of
+    omabox's in the box, finding 494), so /dev/tty is "No such device or address" there, for it and
+    for what it leaves; gdb's steps and restart-shell's kill too. The process that waits outside the
+    box stays in the caller's session and passes a Ctrl-C, Ctrl-\ and a hang-up on to the command's
+    process group, as the terminal did; a Ctrl-Z stops that group (SIGSTOP: the kernel will not stop
+    an orphaned process group for SIGTSTP) and the processes of omabox's with it, `fg` continues
+    them all. A caller at
     a terminal still gets box_pty (finding 325): the command's controlling terminal is the
     pseudo-terminal `script` holds, never the caller's. What the box can do with that one, kept: type
     into its own input (TIOCSTI), signal its own session, and write to the caller's terminal what any
     program run there writes, escape sequences included (as `cat` of a file would); it reads only what
     is typed while it runs. Tests: t_run_stdio ("what is typed there is not the box's to read", "the
-    command leads a session of its own", "nor of what it leaves running": each fails with
+    command is in a session of the box's own", "nor of what it leaves running": each fails with
     OMABOX_BASH=1).
 
 492. **The tools omabox runs in a box's namespaces had the caller's core limit** (2026-10-24, #324,
@@ -9866,6 +9871,27 @@ from them.
     refusal, and a host grim on the earlier path captures that box's own screen); t_pointer (the path);
     t_unit_rust_parity ("env of a box whose socket is a link now" and the live boxes' env: expected
     differences).
+
+494. **The native entry's signals reached the command, not its children** (2026-10-24, #324, the
+    native-entry step's review). With the command in a session of its own (finding 491), the caller's
+    group signals and the terminal's no longer reached what it started, and the waiter passed them on
+    to the command's pid alone: `run -- sh -c 'sleep 40; echo after' | cat` stopped by a Ctrl-C, or a
+    TERM or KILL to `run`'s process group, left `sleep 40` in the box, where bash left nothing. A KILL
+    to the waiter killed only the command (PR_SET_PDEATHSIG); a TERM or KILL to omabox alone left the
+    waiter and the command running; a command that stopped itself (`kill -STOP $$`) stopped the
+    waiter for good, so `run` hung once the box continued it. **Fix**: in the box, the session is led
+    by a process of omabox's (`omabox-session`, the keeper), which puts the command in a process group
+    of its own and passes each signal the waiter passes it on to that whole group, as the caller's
+    group signals reached everything in the caller's group under nsenter; its PR_SET_PDEATHSIG (a
+    signal nothing else sends it) kills that group when the waiter dies. The waiter's own is a TERM,
+    passed on, when the caller dies. Each stops with its child only for a stop that was asked for (a
+    Ctrl-Z), never for the command's own or a tracer's. Both wait without reaping first (waitid's
+    WNOWAIT), then block signals and forget the pid before reaping, so nothing is sent to a pid
+    another process may have by then. gdb's steps, its watching gdb and restart-shell's kill
+    (stdio_relay) get the 1-byte core limit too (finding 492). Tests: t_run_stdio (a terminal's Ctrl-C,
+    a group TERM and KILL, a TERM and KILL to omabox alone, each with nothing left in the box; a
+    command that stops itself and is continued in the box), t_gdb (the watching gdb's core limit, its
+    caller's 2 bytes), env.rs's test (finding 493: a second env leaves no temporary link).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

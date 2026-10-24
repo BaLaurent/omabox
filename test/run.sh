@@ -7967,6 +7967,8 @@ t_run_stdio() {
   local d=$TMP/$P-stdio B=$P-stdio out rc=0
   mkdir -p "$d"
   up_ok "$B" --no-shell --net isolated || { no "up for run's stdio" "$UP_OUT"; return; }
+  # How many `sleep N` are left in the box.
+  t494_left() { ob run -b "$B" -- sh -c "pgrep -f '^sleep $1\$' | wc -l" 2>&1; }
   echo hello > "$d/in"
   ob run -b "$B" -- sh -c 'readlink /proc/self/fd/0 /proc/self/fd/1 /proc/self/fd/2 | cut -d: -f1 | paste -sd " "' < "$d/in" > "$d/out" 2> "$d/err"
   check_eq "a command's stdin, stdout and stderr from files: pipes in the box (finding 325)" "pipe pipe pipe" "$(cat "$d/out")"
@@ -8005,14 +8007,40 @@ t_run_stdio() {
     # bash's kept it the controlling terminal: /dev/tty read the line typed).
     # shellcheck disable=SC2016 # the box's sh expands them
     local t491='if read -r l </dev/tty; then echo "got:$l"; else echo none; fi
-      [ "$(ps -o sid= -p $$ | tr -d " ")" = $$ ] && echo own session'
+      [ "$(ps -o sid= -p $$ | tr -d " ")" != 0 ] && echo own session'
     out=$( (sleep 1.5; echo t491-typed; sleep 2) | T=$t491 script -q -e -c "$CLI run -b $B -- sh -c \"\$T\" 2>/dev/null | cat" /dev/null 2>&1 | tr -d '\r' | grep -v '^t491-typed$')
     check_eq "a caller at a terminal, the command's output piped: what is typed there is not the box's to read" none "$(sed -n 1p <<<"$out")"
-    check_eq "...the command leads a session of its own (no controlling terminal)" "own session" "$(sed -n 2p <<<"$out")"
+    check_eq "...the command is in a session of the box's own (no controlling terminal)" "own session" "$(sed -n 2p <<<"$out")"
     t491='(sleep 1; if (: 3<>/dev/tty) 2>/dev/null; then echo reached; else echo none; fi > /tmp/t491) >/dev/null 2>&1 &'
     (sleep 3) | T=$t491 script -q -e -c "$CLI run -b $B -- sh -c \"\$T\" 2>/dev/null | cat; sleep 2" /dev/null >/dev/null 2>&1
     check_eq "...nor of what it leaves running" none "$(ob run -b "$B" -- cat /tmp/t491 2>&1)"
+    # A Ctrl-C there reaches the command's children too, as it did in the caller's process group:
+    # nothing of it is left in the box (finding 494). (INT at its default: a parallel job of the
+    # suite's comes with it ignored, which omabox and the box command would keep.)
+    (sleep 1.5; printf '\003'; sleep 2) | T='sleep 494; echo after' env --default-signal=INT script -q -e -c "$CLI run -b $B -- sh -c \"\$T\" | cat" /dev/null >/dev/null 2>&1
+    check_eq "...a Ctrl-C at that terminal ends the command and its children" 0 "$(t494_left 494)"
   fi
+  # A signal to `run`'s whole process group (a harness's), to omabox alone, or a KILL to either:
+  # the command's children go too, as under bash (finding 494).
+  if command -v python3 >/dev/null; then
+    local s494 n494=495
+    for s494 in TERM KILL; do
+      python3 -c 'import os, signal, subprocess, sys, time
+p = subprocess.Popen(["bash", "-c", "\"$0\" run -b \"$1\" -- sh -c \"sleep $2; echo after\" | cat", *sys.argv[1:4]], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(1.5); os.killpg(p.pid, getattr(signal, "SIG" + sys.argv[4])); p.wait()' "$CLI" "$B" "$n494" "$s494"
+      check "a group $s494 to run: nothing of its command left in the box" until_ok 5 test "$(t494_left "$n494")" = 0
+      n494=$((n494 + 1))
+      "$CLI" run -b "$B" -- sh -c "sleep $n494 & sleep $n494" >/dev/null 2>&1 & local p494=$!
+      until_ok 5 test "$(t494_left "$n494")" = 2 >/dev/null
+      kill -"$s494" "$p494"; wait "$p494" 2>/dev/null
+      check "...a $s494 to omabox alone: nothing left either" until_ok 5 test "$(t494_left "$n494")" = 0
+      n494=$((n494 + 1))
+    done
+  else skip "run and a group's signal" "no python3"; fi
+  # A command that stops itself and is continued from inside the box: run goes on with it (a stop
+  # of its own is not the caller's; finding 494).
+  rc=0; out=$(timeout 20 "$CLI" run -b "$B" -- sh -c '(sleep 1; kill -CONT $$) & kill -STOP $$; echo resumed' 2>&1) || rc=$?
+  check_eq "a command that stops itself, continued in the box: run ends with it" "resumed|0" "$out|$rc"
   rc=0; out=$(printf 'echo typed\nexit 3\n' | ob run -b "$B" -- bash 2>&1) || rc=$?
   check_eq "a shell fed by a pipe (no terminal): runs it, its status" "typed|3" "$out|$rc"
   # A process the command leaves running (#239, finding 337) holds neither `run` nor the caller's

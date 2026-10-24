@@ -57,9 +57,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   change ([#357](https://github.com/diogochaves/omabox/issues/357)).
 - **A command in a box had your terminal as its controlling terminal** when it had no terminal of
   its own (its output piped or in a file, from a terminal): it, and what it left running, could open
-  `/dev/tty` and read what you typed there, write to it or signal its session. It now leads a session
-  of its own, with no controlling terminal; a Ctrl-C, Ctrl-\ or Ctrl-Z at your terminal still reaches
-  it. A command run at your terminal keeps the pseudo-terminal of its own it had.
+  `/dev/tty` and read what you typed there, write to it or signal its session. It now runs in a
+  session of its own in the box, with no controlling terminal; a Ctrl-C, Ctrl-\ or Ctrl-Z at your
+  terminal, or a signal to `run`'s process group, still reaches it and everything it started, and
+  nothing of it is left once `run` is stopped or killed. A command run at your terminal keeps the
+  pseudo-terminal of its own it had.
 - **`omabox env` printed a path inside the box's runtime folder**, which the box can write: a link
   put there in its socket's place could lead a host tool to another display, your desktop's included.
   It now prints a hard link to the box's own socket in the box's folder, and refuses a socket that is
@@ -77,13 +79,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **Entering a box is omabox's own**, not `nsenter`'s (`omabox run -b B -- true` takes about a third
   less time). What a failed entry says is in omabox's words, "omabox: cannot enter the box: REASON",
   where nsenter's own line was printed (and "dropped N bytes of other output on the box entry's
-  stderr" where it said "nsenter's stderr"). A TERM sent to the process that waits for a box command
-  (`pkill -f 'omabox run'` reaches it) is passed on to the command, where nsenter died and left the
-  command running; that process is named `omabox-enter`, and `pgrep -f 'omabox run ...'` finds it
-  besides omabox. Scripts that matched `nsenter` lines or processes: match these.
+  stderr" where it said "nsenter's stderr"). A TERM or KILL sent to omabox alone, or to the process
+  that waits for a box command (`pkill -f 'omabox run'` reaches it), ends the command and what it
+  started, where nsenter (or omabox) died and left them running; that process is named
+  `omabox-enter`, and `pgrep -f 'omabox run ...'` finds it besides omabox; in the box, `ps` shows the
+  command's session led by `omabox-session`. Scripts that matched `nsenter` lines or processes: match
+  these.
 - **A command in a box has no controlling terminal** unless it runs at yours (then it has a
   pseudo-terminal of its own, as before): `/dev/tty` there is "No such device or address", and it
-  leads a session of its own. A command that needs a terminal while its output is piped: run it as
+  runs in a session of its own, in a process group of its own. A command that needs a terminal while its output is piped: run it as
   `script -qc CMD /dev/null` in the box.
 - **`omabox env` exports `WAYLAND_DISPLAY=$(omabox path)/wayland`**, a hard link to the box's
   socket, where it exported `$(omabox path --run)/wayland-1`; it exits 1 when the box's socket is not
