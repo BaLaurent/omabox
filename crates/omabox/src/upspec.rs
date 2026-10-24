@@ -197,7 +197,17 @@ pub fn seed_spec(spec: &[u8]) -> Result<(Vec<u8>, Vec<u8>), SeedRefused> {
 /// expansion also globbed each word against the current folder; omabox takes them as written,
 /// finding 439.)
 fn comma_words(v: &[u8]) -> impl Iterator<Item = &[u8]> {
-    v.split(|&c| c == b',').filter(|w| !w.is_empty())
+    ifs_comma(v).into_iter().filter(|w| !w.is_empty())
+}
+
+/// `IFS=, ; for w in $LIST`'s fields as bash splits them: an empty one between two commas or before
+/// the first is kept, the one after a last comma is not (a word clean_keep refuses: `got `).
+fn ifs_comma(v: &[u8]) -> Vec<&[u8]> {
+    let mut f: Vec<&[u8]> = v.split(|&c| c == b',').collect();
+    if f.last().is_some_and(|w| w.is_empty()) {
+        f.pop();
+    }
+    f
 }
 
 /// no_seed_spec LIST HAVE (#231): what of the desk a box starts without, comma-separated, repeatable
@@ -444,7 +454,7 @@ pub fn clean_locale() -> &'static str {
 pub fn clean_keep(list: &[u8]) -> Result<Vec<u8>, ()> {
     let takes = CLEAN_KEEPS.replace(' ', ", ");
     let mut out: Vec<&[u8]> = Vec::new();
-    for k in comma_words(list) {
+    for k in ifs_comma(list) {
         if !CLEAN_KEEPS.as_bytes().split(|&c| c == b' ').any(|x| x == k) {
             say(cat!(
                 "up: --keep takes ",

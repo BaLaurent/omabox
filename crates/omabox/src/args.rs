@@ -85,6 +85,10 @@ fn usage_head(cmd: &[u8]) -> &'static str {
             "  omabox which [--json] PID                              the box a host process is in, or \"not in a box\" (exit 1)"
         }
         b"run" => RUN_HEAD,
+        // (up's lines are run's after its own two: its UP OPTIONS)
+        b"up" => RUN_HEAD
+            .find("  omabox up ")
+            .map_or(RUN_HEAD, |i| &RUN_HEAD[i..]),
         b"hyprctl" => "  omabox hyprctl [-b NAME] ARGS...",
         b"lua" => {
             "  omabox lua [-b NAME] [--json] (EXPR | -)               Lua in the box's Hyprland, printing what it returns"

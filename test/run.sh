@@ -3148,7 +3148,57 @@ EOF
 # state this user namespace cannot read (a non-dumpable process: its ns is unreadable), live ones (a
 # process in a pid namespace of its own, straight or behind a stand-in pasta), a session's boxes
 # (finding 88, #136), an agent resumed (take_over, finding 93) and early ends of run -d jobs (job_note).
-t_unit_rust_parity() {
+t_uni# Wave 5a: `up` itself, both ways, on a box name of its own, taken down before each side: what it says
+# (durations evened out) and what it leaves in the box dir: launch.sh as written (every bwrap, pasta
+# and env word), box.json without its times and pids, and the files there.
+t_rust_parity_up() {
+  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity up" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  local U=$P-rpu r=$TMP/rpu
+  rm -rf "$r"; mkdir -p "$r/td/rp-theme" "$r/norepo"; echo seeded > "$r/seed.txt"; echo 'name = "rp"' > "$r/td/rp-theme/colors.toml"
+  rpu_down() { ob down "$U" >/dev/null 2>&1; true; }
+  rpu_state() {
+    local d=$XDG_RUNTIME_DIR/omabox/$U
+    echo "== launch.sh"; sed -E "s/omabox-$U-[0-9]+/omabox-$U-PID/" "$d/launch.sh" 2>/dev/null
+    echo "== box.json"; jq -S 'del(.created, .pidns, .starter.pid, .starter.start, .starter.command)' "$d/box.json" 2>/dev/null
+    echo "== files"; (cd "$d" 2>/dev/null && command find . -maxdepth 1 -printf '%p %y\n' | LC_ALL=C sort)
+    echo "== home"; (cd "$d/home" 2>/dev/null && command find .config/rp .config/omarchy/themes/rp-theme -maxdepth 0 -printf '%p %y %l\n' 2>/dev/null)
+  }
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=$r/norepo rp_env=() rp_snap=0 rp_prep=rpu_down rp_also=rpu_state
+  rp_sed='s/\b[0-9]+(\.[0-9]+)? ?(s|ms)\b/T/g; s/"created":"[^"]*"/"created":T/'
+  parity "up: headless, no shell, isolated" up "$U" --no-shell --net isolated
+  parity "up --json: with its shell" up "$U" --net isolated --json
+  parity "up: connected" up "$U" --no-shell
+  parity "up --clean" up "$U" --clean
+  parity "up --stock-bar --no-pointer --xwayland" up "$U" --stock-bar --no-pointer --xwayland --net isolated
+  parity "up --monitor: two more, placed" up "$U" --no-shell --net isolated --monitor 800x600 --monitor 1024x768,below
+  parity "up --seed and --theme-dir" up "$U" --no-shell --net isolated --seed "$r/seed.txt:.config/rp/seed.txt" --theme-dir "$r/td/rp-theme"
+  parity "up --addr and --allow" up "$U" --no-shell --net isolated --addr 192.0.2.7 --addr 2001:db8::7 --allow 18081,18080
+  parity "up --idle 0: an orphan to be, said" up "$U" --no-shell --net isolated --idle 0
+  parity "up --env and --size with a scale" up "$U" --no-shell --net isolated --env RPV=1 --size 1280x720,scale=1.5
+  parity "up --no-seed fonts,extensions" up "$U" --no-shell --net isolated --no-seed fonts,extensions
+  # A save whose HOME has a link where --clean writes its wallpaper (finding 461): bash wrote the PNG
+  # through it, onto the host file it leads to; the Rust half writes it in the box HOME.
+  mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"
+  rpu_victim() { rpu_state; echo "== victim"; head -c 4 "$r/victim" | od -An -c | tr -s ' '; echo victim > "$r/victim"; }
+  echo victim > "$r/victim"
+  rp_env=(XDG_DATA_HOME=$r/data) rp_also=rpu_victim rp_why=461 rp_bash=('state~^ 211 P N G$') rp_rust=('state~^ v i c t$')
+  parity "up --from a save with a link at the clean wallpaper's place" up "$U" --no-shell --clean --from rp-save
+  rp_env=() rp_also=rpu_state
+  # A desk with no shell.json: bash's own redirection error said, the Rust half's empty bar unsaid
+  # (finding 462).
+  mkdir -p "$r/desk-empty"
+  rp_env=(OMABOX_DESK_CONFIG=$r/desk-empty) rp_why=462 rp_bash=('err~shell\.json: No such file or directory$') rp_rust=('err!~No such file or directory')
+  parity "up with a desk that has no shell.json" up "$U" --no-shell --net isolated; rp_env=()
+  # Up already: said (the box is the bash half's of the case before, kept), or refused for what it lacks.
+  rp_prep=""
+  parity "up of the box up already" up "$U"
+  parity "up --json of the box up already" up "$U" --json
+  parity "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected --stock-bar
+  rpu_down
+  rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/
+}
+
+t_rust_parity() {
   [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity" "no build/bin/omabox (an install: every command runs in bash)"; return; }
   local r=$TMP/rp sid=0123456789abcdef s8=89abcdef
   # (a locale whose `[0-9]` and `[A-Za-z]` take more than ASCII in glibc's regex, bash's `=~`: where
@@ -5701,6 +5751,132 @@ PYEOF
 # test's own runtime dir (a socket) that logs every request and, for a peek it is told to exec,
 # starts a stand-in peek (sleep under peek's command line, killed before the next case, never a
 # window); nothing of the user's desktop is reached. Every core limit 1 byte.
+# Wave 5a: `up`'s refusals both ways, each before anything is made (the runtime dir is the test's own:
+# rp_snap compares it after), and a box that is up already (up_already) on stand-in boxes (a process
+# in a pid namespace of its own). No case starts a box: every one is refused, or finds its box up.
+t_unit_rust_parity5() {
+  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity 5" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  local r=$TMP/rp5 u1="" l1="" ns1 i
+  rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/norepo" "$r/pl/good" "$r/pl/badid" "$r/pl/noid" "$r/th/mytheme" "$r/th2/mytheme" \
+    "$r/th/.hidden" "$r/glob/fonts" "$r/hypr" "$r/desk-none" "$r/bin"
+  echo '{"id":"rp.good","kinds":["bar-widget"]}' > "$r/pl/good/manifest.json"
+  echo '{"id":"-bad"}' > "$r/pl/badid/manifest.json"
+  echo '{}' > "$r/pl/noid/manifest.json"
+  printf '#!/bin/sh\nexit 0\n' > "$r/hypr/Hyprland"; chmod +x "$r/hypr/Hyprland"
+  rp_rt=$r/rt rp_dir=$r/norepo rp_env=() rp_snap=1 rp_prep="" rp_sed="" rp_wrap=()
+  parity "up: an unknown option" up --bogus
+  for i in --size --plugin --overlay --ro-bind --seed --no-seed --monitor --theme-dir --theme --net --allow --addr --env --idle --from \
+           --hyprland --quickshell --omarchy --owner --keep --workspace -b; do
+    parity "up $i with no value" up "$i"
+  done
+  parity "up -i: refused since 1.0" up -i
+  parity "up: two names" up rpa rpb
+  parity "up --new with a name" up rpa --new
+  parity "up: a name with a slash" up 'rp/a'
+  parity "up: a name starting with a dot" up .rpa
+  parity "up --clean and --desk-shell" up rpa --clean --desk-shell
+  parity "up --keep without --clean" up rpa --keep bar
+  parity "up --keep: not one of its words" up rpa --clean --keep bars
+  parity "up --keep: none" up rpa --clean --keep ,
+  parity "up --no-seed: not one of its words" up rpa --no-seed extension
+  parity "up --monitor: no size" up rpa --monitor right
+  parity "up --workspace 0" up rpa --workspace 0
+  parity "up --size: not a size" up rpa --size big
+  parity "up --size: a scale past 4" up rpa --size 800x600,scale=5
+  parity "up --size: two commas" up rpa --size 800x600,scale=2,x
+  parity "up --size: a rate of 0" up rpa --size 800x600@0
+  parity "up --interactive --size with a scale" up rpa --interactive --size 800x600,scale=2
+  parity "up --idle: a bare number" up rpa --idle 30
+  parity "up --idle: not a duration" up rpa --idle soon
+  rp_env=(OMABOX_IDLE=x); parity "up: OMABOX_IDLE not a duration" up rpa; rp_env=()
+  rp_env=(OMABOX_READY_TIMEOUT=never); parity "up: OMABOX_READY_TIMEOUT not a duration" up rpa; rp_env=()
+  parity "up --workspace without --interactive" up rpa --workspace 3
+  parity "up --confirm-close without --interactive" up rpa --confirm-close
+  parity "up --net: neither mode" up rpa --net open
+  parity "up --allow without --net isolated" up rpa --allow 8081
+  parity "up --allow: not ports" up rpa --net isolated --allow 80a
+  parity "up --allow: 0" up rpa --net isolated --allow 0
+  parity "up --allow: past 65535" up rpa --net isolated --allow 70000
+  parity "up --addr: not a documentation address" up rpa --net isolated --addr 10.0.0.1
+  parity "up --addr: an IPv6 one outside 2001:db8::/32" up rpa --net isolated --addr 2001:db9::1
+  parity "up --addr without --net isolated" up rpa --addr 192.0.2.7
+  parity "up --env: no =" up rpa --env NOVALUE
+  parity "up --env: the session's own" up rpa --env WAYLAND_DISPLAY=x
+  parity "up --owner: not a pid" up rpa --owner 0x1
+  parity "up --overlay: no such directory" up rpa --overlay "$r/none"
+  parity "up --ro-bind: no such path" up rpa --ro-bind "$r/none:/mnt/x"
+  parity "up --ro-bind: a secret store" up rpa --ro-bind "$HOME/.ssh"
+  parity "up --ro-bind: HOME itself" up rpa --ro-bind "$HOME"
+  parity "up --ro-bind: onto the box's /usr" up rpa --ro-bind "$r/pl/good:/usr/x"
+  parity "up --overlay: /tmp" up rpa --overlay /tmp
+  parity "up --seed: no colon" up rpa --seed "$r/pl/good"
+  parity "up --seed: DEST outside the box HOME" up rpa --seed "$r/pl/good:/etc/x"
+  parity "up --seed: DEST climbing out" up rpa --seed "$r/pl/good:../x"
+  parity "up --seed: no such SRC" up rpa --seed "$r/none:x"
+  parity "up --seed: a secret store as SRC" up rpa --seed "$HOME/.ssh:x"
+  parity "up --seed onto a --theme-dir's folder" up rpa --theme-dir "$r/th/mytheme" --seed "$r/pl/good:.config/omarchy/themes/mytheme/x"
+  parity "up --seed over a --plugin's folder" up rpa --plugin "$r/pl/good" --seed "$r/pl/good/manifest.json:.config/omarchy/plugins"
+  parity "up --theme-dir: no such directory" up rpa --theme-dir "$r/none"
+  parity "up --theme-dir: a hidden name" up rpa --theme-dir "$r/th/.hidden"
+  parity "up --theme-dir: two of one name" up rpa --theme-dir "$r/th/mytheme" --theme-dir "$r/th2/mytheme"
+  parity "up --theme: none of that name" up rpa --theme rp-no-such-theme
+  parity "up --theme: not a name" up rpa --theme '!!'
+  parity "up --plugin: not there" up rpa --plugin "$r/none"
+  parity "up --plugin: an id that is not a name" up rpa --plugin "$r/pl/badid"
+  parity "up --plugin: no id" up rpa --plugin "$r/pl/noid"
+  parity "up --hyprland: not a Hyprland" up rpa --hyprland "$r/pl/good/manifest.json"
+  parity "up --quickshell: not there" up rpa --quickshell "$r/none"
+  parity "up --quickshell with --no-shell" up rpa --quickshell /usr/bin/quickshell --no-shell
+  parity "up --omarchy: not a tree" up rpa --omarchy "$r/pl"
+  parity "up --from: a bad save name" up rpa --from 'a/b'
+  parity "up --from: no such save" up rpa --from rp-no-such-save
+  parity "up --desk-shell and --stock-bar" up rpa --desk-shell --stock-bar
+  rp_env=(OMABOX_DESK_CONFIG=$r/none); parity "up --desk-shell: no desk config" up rpa --desk-shell; rp_env=()
+  rp_env=(OMABOX_RENDER_NODE=/dev/dri/card9); parity "up: no usable render node (a card node named)" up rpa --no-shell; rp_env=()
+  # (a cwd with a file `fonts`: bash's unquoted words were globbed against it, finding 457)
+  rp_dir=$r/glob rp_why=457 rp_bash=("err~^omabox: --overlay: no such directory") rp_rust=("err~^omabox: --no-seed: what a box starts without")
+  parity "up --no-seed with a glob character: taken as written" up rpa --no-seed 'font?' --overlay "$r/none"
+  rp_dir=$r/norepo
+  # (--audio's missing programs, with a PATH that has all but PipeWire's: bash joined them with a bare
+  # comma, finding 462)
+  mkdir -p "$r/nopw"; for i in /usr/bin/*; do case ${i##*/} in pipewire|wireplumber|pipewire-pulse|pactl) ;; *) ln -s "$i" "$r/nopw/" ;; esac; done
+  rp_env=(PATH=$r/nopw) rp_why=462 rp_bash=("err~^omabox: up --audio needs pipewire,wireplumber,pipewire-pulse,pactl ") rp_rust=("err~^omabox: up --audio needs pipewire, wireplumber, pipewire-pulse, pactl ")
+  parity "up --audio without PipeWire: the programs named" up rpa --audio --no-shell --net isolated; rp_env=()
+  parity "up --help" up --help
+  # After the lock: a down that came while it started (finding 147), the box's own dir untouched.
+  echo 999999999999 > "$r/rt/omabox/.down-rpc"
+  rp_prep() { echo 999999999999 > "$r/rt/omabox/.down-rpc"; }
+  rp_prep=rp_prep; parity "up: a down came while it was starting" up rpc --no-shell --net isolated; rp_prep=""
+  rm -f "$r/rt/omabox/.down-rpc"
+  # A box up already (stand-ins): said, or refused for what it lacks (finding 134).
+  unshare -Urpf --mount-proc sleep 3600 >/dev/null 2>&1 & u1=$!
+  for i in $(seq 300); do l1=$(pgrep -P "$u1"); [ -n "$l1" ] && [ "$(readlink "/proc/$l1/ns/pid")" != "$(readlink /proc/self/ns/pid)" ] && break; sleep 0.1; done
+  ns1=$(readlink "/proc/$l1/ns/pid")
+  rp5_live() {
+    rm -rf "$r/rt/omabox/rpu"; mkdir -p "$r/rt/omabox/rpu/run" "$r/rt/omabox/rpu/home"
+    echo "{\"child-pid\": $l1}" > "$r/rt/omabox/rpu/info.json"
+    jq -n --arg ns "$ns1" '{name: "rpu", mode: "headless", size: "1920x1080@60", scale: 1, plugins: ["rp.good"], net: "isolated",
+      allow: "8081", idle: 7200, bar: "user", systemd: false, audio: false, overlays: [], xwayland: false, autoreload: false,
+      shell: true, addrs: ["192.0.2.7"], monitor_specs: ["800x600"], theme: "tokyo-night", pidns: $ns}' > "$r/rt/omabox/rpu/box.json"
+  }
+  rp_prep=rp5_live
+  parity "up of a box up already: said" up rpu
+  parity "up --json of a box up already" up rpu --json
+  parity "up of a box up already, with what it has" up rpu --net isolated --allow 8081 --size 1920x1080 --addr 192.0.2.7 --monitor 800x600 --theme tokyo-night
+  parity "up of a box up already, without what is asked" up rpu --size 800x600 --net connected --allow 8082,8081 --systemd --audio --stock-bar \
+    --xwayland --autoreload --no-shell --no-pointer --clean --addr 192.0.2.9 --monitor 1024x768 --no-seed fonts --theme catppuccin \
+    --theme-dir "$r/th/mytheme" --plugin "$r/pl/good" --hyprland /usr/bin/Hyprland
+  parity "up --interactive of a headless box up already" up rpu --interactive
+  parity "up --desk-shell of a box up already" up rpu --desk-shell --plugin "$r/pl/good"
+  rp_wrap=(setpriv --no-new-privs)
+  parity "up from a no_new_privs process, of a box up already" up rpu
+  rp_wrap=() rp_prep=""
+  kill "$u1" 2>/dev/null
+  rm -rf "$r/rt/omabox/rpu"
+  # (a case that started a box, in either half, is a failure above: its box goes here)
+  pkill -KILL -f "^pasta .* $r/rt/omabox/" 2>/dev/null
+}
+
 t_unit_rust_parity4b() {
   [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity 4b" "no build/bin/omabox (an install: every command runs in bash)"; return; }
   local r=$TMP/rp4b st i weird=$'w\nx\x1by:z'
@@ -19166,9 +19342,9 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_jail_held t_jail_record t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole

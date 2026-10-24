@@ -9553,6 +9553,64 @@ from them.
     differences, the video made in Rust and the recording's state gone; "... and INT": both make the
     video, bash at the hold's end with 0, Rust at once with 130, finding 454).
 
+456. **`up` in the Rust half, with SECURITY.md's rules held by construction** (2026-10-24, #324 wave
+    5a, #355). cmd/up.rs reads the words and makes every check bash's cmd_up makes before anything
+    exists, in its order and words; cmd/up_box.rs makes the box. launch.sh comes out byte for byte
+    bash's (t_rust_parity_up compares it, and box.json without its times, on real boxes), so what a
+    box gets is unchanged. What changed is how the command is built: every bwrap bind goes through
+    bwrap.rs's Bwrap, whose methods refuse a seat path (a DRM card node, /dev/input, seatd's socket,
+    /run/dbus, the real runtime dir, or a folder holding one) as a source or a destination, take
+    devices only as render nodes and NVIDIA's own nodes, the one card path only as the box dir's
+    empty placeholder file (finding 294), host folders only read-only or as `--tmp-overlay`, and
+    writable binds only for the box's own runtime dir, HOME and cgroup (S1, S4); the fixed system
+    binds are a list of their own and what a user or a repo names passes refuse_src and refuse_dest
+    (S3). render.rs's RenderNode and NvidiaDev accept only those paths. The HOME is seeded through
+    seed.rs's allow list (SEED_ALLOW: each path of the user's look a box may be seeded from), with
+    --seed, the desk's files under --desk-shell and a --from save the only other sources (S2). The
+    host's Hyprland is reached only through host::HostSilent, which starts the launch script
+    `silent` on a workspace ws_check gave, with no focus, and nothing else (S8). The isolated mode
+    carries its allow list (net.rs's Net::Isolated, S5). And the started box is read back: its
+    mountinfo, through its PID 1, must hold none of the seat's paths (a card node that is the
+    placeholder file is fine), nor /dev/input, /run/seatd.sock or /run/dbus, and its runtime dir must
+    not be the user's own; one there ends the box, "up: box 'B' has ... (S1: never the seat's paths):
+    not started" (up_box.rs's seat_check), so every box any test starts is checked. Box entry is
+    still nsenter. Tests: bwrap.rs's no_seat_path_gets_through (proptest: arbitrary paths at every
+    bind method), net.rs's pasta_opens_what_it_should (proptest), upspec.rs's refuse_dest proptest,
+    render.rs's, seed.rs's every_allowed_source_says_what_it_is; t_unit_rust_parity5 (96 refusal and
+    up-already cases both ways), t_rust_parity_up (19 live cases), the suite's box tests of up.
+
+457. **`--no-seed` and `--keep` matched their words against the current folder** (2026-10-24, #324
+    wave 5a; finding 439's class). Bash split them with `IFS=,` unquoted, so each word was also a
+    glob: `--no-seed 'font?'` in a folder holding a file `fonts` was read as `fonts`. **Change**
+    (Rust over bash): the words are taken as written; `font?` is refused, as any word that is not
+    one of the list (CHANGELOG). Tests: t_unit_rust_parity5 ("up --no-seed with a glob character:
+    taken as written"), an expected difference.
+
+461. **`up --clean --from SAVE` wrote its wallpaper through a link the save left** (2026-10-24, #324
+    wave 5a; finding 168's class). seed_home clears the links on the way to what it writes, but
+    --clean's `base64 -d > .config/omabox/clean-wallpaper.png` cleared the folder's, not the file's:
+    a save whose HOME had a link there (a box can write anything in its HOME) had the PNG written
+    onto the host file the link led to. **Fix** (the Rust half): the link at the file is removed
+    first, and the PNG written in the box HOME. Tests: t_rust_parity_up ("up --from a save with a
+    link at the clean wallpaper's place"), an expected difference: bash overwrote the host file.
+
+462. **What up said in bash's or a tool's words** (2026-10-24, #324 wave 5a; finding 441's class).
+    **Change** (Rust over bash): `up --audio` names the programs it lacks one by one ("pipewire,
+    pactl", as its code meant: bash's substitution ran on each word and wrote a bare comma); a desk
+    with no shell.json is said by nothing (bash printed its own "bin/omabox: line N: ...: No such file
+    or directory"; the box's bar starts from an empty shell.json, as before); a plugin validator that
+    cannot start is "omabox: cannot run V: ...", and a folder or file seed_home cannot make is "up:
+    could not ... in the box HOME: WHY", exit 1, where bash ended with the tool's own line; a failed
+    rewrite of box.json (plugin_check, client_render_check) leaves no box.json.tmp. Exit codes
+    unchanged. Tests: t_unit_rust_parity5 ("up --audio without PipeWire: the programs named"),
+    t_rust_parity_up ("up with a desk that has no shell.json"): expected differences.
+
+463. **A jailed caller's file read by up could hang it** (2026-10-24, #324 wave 5a). jail_read (a
+    jailed caller's plugin manifest, its --omarchy tree's files) opened the file with bash's `exec
+    {fd}<`, which waits for a writer when the path is a FIFO: a jail that swapped one in hung its
+    own `up` (the broker's call to it). **Fix** (the Rust half): the file is opened
+    without blocking and refused unless it is a regular file. Tests: jailpath.rs's unit tests.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

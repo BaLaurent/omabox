@@ -20,6 +20,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`up --clean --from SAVE` could write its wallpaper outside the box**, onto the file a link the
+  save left at `~/.config/omabox/clean-wallpaper.png` led to. It is written in the box HOME.
 - **A monitor window of an interactive box could open on your workspace and take focus**: when the
   box's Hyprland took more than 5 s to make it, when `monitor add` was interrupted (Ctrl-C, TERM,
   HUP) while the box made it, or when two adds ran at once; and an add cut short could leave its host
@@ -41,6 +43,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **`up --no-seed` and `--keep` take their words as written**: `*`, `?` or `[` in them are refused.
+  The bash omabox matched them against the current folder's file names (`--no-seed 'font?'` was
+  `fonts` in a folder holding a file of that name). Name the words instead.
+- **`up` says its own words**: `up --audio` names the programs it lacks as "pipewire, pactl" (the
+  bash omabox wrote "pipewire,pactl"); a desk with no `shell.json` no longer prints bash's "No such
+  file or directory" line; a failure to make the box HOME is said as "up: could not ... in the box
+  HOME". Exit codes unchanged.
 - **An INT sent to omabox by another process (`kill -INT PID`) stops the command like TERM**, once
   the step in progress is over, with what a TERM would leave (a temporary file removed, a monitor
   half made removed, a `record --for` stopped), exit 130. The bash omabox went on or stopped

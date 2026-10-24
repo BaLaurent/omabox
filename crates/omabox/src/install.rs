@@ -1119,9 +1119,9 @@ pub fn audio_packages() -> Result<(), Vec<u8>> {
     if miss.is_empty() {
         return Ok(());
     }
-    // (bash's `local IFS=,; echo "${miss[*]//,/, }"` joins them with a bare comma: its substitution
-    // runs on each word, which has none)
-    Err(miss.join(&b','))
+    // "pipewire, pactl", as its comment meant: bash's `local IFS=,; echo "${miss[*]//,/, }"` ran the
+    // substitution on each word, which has none, and wrote a bare comma (finding 462)
+    Err(miss.join(b", ".as_slice()))
 }
 
 /// audio_ready: the box's audio is up (#226): its pipewire-pulse answers, its default output is

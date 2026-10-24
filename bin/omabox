@@ -30,7 +30,7 @@ RELAY=$ROOT/tools/relay/omabox-relay
 # The Rust half (#324, crates/omabox, built into build/bin): the commands it has taken over run there
 # (rust_handoff). OMABOX_BASH=1 keeps every command here, to compare the two.
 RUST=$ROOT/build/bin/omabox
-RUST_CMDS=" _rust path env which hyprctl lua run log logs events wait windows tree pixel keys keys-to-box click scroll pointer drag shot screenshot calibrate monitor output mode gpu cpu audio ports clip peek gdb check record "
+RUST_CMDS=" _rust path env which hyprctl lua run log logs events wait windows tree pixel keys keys-to-box click scroll pointer drag shot screenshot calibrate monitor output mode gpu cpu audio ports clip peek gdb check record up "
 NO_RUST=${OMABOX_BASH:-}; unset OMABOX_BASH   # for this call only, not what it starts
 # aquamarine with the fix boxes need for a nested Wayland output (hyprwm/aquamarine#415, finding 125):
 # the commit `omabox setup --aquamarine` builds (after v0.15.1; the first release after that has it),
