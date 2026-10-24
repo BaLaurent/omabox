@@ -1803,10 +1803,10 @@ fn burst_run(
         if !s.win.is_empty() {
             let _ = on_box(ctx, &g, false, Out::Null, ErrTo::Null);
         }
-        let t0 = now_ms();
+        let t0 = crate::settle::mono_ms();
         for k in 1..=nf {
             let fpath = cat!(frame(&s.out, &n(k))?, ".png");
-            let t = now_ms() - t0;
+            let t = crate::settle::mono_ms() - t0;
             let ef = std::fs::File::create(shell::path(&err)).ok();
             let rc = match (std::fs::File::create(shell::path(&fpath)), ef.as_ref()) {
                 (Ok(f), Some(e)) => {
@@ -1835,7 +1835,7 @@ fn burst_run(
                 act = spawn_act(ctx);
             }
             if every > 0 && k < nf {
-                let next = t0 + k * every - now_ms();
+                let next = t0 + k * every - crate::settle::mono_ms();
                 if next > 0 {
                     std::thread::sleep(Duration::from_millis(u64::try_from(next).unwrap_or(0)));
                 }

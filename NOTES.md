@@ -9396,10 +9396,17 @@ from them.
     (settle::secs, time(2)) at ~20 waits: a window to appear (3 s), a mode or output to apply (5 s,
     10 s), the still tool's start (12 s) and a gone box's 2 s, peek's focus (5 s), gdb's attach
     (10 s), record's start (5 s) and wf-recorder's end (15 s), the monitors' moves (5 s), wait's
-    and settle's 30 s notes. **Change** (Rust over bash): Instant deadlines (settle::after, past),
-    exact and monotonic; `check run`'s "box up in N s" is the whole seconds of an Instant's elapsed
-    time. The sleeps between the polls are unchanged (CHANGELOG). Tests: none pins a sub-N wait;
-    the box tests of those commands run as before.
+    and settle's 30 s notes. Other waits counted milliseconds of the wall clock (`date +%s%3N`,
+    settle::now_ms), so a clock step lengthened or cut them: `wait --timeout` and its probes'
+    budget, `events --until`'s timeout, `run -d --replace`'s 5 s before SIGKILL and 3 s after,
+    `shot --burst`'s frame times and spacing, settle's time to a gone compositor, and the windows
+    `cpu` and `gpu` sample over (`date +%s%N`). **Change** (Rust over bash): Instant deadlines
+    (settle::after, past) and intervals (settle::mono_ms, mono_ns: the monotonic clock since the
+    process's first ask), exact; now_ms is left for times written out (run marks, a shot's stamp,
+    `events --since 30s`, which compares with events.log's times). `check run`'s "box up in N s" is
+    the whole seconds of an Instant's elapsed time. The sleeps between the polls are unchanged
+    (CHANGELOG). Tests: none pins a sub-N wait or a clock step; the box tests of those commands
+    run as before.
 
 451. **`check run SCENARIO` could run a shell builtin or one of omabox's functions** (2026-10-23, #324
     wave 4c; decided by Diogo 2026-10-22). Bash's check_run starts the scenario as `"${scen[@]}"`

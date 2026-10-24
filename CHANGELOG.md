@@ -99,10 +99,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **JSON numbers are written in standard form**: `1000`, not jq's `1E+3`; `1e+300`, not `1E+300`
   (`lua --json`, a box's `box.json`). A number written without an exponent stays as it was. Scripts
   that read the JSON with a JSON reader: nothing to change.
-- **Built-in waits last their full time** (a window to appear, a mode to apply, peek's focus,
-  gdb's attach, `wait`'s 30 s notes), on a clock that a time change does not move. The bash omabox
-  counted whole seconds of the wall clock, so they could end up to a second early. Scripts: nothing
-  to change.
+- **Waits and timeouts run on a clock that a time change does not move**: `wait --timeout`,
+  `events --until`'s timeout, `run -d --replace`'s grace before SIGKILL, `shot --burst`'s spacing,
+  `cpu` and `gpu`'s sampling window, and the built-in waits (a window to appear, a mode to apply,
+  peek's focus, gdb's attach, `wait`'s 30 s notes), which also last their full time now. The bash
+  omabox measured them on the wall clock, and the built-in ones in whole seconds, so they could end
+  up to a second early. Scripts: nothing to change.
 - **`check run SCENARIO` always runs the program found in PATH**: a scenario named like a shell
   builtin or one of omabox's functions (`test`, `true`, `say`) is no longer run inside omabox.
   Scripts: nothing to change (give a path, as before, for a scenario of your own).

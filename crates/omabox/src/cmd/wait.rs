@@ -13,7 +13,7 @@ use crate::jqprog::WIN_DESC_JQ;
 use crate::num::{fixed, ms_duration, ms_s, xywh_less};
 use crate::select::select_box;
 use crate::settle::{
-    Settle, WAIT_MAX_MS, cursor_now, cursor_rect, geom_csv, geom_parse, now_ms, rects_meet,
+    Settle, WAIT_MAX_MS, cursor_now, cursor_rect, geom_csv, geom_parse, mono_ms, rects_meet,
 };
 use crate::shell::{dec, strip_nl};
 use crate::shellnote::shell_note;
@@ -75,7 +75,7 @@ impl Probe<'_> {
                 (0, o)
             }
             Probe::Until(cmd) => {
-                let left = tmo - (now_ms() - t0);
+                let left = tmo - (mono_ms() - t0);
                 match box_alive(ctx) {
                     Ok(true) => {}
                     Ok(false) => return (1, Vec::new()),
@@ -161,15 +161,15 @@ fn poll_until(
     json: bool,
     probe: Probe,
 ) -> Res<()> {
-    let t0 = now_ms();
     // (the monotonic clock: finding 450)
+    let t0 = mono_ms();
     let mut used = std::time::Instant::now();
     let (mut yes, mut detail) = (0u32, Vec::new());
     let mut now: i64;
     let (res, msg): (&str, Vec<u8>);
     loop {
         let (rc, o) = probe.run(ctx, t0, tmo);
-        now = now_ms() - t0;
+        now = mono_ms() - t0;
         if rc == 2 {
             return Err(Exit(2));
         }

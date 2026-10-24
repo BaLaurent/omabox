@@ -127,11 +127,11 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         )
         .out
     } else {
-        let t0 = now_ns();
+        let t0 = crate::settle::mono_ns();
         let a = snap(ctx);
         let _ = std::fs::write(shell::path(&at("a")), &a);
         crate::trap::sleep(&secs);
-        let t1 = now_ns();
+        let t1 = crate::settle::mono_ns();
         let b = snap(ctx);
         let _ = std::fs::write(shell::path(&at("b")), &b);
         // A client first seen in the second sample started during the window: all its time
@@ -199,14 +199,6 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 /// The words of a jq call built with Args (for one fed by a pipe, not a here-string).
 fn r_words(a: Args) -> Vec<Vec<u8>> {
     a.into_words()
-}
-
-/// `date +%s%N`.
-fn now_ns() -> i128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i128)
-        .unwrap_or(0)
 }
 
 /// `command -v NAME`: on PATH, executable.

@@ -140,7 +140,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         .unwrap_or(0);
     let ns: i128 = fixed(awk_num(&secs) * 1e9, 0).parse().unwrap_or(0);
     loop {
-        let left = t0 + ns - now_ns();
+        let left = t0 + ns - crate::settle::mono_ns();
         if left <= 0 {
             break;
         }
@@ -220,14 +220,6 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     crate::cmd::hyprctl::code(t.rc)
 }
 
-/// `date +%s%N`.
-fn now_ns() -> i128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i128)
-        .unwrap_or(0)
-}
-
 /// cpu_tame: a process name as `cpu` writes it, in C's bytes: blanks to _, anything but
 /// [A-Za-z0-9_.:+@-] to ?.
 pub fn cpu_tame(v: &[u8]) -> Vec<u8> {
@@ -248,7 +240,7 @@ pub fn cpu_tame(v: &[u8]) -> Vec<u8> {
 /// threads of the processes cpu_report keeps (by --pid, either numbering, or by name).
 fn cpu_snap(ctx: &Ctx, threads: bool, pid: &[u8], tapp: &[u8], into: &mut Vec<u8>) {
     let pids = box_pids(ctx);
-    into.extend_from_slice(format!("S {}\n", now_ns()).as_bytes());
+    into.extend_from_slice(format!("S {}\n", crate::settle::mono_ns()).as_bytes());
     let lines = cpu_sample(&pids);
     if !threads {
         for l in &lines {

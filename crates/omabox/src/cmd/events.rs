@@ -629,11 +629,11 @@ fn wait_until(ctx: &Ctx, sh: &Show, lr: &mut LineReader, until: &[u8], tmo: i64)
         Re::from_bytes(&sh.re, icase)
     };
     let ts_re = Re::new(r"^[0-9]+\.[0-9]{3}$");
-    let t0 = now_ms();
+    let t0 = crate::settle::mono_ms();
     let mut used = Instant::now();
     let mut part = Vec::new();
     loop {
-        let left = tmo - (now_ms() - t0);
+        let left = tmo - (crate::settle::mono_ms() - t0);
         if left <= 0 {
             say(format!(
                 "events: no event matching {} in {:.2}s",

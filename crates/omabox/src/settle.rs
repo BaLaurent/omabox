@@ -26,7 +26,20 @@ pub const BOX_STILL: &str = "/opt/omabox/bin/omabox-still";
 /// --timeout and the like: 10 min at most.
 pub const WAIT_MAX_MS: i64 = 600_000;
 
-/// `date +%s%3N`.
+/// Milliseconds on the monotonic clock since this process first asked: what a deadline or an interval
+/// is measured with (finding 450); now_ms is for a time written out.
+pub fn mono_ms() -> i64 {
+    i64::try_from(mono_ns() / 1_000_000).unwrap_or(i64::MAX)
+}
+
+/// mono_ms in nanoseconds.
+pub fn mono_ns() -> i128 {
+    static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    i128::try_from(T0.get_or_init(std::time::Instant::now).elapsed().as_nanos())
+        .unwrap_or(i128::MAX)
+}
+
+/// `date +%s%3N`: a time written out (a mark, a stamp); never a deadline (mono_ms).
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -526,7 +539,7 @@ impl Settle {
             }
         }
         self.line = line;
-        self.t0 = now_ms();
+        self.t0 = mono_ms();
         Ok(())
     }
 
@@ -690,7 +703,7 @@ impl Settle {
                 b"off-screen" => cat!("the region watched is not on the screen of box '", n, "'"),
                 _ => {
                     // Its compositor gone: the box is (being) taken down.
-                    let gone = now_ms() - self.t0;
+                    let gone = mono_ms() - self.t0;
                     let end = after(2);
                     while box_alive(ctx)? && !past(end) {
                         std::thread::sleep(Duration::from_millis(200));

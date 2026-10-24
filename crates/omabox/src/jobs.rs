@@ -691,7 +691,7 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
     };
     let cj = crate::hypr::hypr_json(ctx, &["clients"])?;
     let wins = windows(&cj);
-    let t0 = now_ms();
+    let t0 = crate::settle::mono_ms();
     let (mut end, mut killed) = (t0 + 5000, false);
     let signal = |procs: &[(Vec<u8>, Vec<u8>)], sig: i32| {
         for (h, _) in procs {
@@ -710,7 +710,7 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
         if procs.is_empty() {
             break;
         }
-        if now_ms() < end {
+        if crate::settle::mono_ms() < end {
             continue;
         }
         if killed {
@@ -722,7 +722,7 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
             )));
         }
         killed = true;
-        end = now_ms() + 3000;
+        end = crate::settle::mono_ms() + 3000;
         signal(&procs, libc::SIGKILL);
     }
     // A client's windows go when it does; a window still there after 3 s is not what --replace is for.
@@ -765,7 +765,7 @@ pub fn job_replace(ctx: &Ctx, quiet: bool, argv: &[Vec<u8>]) -> crate::exit::Res
         };
         say(format!(
             "--replace: stopped the earlier job ({n} window{s}) in {:.2}s{k}",
-            (now_ms() - t0) as f64 / 1000.0
+            (crate::settle::mono_ms() - t0) as f64 / 1000.0
         ));
     }
     Ok(())
