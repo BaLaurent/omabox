@@ -19878,7 +19878,7 @@ box_procs() {
   for p in /proc/[0-9]*; do
     [[ $mine != *" ${p#/proc/} "* ]] || continue
     c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
-    e=$(tr '\0' '\n' < "$p/environ" 2>/dev/null) || e=""
+    e=$(tr '\0' '\n' 2>/dev/null < "$p/environ") 2>/dev/null || e=""
     if [[ $c == *"/omabox/$1"* || $c == *" _reap $1"* ]] || grep -qE "^OMABOX_(BOX|NAME)=$1" <<<"$e"; then
       echo "${p#/proc/} ${c:0:200}"
     fi
