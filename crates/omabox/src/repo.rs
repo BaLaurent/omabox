@@ -174,7 +174,7 @@ pub fn repo_top() -> Option<Vec<u8>> {
 
 /// JAIL_COVERABLE: a jail's folder a box may mount with what the jail hides in it covered again: not
 /// one of the hidden paths itself, and one with nothing hidden or whose hidden paths the policy lists.
-fn coverable(pol: &Value, root: &Value) -> bool {
+pub(crate) fn coverable(pol: &Value, root: &Value) -> bool {
     let path = root.get("path");
     let masks = pol.get("masks").and_then(Value::as_array);
     let hidden = masks.is_some_and(|m| m.iter().any(|x| Some(x) == path));
