@@ -6271,7 +6271,7 @@ while time.time() < end:
     rp4b_also_c
     echo "== rt"; (cd "$r/rt/omabox" && for f in rc/* rca/*; do [ -f "$f" ] || continue; case $f in */box.json|*/info.json) continue ;; esac; echo "-- $f"; case $f in */record|*/record.audio) sed -E 's/^[0-9]+(,[0-9]+)*( |$)/P\2/; s/[0-9]{3,}/N/g' "$f" ;; *) sed -E 's/[0-9]{3,}/N/g' "$f" ;; esac; done)
     # (the layout's wf-recorders start together: their lines in either order)
-    for f in wf.log ff.log magick.log; do [ ! -f "$st/$f" ] || { echo "== $f"; sed -E "s#$r#R#g; s/sheet-[0-9]+/sheet-PID/g; s/\.record-[A-Za-z0-9]+/.record-X/g; s/[0-9]{6,}/N/g" "$st/$f" | if [ "$f" = wf.log ]; then LC_ALL=C sort; else cat; fi; }; done
+    for f in wf.log ff.log magick.log; do [ ! -f "$st/$f" ] || { echo "== $f"; sed -E "s#$r#R#g; s/sheet-[0-9]+/sheet-PID/g; s/\.record-[A-Za-z0-9]+/.record-X/g; s/[0-9]{6,}/N/g${rp4b_cuts_sed:-}" "$st/$f" | if [ "$f" = wf.log ]; then LC_ALL=C sort; else cat; fi; }; done
   }
   rp_snap=0 rp_also=rp4b_recst rp4b_pre=(rp4b_recfix)
   rp_env=("${rp_env4c[@]}" PATH="$r/mbin:$PATH")
@@ -6398,7 +6398,11 @@ while time.time() < end:
   parity "record stop --cut-idle" record -b rc stop --cut-idle
   rp4b_marked() { rp4b_started; rp4b_cli -b rc record mark 'a mark' >/dev/null 2>&1; printf '%s 1 ptr 1920x1080 move 10 10 click\n' "$(($(date +%s%N) / 1000))" >> "$r/rt/omabox/rc/record.input"; }
   rp4b_pre=(rp4b_marked)
+  # (the frames --cut-idle keeps around the click hang on when the prep wrote it after the recording's
+  # start, under load later on one side: their numbers are timing, the cut's shape is compared)
+  local rp4b_cuts_sed='; s/between\(n,[0-9]+,[0-9]+\)/between(n,A,B)/g'
   parity "record stop --show-input --captions --cut-idle 200ms" record -b rc stop --show-input --captions --cut-idle 200ms
+  rp4b_cuts_sed=""
   parity "record stop --sheet --frames 4 --fit 400" record -b rc stop --sheet --frames 4 --fit 400
   parity "record stop --sheet --every 1s" record -b rc stop --sheet --every 1s
   # --frames as bash's arithmetic read it: 010 octal (8), 08 none (no frame picked; with --fit a
