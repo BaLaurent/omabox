@@ -69,6 +69,11 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **The tools omabox runs against a box (grim, hyprctl, its input tools, gdb) could make a crash
   notification on your desktop**: unlike a box's own commands, they kept your core limit. They get
   the box's 1-byte limit.
+- **A monitor could come up at scale 2 where `--monitor` or `monitor add` asked for another**: one
+  at the size an output starts at (1280x720 on NVIDIA) was now and then kept at Hyprland's default
+  scale, which a reload kept too. Its scale is set before it exists, and the add waits until the box
+  has it (rounded to whole pixels at most, as `mode`'s); one Hyprland makes at another is removed,
+  saying what it made, exit 1 ([#379](https://github.com/diogochaves/omabox/issues/379)).
 
 ### Changes from the bash omabox
 

@@ -9896,6 +9896,32 @@ from them.
     command that stops itself and is continued in the box), t_gdb (the watching gdb's core limit, its
     caller's 2 bytes), env.rs's test (finding 493: a second env leaves no temporary link).
 
+510. **A monitor `up --monitor` or `monitor add` made could be kept at scale 2** (2026-10-24, #379).
+    t_monitors_wait_nvidia's box now and then came up with its 1280x720,scale=1.6 monitor at 2 (three
+    full suites, once alone; by hand 1 up in 2). The box's Hyprland log has the cause: `output create`
+    makes the output before its rule exists (`monitor add` set it only after, through
+    omabox_place_monitors()), so Hyprland gives it its hardcoded rule ("No rule found for WAYLAND-2
+    ... Using the default hardcoded one": scale 2.00) until the rule applies, a tick after the place's
+    eval. On NVIDIA the output is a window on labwc, which starts at aquamarine's default 1280x720, so
+    for a 1280x720 SPEC the add's wait (the size asked, any scale) was met in that gap; the place's own
+    wait (finding 260) checks positions only, and a monitor right of the main screen is at 1920,0 at
+    any scale of its own. The add read scale 2, wrote it to omabox.monitors as "Hyprland made it" (a
+    scale may be rounded), and the next place, a reload, every later load set 2 for good. Any SPEC at
+    the size an output starts at would do it (a headless output's too). Not Hyprland's fault: an
+    output with no rule is meant to take the default one.
+    **Fix** (Rust only): `monitor add` evaluates omabox_place_monitors() before `output create` (the
+    line is in omabox.monitors already, so the rule is there when the output comes: its first rule
+    applied is its own, logged at scale 1.60), and its wait takes the monitor only at its size and
+    within 0.2 of the scale asked, as `mode` does (Hyprland rounds a scale to whole pixels, never
+    further). One Hyprland makes at another scale is removed and the record put back, saying "did not
+    come up as WxH@HZ,scale=S: Hyprland made it ...", exit 1, so `up` fails rather than come up at a
+    scale nobody asked for. Checked on the RTX: 12 hand-made ups of the test's box and 10 runs of
+    t_monitors_wait_nvidia alone, all at 1.6 (before the fix, 1 up in 2 at 2). Tests:
+    t_unit_rust_parity4 ("its rule there before its output", the stand-in giving an output with no
+    rule scale 2 for good; "Hyprland makes it at another scale": expected differences, bash keeps 2),
+    t_monitors_wait_nvidia and t_monitors_wait (the monitors' scales and places read from the box,
+    besides up's line).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

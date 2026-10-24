@@ -17,6 +17,7 @@ use crate::mon::{
     monitors_file, monitors_place, monitors_record, monitors_without, monitors_write, pad, w,
     with_line,
 };
+use crate::num::awk_num;
 use crate::screen::main_screen;
 use crate::select::select_box;
 use crate::settle::{after, past};
@@ -460,6 +461,25 @@ pub(crate) fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u
             "'s window"
         )));
     }
+    // Its rule set before its output exists (#379, finding 510): an output with no rule of its own
+    // comes up on Hyprland's hardcoded one, at scale 2, until the place below sets it; a Wayland one
+    // (NVIDIA) at 1280x720 too, aquamarine's size for a window not configured yet. A 1280x720 SPEC
+    // at another scale was read in that gap as made at 2, and kept so. (Its result unread: the place
+    // below says why one failed.)
+    on_box(
+        ctx,
+        &w(&[
+            b"timeout",
+            HYPR_LIMIT.as_bytes(),
+            b"hyprctl",
+            b"eval",
+            b"omabox_place_monitors()",
+        ]),
+        false,
+        Out::Null,
+        ErrTo::Null,
+    )
+    .or_exit()?;
     let r = on_box(
         ctx,
         &w(&[
@@ -503,6 +523,7 @@ pub(crate) fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u
         .unwrap_or_default()
         .to_vec();
     let made;
+    let mut seen = Vec::new();
     loop {
         if let Ok(x) = hypr_json(ctx, &["monitors"]) {
             m = strip_nl(&x);
@@ -511,20 +532,49 @@ pub(crate) fn monitor_add(ctx: &mut Ctx, spec: &[u8], given: &[u8]) -> Res<Vec<u
                 .kv("--arg", "w", &wmode)
                 .arg(crate::jqprog::ADD_LINE_JQ)
                 .run(Some(&m), jq::Err::Null);
+            // At its size and at the scale asked (#379): Hyprland may round a scale to whole pixels
+            // (within 0.2, as `mode` takes it), never make it another.
             if r.ok() {
-                made = r.text();
-                break;
+                let f = shell::read_fields(&r.text(), 4);
+                if (awk_num(&f[3]) - awk_num(&scale)).abs() < 0.2 {
+                    made = r.text();
+                    break;
+                }
+                seen = mon::size_text(&f[1], &f[3]);
             }
         }
         if past(end) {
+            if seen.is_empty() {
+                return Err(ctx.die(cat!(
+                    "monitor add: ",
+                    name,
+                    " did not come up as ",
+                    mode,
+                    " (omabox monitor list -b ",
+                    n,
+                    ")"
+                )));
+            }
+            // At another scale: not kept (a reload would keep it so), the record as it was.
+            on_box(
+                ctx,
+                &w(&[b"hyprctl", b"output", b"remove", &name]),
+                false,
+                Out::Null,
+                ErrTo::Null,
+            )
+            .or_exit()?;
+            monitors_write(ctx, &rest);
             return Err(ctx.die(cat!(
                 "monitor add: ",
                 name,
                 " did not come up as ",
-                mode,
-                " (omabox monitor list -b ",
+                mon::size_text(&mode, &scale),
+                ": Hyprland made it ",
+                seen,
+                " (omabox log -b ",
                 n,
-                ")"
+                " hyprland)"
             )));
         }
         std::thread::sleep(Duration::from_millis(50));

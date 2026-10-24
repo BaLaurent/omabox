@@ -4799,6 +4799,9 @@ elif a[:1] == ["eval"]:
         if has("place.out"):
             print(rd("place.out").strip())
             sys.exit(0)
+        # (the rules it set, by name: an output made after has one of its own, create.norule below)
+        with open(os.path.join(ST, "rules"), "w") as h:
+            h.write("".join(l[0] + "\n" for l in lines()))
         m = mons()
         for n, x, y, w, h in layout(m)[1:]:
             for mo in m:
@@ -4848,6 +4851,13 @@ elif cmd in ("output create",):
         w, h = (int(v) for v in mode.split("@")[0].split("x"))
         r = float(mode.split("@")[1])
         s = float(line[3])
+    # (create.norule: an output with no rule of its own yet comes up at Hyprland's hardcoded scale, 2,
+    # and stays so here, as a read in the gap before the rule set after it applies (#379); create.scale:
+    # Hyprland makes it at that scale whatever the rule)
+    if has("create.norule") and n not in (rd("rules", "") or "").split():
+        s = 2.0
+    if has("create.scale"):
+        s = float(rd("create.scale").strip())
     d = (rd("dropped.mode", "") or "").split()
     if d and d[0] == n:
         w, h = (int(v) for v in d[1].split("@")[0].split("x"))
@@ -5212,23 +5222,50 @@ PYEOF
   parity "monitor list --json" monitor -b fk list --json
   rp4_zero() { rp4_nvbox; rp4_mons WAYLAND-1:1920x1080 HEADLESS-3:0x0; }; rp4_pre=(rp4_zero)
   parity "monitor list: a 0x0 one on NVIDIA (zero_note)" monitor -b fkn list
+  # (#379, finding 510: the Rust half sets a new monitor's rule before its output exists, one more
+  # omabox_place_monitors() in the stand-in's log; bash's only after, none where the create fails)
+  rp4_rule_first() { rp_why=510 rp_bash=("state${1:-~}^eval omabox_place_monitors\(\)$") rp_rust=('state~^eval omabox_place_monitors\(\)$'); }
   rp4_pre=()
+  rp4_rule_first
   parity "monitor add: made, placed, recorded" monitor -b fk add 800x600
+  rp4_rule_first
   parity "monitor add: scale, below, a name of its own" monitor -b fk add 800x600@30,scale=1.5,below --name side
   rp4_pre=(rp4_three)
+  rp4_rule_first
   parity "monitor add: the next free name, past a dropped one's" monitor -b fk add 1024x768,10,20
   parity "monitor add --name: one there already" monitor -b fk add 800x600 --name HEADLESS-3
   parity "monitor add --name: a dropped one's" monitor -b fk add 800x600 --name HEADLESS-4
   parity "monitor add --name: the main screen's" monitor -b fk add 800x600 --name HEADLESS-2
   parity "monitor add --name: not a name" monitor -b fk add 800x600 --name 'a/b'
   rp4_nocreate() { echo "error: nope" > "$st/create.out"; }; rp4_pre=(rp4_nocreate)
+  # (and the stand-in's place saved its monitors again, in its own format)
+  rp4_rule_first '!~'; rp_bash+=('state~^\[\{"id":0,') rp_rust+=('state~^\[\{"id": 0,')
   parity "monitor add: Hyprland does not make it, the record put back" monitor -b fk add 800x600
   rp4_pre=(rp4_noplace)
+  rp4_rule_first
   parity "monitor add: placing it fails, it is removed" monitor -b fk add 800x600
   rp4_wrongmode() { : > "$st/create.mode"; }; rp4_pre=(rp4_wrongmode)
+  rp4_rule_first
   parity "monitor add: it never comes up at its mode (5 s)" monitor -b fk add 800x600
   rp4_pre=(rp4_round)
+  rp4_rule_first
   parity "monitor add: a rounded scale kept as made" monitor -b fk add 2560x1440,scale=1.5
+  # (#379, finding 510) An output comes up on Hyprland's hardcoded rule, scale 2, until its own is set:
+  # bash set it only after making it, and a read in that gap was kept; Rust sets it first. One Hyprland
+  # makes at another scale: bash kept it, Rust removes it, saying so (after its 5 s).
+  rp4_norule() { : > "$st/create.norule"; }; rp4_pre=(rp4_norule)
+  local rp4_kept=('state~ \./omabox/fk/box\.json$' 'state~ \./omabox/fk/run/omabox\.monitors$' 'state~^eval omabox_place_monitors\(\)$')
+  rp_why=510
+  rp_bash=("err=omabox: box 'fk' has a monitor HEADLESS-3 800x600@60 1920x0 2.0" 'state~"name": "HEADLESS-3".*"scale": 2\.0' "${rp4_kept[@]}")
+  rp_rust=("err=omabox: box 'fk' has a monitor HEADLESS-3 800x600@60 1920x0 1.5" 'state~"name": "HEADLESS-3".*"scale": 1\.5' "${rp4_kept[@]}")
+  parity "monitor add: its rule there before its output, at the scale asked (#379)" monitor -b fk add 800x600,scale=1.5
+  rp4_otherscale() { echo 2 > "$st/create.scale"; }; rp4_pre=(rp4_otherscale)
+  rp_why=510
+  rp_bash=(rc=0 out=HEADLESS-3 "err=omabox: box 'fk' has a monitor HEADLESS-3 800x600@60 1920x0 2.0" 'state~"name": "HEADLESS-3"'
+    'state~\./omabox/\.lock-fk' 'state!~^output remove' "${rp4_kept[@]}")
+  rp_rust=(rc=1 out= 'err=omabox: monitor add: HEADLESS-3 did not come up as 800x600@60,scale=1.5: Hyprland made it 800x600@60,scale=2.0 (omabox log -b fk hyprland)'
+    'state~^\[\{"id": 0, "name": "HEADLESS-2", .*"specialWorkspace": \{"id": 0, "name": ""\}\}\]$' 'state!~"id": 1, "name": "HEADLESS-3"' 'state!~\.lock-fk' 'state~^output remove HEADLESS-3$' "${rp4_kept[@]}")
+  parity "monitor add: Hyprland makes it at another scale: removed, said (#379, 5 s)" monitor -b fk add 800x600,scale=1.5
   rp4_pre=(rp4_three)
   parity "monitor remove: the main screen" monitor -b fk remove HEADLESS-2
   parity "monitor remove: a dropped one" monitor -b fk remove HEADLESS-4
@@ -5242,6 +5279,7 @@ PYEOF
   rp4_stay() { rp4_three; : > "$st/remove.stay"; }; rp4_pre=(rp4_stay)
   parity "monitor remove: still listed (5 s)" monitor -b fk remove HEADLESS-3
   rp4_pre=(rp4_nvbox)
+  rp4_rule_first
   parity "monitor add: NVIDIA, labwc's rule first" monitor -b fkn add 800x600
   parity "monitor add: NVIDIA, no --name" monitor -b fkn add 800x600 --name x
   rp4_norc() { rm -f "$r/rt/omabox/fkn/run/labwc/rc.xml"; }; rp4_pre=(rp4_nvbox rp4_norc)
@@ -16012,6 +16050,10 @@ monitors_wait_on() {
     --monitor 1080x1920,below || { no "up with two more monitors" "$UP_OUT"; return; }
   check_match "up's line names every monitor, a scale where it is not 1 (#308)" \
     "box '$B' up \(1920x1080@60 \+ 1280x720@60,scale=1.6 \+ 1080x1920@60\) in " "$UP_OUT"
+  # (#379, finding 510: up once kept the second at scale 2, read before its rule applied; every check
+  # below hangs on the layout, so the box's own word for it first)
+  check_eq "...and the box has them so, the third below the second at 1920,450 (#379)" "0,0 1 1920,0 1.6 1920,450 1" \
+    "$(ob hyprctl -b "$B" monitors -j | jq -r '[sort_by(.id)[] | "\(.x),\(.y) \(.scale)"] | join(" ")')"
   ob pointer -b "$B" -- move 2300 200 >/dev/null
   ob run -b "$B" -d -q -- foot -T N sh -c 'i=0; while :; do printf "\r%s" $((i++ % 10)); sleep 0.05; done'
   ob wait -b "$B" window 'title:^N$' >/dev/null
