@@ -191,15 +191,44 @@ pub fn protect_rules(protect: &Ports, v4: &[String], v6: &[String]) -> Option<St
     Some(r)
 }
 
-/// conf_get protect-ports: the config's value checked (`PORT[,PORT...]`, the ports once each, in
-/// order), else none: an unreadable value is said and ignored, as every setting's.
-pub fn conf_protect() -> Ports {
-    let v = crate::conf::conf_get(
-        "protect-ports",
-        |v| Ports::parse(v).ok().map(|p| p.csv()),
-        b"",
-    );
-    Ports::parse(&v).unwrap_or_default()
+/// protect-ports from ~/.config/omabox/config: none when unset. Blanks around each port are fine
+/// (`8080, 5432`); anything else that is not a list of ports 1-65535 is refused, exit 2, where every
+/// other setting's bad value is said and ignored: ignored, it would let boxes reach the ports the
+/// user meant to keep from them (S10 fails closed).
+pub fn conf_protect(ctx: &crate::exit::Ctx) -> crate::exit::Res<Ports> {
+    let (config, v) = crate::conf::conf_raw("protect-ports");
+    if v.is_empty() {
+        return Ok(Ports::default());
+    }
+    match protect_parse(&v) {
+        Some(p) => Ok(p),
+        None => {
+            crate::exit::say(cat!(
+                config,
+                ": protect-ports=",
+                v,
+                " is not a list of ports (PORT[,PORT...], each 1-65535): no box starts until it is one, or the line is gone (a box would reach the ports it means to keep)"
+            ));
+            Err(crate::exit::Exit(ctx.die_rc.unwrap_or(2)))
+        }
+    }
+}
+
+/// `8080, 5432` as Ports: each comma-separated item with blanks (space, tab) around it trimmed; an
+/// empty item, a trailing comma or anything but digits is no list.
+fn protect_parse(v: &[u8]) -> Option<Ports> {
+    let blank = |c: &u8| *c == b' ' || *c == b'\t';
+    let mut items: Vec<&[u8]> = Vec::new();
+    for it in v.split(|&c| c == b',') {
+        let s = it.iter().position(|c| !blank(c)).unwrap_or(it.len());
+        let e = it.iter().rposition(|c| !blank(c)).map_or(s, |i| i + 1);
+        let t = &it[s..e.max(s)];
+        if t.is_empty() {
+            return None;
+        }
+        items.push(t);
+    }
+    Ports::parse(&items.join(&b',')).ok()
 }
 
 #[cfg(test)]
@@ -232,6 +261,16 @@ mod tests {
                 "2001:db8::5".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn protect_values() {
+        let csv = |v: &[u8]| protect_parse(v).map(|p| p.csv());
+        assert_eq!(csv(b"8080, 5432"), Some(b"5432,8080".to_vec()));
+        assert_eq!(csv(b" 8080 ,\t5432 "), Some(b"5432,8080".to_vec()));
+        for bad in ["8080,", "8080,,1", "80 80", "x", "0", "70000", ","] {
+            assert!(protect_parse(bad.as_bytes()).is_none(), "{bad}");
+        }
     }
 
     #[test]

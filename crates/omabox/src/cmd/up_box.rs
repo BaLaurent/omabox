@@ -240,7 +240,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         }
     }
     let etc = etc_files(ctx, &u)?;
-    let protect = net::conf_protect();
+    let protect = u.protect.clone();
     let args = bwrap_args(
         ctx,
         &u,

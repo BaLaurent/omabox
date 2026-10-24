@@ -88,6 +88,8 @@ pub struct Up {
     pub net_set: bool,
     pub allow: Vec<u8>,
     pub allow_ports: Ports,
+    /// protect-ports (S10), read once.
+    pub protect: Ports,
     pub net_addrs: Vec<Vec<u8>>,
     /// --env KEY=VAL: (KEY, VAL), as bwrap's --setenv takes them.
     pub envs: Vec<(Vec<u8>, Vec<u8>)>,
@@ -790,7 +792,8 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     })?;
     u.allow = u.allow_ports.csv();
     // Protected ports (#355, S10): never an isolated box's --allow either.
-    let protect = crate::net::conf_protect();
+    u.protect = crate::net::conf_protect(ctx)?;
+    let protect = u.protect.clone();
     if let Some(p) = u
         .allow_ports
         .ports()

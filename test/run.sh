@@ -9356,6 +9356,13 @@ while True:
   # An isolated box's --allow of a protected port is refused.
   check_match "--allow of a protected port: refused" "up: --allow $q: a protected port" "$(HOME=$h ob up "$B" --no-shell --theme tokyo-night --net isolated --allow "$q" 2>&1)"
   check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
+  # A value that is not a list of ports refuses every up (exit 2), where a setting's bad value is
+  # otherwise ignored: ignored, the box would reach the ports meant to be kept (fails closed).
+  printf 'protect-ports=%s,x\n' "$p" > "$h/.config/omabox/config"
+  local out rc=0; out=$(HOME=$h "$CLI" up "$B" --no-shell --theme tokyo-night --net isolated 2>&1) || rc=$?
+  check_eq "a protect-ports that is not ports: refused, exit 2" 2 "$rc"
+  check_match "...saying which line, and why" "protect-ports=$p,x is not a list of ports .*no box starts until it is one" "$out"
+  check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
 }
 
 t_connected() {
@@ -13374,7 +13381,15 @@ t_rust_parity_up() {
   [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity up" "no build/bin/omabox (an install: every command runs in bash)"; return; }
   local U=$P-rpu r=$TMP/rpu
   rm -rf "$r"; mkdir -p "$r/td/rp-theme" "$r/norepo"; echo seeded > "$r/seed.txt"; echo 'name = "rp"' > "$r/td/rp-theme/colors.toml"
-  rpu_down() { ob down "$U" >/dev/null 2>&1; true; }
+  # A HOME of the test's own, so the user's own ~/.config/omabox/config (protect-ports, a gpu) cannot
+  # make the halves differ: its theme the user's current one, its config empty.
+  local h=$r/home st=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current
+  mkdir -p "$h/.config/omabox" "$h/.local/state/omarchy/current"; : > "$h/.config/omabox/config"
+  ln -s "$(readlink -f "$st/theme")" "$h/.local/state/omarchy/current/theme"
+  cp "$st/theme.name" "$h/.local/state/omarchy/current/" 2>/dev/null
+  # (and the user's bar, as the halves seed it from the desk)
+  mkdir -p "$h/.config/omarchy"; cp "$HOME/.config/omarchy/shell.json" "$HOME/.config/omarchy/shell.toml" "$h/.config/omarchy/" 2>/dev/null
+  rpu_down() { HOME=$h ob down "$U" >/dev/null 2>&1; true; }
   rpu_state() {
     local d=$XDG_RUNTIME_DIR/omabox/$U
     echo "== launch.sh"; sed -E "s/omabox-$U-[0-9]+/omabox-$U-PID/" "$d/launch.sh" 2>/dev/null
@@ -13382,7 +13397,7 @@ t_rust_parity_up() {
     echo "== files"; (cd "$d" 2>/dev/null && command find . -maxdepth 1 -printf '%p %y\n' | LC_ALL=C sort)
     echo "== home"; (cd "$d/home" 2>/dev/null && command find .config/rp .config/omarchy/themes/rp-theme -maxdepth 0 -printf '%p %y %l\n' 2>/dev/null)
   }
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=$r/norepo rp_env=() rp_snap=0 rp_prep=rpu_down rp_also=rpu_state
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=$r/norepo rp_env=(HOME=$h) rp_snap=0 rp_prep=rpu_down rp_also=rpu_state
   rp_sed='s/\b[0-9]+(\.[0-9]+)? ?(s|ms)\b/T/g; s/"created":"[^"]*"/"created":T/'
   parity "up: headless, no shell, isolated" up "$U" --no-shell --net isolated
   parity "up --json: with its shell" up "$U" --net isolated --json
@@ -13400,21 +13415,27 @@ t_rust_parity_up() {
   mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"
   rpu_victim() { rpu_state; echo "== victim"; head -c 4 "$r/victim" | od -An -c | tr -s ' '; echo victim > "$r/victim"; }
   echo victim > "$r/victim"
-  rp_env=(XDG_DATA_HOME=$r/data) rp_also=rpu_victim rp_why=461 rp_bash=('state~^ 211 P N G$') rp_rust=('state~^ v i c t$')
+  rp_env=(HOME=$h XDG_DATA_HOME=$r/data) rp_also=rpu_victim rp_why=461 rp_bash=('state~^ 211 P N G$') rp_rust=('state~^ v i c t$')
   parity "up --from a save with a link at the clean wallpaper's place" up "$U" --no-shell --clean --from rp-save
-  rp_env=() rp_also=rpu_state
+  rp_env=(HOME=$h) rp_also=rpu_state
   # A desk with no shell.json: bash's own redirection error said, the Rust half's empty bar unsaid
   # (finding 462).
   mkdir -p "$r/desk-empty"
-  rp_env=(OMABOX_DESK_CONFIG=$r/desk-empty) rp_why=462 rp_bash=('err~shell\.json: No such file or directory$') rp_rust=('err!~No such file or directory')
-  parity "up with a desk that has no shell.json" up "$U" --no-shell --net isolated; rp_env=()
+  rp_env=(HOME=$h OMABOX_DESK_CONFIG=$r/desk-empty) rp_why=462 rp_bash=('err~shell\.json: No such file or directory$') rp_rust=('err!~No such file or directory')
+  parity "up with a desk that has no shell.json" up "$U" --no-shell --net isolated; rp_env=(HOME=$h)
+  # protect-ports set (finding 459): the Rust half starts a connected box with the port left out of
+  # pasta's host rules; bash's half, which cannot hold it, refuses to start one.
+  local pp; pp=$(free_port); echo "protect-ports=$pp" > "$h/.config/omabox/config"
+  rp_why=459 rp_bash=(rc=1 'err~^omabox: up: protect-ports is set in ' 'err~.' 'state~.') rp_rust=(rc=0 "state~ -T \\\\~$pp\\\\,auto " 'err~.' 'state~.')
+  parity "up of a connected box with protect-ports set" up "$U" --no-shell
+  : > "$h/.config/omabox/config"
   # Up already: said (the box is the bash half's of the case before, kept), or refused for what it lacks.
   rp_prep=""
   parity "up of the box up already" up "$U"
   parity "up --json of the box up already" up "$U" --json
   parity "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected --stock-bar
   rpu_down
-  rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/
+  rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/ rp_env=()
 }
 
 # The Rust half's parity (#324) on a real box: what t_unit_rust_parity checks on fakes, against a box

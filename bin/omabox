@@ -4173,6 +4173,11 @@ cmd_up() {
     die "up: cancelled: omabox down $NAME came while it was starting"
   # No down can come first here (this holds the lock): only a box that just died starts again.
   if box_alive && take_over held; then up_already; return 0; fi
+  # protect-ports (#355, finding 459) is held by the Rust half only: this one (OMABOX_BASH=1) cannot
+  # keep a box off them, so it starts no connected box while they are set.
+  if [ "$net" = connected ] && [ -n "$(sed -n 's/^[[:space:]]*protect-ports[[:space:]]*=[[:space:]]*//p' "$CONFIG" 2>/dev/null | tail -n 1 | tr -d '[:space:]')" ]; then
+    die "up: protect-ports is set in $CONFIG, which only omabox's Rust half keeps a box off: run up without OMABOX_BASH=1 (or with --net isolated)"
+  fi
   [ $systemd = 0 ] || systemctl --user is-system-running >/dev/null 2>&1 || [ "$(systemctl --user is-system-running 2>/dev/null)" = degraded ] ||
     die "--systemd needs your systemd user manager (systemctl --user) to delegate the box a cgroup"
   [ $audio = 0 ] || audio_missing=$(audio_packages) || die "up --audio needs $audio_missing (sudo pacman -S pipewire wireplumber pipewire-pulse libpulse)"

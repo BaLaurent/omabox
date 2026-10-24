@@ -9613,13 +9613,20 @@ from them.
     the host's own addresses (its routing table's local IPv4 ones and /proc/net/if_inet6's, loopback
     aside) on those ports, TCP and UDP. Connections that stay in the box (its loopback, the address
     pasta gave it) are its own and pass. An isolated box reaches only its --allow ports, and a
-    protected one is refused there ("up: --allow P: a protected port ..."). nft is needed only with
+    protected one is refused there ("up: --allow P: a protected port ..."). The value fails closed:
+    blanks around each port are fine (`8080, 5432`), anything else that is not a list of ports
+    1-65535 refuses every `up`, exit 2, naming the line (any other setting's bad value is said and
+    ignored, which here would let boxes reach the ports). The bash half cannot hold the list, so
+    with it set `OMABOX_BASH=1 up` starts no connected box ("up: protect-ports is set in CONFIG, which
+    only omabox's Rust half keeps a box off"). nft is needed only with
     a list ("up: protect-ports ... needs nft"); a rule nft refuses ends the box's start. Not covered: an
     address the host gains after the box started. Tests: net.rs's pasta_opens_what_it_should
     (proptest: every host-bound rule leaves out each protected port) and rules; t_protect_ports
     (throwaway servers on a port of the test's own, on 127.0.0.1 and 0.0.0.0, tried from a box by
     loopback and by each host address; and nothing in the box can remove the rule: nft refuses it,
-    no capability in that namespace).
+    no capability in that namespace; a value that is not ports refused, exit 2); t_rust_parity_up
+    ("up of a connected box with protect-ports set", an expected difference: bash's half refuses),
+    on a HOME of its own so the user's config cannot reach the halves; net.rs's protect_values.
 
 460. **`up` cut short by a signal could still exit 1 and leave its box** (2026-10-24, #324 wave 5a,
     #356). Bash's fix (finding 434) trapped INT, TERM and HUP with `exit 130|143|129` and ended the
