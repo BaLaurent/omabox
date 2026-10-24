@@ -2,10 +2,12 @@
 //! an interactive `monitor add` was making): undone when the command ends, however it ends, and on
 //! INT, TERM or HUP, the signal then raised again: bash runs its EXIT trap and dies of the signal
 //! (probed: at once for TERM and HUP, its foreground child left running; for INT once that child is
-//! over, and not at all when that child did not die of it: an INT to omabox alone). A second INT,
-//! TERM or HUP while a trap with no exit code runs ends it there, as it ends bash's (probed); a
-//! code trap's undo finishes and exits with its code (on_exit_code). Nothing new starts meanwhile
-//! (sig::run_child). A signal ignored when omabox started stays ignored (sig::catch).
+//! over, and not at all when that child did not die of it: an INT to omabox alone). A code trap's
+//! (on_exit_code) ends with the signal's 128+N instead. The first signal decides: once its undo
+//! begins, another INT, TERM or HUP changes nothing, and the undo finishes (bash's second signal
+//! cut its trap short, or ran the lowest-numbered pending trap's code: finding 452). Nothing new
+//! starts meanwhile (sig::run_child). A signal ignored when omabox started stays ignored
+//! (sig::catch).
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
@@ -147,44 +149,14 @@ extern "C" fn on_signal(sig: libc::c_int) {
         Ordering::SeqCst,
     );
     // Nothing new starts from here (the thread lets main go on where bash would: an INT to omabox
-    // alone, a code trap's substitution to finish; it clears this then). Not while a code trap
-    // waits for its substitution: a second signal stays pending there, as bash's does, and main
-    // finishes the substitution (it would park in it, and the trap wait for ever).
-    if !crate::sig::SUBST_STOP.load(Ordering::SeqCst) {
-        crate::sig::STOPPING.store(true, Ordering::SeqCst);
-    }
+    // alone; it clears this then).
+    crate::sig::STOPPING.store(true, Ordering::SeqCst);
     let fd = SIG_W.load(Ordering::Relaxed);
     if fd >= 0 {
         let b = [u8::try_from(sig).unwrap_or(0)];
         // SAFETY: write is async-signal-safe; b outlives the call.
         unsafe {
             libc::write(fd, b.as_ptr().cast(), 1);
-        }
-    }
-}
-
-/// The signals the handler wrote to the pipe and the thread has not read yet (INT, TERM, HUP).
-fn drain(f: &std::fs::File) -> Vec<libc::c_int> {
-    use std::os::fd::AsRawFd;
-    let mut v = Vec::new();
-    loop {
-        let mut p = libc::pollfd {
-            fd: f.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: one pollfd of ours, no wait.
-        if unsafe { libc::poll(&mut p, 1, 0) } != 1 || p.revents & libc::POLLIN == 0 {
-            return v;
-        }
-        let mut b = [0u8; 1];
-        // SAFETY: a one-byte read into b from the pipe poll said is readable.
-        if unsafe { libc::read(f.as_raw_fd(), b.as_mut_ptr().cast(), 1) } != 1 {
-            return v;
-        }
-        let s = libc::c_int::from(b[0]);
-        if [libc::SIGINT, libc::SIGTERM, libc::SIGHUP].contains(&s) {
-            v.push(s);
         }
     }
 }
@@ -219,46 +191,9 @@ fn arm() {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
             };
-            let mut held = None;
-            // (signals that came after this one, read while it was handled: bash runs the pending
-            // traps in signal-number order, so a code trap ends with the lowest one's code)
-            let mut pending: Vec<libc::c_int> = Vec::new();
-            // A code trap during a `$(...)`: when the child running then did not die of the signal
-            // (one to omabox alone), bash runs the trap once the whole substitution is over (probed:
-            // `trap 'exit 143' TERM` during `x=$(a; b)` exits after b): main finishes it, then
-            // parks. A group signal kills bash's subshell and bash ends at once (probed); so does one
-            // that came with no child running.
-            if code && crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0 {
-                let g = busy_at.then(lock_fg);
-                if g.is_some() && crate::sig::FG_SIG.load(Ordering::SeqCst) != sig {
-                    // (main goes on to the substitution's end, where it parks: sig::subst)
-                    crate::sig::seen(None);
-                    crate::sig::SUBST_STOP.store(true, Ordering::SeqCst);
-                    crate::sig::STOPPING.store(false, Ordering::SeqCst);
-                    drop(g);
-                    // (till its end, or a group signal's death of its child: sig::group_cut)
-                    while crate::sig::SUBST_DEPTH.load(Ordering::SeqCst) > 0
-                        && !crate::sig::SUBST_CUT.load(Ordering::SeqCst)
-                    {
-                        // (a second signal's handler that read SUBST_STOP before it was set)
-                        crate::sig::STOPPING.store(false, Ordering::SeqCst);
-                        for s in drain(&f) {
-                            pending.push(s);
-                            crate::sig::seen(Some(s));
-                        }
-                        std::thread::sleep(std::time::Duration::from_millis(10));
-                    }
-                } else {
-                    crate::sig::STOPPING.store(true, Ordering::SeqCst);
-                    held = g;
-                }
-            }
             crate::sig::STOPPING.store(true, Ordering::SeqCst);
             let wait_fg = sig == libc::SIGINT || FG_TRAPS.load(Ordering::SeqCst) > 0;
-            let fg = match held {
-                Some(g) => Some(g),
-                None => wait_fg.then(lock_fg),
-            };
+            let fg = wait_fg.then(lock_fg);
             // An INT to omabox alone while a child ran that did not die of it: bash goes on (probed:
             // `kill -INT` of the script during a sleep, the rest of it ran, its EXIT trap at its end).
             // In a DEFER_INT step (bash's `$(...)` subshell) only the first: bash's main has ended of
@@ -283,29 +218,15 @@ fn arm() {
                 drop(fg);
                 continue;
             }
-            if code {
-                pending.extend(drain(&f));
-            } else {
-                // A second one while the undo runs ends this process at once, as it ends bash's
-                // trap; a code trap's stays pending, and its undo finishes before its exit code.
-                for s in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-                    if !crate::sig::ignored(s) {
-                        // SAFETY: the default disposition for a signal this process caught.
-                        unsafe {
-                            libc::signal(s, libc::SIG_DFL);
-                        }
-                    }
-                }
-            }
+            // From here a second INT, TERM or HUP changes nothing: the thread reads no more of
+            // them, and the undo finishes (finding 452).
             FG_HELD.store(fg.is_some(), Ordering::SeqCst);
             run_undos();
             if code {
-                // (bash's `exit 130|143|129` in the first of its traps to run, HUP's before INT's
-                // before TERM's, its EXIT trap run on the way)
-                let first = pending.into_iter().fold(sig, libc::c_int::min);
+                // (bash's `exit 130|143|129`, its EXIT trap run on the way: the first signal's)
                 let _ = std::io::Write::flush(&mut std::io::stdout());
                 // SAFETY: _exit ends this process at once, nothing left to run.
-                unsafe { libc::_exit(128 + first) }
+                unsafe { libc::_exit(128 + sig) }
             }
             // SAFETY: the default disposition back, then the signal to this process: it ends of it,
             // as bash does after its EXIT trap.

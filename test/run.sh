@@ -5580,11 +5580,15 @@ PYEOF
   # sent again then finds no output: the token stays, both ways)
   rp_wrap=(env RP_LINGER=8 "$r/rp-sig" group-TERM "$st/creating") rp4_pre=(rp4_l6) rp4_want=closed rp4_tok=kept
   parity "monitor add, interactive, and group-TERM, the box's create handled 6 s late (finding 429)" monitor -b fki add 800x600
-  # A second signal while the trap removes the output: it ends there (signals are not held: the
-  # window is safe by its rule), the remove already asked for.
+  # A second signal while the trap removes the output: it ends bash's there (signals are not held:
+  # the window is safe by its rule), the remove already asked for; the Rust half's trap finishes.
   rp4_twice() { rp4_imain; echo 1.5 > "$st/create.later"; }; rp4_pre=(rp4_twice) rp4_want="" rp4_tok=""
   for sg in group-TERM group-INT; do
     rp_wrap=(env RP_LINGER=4 RP_TWICE=0.4 "$r/rp-sig" "$sg" "$st/creating")
+    # (bash's second TERM cuts its trap short, the token file left; the Rust half's undo finishes:
+    # the remove answered ok, the token gone, finding 452. A second INT reaches bash before its trap
+    # begins, once the create is over: alike.)
+    [ "$sg" != group-TERM ] || { rp_why=452 rp_bash=('state~omabox\.appid\.WAYLAND-2( f)?$') rp_rust=('state!~omabox\.appid\.WAYLAND-2'); }
     parity "monitor add, interactive, and $sg twice, the second during the trap: no rule off (finding 429)" monitor -b fki add 800x600
   done
   # Two adds on one box at once: one after the other (the box's lock), each its own name and window.
@@ -6423,10 +6427,18 @@ while time.time() < end:
   parity "record stop --sheet --frames 01: 1" record -b rc stop --sheet --frames 01
   rp_sed=$rp_sed_r
   # Signals during stop's encode (2 s), the input recorded (its temp file gone in both: 432).
+  # (bash has only its EXIT trap there, so an INT to it alone that the encode outlives lets it go on,
+  # and a HUP ends it of the signal; the Rust half's one trap from the input's file on stops it, 130,
+  # and exits 129: finding 452)
   rp4b_slowenc() { rp4b_marked; : > "$st/ffmpeg.sleep"; }; rp4b_pre=(rp4b_slowenc)
   for i in INT group-INT TERM HUP; do
     rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/encoding")
     rp_sed="$rp_sed_r"'; s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line N: PID \2 /'
+    case $i in
+      INT) rp_why=452 rp_bash=(rc=0 'out~/co/v\.mp4$' 'err~^omabox: record: ' 'state~^\. d [0-9]+$' 'state~^\./v\.(mp4|marks\.tsv|vtt) f ' 'state~^ffprobe .*format=duration')
+           rp_rust=(rc=130 out= err= 'state~^\. d [0-9]+$' 'state!~^\./v\.mp4 ' 'state!~^ffprobe .*format=duration') ;;
+      HUP) rp_why=452 rp_bash=('err~ line N: PID Hangup ') rp_rust=('err!~Hangup') ;;
+    esac
     parity "record stop --show-input and $i during its encode" record -b rc stop --show-input
   done
   rp_wrap=() rp_sed=$rp_sed_r
@@ -6435,18 +6447,25 @@ while time.time() < end:
   rp4b_pre=(rp4b_ptrlock)
   parity "record stop: the pointer's lock held (432: no temp file left)" record -b rc stop --show-input
   # A TERM or an INT to omabox alone while the sheet takes its frames (a `$(...)` under rec_traps):
-  # bash finishes the sheet, says it, then exits 143 (130).
+  # bash finishes the sheet, says it, then exits 143 (130); the Rust half stops after the frame in
+  # progress, the same code, no sheet (finding 452).
   rp4b_slowtiles() { rp4b_marked; : > "$st/tiles.sleep"; }; rp4b_pre=(rp4b_slowtiles)
+  rp4b_nosheet() {
+    rp_why=452 rp_bash=('err~contact sheet of 3 frames' 'state~^\. d [0-9]+$' 'state~^\./v\.sheet\.png f SIZE$' 'state~^== magick\.log$' 'state~^magick montage ' 'state~^> T a mark')
+    rp_rust=('err!~contact sheet' 'state~^\. d [0-9]+$' 'state!~sheet\.png' 'state!~^magick montage ')
+  }
   for i in TERM INT; do
     rp_wrap=(env RP_LINGER=3 "$r/rp-sig" "$i" "$st/tiles-made")
+    rp4b_nosheet
     parity "record stop --sheet and $i to omabox alone while it takes the frames" record -b rc stop --sheet --frames 3
   done
-  # Twice (0.4 s apart, both in its ffmpeg): the second stays pending, bash still finishes the
-  # sheet and exits 143 (130) once. (The Rust half hung there: the second signal parked main inside
-  # the substitution the first one's trap waited for. Its group KILLed at 40 s fails it rather than
-  # the suite, nothing of it left.)
+  # Twice (0.4 s apart, both in its ffmpeg): bash's second stays pending, it still finishes the sheet
+  # and exits 143 (130) once; the Rust half's first signal decides, the second changes nothing.
+  # (The Rust half once hung there. Its group KILLed at 40 s fails it rather than the suite, nothing
+  # of it left.)
   for i in TERM INT; do
     rp_wrap=(env RP_LINGER=3 RP_TWICE=0.4 RP_DEADLINE=40 "$r/rp-sig" "$i" "$st/tiles-made")
+    rp4b_nosheet
     parity "record stop --sheet and $i twice to omabox alone while it takes the frames" record -b rc stop --sheet --frames 3
   done
   rp_wrap=()
@@ -13522,6 +13541,8 @@ EOF
   rp_ckleft() { rp_ckls; rp_ckwait; echo "== boxes"; (cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n'); }
   rp_prep=rp_cks rp_also=rp_ckleft
   rp_sed="$rp_sed"'; s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line N: PID \2 /'
+  # (bash's EXIT trap runs at once, and its down waits for the up's lock, findings 147 and 237: no box
+  # left either way)
   for i in TERM HUP; do
     rp_wrap=(env RP_LINGER=8 "$r_sig" "$i" "$ck/o/run1.up.log")
     parity "check run and $i during its box's up (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/slow"

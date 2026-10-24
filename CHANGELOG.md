@@ -41,6 +41,13 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **The first INT, TERM or HUP decides how omabox ends**, and what it was undoing finishes: a
+  second signal no longer cuts its cleanup short, and the exit code is the first signal's (TERM then
+  INT: 143; the bash omabox gave the lowest-numbered one's, 130). A signal during `record stop`
+  stops the step in progress: during `--sheet`'s frames, no sheet is made (the bash omabox made it,
+  then exited 130 or 143 all the same); during its encode, an INT sent to omabox alone stops it with
+  130 (the bash omabox went on). Scripts: nothing to change unless they relied on the second
+  signal's code.
 - **An interactive `monitor add` ends at any Ctrl-C or INT**, its half-made monitor removed, exit 130.
   The bash omabox did so for a Ctrl-C to its terminal, but an INT sent to omabox alone (`kill -INT
   PID`) ended it with 130 while the add went on and kept the monitor. A script that sent omabox an

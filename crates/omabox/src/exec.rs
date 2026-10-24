@@ -246,9 +246,6 @@ pub fn status(s: std::process::ExitStatus) -> (i32, Option<i32>) {
     if s.signal() == Some(libc::SIGINT) {
         crate::sig::FG_INT.store(true, std::sync::atomic::Ordering::SeqCst);
     }
-    if let Some(sig) = s.signal() {
-        crate::sig::FG_SIG.store(sig, std::sync::atomic::Ordering::SeqCst);
-    }
     match (s.code(), s.signal()) {
         (Some(c), _) => (c, None),
         (None, Some(sig)) => (128 + sig, Some(sig)),

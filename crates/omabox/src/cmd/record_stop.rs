@@ -241,13 +241,13 @@ fn size_of(p: &std::path::Path) -> Option<i64> {
 }
 
 /// The files record_stop makes here (the box dir's, the video's .part, the input's temp file),
-/// removed however it ends: the input's by an EXIT trap alone (finding 432: a signal still ends the
-/// stop as it did), from the copy on by rec_traps (`exit 130|143|129` on a signal, as bash's).
+/// removed however it ends, by one trap from the first of them on (rec_traps': `exit 130|143|129`
+/// on a signal). Bash's had the input's file under its EXIT trap alone, so that a signal ended the
+/// stop there as it did before finding 432; one trap is enough (finding 452).
 struct Tmps {
     v: Arc<Mutex<Vec<Vec<u8>>>>,
     part: Arc<Mutex<Vec<u8>>>,
-    exit_trap: Option<crate::trap::Trap>,
-    code_trap: Option<crate::trap::Trap>,
+    trap: Option<crate::trap::Trap>,
 }
 
 impl Tmps {
@@ -255,8 +255,7 @@ impl Tmps {
         Tmps {
             v: Arc::new(Mutex::new(Vec::new())),
             part: Arc::new(Mutex::new(Vec::new())),
-            exit_trap: None,
-            code_trap: None,
+            trap: None,
         }
     }
 
@@ -279,22 +278,14 @@ impl Tmps {
 
     /// rec_traps: the trap set (once).
     fn arm(&mut self) {
-        if self.code_trap.is_none() {
-            self.code_trap = Some(crate::trap::on_exit_code(self.undo()));
+        if self.trap.is_none() {
+            self.trap = Some(crate::trap::on_exit_code(self.undo()));
         }
     }
 
     fn push(&mut self, d: Vec<u8>) {
         if let Ok(mut v) = self.v.lock() {
             v.push(d);
-        }
-    }
-
-    /// The input's temp file: bash's EXIT trap alone.
-    fn add_exit(&mut self, d: Vec<u8>) {
-        self.push(d);
-        if self.exit_trap.is_none() && self.code_trap.is_none() {
-            self.exit_trap = Some(crate::trap::on_exit(self.undo()));
         }
     }
 
@@ -521,9 +512,9 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
             }
         }
     }
-    // (gone however the stop ends from here, by an EXIT trap: finding 432)
+    // (gone however the stop ends from here, by its trap: findings 432, 452)
     if !input.is_empty() {
-        tmps.add_exit(input.clone());
+        tmps.add(input.clone());
     }
     let geo = if ctx.at("record.geo").is_file() {
         let d = std::fs::read(ctx.at("record.geo")).unwrap_or_default();

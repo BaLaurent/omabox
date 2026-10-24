@@ -8840,13 +8840,11 @@ from them.
     in-process ends the Rust half at once, where bash would finish the step it is in (the safe side);
     (b) a TERM to omabox alone while `record sheet` takes its frames ends both 143, but bash's
     subshell finishes the sheet after its main is gone, where the Rust half makes none (the safe
-    side: nothing left behind); (c) a TERM during the EXIT trap an INT began ends bash at once, 143,
-    its undo cut short, where the Rust half finishes the undo first (the safe side); (d) a group
-    signal while a code trap waits for its `$(...)` that kills no child there (the child traps it, or
-    the substitution is between children) ends bash's subshell, and nothing more of it runs, where the
-    Rust half runs the substitution's remaining steps before the trap's exit (not the safe side).
-    The Rust half runs the subshell's steps in-process, so it tells a group signal from one to omabox
-    alone only by a child that dies of it (sig::group_cut).
+    side: nothing left behind); (c) a second INT, TERM or HUP while a trap's undo runs ends bash at
+    once, its undo cut short, or (pending behind a code trap) picks the lowest-numbered exit code,
+    where the Rust half finishes the undo and exits with the first signal's code (the safe side,
+    finding 452); (d) a code trap (record stop's) runs once bash's `$(...)` in progress is over, for
+    a signal to omabox alone, where the Rust half stops after the foreground child (finding 452).
 
 426. **A refused OMABOX_STILL_DUMP left a temporary dir behind** (2026-10-22, #324 wave 3a's review).
     settle_begin made its `mktemp -d` dir for the tool's two fifos, and an action's before snapshot
@@ -9429,6 +9427,33 @@ from them.
     (Rust over bash): documented, no code (CHANGELOG; skill/reference.md says SCENARIO is a
     program). Tests: t_rust_parity ("check run: a scenario named like omabox's say", an expected
     difference: bash ran its function, the Rust half finds no such program).
+
+452. **A signal's stop kept bash's timing: a code trap waited out a whole `$(...)`, a second signal
+    picked the exit code or cut the undo short** (2026-10-24, #324 wave 4c). Bash runs a code trap
+    (`trap 'exit 143' TERM`, rec_traps: record stop) for a signal to omabox alone only once the
+    command substitution in progress is over (`x=$(a; b)`: b ran too), at once for a group one (its
+    subshell dies of it), runs pending traps in signal-number order (TERM then INT ended 130), and
+    dies of a second signal during its EXIT trap, the undo cut short. The Rust half copied all four:
+    the trap's thread waited for main to leave every `$(...)` step (a depth count in sig::subst),
+    told a group signal from a lone one by whether the step's child died of the same signal within
+    300 ms (group_cut), folded pending signals to the lowest, and set INT, TERM and HUP back to the
+    default before a plain trap's undo. record stop had a plain EXIT trap for the input's temp file
+    until its copy began, so that a signal there ended the stop as bash's did (finding 432's split).
+    **Change** (Rust over bash): the first INT, TERM or HUP decides. Its trap waits for the
+    foreground child as before, runs the undo, and exits 128+N for that signal (a code trap) or dies
+    of it (a plain one); another INT, TERM or HUP meanwhile changes nothing and the undo finishes.
+    record stop has one code trap from its first temp file on. What a caller sees: a TERM or INT to
+    omabox alone while `record stop --sheet` takes its frames ends after the frame in progress, 143
+    or 130, the video kept and no sheet (bash made the sheet, said it, then exited with that code);
+    TERM then INT ends 143, not 130; during stop's encode an INT to omabox alone stops it, 130 (bash
+    went on and made the video) and a HUP ends it with 129 rather than dying of SIGHUP (the same
+    `$?`). Tests: sig.rs's code_trap_first_signal_wins, second_signal_during_the_undo,
+    second_signal_during_a_code_undo (which replace six cases that pinned bash's order and its
+    substitution wait); t_unit_rust_parity4b ("record stop --sheet and TERM|INT (twice) to omabox
+    alone while it takes the frames", "record stop --show-input and INT|HUP during its encode"),
+    t_unit_rust_parity4 ("monitor add, interactive, and group-TERM twice, the second during the
+    trap": bash's trap cut short leaves the token file, the Rust half's removes it): expected
+    differences.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
