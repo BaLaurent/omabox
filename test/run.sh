@@ -3148,57 +3148,7 @@ EOF
 # state this user namespace cannot read (a non-dumpable process: its ns is unreadable), live ones (a
 # process in a pid namespace of its own, straight or behind a stand-in pasta), a session's boxes
 # (finding 88, #136), an agent resumed (take_over, finding 93) and early ends of run -d jobs (job_note).
-t_uni# Wave 5a: `up` itself, both ways, on a box name of its own, taken down before each side: what it says
-# (durations evened out) and what it leaves in the box dir: launch.sh as written (every bwrap, pasta
-# and env word), box.json without its times and pids, and the files there.
-t_rust_parity_up() {
-  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity up" "no build/bin/omabox (an install: every command runs in bash)"; return; }
-  local U=$P-rpu r=$TMP/rpu
-  rm -rf "$r"; mkdir -p "$r/td/rp-theme" "$r/norepo"; echo seeded > "$r/seed.txt"; echo 'name = "rp"' > "$r/td/rp-theme/colors.toml"
-  rpu_down() { ob down "$U" >/dev/null 2>&1; true; }
-  rpu_state() {
-    local d=$XDG_RUNTIME_DIR/omabox/$U
-    echo "== launch.sh"; sed -E "s/omabox-$U-[0-9]+/omabox-$U-PID/" "$d/launch.sh" 2>/dev/null
-    echo "== box.json"; jq -S 'del(.created, .pidns, .starter.pid, .starter.start, .starter.command)' "$d/box.json" 2>/dev/null
-    echo "== files"; (cd "$d" 2>/dev/null && command find . -maxdepth 1 -printf '%p %y\n' | LC_ALL=C sort)
-    echo "== home"; (cd "$d/home" 2>/dev/null && command find .config/rp .config/omarchy/themes/rp-theme -maxdepth 0 -printf '%p %y %l\n' 2>/dev/null)
-  }
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=$r/norepo rp_env=() rp_snap=0 rp_prep=rpu_down rp_also=rpu_state
-  rp_sed='s/\b[0-9]+(\.[0-9]+)? ?(s|ms)\b/T/g; s/"created":"[^"]*"/"created":T/'
-  parity "up: headless, no shell, isolated" up "$U" --no-shell --net isolated
-  parity "up --json: with its shell" up "$U" --net isolated --json
-  parity "up: connected" up "$U" --no-shell
-  parity "up --clean" up "$U" --clean
-  parity "up --stock-bar --no-pointer --xwayland" up "$U" --stock-bar --no-pointer --xwayland --net isolated
-  parity "up --monitor: two more, placed" up "$U" --no-shell --net isolated --monitor 800x600 --monitor 1024x768,below
-  parity "up --seed and --theme-dir" up "$U" --no-shell --net isolated --seed "$r/seed.txt:.config/rp/seed.txt" --theme-dir "$r/td/rp-theme"
-  parity "up --addr and --allow" up "$U" --no-shell --net isolated --addr 192.0.2.7 --addr 2001:db8::7 --allow 18081,18080
-  parity "up --idle 0: an orphan to be, said" up "$U" --no-shell --net isolated --idle 0
-  parity "up --env and --size with a scale" up "$U" --no-shell --net isolated --env RPV=1 --size 1280x720,scale=1.5
-  parity "up --no-seed fonts,extensions" up "$U" --no-shell --net isolated --no-seed fonts,extensions
-  # A save whose HOME has a link where --clean writes its wallpaper (finding 461): bash wrote the PNG
-  # through it, onto the host file it leads to; the Rust half writes it in the box HOME.
-  mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"
-  rpu_victim() { rpu_state; echo "== victim"; head -c 4 "$r/victim" | od -An -c | tr -s ' '; echo victim > "$r/victim"; }
-  echo victim > "$r/victim"
-  rp_env=(XDG_DATA_HOME=$r/data) rp_also=rpu_victim rp_why=461 rp_bash=('state~^ 211 P N G$') rp_rust=('state~^ v i c t$')
-  parity "up --from a save with a link at the clean wallpaper's place" up "$U" --no-shell --clean --from rp-save
-  rp_env=() rp_also=rpu_state
-  # A desk with no shell.json: bash's own redirection error said, the Rust half's empty bar unsaid
-  # (finding 462).
-  mkdir -p "$r/desk-empty"
-  rp_env=(OMABOX_DESK_CONFIG=$r/desk-empty) rp_why=462 rp_bash=('err~shell\.json: No such file or directory$') rp_rust=('err!~No such file or directory')
-  parity "up with a desk that has no shell.json" up "$U" --no-shell --net isolated; rp_env=()
-  # Up already: said (the box is the bash half's of the case before, kept), or refused for what it lacks.
-  rp_prep=""
-  parity "up of the box up already" up "$U"
-  parity "up --json of the box up already" up "$U" --json
-  parity "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected --stock-bar
-  rpu_down
-  rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/
-}
-
-t_rust_parity() {
+t_unit_rust_parity() {
   [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity" "no build/bin/omabox (an install: every command runs in bash)"; return; }
   local r=$TMP/rp sid=0123456789abcdef s8=89abcdef
   # (a locale whose `[0-9]` and `[A-Za-z]` take more than ASCII in glibc's regex, bash's `=~`: where
@@ -13399,6 +13349,56 @@ t_own_processes() {
   # #166: instead of nsenter's line or bash's "Killed" one for it, not after them.
   check_eq "...in those words alone" 1 "$(grep -c . <<<"$out")"
   ob down "$B" >/dev/null 2>&1
+}
+
+# Wave 5a: `up` itself, both ways, on a box name of its own, taken down before each side: what it says
+# (durations evened out) and what it leaves in the box dir: launch.sh as written (every bwrap, pasta
+# and env word), box.json without its times and pids, and the files there.
+t_rust_parity_up() {
+  [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity up" "no build/bin/omabox (an install: every command runs in bash)"; return; }
+  local U=$P-rpu r=$TMP/rpu
+  rm -rf "$r"; mkdir -p "$r/td/rp-theme" "$r/norepo"; echo seeded > "$r/seed.txt"; echo 'name = "rp"' > "$r/td/rp-theme/colors.toml"
+  rpu_down() { ob down "$U" >/dev/null 2>&1; true; }
+  rpu_state() {
+    local d=$XDG_RUNTIME_DIR/omabox/$U
+    echo "== launch.sh"; sed -E "s/omabox-$U-[0-9]+/omabox-$U-PID/" "$d/launch.sh" 2>/dev/null
+    echo "== box.json"; jq -S 'del(.created, .pidns, .starter.pid, .starter.start, .starter.command)' "$d/box.json" 2>/dev/null
+    echo "== files"; (cd "$d" 2>/dev/null && command find . -maxdepth 1 -printf '%p %y\n' | LC_ALL=C sort)
+    echo "== home"; (cd "$d/home" 2>/dev/null && command find .config/rp .config/omarchy/themes/rp-theme -maxdepth 0 -printf '%p %y %l\n' 2>/dev/null)
+  }
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=$r/norepo rp_env=() rp_snap=0 rp_prep=rpu_down rp_also=rpu_state
+  rp_sed='s/\b[0-9]+(\.[0-9]+)? ?(s|ms)\b/T/g; s/"created":"[^"]*"/"created":T/'
+  parity "up: headless, no shell, isolated" up "$U" --no-shell --net isolated
+  parity "up --json: with its shell" up "$U" --net isolated --json
+  parity "up: connected" up "$U" --no-shell
+  parity "up --clean" up "$U" --clean
+  parity "up --stock-bar --no-pointer --xwayland" up "$U" --stock-bar --no-pointer --xwayland --net isolated
+  parity "up --monitor: two more, placed" up "$U" --no-shell --net isolated --monitor 800x600 --monitor 1024x768,below
+  parity "up --seed and --theme-dir" up "$U" --no-shell --net isolated --seed "$r/seed.txt:.config/rp/seed.txt" --theme-dir "$r/td/rp-theme"
+  parity "up --addr and --allow" up "$U" --no-shell --net isolated --addr 192.0.2.7 --addr 2001:db8::7 --allow 18081,18080
+  parity "up --idle 0: an orphan to be, said" up "$U" --no-shell --net isolated --idle 0
+  parity "up --env and --size with a scale" up "$U" --no-shell --net isolated --env RPV=1 --size 1280x720,scale=1.5
+  parity "up --no-seed fonts,extensions" up "$U" --no-shell --net isolated --no-seed fonts,extensions
+  # A save whose HOME has a link where --clean writes its wallpaper (finding 461): bash wrote the PNG
+  # through it, onto the host file it leads to; the Rust half writes it in the box HOME.
+  mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"
+  rpu_victim() { rpu_state; echo "== victim"; head -c 4 "$r/victim" | od -An -c | tr -s ' '; echo victim > "$r/victim"; }
+  echo victim > "$r/victim"
+  rp_env=(XDG_DATA_HOME=$r/data) rp_also=rpu_victim rp_why=461 rp_bash=('state~^ 211 P N G$') rp_rust=('state~^ v i c t$')
+  parity "up --from a save with a link at the clean wallpaper's place" up "$U" --no-shell --clean --from rp-save
+  rp_env=() rp_also=rpu_state
+  # A desk with no shell.json: bash's own redirection error said, the Rust half's empty bar unsaid
+  # (finding 462).
+  mkdir -p "$r/desk-empty"
+  rp_env=(OMABOX_DESK_CONFIG=$r/desk-empty) rp_why=462 rp_bash=('err~shell\.json: No such file or directory$') rp_rust=('err!~No such file or directory')
+  parity "up with a desk that has no shell.json" up "$U" --no-shell --net isolated; rp_env=()
+  # Up already: said (the box is the bash half's of the case before, kept), or refused for what it lacks.
+  rp_prep=""
+  parity "up of the box up already" up "$U"
+  parity "up --json of the box up already" up "$U" --json
+  parity "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected --stock-bar
+  rpu_down
+  rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/
 }
 
 # The Rust half's parity (#324) on a real box: what t_unit_rust_parity checks on fakes, against a box
