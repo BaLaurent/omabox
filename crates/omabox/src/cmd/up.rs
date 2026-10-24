@@ -982,12 +982,26 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
             "' is busy (another up or down); try again"
         )));
     }
+    // A jailed caller's box is checked again under the lock: select_box passed a name whose up (the
+    // user's, or another jail's) had not written its box.json yet; that up has finished since, and
+    // its box is not this caller's to be told about.
+    if crate::jail::in_jail()
+        && ctx.at("box.json").is_file()
+        && meta(&ctx.d, "jail").0 != crate::jail::jail_id()
+    {
+        return Err(ctx.die(cat!(
+            "box '",
+            ctx.name,
+            "' is not this jail's: an agent inside ai-jail drives only the boxes it started"
+        )));
+    }
     // A down started since this up was, before it held the lock, found no box and left its start
-    // (finding 147): the box it asked to have gone is this one.
-    let dt = std::fs::read(ctx.in_boxes(cat!(".down-", ctx.name)))
-        .map(|v| shell::strip_nl(&v))
-        .unwrap_or_default();
-    if let (Some(dt), Some(t0)) = (num(&dt), num(&u.t0))
+    // (finding 147): the box it asked to have gone is this one. A jailed down's (its jail on a
+    // second line) only for an up of that jail: a jail does not cancel the user's up.
+    let dmark = std::fs::read(ctx.in_boxes(cat!(".down-", ctx.name))).unwrap_or_default();
+    let (dt, djail) = down_marker(&dmark);
+    let mine = djail.is_none_or(|j| crate::jail::in_jail() && j == crate::jail::jail_id());
+    if let (true, Some(dt), Some(t0)) = (mine, num(&dt), num(&u.t0))
         && dt >= t0
     {
         return Err(ctx.die(cat!(
@@ -1028,6 +1042,15 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     }
     mounts(ctx, u)?;
     Ok(true)
+}
+
+/// A `.down-NAME` marker: the down's start, and the jail of a jailed caller's down (its second line).
+fn down_marker(v: &[u8]) -> (Vec<u8>, Option<Vec<u8>>) {
+    let t = shell::strip_nl(v);
+    match t.iter().position(|&c| c == b'\n') {
+        Some(i) => (t[..i].to_vec(), Some(t[i + 1..].to_vec())),
+        None => (t, None),
+    }
 }
 
 /// `[[ $dt =~ ^[0-9]+$ ]]` and its value.
@@ -1579,6 +1602,16 @@ pub fn up_already(ctx: &Ctx, u: &Up) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn down_markers() {
+        assert_eq!(down_marker(b"123\n"), (b"123".to_vec(), None));
+        assert_eq!(
+            down_marker(b"123\nj 1\n"),
+            (b"123".to_vec(), Some(b"j 1".to_vec()))
+        );
+        assert_eq!(down_marker(b""), (Vec::new(), None));
+    }
 
     #[test]
     fn ro_bind_lines() {

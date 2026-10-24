@@ -8,6 +8,7 @@ use crate::args::{optarg, unknown_opt};
 use crate::boxes::{box_alive, box_state, list_names, lock_file, meta};
 use crate::cat;
 use crate::exit::{Ctx, Res, muted, say};
+use crate::jail::{in_jail, jail_id};
 use crate::jq::{self, Args};
 use crate::select::{select_box, session_boxes};
 use crate::shell;
@@ -122,6 +123,16 @@ pub fn down_one(ctx: &mut Ctx, given: &[u8], cond: &DownIf) -> Res<bool> {
         drop(lock);
         return Ok(down_none(ctx));
     }
+    // A jailed caller's box is checked again under the lock: select_box passed a name whose up (the
+    // user's, or another jail's) had not written its box.json yet, and that up has finished since.
+    if in_jail() && meta(&ctx.d, "jail").0 != jail_id() {
+        drop(lock);
+        return Err(ctx.die(cat!(
+            "box '",
+            ctx.name,
+            "' is not this jail's: an agent inside ai-jail drives only the boxes it started"
+        )));
+    }
     // The reaper decided on the box it watched, then waited here: an `up` holding the lock may have
     // started a new box under the name (finding 74). Not that one.
     if let Some(c) = &cond.created
@@ -168,13 +179,17 @@ fn signal(pid: &[u8], sig: libc::c_int) {
 
 /// A down that finds no box leaves when it was started (proc_start: clock ticks since boot), for an
 /// up started before it that has no lock yet: they compare starts, not when each got to its check
-/// (finding 147). Written before the down lets go of the name's lock (finding 237). Not the
-/// reaper's.
+/// (finding 147). A jailed caller's names its jail on a second line: an up cancels for it only when
+/// it is that jail's (a jail's down must not cancel the user's up of a name). Written before the
+/// down lets go of the name's lock (finding 237). Not the reaper's.
 fn down_mark(ctx: &Ctx, cond: &DownIf) {
     if cond.created.is_none() {
         let me = std::process::id().to_string().into_bytes();
         if let Some(start) = crate::procfs::proc_start(&me) {
-            let v = cat!(start, "\n");
+            let mut v = cat!(start, "\n");
+            if in_jail() {
+                v.extend(cat!(jail_id(), "\n"));
+            }
             let _ = std::fs::create_dir_all(shell::path(&ctx.boxes))
                 .and_then(|()| std::fs::write(ctx.in_boxes(cat!(".down-", ctx.name)), v));
         }

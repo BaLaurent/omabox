@@ -9695,6 +9695,16 @@ from them.
     real, saves in a data dir of its own; byte order an expected difference under en_US.UTF-8),
     t_rust_parity_up (ls, save, saves and down on a box up), down.rs's and save.rs's unit tests.
 
+472. **A jailed caller's down and up check the box again under its name's lock** (2026-10-24, #324
+    wave 5b; S9). select_box refuses another jail's or the user's box by its box.json, which an `up`
+    writes while it holds the name's lock; a jailed `down` or `up` of that name waits on the lock,
+    and found nothing to refuse before it. **Fix** (the Rust half; bash's `down` stays as it was, a
+    fallback): once `down` and `up` hold the lock, a jailed caller's box is checked again, and one
+    that is not the jail's is refused ("box 'B' is not this jail's: ..."). A jailed `down` that finds
+    no box writes its jail under its `.down-` marker's time, and only an `up` of that jail is
+    cancelled by it; the user's own `down` cancels any. Tests: t_unit_down_jail_race (fails on the
+    bash half: the box taken down, the box told, the up cancelled), up.rs's down_markers.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
