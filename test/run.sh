@@ -3300,6 +3300,9 @@ t_unit_rust_parity() {
   parity "which --jsn" which --jsn 1
   parity "which: this shell" which $$
   parity "which --json: this shell" which --json $$
+  # (decimal: 0PID is PID; bash looked for /proc/0PID: finding 448)
+  rp_why=448 rp_bash=(rc=2 out= "err~^omabox: which: no process 0$$ " 'state!~pst/pid') rp_rust=(rc=1 'out=not in a box' err= 'state~ \./omabox/pst/pid$' 'state~^\./omabox/pst/pid f$')
+  parity "which: this shell, a zero in front" which 0$$
   parity "which: root's" which 1
   parity "which --json: root's" which --json 1
   parity "which: no such pid" which 999999999

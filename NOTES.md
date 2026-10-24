@@ -9373,8 +9373,9 @@ from them.
     cannot read where it expects one (a tool's answer, a record of its own) ends the command in its
     words, "omabox: CMD: cannot read WHAT as a number: 'V'" (num::read), exit 1 as before. Regions
     are written as the numbers read: shot's `-g 010,...` is `10,...` in grim's argument, the record
-    and what shot says, and `record --fps 010` records at 10 and says so (CHANGELOG). Tests:
-    t_unit_rust_parity ("run --ignore with a zero in front", "wait still: a ready size with a zero
+    and what shot says, `record --fps 010` records at 10 and says so, and `which 0123` asks about
+    pid 123 (bash looked for /proc/0123; `cpu --pid` and `gdb --pid` refuse a 0 in front) (CHANGELOG).
+    Tests: t_unit_rust_parity ("which: this shell, a zero in front", "run --ignore with a zero in front", "wait still: a ready size with a zero
     in front", "pixel: a width with a zero in front", "shot -g with zeros in front") and
     t_unit_rust_parity4b ("check diff --ignore 08,0", "record stop --sheet --frames" 010, 08 and 01,
     "record --fps" 08 and 010): expected differences; shell.rs's numbers_are_decimal, shot.rs's

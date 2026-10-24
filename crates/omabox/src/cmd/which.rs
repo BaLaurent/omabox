@@ -38,7 +38,8 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         return Err(ctx.usage_die("which: one PID (omabox which [--json] PID)"));
     }
     ctx.parsed();
-    let pid = pid.clone();
+    // (the number read, decimal: `0123` is pid 123 for /proc and the answer alike, finding 448)
+    let pid = shell::dec(pid).unwrap_or(0).to_string().into_bytes();
     // The answer: a box's name or "not in a box".
     let answer = |b: &[u8], by: &str| -> Res<()> {
         if as_json {
