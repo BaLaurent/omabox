@@ -482,12 +482,11 @@ pub fn desk_relay(ctx: &Ctx, new: &[u8]) -> Res<Vec<u8>> {
 /// monitor_add_window's EXIT trap once the box was told to make the output (MON_CREATING, mon_undo,
 /// finding 429): it is removed, so an add cut short (a refusal; INT, TERM or HUP) leaves no
 /// monitor. The box handles its IPC in order, so a remove sent after the create reaches it comes after
-/// it, however late. It is sent at once; one not answered `ok` (a TERM or HUP while the create was
-/// still on its way to the box: "output not found") is sent again once main's foreground child, the
-/// create's capture, is over (trap::wait_foreground; bash's mon_undo cannot wait for its `$(...)`, and
-/// sends it again half a second on). Waiting is not holding signals:
-/// nothing here keeps the window off the user's workspace (its own rule does), so a second one ends
-/// the trap, and a remove that fails leaves at worst a monitor on the box's workspace. Its token file
+/// it, however late. A signal's trap runs once main's foreground child, the create's capture, is over
+/// (finding 453), so the remove is sent once, after the create (bash's mon_undo sent it at once, and
+/// again half a second on for a create still on its way, "output not found" the first time). Nothing
+/// here keeps the window off the user's workspace (its own rule does): a remove that fails leaves at
+/// worst a monitor on the box's workspace. Its token file
 /// goes once the remove is answered `ok` (the box made the output, so read it), and stays otherwise,
 /// for a box that has yet to read it.
 struct MonUndo {
@@ -522,12 +521,7 @@ impl MonUndo {
                     );
                     shell::subst(&r.out) == b"ok"
                 };
-                // (sent at once, as bash's: a second signal may end this before the create is over)
-                let removed = remove() || {
-                    crate::trap::wait_foreground();
-                    remove()
-                };
-                if removed {
+                if remove() {
                     let _ = std::fs::remove_file(&appid);
                 }
             });

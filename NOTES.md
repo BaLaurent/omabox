@@ -9474,7 +9474,10 @@ from them.
     the step's end, at most ~20 s; nothing it started is left running. Exit codes unchanged. Seen by
     a caller: `check run` stopped during a scenario takes that scenario's step to its end (its point
     written) before its boxes go; `monitor add`'s remove comes once, after the create, its token
-    file then removed where bash's stayed. Tests: sig.rs's term_waits_for_the_foreground_child and
+    file then removed where bash's stayed. With that, the remove's second try once the foreground
+    was over (trap::wait_foreground, and FG_HELD beside it) had nothing left to wait for and went:
+    an unclear create (no answer, or past `timeout 10`) now gets one remove, where bash sends a
+    second half a second on. Tests: sig.rs's term_waits_for_the_foreground_child and
     a_child_that_will_not_end_is_stopped (both fail on the version before: the undo saw nothing; a
     30 s hang); t_rust_parity ("check run and TERM|HUP during its scenario"), t_unit_rust_parity4
     ("monitor add ... group-TERM before the create reaches the box", "... group-TERM, the box's

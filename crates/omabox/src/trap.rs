@@ -18,8 +18,6 @@ type Undo = Box<dyn FnOnce() + Send>;
 
 static TRAPS: Mutex<Vec<(u64, Undo)>> = Mutex::new(Vec::new());
 static NEXT: AtomicU64 = AtomicU64::new(1);
-/// The signal thread holds sig::FOREGROUND while it undoes (it waited for that child).
-static FG_HELD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static SIG_W: AtomicI32 = AtomicI32::new(-1);
 
 /// Traps that end with an exit code (`trap 'exit 143' TERM`), not the signal: on_exit_code's.
@@ -87,21 +85,6 @@ impl Drop for CodeCount {
     fn drop(&mut self) {
         CODE_TRAPS.fetch_sub(1, Ordering::SeqCst);
     }
-}
-
-/// For an undo whose step in flight must land first (monitor add's remove after its create, finding
-/// 429): wait until main's foreground child is over, unless it already is (an INT's undo, a code
-/// trap's, a refusal's on main). Waiting is not holding: a second INT, TERM or HUP meanwhile ends
-/// this process at once (with no code trap on: those hold the foreground and finish their undo).
-pub fn wait_foreground() {
-    if FG_HELD.load(Ordering::SeqCst) {
-        return;
-    }
-    drop(
-        crate::sig::FOREGROUND
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner),
-    );
 }
 
 impl Trap {
@@ -247,7 +230,8 @@ fn arm() {
             };
             // From here a second INT, TERM or HUP changes nothing: the thread reads no more of
             // them, and the undo finishes (finding 452).
-            FG_HELD.store(fg.is_some(), Ordering::SeqCst);
+            // (FOREGROUND held, when it was had, till this process ends: main starts nothing more)
+            let _fg = fg;
             // (read before the undo, which drops the code traps' count with them)
             let code = CODE_TRAPS.load(Ordering::SeqCst) > 0;
             run_undos();

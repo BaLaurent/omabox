@@ -5572,12 +5572,14 @@ PYEOF
   rp_wrap=(env RP_LINGER=2 "$r/rp-linger") rp4_pre=(rp4_l6) rp4_want=closed rp4_tok=gone
   parity "monitor add, interactive, the box's create handled 6 s late: given up, removed after it (finding 429)" monitor -b fki add 800x600
   # A hyprctl that never gets the create to the box (stuck before it connects) until `timeout 10` ends
-  # it: 124 and no answer, unclear; the remove finds no output, twice, so the token stays, for a box
-  # that has yet to read it (there is none to read it here).
+  # it: 124 and no answer, unclear; the remove finds no output (twice in bash, which sends it again
+  # half a second on; once in the Rust half, whose undo comes after the create: finding 453), so the
+  # token stays, for a box that has yet to read it (there is none to read it here).
   rp4_hang() { rp4_imain; echo 12 > "$st/create.arrive"; }
   rp_wrap=() rp4_pre=(rp4_hang) rp4_want=none rp4_tok=kept
+  local rp4_rm2=2; [ ! -x "$ROOT/build/bin/omabox" ] || rp4_rm2=1
   parity "monitor add, interactive, the create past timeout 10: unclear, removed, nothing made (finding 429)" monitor -b fki add 800x600
-  check_eq "...the box never got it, the remove sent twice" "0 2" \
+  check_eq "...the box never got it, the remove sent (twice in bash, once in Rust)" "0 $rp4_rm2" \
     "$(grep -c '^output create' "$st/hypr.log" 2>/dev/null || true) $(grep -c '^output remove WAYLAND-2' "$st/hypr.log" 2>/dev/null || true)"
   rp4_tok=""
   # (bash's remove queued behind that create gives up at 5 s too, and is handled after it; the one
@@ -5625,7 +5627,7 @@ PYEOF
   # there, so the token stays.
   rp4_iempty() { rp4_irefuse ""; }; rp4_pre=(rp4_iempty) rp4_tok=kept
   parity "monitor add, interactive, the create answered with nothing: unclear, removed (finding 429)" monitor -b fki add 800x600
-  check_eq "...the remove sent twice" 2 "$(grep -c '^output remove WAYLAND-2' "$st/hypr.log" 2>/dev/null || true)"
+  check_eq "...the remove sent (twice in bash, once in Rust)" "$rp4_rm2" "$(grep -c '^output remove WAYLAND-2' "$st/hypr.log" 2>/dev/null || true)"
   rp_check="" rp4_want="" rp4_tok=""
   # An INT to omabox alone (kill -INT PID) while a child runs that does not die of it: bash goes on
   # (the figures); the Rust half stops as on a TERM, 130, nothing said (finding 454).
