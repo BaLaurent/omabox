@@ -12,6 +12,9 @@ fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
         b"path" => Some("-b= --box= --logs --run --home --json"),
         b"env" => Some("-b= --box="),
         b"which" => Some("--json"),
+        b"down" => Some("-b= --box= --all --orphans"),
+        b"ls" | b"list" | b"saves" | b"--version" => Some("--json"),
+        b"save" => Some("-b= --box= --force"),
         b"run" => Some(concat!(
             "-b= --box= -d --detach -q --print-log --replace --pass= --env-file= ",
             "--wait --start= --quiet= --timeout= --strict --json --ignore= -g= ",
@@ -83,6 +86,12 @@ fn usage_head(cmd: &[u8]) -> &'static str {
         }
         b"which" => {
             "  omabox which [--json] PID                              the box a host process is in, or \"not in a box\" (exit 1)"
+        }
+        b"down" => {
+            "  omabox down [NAME | -b NAME | --all | --orphans]       --orphans: the boxes ls calls orphans (no idle limit, starter gone)"
+        }
+        b"save" => {
+            "  omabox save SAVE [-b NAME] [--force]                   keep the box's HOME: up/run --from SAVE start from it"
         }
         b"run" => RUN_HEAD,
         // (up's lines are run's after its own two: its UP OPTIONS)

@@ -9340,9 +9340,10 @@ from them.
     hung on LANG. The Rust half copied it (shell::coll_cmp, `sort` in the caller's locale).
     **Change** (Rust over bash): byte order everywhere, the same in every locale: shell::glob and
     glob_ext sort bytes, coll_cmp is gone, and every `sort` omabox runs gets LC_ALL=C (sig::command;
-    `-n` then reads numbers as C does too). `ls` and `saves` (still bash's) get it when wave 5 ports
-    them (CHANGELOG). Tests: t_unit_rust_parity ("four: named in byte order", an expected difference
-    under en_US.UTF-8); its fixture's box Zed is zed now, whose capital put the "up: ..." list of
+    `-n` then reads numbers as C does too). `ls` and `saves` got it in wave 5b (finding 470)
+    (CHANGELOG). Tests: t_unit_rust_parity ("four: named in byte order"), t_unit_rust_parity5 ("ls
+    --json: in byte order in every locale", "saves --json: ..."), expected differences under
+    en_US.UTF-8; its fixture's box Zed is zed now, whose capital put the "up: ..." list of
     some 30 refusals in an order that hung on the suite's locale.
 
 447. **Text was read in the caller's locale** (2026-10-23, #324 wave 4c). Bash and coreutils count
@@ -9674,6 +9675,25 @@ from them.
     {fd}<`, which waits for a writer when the path is a FIFO: a jail that swapped one in hung its
     own `up` (the broker's call to it). **Fix** (the Rust half): the file is opened
     without blocking and refused unless it is a regular file. Tests: jailpath.rs's unit tests.
+
+470. **`down`, `ls`, `save`, `saves` and `version` in the Rust half** (2026-10-24, #324 wave 5b).
+    cmd/down.rs takes a box down as bash's cmd_down did, step for step under the name's lock: its peek
+    windows ended, its PID 1 SIGKILLed as box_pid finds it and its pasta with it (ready.rs's
+    kill_box; SIGTERM does not work, finding 6), its reaper ended, its dir and HOME removed, the lock
+    file with them; `--all`, `--orphans` and the `.down-` marker as before (findings 147, 237).
+    cmd/ls.rs asks every box up at once on threads of its own (hung_boxes: 1 s at most, 3 s with a
+    hung shell) and runs the same jq programs on box.json (checked verbatim against bin/omabox's);
+    cmd/save.rs pauses the box for the copy as bash did (SIGSTOP to its pid namespace), and lets it
+    go however the save ends (trap.rs's on_exit: a refusal, INT, TERM or HUP). **Changes** (Rust over
+    bash): `ls` and `saves` list in byte order in every locale (finding 446's promise); `save` and
+    `saves rm` say what they could not remove in omabox's words ("could not remove all of save 'S':
+    rm's line", rm_tree), where bash printed rm's own; a save's keyring is read only when it is a
+    regular file (a FIFO there hung bash's grep); `save` clears what a killed save of that name left
+    and nothing of another save whose name starts the same (bash's `.new-NAME-*` glob took
+    `.new-NAME-x-PID` too). Exit codes unchanged (CHANGELOG). Tests: t_unit_rust_parity5 (about 90
+    cases both ways on boxes of the test's own: dead ones, stand-ins whose PID 1 is taken down for
+    real, saves in a data dir of its own; byte order an expected difference under en_US.UTF-8),
+    t_rust_parity_up (ls, save, saves and down on a box up), down.rs's and save.rs's unit tests.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

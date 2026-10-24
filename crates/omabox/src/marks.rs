@@ -56,13 +56,29 @@ pub fn peek_pid(ctx: &Ctx, output: Option<&[u8]>) -> Option<Vec<u8>> {
     );
     // (in this process, not a foreground step: an INT here ends omabox, as one during bash's
     // pgrep ends that and bash with it when it is the group's)
-    scan(&want, output)
+    scan(&want, output, true).into_iter().next()
 }
 
-fn scan(want: &[u8], output: Option<&[u8]>) -> Option<Vec<u8>> {
+/// peek_pids: the pids of this box's peek windows, lowest first (a window per monitor shown, #122).
+pub fn peek_pids(ctx: &Ctx) -> Vec<Vec<u8>> {
+    let want = cat!(
+        shell::bytes(&crate::root().join("tools/peek/omabox-peek")),
+        " --box ",
+        ctx.d,
+        "/run/"
+    );
+    scan(&want, None, false)
+}
+
+/// The pids whose command line (words joined by spaces) starts with WANT (and holds OUTPUT's words
+/// after it), lowest first; the first alone with FIRST.
+fn scan(want: &[u8], output: Option<&[u8]>, first: bool) -> Vec<Vec<u8>> {
     let tail = output.map(|o| cat!(" --output ", o, " --fps "));
     let me = std::process::id();
-    let rd = std::fs::read_dir("/proc").ok()?;
+    let Ok(rd) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
     let mut pids: Vec<u32> = rd
         .flatten()
         .filter_map(|e| e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()))
@@ -88,10 +104,13 @@ fn scan(want: &[u8], output: Option<&[u8]>) -> Option<Vec<u8>> {
             .as_ref()
             .is_none_or(|t| rest.windows(t.len()).any(|w| w == t.as_slice()))
         {
-            return Some(p.to_string().into_bytes());
+            found.push(p.to_string().into_bytes());
+            if first {
+                break;
+            }
         }
     }
-    None
+    found
 }
 
 /// rec_input T0 LINE...: while the box records, each line with when it began (T0, µs; now when T0

@@ -56,6 +56,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **`save` and `saves rm` say what they could not remove in omabox's words** ("could not remove all
+  of save 'S': ..."), where the bash omabox printed `rm`'s own line. Exit codes unchanged.
 - **`up` stopped by INT, TERM or HUP ends with the signal's code at every step** (130, 143, 129),
   its box ended; the bash omabox could exit 1, its box left running, when the signal landed during
   `up --interactive --monitor`'s add. Scripts: nothing to change.
@@ -133,10 +135,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   integer constant", exit 1). `events --grep` and `--until` still read your pattern in your locale.
   Scripts: nothing to change.
 - **Lists are in byte order, the same in every locale**: a session's boxes in a message, run logs,
-  `check run`'s checkpoints, `ports` and `gpu`'s rows. The bash omabox followed the locale's
-  collation, so under en_US.UTF-8 `a` came before `B`, under C after it. `ls` and `saves` still
-  follow the locale until they move to Rust (wave 5), then byte order too. Scripts that sorted the
-  output themselves: nothing to change.
+  `check run`'s checkpoints, `ports` and `gpu`'s rows, and `ls` and `saves` (table and `--json`).
+  The bash omabox followed the locale's collation, so under en_US.UTF-8 `a` came before `B`, under C
+  after it. Scripts that sorted the output themselves: nothing to change.
 - **Text is read as UTF-8 whatever the locale**: the default box name of a repo with non-ASCII
   letters, `keys`' notes (`secret N`) and `record`'s `--as` and mark lengths come out the same under
   LANG=C as under a UTF-8 locale (the bash omabox counted bytes under C), and option words are

@@ -5704,6 +5704,8 @@ PYEOF
 # Wave 5a: `up`'s refusals both ways, each before anything is made (the runtime dir is the test's own:
 # rp_snap compares it after), and a box that is up already (up_already) on stand-in boxes (a process
 # in a pid namespace of its own). No case starts a box: every one is refused, or finds its box up.
+# Wave 5b: down, ls, save, saves, version and _reap on boxes of the test's own, dead ones and
+# stand-ins taken down for real, their HOMEs and saves in the test's cache and data dirs.
 t_unit_rust_parity5() {
   [ -x "$ROOT/build/bin/omabox" ] || { skip "rust parity 5" "no build/bin/omabox (an install: every command runs in bash)"; return; }
   local r=$TMP/rp5 u1="" l1="" ns1 i
@@ -5827,6 +5829,164 @@ t_unit_rust_parity5() {
   rm -rf "$r/rt/omabox/rpu"
   # (a case that started a box, in either half, is a failure above: its box goes here)
   pkill -KILL -f "^pasta .* $r/rt/omabox/" 2>/dev/null
+  # Wave 5b: down, ls, save, saves, version and _reap, both ways, on boxes of the test's own: dead
+  # ones, and stand-ins whose PID 1 is a fresh process in a pid namespace of its own for each side
+  # (down SIGKILLs it), their HOMEs and saves in the test's own cache and data dirs (never the user's).
+  local b=$r/b s8=89abcdef
+  local rp5b_ul=""; ! locale -a 2>/dev/null | grep -qix 'en_US.utf-\{0,1\}8' || rp5b_ul=en_US.UTF-8
+  # A stand-in box up: rp5b_up NAME [JQ-OBJECT added to its box.json]
+  rp5b_up() {
+    local n=$1 p l="" i d=$b/rt/omabox/$1
+    # (started from a subshell: no job of this shell's, whose kill would be said)
+    p=$( (unshare -Urpf --mount-proc sleep 600 >/dev/null 2>&1 & echo $!) )
+    echo "$p" >> "$b/kids"
+    for i in $(seq 200); do
+      l=$(pgrep -P "$p") && [ -n "$l" ] && [ "$(readlink "/proc/$l/ns/pid" 2>/dev/null)" != "$(readlink /proc/self/ns/pid)" ] && break
+      sleep 0.05
+    done
+    rp5b_box "$n" "{pidns: \"$(readlink "/proc/$l/ns/pid")\"} + ${2:-{\}}"
+    echo "{\"child-pid\": $l}" > "$d/info.json"
+  }
+  # A box dir: rp5b_box NAME [JQ-OBJECT], with its HOME in the test's cache dir.
+  rp5b_box() {
+    local d=$b/rt/omabox/$1 h=$b/cache/omabox/$1/home
+    mkdir -p "$d/run" "$h/.config/rp" "$h/.cache"; ln -sfn "$h" "$d/home"
+    echo k > "$h/.config/rp/k"; echo log > "$h/hyprland.log"; echo c > "$h/.cache/c"
+    jq -n --arg n "$1" "{name: \$n, mode: \"headless\", size: \"1920x1080@60\", created: \"c-\" + \$n, plugins: [], net: \"host\",
+      idle: 7200, shell: false} + ${2:-{\}}" > "$d/box.json"
+    touch -d '-3 min -30 sec' "$d/used"
+  }
+  rp5b_fix() {
+    [ ! -f "$b/kids" ] || { xargs -r kill -KILL < "$b/kids" 2>/dev/null; rm -f "$b/kids"; }
+    rm -rf "$b/rt" "$b/cache" "$b/data"; mkdir -p "$b/rt/omabox" "$b/cache" "$b/data/omabox/saves"
+    rp5b_box dead '{pidns: "pid:[1]"}'
+    rp5b_box mon '{monitors: [{}, {}], plugins: ["p.one", "p.two"]}'
+    rp5b_up live '{net: "isolated", addrs: ["192.0.2.7"], size: "800x600@60", scale: 1.5, plugins: ["p.one"],
+      hyprland: "/opt/h/Hyprland", hyprland_version: "0.56.9", quickshell: "/q/qs",
+      render: {driver: "amdgpu", pci: "0000:0b:00.0", node: "/dev/dri/renderD128", fallback: true, wanted: "nvidia", why: "busy"},
+      client_render: {renderer: "llvmpipe (LLVM 19.1, 256 bits)", software: true}}'
+    : > "$b/rt/omabox/live/keys-to-box"
+    rp5b_up orph '{idle: 0, starter: {pid: 999999999, start: "1", command: "bash"}}'
+    # Saves: one with a keyring secret, one with no save.json, a dir that is none, what a killed
+    # save left (hidden).
+    local s=$b/data/omabox/saves
+    mkdir -p "$s/sv1/home/.local/share/keyrings" "$s/sv2/home" "$s/nohome" "$s/.new-sv1-1/home"
+    printf '[keyring]\ndisplay-name=login\n\n[1]\nsecret=x\n' > "$s/sv1/home/.local/share/keyrings/login.keyring"
+    printf '{\n  "box": "live",\n  "saved": "2026-10-24T10:11:12+01:00",\n  "version": "1.0.1"\n}\n' > "$s/sv1/save.json"
+  }
+  rp5b_saves() { (cd "$b/data/omabox/saves" && command find . -printf '%p %y\n' | LC_ALL=C sort; jq -S 'del(.saved)' ./*/save.json 2>/dev/null); }
+  rp_rt=$b/rt rp_dir=$r/norepo rp_snap=1 rp_prep=rp5b_fix rp_sed="" rp_wrap=() rp_also=rp5b_saves
+  rp_mask='s/"child-pid": [0-9]+/"child-pid": N/; s/pid:\[[0-9]+\]/pid:[N]/; s/^[0-9]+$/N/'
+  local rp5b_env=(XDG_CACHE_HOME="$b/cache" XDG_DATA_HOME="$b/data" HYPRLAND_INSTANCE_SIGNATURE=rp-none)
+  rp_env=("${rp5b_env[@]}")
+  # down: refusals first, each before anything is touched.
+  parity "down --bogus" down --bogus
+  parity "down --al (the nearest named)" down --al
+  parity "down -b with no value" down -b
+  parity "down --orphans with a name" down --orphans live
+  parity "down --orphans --all" down --orphans --all
+  parity "down --all with a name" down --all live
+  parity "down: a name with other characters" down 'a b'
+  parity "down: a name that starts wrong" down _x
+  parity "down: a name past 40" down "$(printf 'x%.0s' {1..41})"
+  parity "down --help" down --help
+  parity "down: no box of that name, said" down nobox
+  parity "down: the default box, none" down
+  parity "down: a lock file and no box: none, its lock gone" down ghost
+  rp5b_ghost() { rp5b_fix; : > "$b/rt/omabox/.lock-ghost"; }
+  rp_prep=rp5b_ghost; parity "...a lock file left by a gone box" down ghost; rp_prep=rp5b_fix
+  parity "down of a dead box: its dir and HOME removed" down dead
+  parity "down -b of a box up: PID 1 killed, its dir removed" down -b live
+  parity "down of two, one missing" down nobox dead
+  parity "down of an idle note's name: the note goes" down gone
+  rp5b_expired() { rp5b_fix; echo 30m > "$b/rt/omabox/.expired-gone"; }
+  rp_prep=rp5b_expired; parity "...with the note there" down gone; rp_prep=rp5b_fix
+  rp5b_inter() { rp5b_fix; rp5b_up inter '{mode: "interactive"}'; }
+  rp_prep=rp5b_inter; parity "down of an interactive box (no host session: the submap left alone, unsaid)" down inter; rp_prep=rp5b_fix
+  parity "down --all" down --all
+  parity "down --orphans: the orphan named, taken down" down --orphans
+  rp5b_noorph() { rp5b_fix; xargs -r kill -KILL < "$b/kids"; rm -rf "$b/rt/omabox/orph"; }
+  rp_prep=rp5b_noorph; parity "down --orphans: none" down --orphans; rp_prep=rp5b_fix
+  rp_env=("${rp5b_env[@]}" OMABOX_JAIL='{"id":"j1"}')
+  parity "down in a jail: not its box" down live
+  parity "down --all in a jail: its boxes only (none)" down --all
+  rp5b_jailbox() { rp5b_fix; rp5b_up jb '{jail: "j1"}'; }
+  rp_prep=rp5b_jailbox; parity "down in a jail: its own box" down jb; rp_prep=rp5b_fix
+  # A name derived here (outside any repo) while this session has a box up from its repo: that one
+  # is used (finding 200); two are named, exit 1 (#262).
+  rp5b_sess1() { rp5b_fix; rp5b_up "rp-repo-$s8" "{dir: \"$HOME/rp-somewhere\"}"; }
+  rp5b_sess2() { rp5b_sess1; rp5b_up "other-$s8" '{dir: "/elsewhere"}'; }
+  rp_env=("${rp5b_env[@]}" CLAUDE_CODE_SESSION_ID=0123456789abcdef)
+  rp_prep=rp5b_sess1; parity "down: the session's one box from outside its repo, used (finding 200)" down
+  rp_prep=rp5b_sess2; parity "down: the session's two boxes from outside its repo, named (#262)" down
+  rp_prep=rp5b_fix rp_env=("${rp5b_env[@]}")
+  # ls: refusals, then the table and --json over every kind of box above.
+  parity "ls --bogus" ls --bogus
+  parity "ls --jsn (the nearest named)" ls --jsn
+  parity "ls -b" ls -b x
+  parity "ls x" ls x
+  parity "ls NAME of a box: the -b hint" ls live
+  parity "list -b" list -b x
+  parity "ls --help" ls --help
+  rp_sed='s/ [0-9]+m\/2h / Nm\/2h /'
+  parity "ls: every kind of box, the orphan said" ls
+  parity "list" list
+  parity "ls --json" ls --json
+  rp_env=("${rp5b_env[@]}" OMABOX_JAIL='{"id":"j1"}'); parity "ls in a jail: none of its own" ls --json; rp_env=("${rp5b_env[@]}")
+  rp5b_none() { rp5b_fix; xargs -r kill -KILL < "$b/kids"; rm -rf "$b/rt/omabox"; mkdir -p "$b/rt/omabox"; }
+  rp_prep=rp5b_none; parity "ls: none" ls; parity "ls --json: none" ls --json; rp_prep=rp5b_fix
+  rp5b_odd() { rp5b_fix; mkdir -p "$b/rt/omabox/_odd"; echo '{}' > "$b/rt/omabox/_odd/box.json"; }
+  rp_prep=rp5b_odd; parity "ls --json: a dir no box can be named ends it" ls --json; parity "ls: the same" ls; rp_prep=rp5b_fix
+  # (bash's glob lists them in the locale's collation, en_US.UTF-8's a before B; omabox's in byte
+  # order, B before a, the same in every locale: finding 446, promised for ls and saves)
+  rp5b_case() { rp5b_fix; rp5b_box a-x; rp5b_box B-x; mkdir -p "$b/data/omabox/saves/a-s/home" "$b/data/omabox/saves/B-s/home"; }
+  rp_prep=rp5b_case rp_env=("${rp5b_env[@]}" LC_ALL=C)
+  parity "ls --json under C: B before a" ls --json
+  parity "saves --json under C: B before a" saves --json
+  if [ -n "$rp5b_ul" ]; then
+    rp_env=("${rp5b_env[@]}" LC_ALL=$rp5b_ul)
+    rp_why=446 rp_bash=('out~"name":"a-x".*"name":"B-x"') rp_rust=('out~"name":"B-x".*"name":"a-x"')
+    parity "ls --json: in byte order in every locale" ls --json
+    rp_why=446 rp_bash=('out~"name":"a-s".*"name":"B-s"') rp_rust=('out~"name":"B-s".*"name":"a-s"')
+    parity "saves --json: in byte order in every locale" saves --json
+  else
+    skip "ls and saves --json: in byte order in every locale" "no en_US.UTF-8 on this system, whose collation it needs"
+  fi
+  rp_env=("${rp5b_env[@]}")
+  rp_prep=rp5b_fix rp_sed=""
+  # save and saves.
+  parity "saves --bogus" saves --bogus
+  parity "saves x" saves x
+  parity "saves -b" saves -b x
+  parity "saves rm: which?" saves rm
+  parity "saves rm: a bad name" saves rm 'a/b'
+  parity "saves rm: no such save" saves rm nosave
+  parity "saves rm: one, then one not there" saves rm sv1 nosave
+  parity "saves rm: two" saves rm sv1 sv2
+  parity "saves: the table (a keyring, no save.json)" saves
+  parity "saves --json" saves --json
+  parity "saves --json --help" saves --json --help
+  parity "save: no name" save
+  parity "save: two names" save a b
+  parity "save -f (refused since 1.0)" save s -f
+  parity "save --bogus" save s --bogus
+  parity "save: a bad name" save 'a/b'
+  parity "save -b with no value" save s -b
+  parity "save of no box up" save s -b nobox
+  parity "save of a dead box" save s -b dead
+  parity "save of a box up: its HOME but .cache and the logs, keyring said or not" save sv3 -b live
+  parity "save over one there: refused" save sv1 -b live
+  parity "save --force over one there: replaced" save sv1 -b live --force
+  rp_env=("${rp5b_env[@]}" OMABOX_JAIL='{"id":"j1"}'); parity "save in a jail: not its box" save sv3 -b live; rp_env=("${rp5b_env[@]}")
+  # version.
+  parity "version" version
+  parity "version --json" version --json
+  parity "-V" -V
+  parity "--version --json" --version --json
+  parity "version: an argument" version x
+  parity "version --jsn" version --jsn
+  rp_prep="" rp_sed="" rp_also="" rp_mask="" rp_env=() rp_snap=1
+  [ ! -f "$b/kids" ] || xargs -r kill -KILL < "$b/kids" 2>/dev/null
 }
 
 t_unit_rust_parity4b() {
@@ -6935,6 +7095,7 @@ print(a.getsockname()[1], b.getsockname()[1])')
   # shellcheck disable=SC2016 # expanded in the box
   out=$(cd "$repo" && env -u OMABOX "$CLI" run --overlay "$ov" --net isolated --allow "$port" --size 800x600 --plugin "$ROOT/plugin" -- sh -c '
     echo box > "$1/f" && cat "$1/f"
+    { rm -f "$1/sub/g"; mkdir "$1/new"; echo n > "$1/new/n"; chmod 700 "$1/sub"; ln -s /etc "$1/l"; mv "$1/f" "$1/f2"; } 2>/dev/null
     curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$2/" || true
     curl -s -o /dev/null -w "%{http_code}\n" --max-time 3 "http://127.0.0.1:$3/" || true
     hyprctl -j monitors | jq -r ".[0] | \"\(.width)x\(.height)\""
@@ -13437,8 +13598,29 @@ t_rust_parity_up() {
   parity "up of the box up already" up "$U"
   parity "up --json of the box up already" up "$U" --json
   parity "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected --stock-bar
+  # Wave 5b on the box up: ls (its own line or entry; other boxes come and go), save and saves (in a
+  # data dir of the test's own; sizes evened out: its HOME moves), then down, a box up for each side.
+  # (rp_check: each side's stdout, its entry of the box alone)
+  rpu_json() { jq -c --arg n "$U" '[.[] | select(.name == $n)]' "$2" > "$2.t" && mv "$2.t" "$2"; }
+  rp_also="" rp_check="" rp_sed="/^$U /!d; s/ [0-9]+m\/2h / Nm\/2h /"
+  parity "ls: the box up" ls
+  rp_sed="" rp_check=rpu_json
+  parity "ls --json: the box up" ls --json
+  rp_check="" rp_env=(XDG_DATA_HOME=$r/data5b)
+  rpu_nosave() { rm -rf "$r/data5b"; }
+  rp_prep=rpu_nosave rp_sed='s/\(([0-9.,]+[KMG]?)(, keyring secrets included)?\)/(SIZE\2)/; s/ is [0-9.,]+[KMG]?: / is SIZE: /'
+  parity "save of the box up" save rp5b-save -b "$U"
+  rp_prep="" rp_sed='s/^(rp5b-save +)[0-9.,]+[KMG]? /\1SIZE /; s/"size":"[^"]*","size_kb":[0-9]+/"size":S,"size_kb":K/'
+  parity "saves: that save" saves
+  parity "saves --json" saves --json
+  rp_sed=""; rpu_resave() { rpu_nosave; ob save rp5b-save -b "$U" >/dev/null 2>&1; }
+  rp_prep=rpu_resave; parity "saves rm" saves rm rp5b-save
+  rp_env=() rp_prep=""
+  rpu_up() { ob up "$U" --no-shell --net isolated >/dev/null 2>&1; }
+  rpu_gone() { echo "== dir $(test -e "$XDG_RUNTIME_DIR/omabox/$U" && echo there || echo gone)"; echo "== reaper $(pgrep -fc "omabox _reap $U " || true)"; }
+  rp_prep=rpu_up rp_also=rpu_gone; parity "down of the box up" down "$U"
   rpu_down
-  rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/ rp_env=()
+  rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/ rp_check="" rp_env=()
 }
 
 # The Rust half's parity (#324) on a real box: what t_unit_rust_parity checks on fakes, against a box

@@ -206,6 +206,17 @@ pub fn awk_v(v: &[u8]) -> Vec<u8> {
     out
 }
 
+/// human_duration SECS: seconds as the user would write them: 90s, 30m, 2h.
+pub fn human_duration(s: i64) -> String {
+    if s > 0 && s % 3600 == 0 {
+        format!("{}h", s / 3600)
+    } else if s > 0 && s % 60 == 0 {
+        format!("{}m", s / 60)
+    } else {
+        format!("{s}s")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

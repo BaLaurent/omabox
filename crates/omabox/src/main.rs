@@ -127,6 +127,11 @@ fn main() -> ExitCode {
         Some("check") => Some(cmd::check::run),
         Some("record") => Some(cmd::record::run),
         Some("up") => Some(cmd::up::run),
+        Some("down") => Some(cmd::down::run),
+        Some("ls" | "list") => Some(cmd::ls::run),
+        Some("save") => Some(cmd::save::save),
+        Some("saves") => Some(cmd::save::saves),
+        Some("version" | "-V" | "--version") => Some(cmd::version::run),
         _ => None,
     };
     // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.
@@ -174,6 +179,8 @@ fn main() -> ExitCode {
                 .chain(plugins::JQ_INLINE)
                 .chain(ready::JQ_INLINE)
                 .chain(shelljson::JQ_INLINE)
+                .chain(cmd::ls::JQ_INLINE)
+                .chain(cmd::down::JQ_INLINE)
             {
                 print!("{p}\0");
             }

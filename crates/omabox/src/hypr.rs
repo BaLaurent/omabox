@@ -49,6 +49,20 @@ fn hypr_host_pid(ctx: &Ctx) -> Option<Option<Vec<u8>>> {
     Some(None)
 }
 
+/// hypr_gone: for `ls`, at one look (no wait): a box up whose Hyprland did not answer because it is
+/// gone, in the moment before the box ends with it (finding 350): its end's first word (crashed,
+/// exited) when labwc (or an interactive box's session.sh) said how, else going. None for one that
+/// runs, or a box it cannot tell of.
+pub fn hypr_gone(ctx: &Ctx) -> Option<String> {
+    if hypr_host_pid(ctx)?.is_some() {
+        return None;
+    }
+    Some(match hypr_end(&ctx.d) {
+        Some(e) => e.split(' ').next().unwrap_or_default().to_string(),
+        None => "going".to_string(),
+    })
+}
+
 /// A process's state as /proc/PID/status says it ("S (sleeping)", "t (tracing stop)").
 fn pid_state(pid: &[u8]) -> Vec<u8> {
     let s = std::fs::read(shell::path(&cat!("/proc/", pid, "/status"))).unwrap_or_default();

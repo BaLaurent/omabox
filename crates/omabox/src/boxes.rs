@@ -426,7 +426,7 @@ pub fn need_box(ctx: &Ctx) -> Res<()> {
 
 /// Whether the agent `up` recorded for this box still runs: its pid, started when it was then, and
 /// not a zombie. None recorded, or no start time, is none alive.
-fn agent_alive(d: &[u8]) -> bool {
+pub fn agent_alive(d: &[u8]) -> bool {
     let (pid, ok1) = meta(d, "agent");
     let (start, ok2) = meta(d, "agent_start");
     if !ok1 || !ok2 || pid.is_empty() || start.is_empty() {
