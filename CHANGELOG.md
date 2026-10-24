@@ -83,7 +83,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   Scripts: nothing to change.
 - **Lists are in byte order, the same in every locale**: a session's boxes in a message, run logs,
   `check run`'s checkpoints, `ports` and `gpu`'s rows. The bash omabox followed the locale's
-  collation, so under en_US.UTF-8 `a` came before `B`, under C after it. Scripts that sorted the
+  collation, so under en_US.UTF-8 `a` came before `B`, under C after it. `ls` and `saves` still
+  follow the locale until they move to Rust (wave 5), then byte order too. Scripts that sorted the
   output themselves: nothing to change.
 - **Text is read as UTF-8 whatever the locale**: the default box name of a repo with non-ASCII
   letters, `keys`' notes (`secret N`) and `record`'s `--as` and mark lengths come out the same under
