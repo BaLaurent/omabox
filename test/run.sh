@@ -1769,7 +1769,7 @@ t_unit_down_jail_race() {
   touch "$r/release-uu"; wait "$p"
   check_eq "a jailed up that waited on the user's up is told nothing of the user's box" "" "$(cat "$r/out")"
   check_match "...refused: not this jail's" "box 'uu' is not this jail's" "$(cat "$r/err")"
-  kill -KILL "$u" 2>/dev/null
+  kill -KILL "$l" "$u" 2>/dev/null
   # A jailed down that found no box: its marker cancels no up but its jail's (the user's up here
   # goes on, and stops at --audio's check, which a PATH without PipeWire refuses).
   mkdir -p "$r/nopw"; for i in /usr/bin/*; do case ${i##*/} in pipewire|wireplumber|pipewire-pulse|pactl) ;; *) ln -s "$i" "$r/nopw/" ;; esac; done
@@ -5898,7 +5898,7 @@ t_unit_rust_parity5() {
   rp_prep=""
   parity "up --net isolated from a no_new_privs process, no box up: refused" up rpn --net isolated --no-shell
   rp_wrap=() rp_prep=""
-  kill "$u1" 2>/dev/null
+  kill "$l1" "$u1" 2>/dev/null
   rm -rf "$r/rt/omabox/rpu"
   # (a case that started a box, in either half, is a failure above: its box goes here)
   pkill -KILL -f "^pasta .* $r/rt/omabox/" 2>/dev/null
@@ -5912,11 +5912,12 @@ t_unit_rust_parity5() {
     local n=$1 p l="" i d=$b/rt/omabox/$1
     # (started from a subshell: no job of this shell's, whose kill would be said)
     p=$( (unshare -Urpf --mount-proc sleep 600 >/dev/null 2>&1 & echo $!) )
-    echo "$p" >> "$b/kids"
     for i in $(seq 200); do
       l=$(pgrep -P "$p") && [ -n "$l" ] && [ "$(readlink "/proc/$l/ns/pid" 2>/dev/null)" != "$(readlink /proc/self/ns/pid)" ] && break
       sleep 0.05
     done
+    # (its PID 1 too: unshare's end leaves its child running, the namespace with it)
+    echo "$p $l" >> "$b/kids"
     rp5b_box "$n" "{pidns: \"$(readlink "/proc/$l/ns/pid")\"} + ${2:-{\}}"
     echo "{\"child-pid\": $l}" > "$d/info.json"
   }
