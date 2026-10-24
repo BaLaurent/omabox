@@ -11177,6 +11177,29 @@ t_up_signals() {
       ob down "$B" >/dev/null 2>&1
     done
   done
+  # And at the other steps from the box dir on (finding 460, #356): while it seeds the HOME (the dir
+  # just made), and once bwrap has started (its info file), each its signal's code and the box ended;
+  # a dir with no box.json yet goes whole.
+  local mark
+  for mark in jobs-noted info.json; do
+    for sig in HUP TERM; do
+      for how in group alone; do
+        i=$((i + 1)) B=$P-usig$i
+        bd=$(ob path "$B")
+        local s=$sig; [ "$how" = alone ] || s=group-$sig
+        rc=0; RP_WAIT=0.05 RP_DEADLINE=90 "$r/rp-sig" "$s" "$bd/$mark" env --default-signal=INT,TERM,HUP "$CLI" up "$B" --net isolated >/dev/null 2>"$r/err.$i" || rc=$?
+        if grep -q "box '$B' up (" "$r/err.$i"; then
+          skip "up and $how $sig at $mark" "up was done before the signal (load)"; ob down "$B" >/dev/null 2>&1; continue
+        fi
+        check_eq "up and $how $sig at $mark: the signal's code" "$(( 128 + $(kill -l "$sig") ))" "$rc"
+        st=$(ob ls --json 2>/dev/null | jq -r --arg n "$B" 'first(.[] | select(.name == $n) | .state) // "gone"')
+        check "...the box not up ($st)" test "$st" != up
+        check_fails "...no starting file left" test -e "$bd/starting"
+        if [ ! -f "$bd/box.json" ]; then check_fails "...a dir with no box.json gone whole" test -e "$bd"; fi
+        ob down "$B" >/dev/null 2>&1
+      done
+    done
+  done
 }
 
 # The same during `up --interactive --monitor`'s add (finding 434; finding 435's stopgap held it on

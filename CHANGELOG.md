@@ -55,6 +55,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Changes from the bash omabox
 
+- **`up` stopped by INT, TERM or HUP ends with the signal's code at every step** (130, 143, 129),
+  its box ended; the bash omabox could exit 1, its box left running, when the signal landed during
+  `up --interactive --monitor`'s add. Scripts: nothing to change.
 - **`up --no-seed` and `--keep` take their words as written**: `*`, `?` or `[` in them are refused.
   The bash omabox matched them against the current folder's file names (`--no-seed 'font?'` was
   `fonts` in a folder holding a file of that name). Name the words instead.

@@ -9618,6 +9618,19 @@ from them.
     loopback and by each host address; and nothing in the box can remove the rule: nft refuses it,
     no capability in that namespace).
 
+460. **`up` cut short by a signal could still exit 1 and leave its box** (2026-10-24, #324 wave 5a,
+    #356). Bash's fix (finding 434) trapped INT, TERM and HUP with `exit 130|143|129` and ended the
+    box in its EXIT trap, but under load a group HUP during `up --interactive --monitor`'s add gave
+    1, not 129, with the box and its `starting` file left (t_up_signals_window; its evidence was
+    pruned before it was read): most likely the add's own failure (its subshell ended by the same
+    HUP) reached up's `exit "$arc"` before bash ran its HUP trap. **Change** (Rust over bash): from the box dir's making on, up holds one code trap
+    (trap.rs's on_exit_code) whose undo ends the box (and removes a dir that has no box.json yet):
+    a failure runs it, and an INT, TERM or HUP at any step waits for the step's child (bounded,
+    finding 453), runs the undos (the monitor add's own, which removes its output, first), then exits
+    130, 143 or 129, whatever the step returned meanwhile (main parks once the signal is in). Tests:
+    t_up_signals (group and alone, while it waits for the shell), t_up_signals_window (during the
+    interactive monitor's add, in a box standing in for the host).
+
 461. **`up --clean --from SAVE` wrote its wallpaper through a link the save left** (2026-10-24, #324
     wave 5a; finding 168's class). seed_home clears the links on the way to what it writes, but
     --clean's `base64 -d > .config/omabox/clean-wallpaper.png` cleared the folder's, not the file's:
