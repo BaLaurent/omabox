@@ -229,7 +229,7 @@ fn glob_prefix(dir: &str, prefix: &str) -> Vec<Vec<u8>> {
 }
 
 /// refuse_path ABSPATH [look]: why a box may not mount ABSPATH (taken as it is), or None.
-fn refuse_path(p: &[u8], look: bool) -> Option<Vec<u8>> {
+pub fn refuse_path(p: &[u8], look: bool) -> Option<Vec<u8>> {
     let slash = |x: &[u8]| cat!(x.strip_suffix(b"/").unwrap_or(x), "/");
     let s = slash(p);
     let h = home();
@@ -339,9 +339,19 @@ fn refuse_path(p: &[u8], look: bool) -> Option<Vec<u8>> {
 
 /// refuse_src P: why a box may not mount P, or None: P resolved, and as written.
 pub fn refuse_src(p: &[u8]) -> Option<Vec<u8>> {
+    refuse_src_as(p, false)
+}
+
+/// refuse_src P look: seed_home's own copies of the user's look (branding/, extensions/) allowed too.
+#[allow(dead_code)]
+pub fn refuse_src_look(p: &[u8]) -> Option<Vec<u8>> {
+    refuse_src_as(p, true)
+}
+
+fn refuse_src_as(p: &[u8], look: bool) -> Option<Vec<u8>> {
     let r = readlink_f(p).unwrap_or_else(|| p.to_vec());
     let l = realpath_ms(p).unwrap_or_else(|| r.clone());
-    refuse_path(&r, false).or_else(|| if l != r { refuse_path(&l, false) } else { None })
+    refuse_path(&r, look).or_else(|| if l != r { refuse_path(&l, look) } else { None })
 }
 
 /// `${V//[[:cntrl:]]/?}`.
