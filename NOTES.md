@@ -9595,11 +9595,12 @@ from them.
     desk_content_refused, extensions/ did not, so a plugin that keeps a token or a password in its
     settings had it seeded into every box. **Fix** (the Rust half; bash's half of up is no longer
     run): each regular file seed_copy would copy from extensions/ is read by desk_content_refused
-    first, as the desk's files are; one that holds what looks like a key, token or password stays on
+    first, as the desk's files are (exactly what tar copies: below the top, a name like `..cfg`,
+    which tar's `.[!.]*` exclude lets through, is read too; the wave's review found it left out); one that holds what looks like a key, token or password stays on
     the desk, said by its name and never its value ("up: not seeded: extensions/NAME from your desk
     (it holds what looks like a key, token or password)"). A file that only names one (`maxTokens`,
     `tokenizer`) still goes in. Tests: t_extensions_secret (fails on the bash half: the token and the
-    password are seeded).
+    password are seeded), with a token in `plug/..cfg`; seed.rs's content_check_covers_what_tar_copies.
 
 459. **Protected ports: host ports no connected box reaches** (2026-10-24, #324 wave 5a, #355;
     decided by Diogo 2026-10-23). A connected box reached every port on the host's loopback (pasta

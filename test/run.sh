@@ -11221,12 +11221,15 @@ t_extensions_secret() {
   rm -rf "$d"; mkdir -p "$d/desk/extensions/plug/deep"
   printf '{"apiToken": "ghp_abcdefghijklmnopqrstuvwxyz0123"}\n' > "$d/desk/extensions/plug/settings.json"
   printf 'password = hunter2hunter2\n' > "$d/desk/extensions/plug/deep/creds.conf"
+  # (a name tar's .[!.]* exclude lets through: two dots in front)
+  printf '{"token": "ghp_zyxwvutsrqponmlkjihgfedcba9876"}\n' > "$d/desk/extensions/plug/..cfg"
   printf '{"maxTokens": 4, "tokenizer": "x"}\n' > "$d/desk/extensions/plug/ok.json"
   printf 'theme = dark\n' > "$d/desk/extensions/plain.conf"
   e=$XDG_RUNTIME_DIR/omabox/$B/home/.config/omarchy/extensions
   out=$(OMABOX_DESK_CONFIG=$d/desk ob up "$B" --no-shell --net isolated 2>&1) || { no "up" "$out"; return; }
   check_fails "a token in extensions/ is not seeded" test -e "$e/plug/settings.json"
   check_fails "...nor a password in a folder below" test -e "$e/plug/deep/creds.conf"
+  check_fails "...nor a token in a file named ..cfg, which tar copies" test -e "$e/plug/..cfg"
   check_eq "...what holds none is" '{"maxTokens": 4, "tokenizer": "x"}|theme = dark' "$(cat "$e/plug/ok.json")|$(cat "$e/plain.conf")"
   check_match "...each said by name" "not seeded: extensions/plug/deep/creds.conf from $d/desk \(it holds what looks like a key, token or password\)" "$out"
   check_match "...the other too" "not seeded: extensions/plug/settings.json from $d/desk" "$out"

@@ -790,6 +790,18 @@ fn re_escape(n: &[u8]) -> Vec<u8> {
     o
 }
 
+/// Whether seed_copy leaves the entry named N out, so the content check need not read it: at the
+/// top, every hidden name (`set -- *` gives tar none); below, what tar's excludes take, `.[!.]*`
+/// (a dot then anything but a dot: `..x` is copied), node_modules and api-keys.env.
+fn seed_copy_leaves_out(n: &[u8], top: bool) -> bool {
+    let hidden = if top {
+        n.starts_with(b".")
+    } else {
+        n.len() >= 2 && n[0] == b'.' && n[1] != b'.'
+    };
+    hidden || n == b"node_modules" || n == b"api-keys.env"
+}
+
 /// What of the desk's extensions/ (SRC) stays out of the box by what it holds (finding 458): each
 /// regular file seed_copy would copy (no hidden name, no node_modules or api-keys.env on its way; a
 /// link is copied as the link, its target never read) that desk_content_refused refuses, as
@@ -818,7 +830,7 @@ fn extensions_held_back(src: &[u8]) -> Vec<(Vec<u8>, &'static str)> {
             .collect();
         names.sort();
         for n in names {
-            if n.starts_with(b".") || n == b"node_modules" || n == b"api-keys.env" {
+            if seed_copy_leaves_out(&n, rel.is_empty()) {
                 continue;
             }
             let r = if rel.is_empty() {
@@ -1884,6 +1896,22 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_check_covers_what_tar_copies() {
+        assert!(seed_copy_leaves_out(b".git", false));
+        assert!(seed_copy_leaves_out(b".x", true));
+        assert!(
+            !seed_copy_leaves_out(b"..cfg", false),
+            "tar's .[!.]* copies it"
+        );
+        assert!(
+            seed_copy_leaves_out(b"..cfg", true),
+            "the top's glob gives tar none"
+        );
+        assert!(seed_copy_leaves_out(b"node_modules", false));
+        assert!(!seed_copy_leaves_out(b"settings.json", false));
+    }
 
     #[test]
     fn every_allowed_source_says_what_it_is() {
