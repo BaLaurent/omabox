@@ -549,6 +549,12 @@ impl Re {
         Re::compile(pattern, icase, caller_locale())
     }
 
+    /// A caller's pattern in locale LOC, not the environment's (a test's own).
+    #[cfg(test)]
+    fn in_locale(pattern: &[u8], loc: libc::locale_t) -> Option<Re> {
+        Re::compile(pattern, false, loc)
+    }
+
     fn compile(pattern: &[u8], icase: bool, loc: libc::locale_t) -> Option<Re> {
         let pat = CString::new(pattern).ok()?;
         // SAFETY: regex_t is plain data that regcomp fills in; zeroed is a valid starting value.
@@ -949,7 +955,20 @@ mod tests {
     // patterns are ASCII in every locale, and `.` takes any byte; a caller's follow the locale.
     #[test]
     fn own_patterns_ascii_in_any_locale() {
-        let _l = ThreadLocale::new(c"en_US.UTF-8");
+        // (en_US.UTF-8 where the system has it: there glibc's ranges take more than ASCII)
+        // SAFETY: a valid C string; the locale is freed below.
+        let us = unsafe {
+            libc::newlocale(
+                libc::LC_ALL_MASK,
+                c"en_US.UTF-8".as_ptr(),
+                std::ptr::null_mut(),
+            )
+        };
+        if us.is_null() {
+            eprintln!("skip own_patterns_ascii_in_any_locale: no en_US.UTF-8 on this system");
+            return;
+        }
+        let _l = InLocale::new(us);
         assert!(!re_match("^[0-9]+$", "²".as_bytes()));
         assert!(!re_match("^[0-9]+$", "١".as_bytes()));
         assert!(!re_match(
@@ -958,6 +977,9 @@ mod tests {
         ));
         assert!(re_match("^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$", b"box-1.a"));
         assert!(re_match("^x.y$", b"x\xffy"));
-        assert!(Re::from_bytes(b"^[A-Za-z]$", false).is_some_and(|r| r.is_match("é".as_bytes())));
+        assert!(Re::in_locale(b"^[A-Za-z]$", us).is_some_and(|r| r.is_match("é".as_bytes())));
+        drop(_l);
+        // SAFETY: made by newlocale above, no longer in use by this thread.
+        unsafe { libc::freelocale(us) };
     }
 }
