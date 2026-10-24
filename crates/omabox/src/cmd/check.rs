@@ -118,14 +118,35 @@ fn py(args: &[Vec<u8>], input: Option<&[u8]>, err_null: bool) -> jq::Ran {
     });
     match ran {
         Ok((out, (rc, _))) => jq::Ran { rc, out },
-        Err(_) => {
-            let _ = std::io::stderr().write_all(b"/usr/bin/python3: No such file or directory\n");
+        Err(e) => {
+            let (rc, said) = py_not_run(&e);
+            if !err_null {
+                let _ = std::io::stderr().write_all(&said);
+            }
             jq::Ran {
-                rc: 127,
+                rc,
                 out: Vec::new(),
             }
         }
     }
+}
+
+/// Why /usr/bin/python3 did not start, in omabox's words, and the shell's code for it: 127 not there,
+/// 126 there but not runnable (finding 441's rule; bash said "/usr/bin/python3: No such file or
+/// directory" whatever the cause).
+fn py_not_run(e: &std::io::Error) -> (i32, Vec<u8>) {
+    let code = e.raw_os_error().unwrap_or(libc::EIO);
+    // SAFETY: strerror's string for a valid errno, read at once.
+    let why = unsafe {
+        std::ffi::CStr::from_ptr(libc::strerror(code))
+            .to_string_lossy()
+            .into_owned()
+    };
+    let rc = if code == libc::ENOENT { 127 } else { 126 };
+    (
+        rc,
+        cat!("omabox: check: cannot run /usr/bin/python3: ", why, "\n"),
+    )
 }
 
 /// `<<<"$V"`: V and a newline.
@@ -3148,6 +3169,20 @@ mod tests {
             vec![b"1,2 3x4".to_vec(), b"x".to_vec()]
         );
         assert_eq!(mask_of(b"-1,2 3x4 5"), Some(b"-1 2 3 4".to_vec()));
+    }
+
+    #[test]
+    fn python_not_run_said() {
+        let e = std::io::Error::from_raw_os_error(libc::ENOENT);
+        assert_eq!(
+            py_not_run(&e),
+            (
+                127,
+                b"omabox: check: cannot run /usr/bin/python3: No such file or directory\n".to_vec()
+            )
+        );
+        let e = std::io::Error::from_raw_os_error(libc::EACCES);
+        assert_eq!(py_not_run(&e).0, 126);
     }
 
     // A folder that is a file, or not there: said, 2 (check's own failure), not 1 ("changed").

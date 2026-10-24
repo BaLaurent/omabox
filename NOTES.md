@@ -9256,9 +9256,13 @@ from them.
     run; the interpreter read whole from the first line, each CR shown ^M; a scenario with no #! is
     still run by bash, which callers rely on), "omabox: pixel: the point is past the end of grim's
     image", "omabox: cannot read FILE: why", "omabox: CMD: cannot write PATH: why", "omabox: cannot
-    run jq: not found in PATH", "set for omabox, pid N" (CHANGELOG). Tests: t_rust_parity (the twelve
-    scenario kinds and the one not there), t_unit_rust_parity (pixel's, shot's, clip's), t_clip:
-    expected differences; check.rs's interpreters_as_the_kernel_reads_them, jq.rs's not_run_said.
+    run jq: not found in PATH", "set for omabox, pid N" (CHANGELOG). Wave 4c-2's fix round: check's
+    /usr/bin/python3 that did not start (gone after check's own test for it, or not runnable) said
+    bash's "/usr/bin/python3: No such file or directory" whatever the cause; now "omabox: check:
+    cannot run /usr/bin/python3: why", 127 or 126 (check.rs's py_not_run). Tests: t_rust_parity (the
+    twelve scenario kinds and the one not there), t_unit_rust_parity (pixel's, shot's, clip's),
+    t_clip: expected differences; check.rs's interpreters_as_the_kernel_reads_them and
+    python_not_run_said, jq.rs's not_run_said.
 
 442. **Silent set -e exits, and helpers' statuses taken for omabox's** (2026-10-23, #324 wave 4c).
     Where a bash step failed under set -e the command ended with that step's status and often without
