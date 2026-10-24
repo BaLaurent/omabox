@@ -8508,7 +8508,7 @@ signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGURG}); os.execv(sys.argv[1],
   hits=$(ob run -b "$B" -- sh -c 'wc -l < /tmp/held-hits' 2>/dev/null) || hits=0
   # The Rust half's entry makes the command's stderr the caller's before the exec, so no box process
   # holds that stderr at all (finding 490; bash's nsenter left it to the inner bash's first line).
-  if [ -x "$ROOT/build/bin/omabox" ]; then
+  if [ -x "$ROOT/build/omabox" ]; then
     check_eq "a box process looking for the entry's stderr in 10 runs: never finds it" "0|0000000000" "${hits:-0}|$rcs"
     check_fails "...nothing of its in any stderr" grep -q 'forged' "$d/held.err"
   elif [ "${hits:-0}" -gt 0 ]; then
