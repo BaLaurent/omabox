@@ -8403,6 +8403,10 @@ t_run_stdio() {
   # shellcheck disable=SC2016 # the box's sh expands it
   [ "$CLI" = "$BASH_CLI" ] ||
     check_eq "...the session's leader shows its name alone" omabox-session "$(ob run -b "$B" -- sh -c 'tr -d "\0" < /proc/$PPID/cmdline' 2>&1)"
+  # --pass of a variable omabox takes out of its own environment (OMABOX_BASH, for this call only):
+  # the caller's, as it came (finding 514; the binary said it was not there).
+  # shellcheck disable=SC2016 # the box's sh expands it
+  check_eq "run --pass OMABOX_BASH: the caller's value" "[1]" "$(OMABOX_BASH=1 ob run -b "$B" --pass OMABOX_BASH -- sh -c 'echo "[$OMABOX_BASH]"' 2>&1)"
   # From another box process: a `run` writing a host file is seen holding pipes, never the file.
   ob run -b "$B" -- sh -c 'sleep 4' < "$d/in" > "$d/target" 2>&1 & local bp=$!
   sleep 1.5

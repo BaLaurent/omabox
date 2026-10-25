@@ -1076,21 +1076,29 @@ pub fn caller_environ() -> Option<&'static [u8]> {
 
 /// A variable of the caller's as it was when omabox started (run --pass): from what came, not from
 /// this process's environment (finding 74). A jailed caller's comes as OMABOX_RELAY_PASS_NAME
-/// (relay_call). None when it is not there.
+/// (relay_call). None when it is not there. Called straight, what came is /proc/self/environ, as
+/// bash's caller_env reads /proc/$$/environ: main takes OMABOX_BASH and the hand-off's variables out
+/// of this process's environment, and `OMABOX_BASH=1 omabox run --pass OMABOX_BASH` said it was not
+/// in it (finding 514).
 pub fn caller_env(name: &[u8]) -> Option<Vec<u8>> {
     let k = if jail::in_jail() {
         cat!("OMABOX_RELAY_PASS_", name)
     } else {
         name.to_vec()
     };
-    if let Some(Some(env)) = CALLER_ENVIRON.get() {
-        let lead = cat!(k, "=");
-        return env
-            .split(|&c| c == 0)
+    let lead = cat!(k, "=");
+    let find = |env: &[u8]| {
+        env.split(|&c| c == 0)
             .find_map(|e| e.strip_prefix(lead.as_slice()))
-            .map(<[u8]>::to_vec);
+            .map(<[u8]>::to_vec)
+    };
+    if let Some(Some(env)) = CALLER_ENVIRON.get() {
+        return find(env);
     }
-    std::env::var_os(OsStr::from_bytes(&k)).map(|v| v.as_bytes().to_vec())
+    match std::fs::read("/proc/self/environ") {
+        Ok(env) => find(&env),
+        Err(_) => std::env::var_os(OsStr::from_bytes(&k)).map(|v| v.as_bytes().to_vec()),
+    }
 }
 
 /// caller_path [box]: the caller's PATH without the guard's xdg-open (finding 92); for a box (BOX),

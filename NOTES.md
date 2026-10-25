@@ -10075,6 +10075,17 @@ from them.
     the binary's down). Tests: t_race (fails at 27d9613), t_rust_parity_up (finding 506's), up.rs's
     a_down_still_going_when_the_up_began_came and down_lines.
 
+514. **`run --pass` of a variable the binary takes out of its own environment said it was not set**
+    (2026-10-24, #324 wave 6-front; t_clip's "refused to an agent" at 27d9613, alone 2 in 2). Called
+    straight, main takes OMABOX_BASH (and the hand-off's OMABOX_ROOT, OMABOX_CALL_US,
+    OMABOX_ENVIRON_FD) out of the process's environment, and caller_env, with no environment handed
+    over by bash, read that one: `OMABOX_BASH=1 omabox run --pass OMABOX_BASH -- ...` exited 125, "not
+    in this command's environment". t_clip's parity wraps each leg in such a `run` (the leg's
+    OMABOX_BASH passed into its stand-in host), so both legs failed alike and the expected difference
+    (finding 441) was not there. **Fix** (Rust): caller_env reads /proc/self/environ, the environment
+    as the call came, as bash's reads /proc/$$/environ (finding 74). Tests: t_clip, t_run_stdio ("run
+    --pass OMABOX_BASH: the caller's value", fails at 27d9613).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
