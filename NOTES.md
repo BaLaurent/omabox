@@ -10072,7 +10072,8 @@ from them.
     (its start alone) by its mtime, as finding 506. Measured: `up B & down B` 15 cancels in 15, `down
     B; up B` 0 in 8. **Changes**: a Rust down's marker has three more fields on its line, so bash's up
     (OMABOX_BASH=1), which takes only a lone number, no longer cancels for one (a fallback's up with
-    the binary's down). Tests: t_race (fails at 27d9613), t_rust_parity_up (finding 506's), up.rs's
+    the binary's down); t_unit_rust_parity5 masks the marker's line to compare the halves' downs.
+    Tests: t_race (fails at 27d9613), t_rust_parity_up (finding 506's), up.rs's
     a_down_still_going_when_the_up_began_came and down_lines.
 
 514. **`run --pass` of a variable the binary takes out of its own environment said it was not set**

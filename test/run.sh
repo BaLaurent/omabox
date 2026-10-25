@@ -6413,7 +6413,9 @@ t_unit_rust_parity5() {
       if kill -0 "$l" 2>/dev/null; then echo "$n up"; else echo "$n gone"; fi; done
   }
   rp_rt=$b/rt rp_dir=$r/norepo rp_snap=1 rp_prep=rp5b_fix rp_sed="" rp_wrap=() rp_also=rp5b_saves
-  rp_mask='s/"child-pid": [0-9]+/"child-pid": N/; s/pid:\[[0-9]+\]/pid:[N]/; s/^[0-9]+$/N/'
+  # (a down's .down- marker: bash's start alone; the binary's line goes on with the last pid made, its
+  # pid namespace and its call's time, which bash's up takes for none: finding 513)
+  rp_mask='s/"child-pid": [0-9]+/"child-pid": N/; s/pid:\[[0-9]+\]/pid:[N]/; s/^[0-9]+ ([0-9]+|-) (pid:\[N\]|-) [0-9]+$/N/; s/^[0-9]+$/N/'
   local rp5b_env=(XDG_CACHE_HOME="$b/cache" XDG_DATA_HOME="$b/data" HYPRLAND_INSTANCE_SIGNATURE=rp-none)
   rp_env=("${rp5b_env[@]}")
   # down: refusals first, each before anything is touched.
