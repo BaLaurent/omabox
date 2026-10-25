@@ -10293,6 +10293,14 @@ from them.
     `hypr_lost_waits_for_the_box_to_end` (said once PID 1 has gone; still said, after 1 s, for one
     that stays); t_hyprland_crash from an install (failed alone before, twice).
 
+528. **A box's copy of the config kept share/'s mode** (2026-10-25, #324 wave 6-flip; the same run).
+    start-hyprland.sh made the box's `omabox-hyprland.lua` with `cp`, which keeps the source's mode:
+    from a read-only install (the suite's `--installed` tree is 0444; a store-like package would be
+    too) the copy was 0444, and a write to it in the box was refused, so t_autoreload's change never
+    reached Hyprland. `omabox reload` already wrote it with `cat` (the umask's mode). **Fix:** up
+    writes it the same way. Tests: t_autoreload's new "the box's copy of the config is its to
+    change", and its reload checks, from an install (failed before).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

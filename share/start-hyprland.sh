@@ -30,9 +30,11 @@ if [ "${OMABOX_INTERACTIVE:-0}" = 1 ]; then
 fi
 # The box's own copy of omabox's config (#140): share/ is the checkout's or package's, live, and a
 # change to it (a pull, an upgrade) reloaded every running box, dropping what agents had added in Lua.
-# Autoreload is off too (hyprland.lua); `omabox reload` refreshes the copy and reloads it.
+# Autoreload is off too (hyprland.lua); `omabox reload` refreshes the copy and reloads it. Written as
+# reload writes it (cat, not cp), so it is the box's to change whatever share/'s mode: cp kept a
+# read-only install's 0444, and a write to the copy in the box was refused (finding 528).
 cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua
-cp /opt/omabox/share/hyprland.lua "$cfg.new" && mv -f "$cfg.new" "$cfg"
+cat /opt/omabox/share/hyprland.lua > "$cfg.new" && mv -f "$cfg.new" "$cfg"
 exec env -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u WLR_SCENE_DISABLE_VISIBILITY -u DISPLAY -u OMABOX_HYPRLAND \
   OMARCHY_PATH="${OMABOX_OMARCHY:-/usr/share/omarchy}" "${lib[@]}" HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
   "${OMABOX_HYPRLAND:-/usr/bin/Hyprland}" --config "$cfg"

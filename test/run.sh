@@ -13579,6 +13579,8 @@ t_autoreload() {
   check_eq "...ls --json says so" true "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .autoreload')"
   check_match "...up --autoreload again takes it as it is" "box '$B' is already up$" "$(ob up "$B" --autoreload 2>&1)"
   E=$(ob path -b "$B")/home/events.log
+  # (a read-only install's share/ too: a copy of its mode was refused the write below, finding 528)
+  check "the box's copy of the config is its to change" ob run -b "$B" -- sh -c 'test -w "$XDG_RUNTIME_DIR/omabox-hyprland.lua"'
   ob lua -b "$B" 'omabox_t74 = 1' >/dev/null
   n0=$(grep -c ' configreloaded' "$E")
   # shellcheck disable=SC2016
