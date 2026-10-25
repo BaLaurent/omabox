@@ -491,7 +491,36 @@ pub fn bytes(p: &Path) -> &[u8] {
 
 /// An environment variable as bytes; None when unset.
 pub fn env(name: &str) -> Option<Vec<u8>> {
+    #[cfg(test)]
+    if let Some(v) = TEST_ENV.with(|e| e.borrow().get(name).cloned()) {
+        return v;
+    }
     std::env::var_os(name).map(OsString::into_vec)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// This test thread's environment, over the process's (with_env): what `HOME=... helper` gave a
+    /// helper in the suite, without set_var (the process's, shared by every test thread).
+    static TEST_ENV: std::cell::RefCell<std::collections::HashMap<String, Option<Vec<u8>>>> =
+        std::cell::RefCell::default();
+}
+
+/// F with VARS (NAME, Some(VALUE) or None for unset) in env's view, on this thread only: a #[test]'s
+/// `HOME=... helper`. Child processes still get the process's environment.
+#[cfg(test)]
+pub fn with_env<T>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> T) -> T {
+    let old = TEST_ENV.with(|e| {
+        let mut e = e.borrow_mut();
+        let old = e.clone();
+        for (k, v) in vars {
+            e.insert((*k).to_string(), v.map(|v| v.as_bytes().to_vec()));
+        }
+        old
+    });
+    let r = f();
+    TEST_ENV.with(|e| *e.borrow_mut() = old);
+    r
 }
 
 /// `${NAME:-}`: the variable, empty when unset.
@@ -667,6 +696,20 @@ pub fn test_int(v: &[u8]) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The seam the suite's `HOME=... helper` cases use: this thread's view only, set and unset,
+    /// nested, and the process's back after.
+    #[test]
+    fn with_env_is_this_threads_view() {
+        let path = env("PATH");
+        let got = with_env(&[("OMABOX_T_ENV", Some("a")), ("PATH", None)], || {
+            let inner = with_env(&[("OMABOX_T_ENV", Some("b"))], || env("OMABOX_T_ENV"));
+            let other = std::thread::spawn(|| env("OMABOX_T_ENV")).join().unwrap();
+            (inner, env("OMABOX_T_ENV"), env("PATH"), other)
+        });
+        assert_eq!(got, (Some(b"b".to_vec()), Some(b"a".to_vec()), None, None));
+        assert_eq!((env("OMABOX_T_ENV"), env("PATH")), (None, path));
+    }
 
     #[test]
     fn dates_as_coreutils_prints_them() {

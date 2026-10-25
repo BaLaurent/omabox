@@ -2223,8 +2223,14 @@ mod tests {
             "...a save's theme replaced"
         );
         sc_mk(&h("empty"));
-        // (...nothing to copy: up says so, "could not copy your current theme": its refusal)
-        assert!(seed_theme_from(&c, &sc_src(&h("empty")), h("h5").as_bytes()).is_err());
+        let (r, said) =
+            crate::exit::heard(|| seed_theme_from(&c, &sc_src(&h("empty")), h("h5").as_bytes()));
+        assert!(r.is_err(), "...nothing to copy: refused");
+        assert_eq!(
+            said.matches("could not copy your current theme").count(),
+            1,
+            "...up says so: {said}"
+        );
 
         // finding 228: --seed's folder over links in DEST: replaced, never written through.
         let v = h("victim");
@@ -2254,6 +2260,12 @@ mod tests {
             xs.iter()
                 .all(|x| seed_copy_in(&c, hh.as_bytes(), &sc_src(x), &sc_dest(".cfg")).is_ok())
         };
+        // (the words of a refused one, as `2>&1` had them)
+        let seed_said = |b: &str, xs: &[String]| -> String {
+            let (ok, said) = crate::exit::heard(|| seed_in(b, xs));
+            assert!(!ok, "{b}: refused");
+            said
+        };
         assert!(
             seed_in("b1", &[format!("{sd}/A"), format!("{sd}/B")]),
             "seed: a folder over a folder's links"
@@ -2282,8 +2294,11 @@ mod tests {
             sc_is_ln(&h("b2/home/.cfg/f")),
             "...the link in place of the file, as copied"
         );
-        // (...a link where a dir is: refused, as cp did, "could not copy")
-        assert!(!seed_in("b4", &[format!("{sd}/B"), format!("{sd}/A")]));
+        let said = seed_said("b4", &[format!("{sd}/B"), format!("{sd}/A")]);
+        assert!(
+            said.contains("could not copy"),
+            "...a link where a dir is: refused, as cp did: {said}"
+        );
         sc_ln(&format!("{v}/file"), &h("b3/home/.cfg/f"));
         sc_ln(&format!("{v}/dir"), &h("b3/home/.cfg/sub/d"));
         sc_mk(&format!("{sd}/C/sub/d"));
@@ -2311,28 +2326,30 @@ mod tests {
             "...merged with what DEST had (finding 229)"
         );
 
-        // finding 257: SRC swapped for a link out before the copy: refused, nothing copied
-        // (the refusal says "not what it was when checked").
+        // finding 257: SRC swapped for a link out before the copy: refused, nothing copied.
         for d in ["sd/D", "b5/home", "b6/home", "b7/home"] {
             sc_mk(&h(d));
         }
         std::fs::remove_dir_all(format!("{sd}/D")).unwrap();
         sc_ln(&format!("{v}/dir"), &format!("{sd}/D"));
+        let said = seed_said("b5", &[format!("{sd}/D")]);
         assert!(
-            !seed_in("b5", &[format!("{sd}/D")]),
-            "seed: a folder swapped for a link since checked"
+            said.contains("not what it was when checked"),
+            "seed: a folder swapped for a link since checked: refused: {said}"
         );
         assert!(!sc_there(&h("b5/home/.cfg/g")));
         sc_ln(&v, &format!("{sd}/P"));
+        let said = seed_said("b6", &[format!("{sd}/P/file")]);
         assert!(
-            !seed_in("b6", &[format!("{sd}/P/file")]),
-            "...a file's folder swapped"
+            said.contains("not what it was when checked"),
+            "...a file's folder swapped: refused: {said}"
         );
         assert!(!sc_there(&h("b6/home/.cfg")));
         sc_ln(&format!("{v}/file"), &format!("{sd}/E"));
+        let said = seed_said("b7", &[format!("{sd}/E")]);
         assert!(
-            !seed_in("b7", &[format!("{sd}/E")]),
-            "...a file swapped for a link"
+            said.contains("not what it was when checked"),
+            "...a file swapped for a link: refused: {said}"
         );
         assert!(!sc_there(&h("b7/home/.cfg")));
         assert_eq!(

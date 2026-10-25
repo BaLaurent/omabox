@@ -44,7 +44,27 @@ pub fn say(m: impl AsRef<[u8]>) {
     let mut line = b"omabox: ".to_vec();
     line.extend_from_slice(m.as_ref());
     line.push(b'\n');
+    #[cfg(test)]
+    if HEARD.with(|h| h.borrow_mut().as_mut().map(|h| h.extend_from_slice(&line))) == Some(()) {
+        return;
+    }
     let _ = std::io::stderr().write_all(&line);
+}
+
+#[cfg(test)]
+thread_local! {
+    /// This test thread's said lines, while heard runs.
+    static HEARD: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// F's result and the lines it said (say's, its refusals' words), as `2>&1` gave the suite; on this
+/// thread only.
+#[cfg(test)]
+pub fn heard<T>(f: impl FnOnce() -> T) -> (T, String) {
+    let was = HEARD.with(|h| h.replace(Some(Vec::new())));
+    let r = f();
+    let got = HEARD.with(|h| h.replace(was)).unwrap_or_default();
+    (r, String::from_utf8_lossy(&got).into_owned())
 }
 
 /// What bash's globals hold for one call: the refusal conventions and the box selected.
