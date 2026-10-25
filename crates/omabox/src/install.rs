@@ -3,6 +3,7 @@
 //! jailed caller's files are followed only through a JailView (jailpath.rs's), and git is never run on
 //! them (#198).
 
+use crate::boxes::{BoxSys, RealBox};
 use crate::cat;
 use crate::exit::{Ctx, Exit, Res, muted, say};
 use crate::jail::in_jail;
@@ -828,12 +829,11 @@ pub fn qs_check(ctx: &Ctx, p: &[u8]) -> Res<()> {
 // --- what the box says of its versions -----------------------------------------------------------
 
 /// `on_box timeout 6 ARGS 2>/dev/null | head -c LIMIT | head -n 1`.
-fn box_first_line(ctx: &Ctx, args: &[&[u8]], limit: usize) -> Vec<u8> {
+fn box_first_line<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, args: &[&[u8]], limit: usize) -> Vec<u8> {
     let a: Vec<Vec<u8>> = args.iter().map(|x| x.to_vec()).collect();
-    let r = crate::exec::on_box(
+    let r = sys.on_box_io(
         ctx,
         &a,
-        false,
         crate::exec::Out::Capture(Some(limit)),
         crate::exec::ErrTo::Null,
     );
@@ -845,8 +845,12 @@ fn box_first_line(ctx: &Ctx, args: &[&[u8]], limit: usize) -> Vec<u8> {
 /// box.json for `ls` and `windows` (#238). A box on its own Hyprland (finding 116) also gets a warning
 /// when the host's hyprctl (the installed Hyprland's) is of another version: their IPC may not match.
 pub fn hypr_version(ctx: &Ctx) {
+    hypr_version_with(&RealBox, ctx);
+}
+
+fn hypr_version_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) {
     let own = crate::boxes::meta(&ctx.d, "hyprland").0;
-    let line = box_first_line(ctx, &[b"timeout", b"6", b"hyprctl", b"version"], 65536);
+    let line = box_first_line(sys, ctx, &[b"timeout", b"6", b"hyprctl", b"version"], 65536);
     if line.is_empty() {
         let o = if own.is_empty() {
             b"the installed one".to_vec()
@@ -875,10 +879,9 @@ pub fn hypr_version(ctx: &Ctx) {
         .iter()
         .map(|x| x.to_vec())
         .collect();
-    let r = crate::exec::on_box(
+    let r = sys.on_box_io(
         ctx,
         &a,
-        false,
         crate::exec::Out::Capture(Some(65536)),
         crate::exec::ErrTo::Null,
     );
@@ -904,8 +907,12 @@ pub fn hypr_version(ctx: &Ctx) {
 /// qs_version: the box's Quickshell version as it says it (`quickshell --version`, its first line),
 /// into box.json for `ls --json`.
 pub fn qs_version(ctx: &Ctx) {
+    qs_version_with(&RealBox, ctx);
+}
+
+fn qs_version_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) {
     let qs = crate::shellnote::box_qs(ctx);
-    let line = box_first_line(ctx, &[b"timeout", b"6", &qs, b"--version"], 4096);
+    let line = box_first_line(sys, ctx, &[b"timeout", b"6", &qs, b"--version"], 4096);
     if line.is_empty() {
         let own = crate::boxes::meta(&ctx.d, "quickshell").0;
         if !own.is_empty() {
@@ -1548,5 +1555,120 @@ mod tests {
         if let Err(m) = audio_packages() {
             assert!(!m.is_empty() && !m.contains(&b' '));
         }
+    }
+
+    /// The box's answers as t_unit_hyprland's and t_unit_quickshell's stubs gave them: hyprctl
+    /// version (-j: JSON) says 0.0.1; a Quickshell at /b/quickshell or /usr/bin/quickshell says its
+    /// version, naming itself.
+    struct Says;
+
+    impl crate::boxes::BoxSys for Says {
+        fn on_box_io(
+            &self,
+            _: &Ctx,
+            args: &[Vec<u8>],
+            _: crate::exec::Out,
+            _: crate::exec::ErrTo,
+        ) -> crate::exec::Ran {
+            let ran = |rc: i32, out: Vec<u8>| crate::exec::Ran {
+                rc,
+                out,
+                refused: false,
+                gone_said: false,
+            };
+            let a = |i: usize| args.get(i).map_or(&b""[..], Vec::as_slice);
+            if a(3) == b"version" {
+                return ran(
+                    0,
+                    if args.last().is_some_and(|l| l == b"-j") {
+                        b"{\"version\": \"0.0.1\"}\n".to_vec()
+                    } else {
+                        b"Hyprland 0.0.1 built from branch x\n".to_vec()
+                    },
+                );
+            }
+            if a(2) == b"/b/quickshell" || a(2) == b"/usr/bin/quickshell" {
+                return ran(0, cat!("Quickshell 0.0.1 (revision abc, by ", a(2), ")\n"));
+            }
+            ran(1, Vec::new())
+        }
+    }
+
+    fn vbox(tag: &str, json: &str) -> (Ctx, std::path::PathBuf) {
+        let d = std::env::temp_dir().join(format!("omabox-ver-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("box.json"), json).unwrap();
+        let mut ctx = Ctx::new(b"up", Vec::new());
+        ctx.name = b"x".to_vec();
+        ctx.d = shell::bytes(&d).to_vec();
+        (ctx, d)
+    }
+
+    fn field(d: &std::path::Path, k: &str) -> Option<String> {
+        let v: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(d.join("box.json")).ok()?).ok()?;
+        v.get(k)?.as_str().map(str::to_string)
+    }
+
+    // t_unit_hyprland's: another version than the installed hyprctl's, a warning; box.json gets the
+    // box's version line either way (#238). (#[ignore]: the host's /usr/bin/Hyprland says its own
+    // version.)
+    #[test]
+    #[ignore = "runs the host's Hyprland --version-json: run by test/run.sh (cargo test -- --ignored)"]
+    fn hypr_version_as_bash() {
+        let (ctx, d) = vbox("h", r#"{"hyprland": "/b/Hyprland"}"#);
+        let (_, said) = crate::exit::heard(|| hypr_version_with(&Says, &ctx));
+        assert!(
+            said.contains(
+                "warning: box 'x' runs Hyprland 0.0.1, but hyprctl and hyprpm are the installed"
+            ),
+            "another Hyprland version than hyprctl's: a warning: {said}"
+        );
+        assert_eq!(
+            field(&d, "hyprland_version").as_deref(),
+            Some("Hyprland 0.0.1 built from branch x"),
+            "...and box.json has its version line"
+        );
+        std::fs::write(d.join("box.json"), "{}").unwrap();
+        let (_, said) = crate::exit::heard(|| hypr_version_with(&Says, &ctx));
+        assert_eq!(said, "", "a box on the installed Hyprland: no warning");
+        assert_eq!(
+            field(&d, "hyprland_version").as_deref(),
+            Some("Hyprland 0.0.1 built from branch x"),
+            "...and box.json has its version line too (#238)"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // t_unit_quickshell's: the version line, from inside the box, every box's, the build's run by
+    // its path (finding 358).
+    #[test]
+    fn qs_version_as_bash() {
+        let (ctx, d) = vbox("q", r#"{"quickshell": "/b/quickshell"}"#);
+        qs_version_with(&Says, &ctx);
+        assert_eq!(
+            crate::shellnote::box_qs(&ctx),
+            b"/b/quickshell",
+            "a build: the box's quickshell is it"
+        );
+        assert_eq!(
+            field(&d, "quickshell_version").as_deref(),
+            Some("Quickshell 0.0.1 (revision abc, by /b/quickshell)"),
+            "...and box.json has its version line, from it"
+        );
+        std::fs::write(d.join("box.json"), "{}").unwrap();
+        qs_version_with(&Says, &ctx);
+        assert_eq!(
+            crate::shellnote::box_qs(&ctx),
+            b"/usr/bin/quickshell",
+            "the installed one otherwise"
+        );
+        assert_eq!(
+            field(&d, "quickshell_version").as_deref(),
+            Some("Quickshell 0.0.1 (revision abc, by /usr/bin/quickshell)"),
+            "...and its version line too"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -134,24 +134,10 @@ fn rec_crf(cut: Option<i64>) -> &'static str {
     if cut.is_some() { "12" } else { "18" }
 }
 
-/// box_copy FILE_IN_BOX MAX TO: the file's bytes into TO, read in the box by its cat, when the box's
-/// stat says it is a regular file, not sparse, of at most MAX bytes; never more than that size, in a
-/// time for it. Some(its size) when the cat ran to its end, None when refused (said) or cut short.
-fn box_copy(ctx: &mut Ctx, file: &[u8], max: i64, to: &std::fs::File) -> Option<i64> {
-    let (_, st) = sys_cap(
-        ctx,
-        &w(&[
-            b"/usr/bin/stat".as_slice(),
-            b"-c",
-            b"%F|%s|%b|%B",
-            b"--",
-            file,
-        ]),
-        Some(200),
-        Err2::Null,
-        false,
-    );
-    let f = shell::read_ifs(&strip_nl(&st), 4, b"|");
+/// box_copy's reading of the box's stat (ST: "%F|%s|%b|%B"): the size to copy, or None when FILE is
+/// not a regular file, is sparse, or is more than MAX bytes (said).
+fn copy_size(ctx: &Ctx, file: &[u8], max: i64, st: &[u8]) -> Option<i64> {
+    let f = shell::read_ifs(&strip_nl(st), 4, b"|");
     let ok = f[0] == b"regular file"
         && shell::re_match(
             "^[0-9]{1,15} [0-9]{1,15} [0-9]{1,6}$",
@@ -196,6 +182,41 @@ fn box_copy(ctx: &mut Ctx, file: &[u8], max: i64, to: &std::fs::File) -> Option<
         ));
         return None;
     }
+    Some(size)
+}
+
+/// box_copy's cat of FILE in the box, given a time for SIZE (10 s, and 1 a 10 MiB): a file swapped
+/// for a FIFO after its stat is not read for ever.
+fn copy_argv(file: &[u8], size: i64) -> Vec<Vec<u8>> {
+    w(&[
+        b"/usr/bin/timeout".as_slice(),
+        b"-k",
+        b"1",
+        (10 + size / 10_485_760).to_string().as_bytes(),
+        b"/usr/bin/cat",
+        b"--",
+        file,
+    ])
+}
+
+/// box_copy FILE_IN_BOX MAX TO: the file's bytes into TO, read in the box by its cat, when the box's
+/// stat says it is a regular file, not sparse, of at most MAX bytes; never more than that size, in a
+/// time for it. Some(its size) when the cat ran to its end, None when refused (said) or cut short.
+fn box_copy(ctx: &mut Ctx, file: &[u8], max: i64, to: &std::fs::File) -> Option<i64> {
+    let (_, st) = sys_cap(
+        ctx,
+        &w(&[
+            b"/usr/bin/stat".as_slice(),
+            b"-c",
+            b"%F|%s|%b|%B",
+            b"--",
+            file,
+        ]),
+        Some(200),
+        Err2::Null,
+        false,
+    );
+    let size = copy_size(ctx, file, max, &st)?;
     // (`| head -c SIZE`: streamed, never held here whole; the pipe closed once SIZE came)
     let (r, w0) = pipe().ok()?;
     let wr = dup_hi(w0.as_raw_fd()).ok()?;
@@ -207,15 +228,7 @@ fn box_copy(ctx: &mut Ctx, file: &[u8], max: i64, to: &std::fs::File) -> Option<
         let mut d = dst;
         let _ = std::io::copy(&mut src, &mut d);
     });
-    let a = w(&[
-        b"/usr/bin/timeout".as_slice(),
-        b"-k",
-        b"1",
-        (10 + size / 10_485_760).to_string().as_bytes(),
-        b"/usr/bin/cat",
-        b"--",
-        file,
-    ]);
+    let a = copy_argv(file, size);
     let rc = box_exec(
         ctx,
         &a,
@@ -2194,5 +2207,133 @@ mod tests {
         assert_eq!(rec_crf(Some(1)), "12");
         assert_eq!(rec_crf(None), "18");
         assert_eq!(replace_all(b"a=pass,b=pass", b"pass", b"x"), b"a=x,b=x");
+    }
+
+    // t_unit_record's record_marks: wall-clock µs to ms from the first frame (in order; one before
+    // it at 0), the wall-clock time as events has it, WebVTT cues from each to the next (the last to
+    // the end), its text escaped; none, and an earlier take's files go; with a cut, the marks shifted.
+    #[test]
+    #[ignore = "runs awk: run by test/run.sh (cargo test -- --ignored)"]
+    fn record_marks_as_bash() {
+        let d = std::env::temp_dir().join(format!("omabox-rmarks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let rb = shell::bytes(&d.join("take")).to_vec();
+        let mut ctx = Ctx::new(b"record", Vec::new());
+        ctx.parsed();
+        let marks = |m: &str, first: &str, dur: &str, cuts: &str| {
+            let (r, _) = crate::exit::heard(|| {
+                record_marks(
+                    &ctx,
+                    m.as_bytes(),
+                    first.as_bytes(),
+                    dur.as_bytes(),
+                    &rb,
+                    cuts.as_bytes(),
+                    &rb,
+                    b"",
+                )
+            });
+            assert!(r.is_ok());
+        };
+        let lines = |f: &str, sep: &str| -> String {
+            std::fs::read_to_string(d.join(f))
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>()
+                .join(sep)
+        };
+        marks(
+            "1000002500000\tscene two\n1000000500400\tscene <one> & more\n999999900000\tearly",
+            "1000000000000",
+            "4000",
+            "",
+        );
+        assert_eq!(
+            lines("take.marks.tsv", "|").replace('\t', " "),
+            "ms time text|0 999999.900 early|500 1000000.500 scene <one> & more|2500 1000002.500 scene two",
+            "record_marks: the TSV"
+        );
+        assert_eq!(
+            lines("take.vtt", "|"),
+            "WEBVTT||1|00:00:00.000 --> 00:00:00.500|early||2|00:00:00.500 --> 00:00:02.500|scene &lt;one&gt; &amp; more||3|00:00:02.500 --> 00:00:04.000|scene two",
+            "...the WebVTT"
+        );
+        marks("", "", "0", "");
+        assert!(
+            !d.join("take.marks.tsv").exists() && !d.join("take.vtt").exists(),
+            "...no marks: an earlier take's files go"
+        );
+        marks(
+            "1000002500000\tafter\n1000000500000\tbefore\n1000001100000\tin",
+            "1000000000000",
+            "4000",
+            "30 60\n",
+        );
+        let cut: Vec<String> = std::fs::read_to_string(d.join("take.marks.tsv"))
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let f: Vec<&str> = l.split('\t').collect();
+                format!("{} {}", f[0], f[2])
+            })
+            .collect();
+        assert_eq!(
+            cut.join("|"),
+            "ms text|500 before|1000 in|1500 after",
+            "record_marks with a cut (frames 30 to 60, 1 s at 30 fps): one after it 1 s earlier, one in it at its start"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // t_jail_record's (#224 re-check): copies out of a box are capped. A fallocated 64 MiB file
+    // (blocks the box reserved, as its stat gives them) is no bound: refused past the cap, said; a
+    // file swapped for a FIFO after its stat is read under a time for its size, not for ever.
+    #[test]
+    fn box_copy_is_capped() {
+        let mut ctx = Ctx::new(b"record", Vec::new());
+        ctx.name = b"jr".to_vec();
+        let (n, said) = crate::exit::heard(|| {
+            copy_size(
+                &ctx,
+                b"/home/sbx/big",
+                1_048_576,
+                b"regular file|67108864|131072|512\n",
+            )
+        });
+        assert_eq!(n, None);
+        assert!(
+            said.contains("is 64.0 MiB: more than omabox copies out of a box (1.0 MiB)"),
+            "a fallocated 64 MiB file past box_copy's cap: refused, said: {said}"
+        );
+        let (n, said) = crate::exit::heard(|| {
+            copy_size(
+                &ctx,
+                b"/home/sbx/sparse",
+                1 << 40,
+                b"regular file|67108864|8|512\n",
+            )
+        });
+        assert_eq!(n, None, "...a sparse one: refused");
+        assert!(said.contains("is sparse"), "{said}");
+        let (n, said) =
+            crate::exit::heard(|| copy_size(&ctx, b"/home/sbx/fifo", 100, b"fifo|0|0|512\n"));
+        assert_eq!(n, None, "...one that is no regular file: refused");
+        assert!(said.contains("is not a file"), "{said}");
+        assert_eq!(
+            copy_size(&ctx, b"/home/sbx/fifo", 100, b"regular file|10|8|512\n"),
+            Some(10),
+            "a file the stat called 10 bytes: copied as 10"
+        );
+        assert_eq!(
+            copy_argv(b"/home/sbx/fifo", 10).join(&b' '),
+            b"/usr/bin/timeout -k 1 10 /usr/bin/cat -- /home/sbx/fifo",
+            "...by a cat given 10 s (a FIFO there is not read for ever)"
+        );
+        assert_eq!(
+            copy_argv(b"f", 104_857_600)[3],
+            b"20",
+            "...and a second more a 10 MiB"
+        );
     }
 }

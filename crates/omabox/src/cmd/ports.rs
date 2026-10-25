@@ -546,4 +546,161 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&rt);
     }
+
+    /// t_unit_jail_policy's stand-ins: box jp (the jail's, pid "1") serves on 40001 (socket
+    /// 424242), held on this side by socket 515151 of uid UID. With OUTSIDE, box jo (another
+    /// jail's, pid "2") serves on it too when it is Some(true) (socket 434343), and the host's
+    /// holder is one no readable process has (a pasta's).
+    struct JPorts {
+        uid: String,
+        outside: Option<bool>,
+    }
+
+    fn me() -> Vec<u8> {
+        std::process::id().to_string().into_bytes()
+    }
+
+    impl PortsSys for JPorts {
+        fn up_pid(&self, d: &[u8]) -> Option<Vec<u8>> {
+            Some(if d.ends_with(b"/jo") { b"2" } else { b"1" }.to_vec())
+        }
+        fn box_pids(&self, ctx: &Ctx) -> Vec<Vec<u8>> {
+            vec![if ctx.name == b"jo" { b"2" } else { b"1" }.to_vec()]
+        }
+        fn tcp_listeners(&self, dir: &[u8]) -> Vec<[Vec<u8>; 4]> {
+            let l = |u: &str, ino: &str| {
+                [
+                    b"40001".to_vec(),
+                    b"0.0.0.0".to_vec(),
+                    u.as_bytes().to_vec(),
+                    ino.as_bytes().to_vec(),
+                ]
+            };
+            match dir {
+                b"/proc/self/net" => vec![l(&self.uid, "515151")],
+                b"/proc/2/net" if self.outside == Some(true) => vec![l("0", "434343")],
+                b"/proc/2/net" => Vec::new(),
+                _ => vec![l("0", "424242")],
+            }
+        }
+        fn sock_owners(&self, pids: &[Vec<u8>], own: &mut HashMap<Vec<u8>, Vec<u8>>) {
+            if self.outside.is_none() {
+                own.insert(b"424242".to_vec(), me());
+                own.insert(b"515151".to_vec(), me());
+            } else if pids == [b"2".to_vec()] {
+                own.insert(b"434343".to_vec(), me());
+            } else {
+                own.insert(b"424242".to_vec(), me());
+            }
+        }
+    }
+
+    // t_unit_jail_policy's (#93, finding 237): ports for a jailed caller, the host side by state only;
+    // a port a box outside the jail serves on too reads as taken, without naming that box.
+    #[test]
+    fn ports_for_a_jailed_caller() {
+        let rt = std::env::temp_dir().join(format!("omabox-jports-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&rt);
+        std::fs::create_dir_all(rt.join("jp")).unwrap();
+        std::fs::write(rt.join("jp/box.json"), r#"{"net":"connected","jail":"j1"}"#).unwrap();
+        let uid = crate::procfs::euid().to_string();
+        let ports = |sys: &JPorts, jailed: bool, json: bool| {
+            let mut ctx = Ctx::new(b"ports", shell::bytes(&rt).to_vec());
+            let args: Vec<Vec<u8>> = if json {
+                vec![b"--json".to_vec()]
+            } else {
+                Vec::new()
+            };
+            let jail = jailed.then_some(r#"{"id":"j1"}"#);
+            let (_, said) = crate::exit::heard_all(|| {
+                shell::with_env(&[("OMABOX_JAIL", jail)], || run_with(sys, &mut ctx, &args))
+            });
+            said
+        };
+        let host = |said: &str| {
+            String::from_utf8_lossy(
+                &jq::jq(
+                    &["-c", ".[0].host"],
+                    Some(said.as_bytes()),
+                    jq::Err::Inherit,
+                )
+                .text(),
+            )
+            .into_owned()
+        };
+        let mine = JPorts {
+            uid: uid.clone(),
+            outside: None,
+        };
+        let comm = std::fs::read_to_string("/proc/self/comm").unwrap();
+        let out = ports(&mine, false, false);
+        assert!(
+            out.contains(&format!(
+                "not this box: {} (pid {}) holds it",
+                comm.trim(),
+                std::process::id()
+            )),
+            "ports, not jailed: the host process named: {out}"
+        );
+        assert_eq!(
+            host(&ports(&mine, true, true)),
+            r#"{"state":"host"}"#,
+            "ports, jailed: no pid or process in --json"
+        );
+        assert!(
+            ports(&mine, true, false).contains("not this box: a process of the user's holds it"),
+            "...nor in the text"
+        );
+        let other = JPorts {
+            uid: "4242".into(),
+            outside: None,
+        };
+        assert_eq!(
+            host(&ports(&other, true, true)),
+            r#"{"state":"other-user"}"#,
+            "...another user's: no uid"
+        );
+        assert!(
+            ports(&other, true, false).contains("not this box: another user's process holds it"),
+            "...said so"
+        );
+        // Finding 237: the port held by a socket no readable process has (a pasta's), with a box
+        // outside the jail (jo, socket 434343) serving on it too: taken, not `this`; with none,
+        // `this` as before.
+        std::fs::create_dir_all(rt.join("jo")).unwrap();
+        std::fs::write(rt.join("jo/box.json"), r#"{"net":"connected","jail":"j2"}"#).unwrap();
+        let out_on = JPorts {
+            uid: uid.clone(),
+            outside: Some(true),
+        };
+        assert_eq!(
+            host(&ports(&out_on, true, true)),
+            r#"{"state":"host"}"#,
+            "ports, jailed: a port a box outside the jail serves on too reads as host, not this (finding 237)"
+        );
+        let text = ports(&out_on, true, false);
+        assert!(
+            text.contains("taken: a box outside this jail serves on it too"),
+            "...said, without naming that box: {text}"
+        );
+        assert!(
+            !text.contains("jo") && !ports(&out_on, true, true).contains("jo"),
+            "...whose name is not in it"
+        );
+        let out_off = JPorts {
+            uid,
+            outside: Some(false),
+        };
+        let st = jq::jq(
+            &["-r", ".[0].host.state"],
+            Some(ports(&out_off, true, true).as_bytes()),
+            jq::Err::Inherit,
+        );
+        assert_eq!(
+            st.text(),
+            b"this",
+            "...with no box outside on it: this, as before"
+        );
+        let _ = std::fs::remove_dir_all(&rt);
+    }
 }

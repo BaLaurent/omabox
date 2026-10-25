@@ -1340,6 +1340,19 @@ pub fn stdio_relay(
     err_null: bool,
     enter: Option<crate::enter::Plan>,
 ) -> std::io::Result<Relayed> {
+    stdio_relay_with([0, 1, 2], false, argv, capture, err_null, enter)
+}
+
+/// stdio_relay with SRC the caller's stdin, stdout and stderr, and PIPES as run's relays have it (a
+/// pipe or socket relayed too, finding 337).
+fn stdio_relay_with(
+    src: [RawFd; 3],
+    pipes: bool,
+    argv: &[Vec<u8>],
+    capture: bool,
+    err_null: bool,
+    enter: Option<crate::enter::Plan>,
+) -> std::io::Result<Relayed> {
     let null_err = if err_null {
         Some(dev_null(true)?)
     } else {
@@ -1352,11 +1365,11 @@ pub fn stdio_relay(
         (None, None)
     };
     let src = [
-        0,
-        cap_w.as_ref().map_or(1, AsRawFd::as_raw_fd),
-        null_err.as_ref().map_or(2, AsRawFd::as_raw_fd),
+        src[0],
+        cap_w.as_ref().map_or(src[1], AsRawFd::as_raw_fd),
+        null_err.as_ref().map_or(src[2], AsRawFd::as_raw_fd),
     ];
-    let relays = Relays::new(src, false)?;
+    let relays = Relays::new(src, pipes)?;
     drop(cap_w);
     drop(null_err);
     let reader = cap_r.map(|r| std::thread::spawn(move || read_all(r, None)));
@@ -1433,7 +1446,16 @@ fn relay_out(fd: RawFd, pipes: bool) -> bool {
     pipes && executable(&relay_bin()) && fstat(fd).is_some_and(|st| is_fifo_or_socket(&st))
 }
 
+/// The checkout's omabox-relay (a #[test]'s binary has no checkout: the source tree's).
 fn relay_bin() -> Vec<u8> {
+    #[cfg(test)]
+    return concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tools/relay/omabox-relay"
+    )
+    .as_bytes()
+    .to_vec();
+    #[cfg(not(test))]
     cat!(shell::bytes(&crate::root()), "/tools/relay/omabox-relay")
 }
 
@@ -1767,6 +1789,185 @@ mod tests {
             "...host keeps it"
         );
         let _ = std::fs::remove_dir_all(&dl);
+    }
+
+    // t_unit_fd_exposed (finding 325): which of a caller's fds a box could reach again through
+    // /proc, and so are relayed.
+    #[test]
+    fn fd_exposed_as_bash() {
+        let d = std::env::temp_dir().join(format!("omabox-fdx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("f"), "x\n").unwrap();
+        let f = std::fs::File::open(d.join("f")).unwrap();
+        assert!(fd_exposed(f.as_raw_fd()), "fd_exposed: a file");
+        std::fs::write(d.join("f.d"), "x\n").unwrap();
+        let del = std::fs::File::open(d.join("f.d")).unwrap();
+        std::fs::remove_file(d.join("f.d")).unwrap();
+        assert!(fd_exposed(del.as_raw_fd()), "...a deleted file still");
+        let dir = std::fs::File::open(&d).unwrap();
+        assert!(fd_exposed(dir.as_raw_fd()), "...a directory");
+        let zero = std::fs::File::open("/dev/zero").unwrap();
+        assert!(fd_exposed(zero.as_raw_fd()), "...a device (/dev/zero)");
+        let null = std::fs::File::open("/dev/null").unwrap();
+        assert!(!fd_exposed(null.as_raw_fd()), "...not /dev/null");
+        let (r, w) = pipe().unwrap();
+        assert!(!fd_exposed(r.as_raw_fd()), "...not a pipe");
+        assert!(!fd_exposed(w.as_raw_fd()), "...stdout: a pipe");
+        // (an fd past any limit: never open)
+        assert!(!fd_exposed(999_999), "...not a closed fd");
+        let out = std::fs::File::create(d.join("f.out")).unwrap();
+        assert!(fd_exposed(out.as_raw_fd()), "...stdout: a file");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A terminal of our own (its other end): posix_openpt's.
+    fn tty() -> (OwnedFd, OwnedFd) {
+        // SAFETY: the calls take and return plain fds and a static name buffer, read at once.
+        unsafe {
+            let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+            assert!(m >= 0);
+            assert_eq!(libc::grantpt(m), 0);
+            assert_eq!(libc::unlockpt(m), 0);
+            let name = std::ffi::CStr::from_ptr(libc::ptsname(m)).to_owned();
+            let s = libc::open(name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+            assert!(s >= 0);
+            (OwnedFd::from_raw_fd(m), OwnedFd::from_raw_fd(s))
+        }
+    }
+
+    fn argv(v: &[&str]) -> Vec<Vec<u8>> {
+        v.iter().map(|w| w.as_bytes().to_vec()).collect()
+    }
+
+    // t_unit_fd_exposed's stdio_relay: the bytes both ways, the status, the drained output, a writer
+    // of stdin the command never reads not waited for; and with run's relays (pipes too, finding
+    // 337), a process the command leaves running holds neither the caller's pipe nor the call.
+    #[test]
+    #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
+    fn stdio_relay_as_bash() {
+        let d = std::env::temp_dir().join(format!("omabox-relay-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let rnd: Vec<u8> = (0..200_000u32)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect();
+        std::fs::write(d.join("rnd"), &rnd).unwrap();
+        std::fs::write(d.join("f"), "x\n").unwrap();
+        let open = |n: &str| std::fs::File::open(d.join(n)).unwrap();
+        let make = |n: &str| std::fs::File::create(d.join(n)).unwrap();
+        let read = |n: &str| std::fs::read(d.join(n)).unwrap();
+        let relay = |src: [RawFd; 3], pipes, a: &[&str], cap| {
+            stdio_relay_with(src, pipes, &argv(a), cap, false, None).unwrap()
+        };
+        let (i, o) = (open("rnd"), make("rnd.out"));
+        relay([i.as_raw_fd(), o.as_raw_fd(), 2], false, &["cat"], false);
+        assert!(
+            read("rnd.out") == rnd,
+            "stdio_relay: 200 kB through a relayed stdin and stdout, byte for byte"
+        );
+        let (i, o, e) = (open("f"), make("o"), make("e"));
+        let r = relay(
+            [i.as_raw_fd(), o.as_raw_fd(), e.as_raw_fd()],
+            false,
+            &["sh", "-c", "echo out; echo err >&2; exit 7"],
+            false,
+        );
+        assert_eq!(
+            (read("o"), read("e"), r.rc),
+            (b"out\n".to_vec(), b"err\n".to_vec(), 7),
+            "...stdout, stderr and the exit status each its own"
+        );
+        let t0 = std::time::Instant::now();
+        let (i, o) = (open("rnd"), make("o"));
+        relay([i.as_raw_fd(), o.as_raw_fd(), 2], false, &["true"], false);
+        assert!(
+            t0.elapsed() < Duration::from_secs(10),
+            "...a command that takes none of a 200 kB stdin returns at once"
+        );
+        let (i, o) = (open("f"), make("o"));
+        relay(
+            [i.as_raw_fd(), o.as_raw_fd(), 2],
+            false,
+            &["sh", "-c", "readlink /proc/self/fd/1"],
+            false,
+        );
+        assert!(
+            read("o").starts_with(b"pipe:"),
+            "...readlink of a relayed fd: a pipe"
+        );
+        let both = make("both");
+        relay(
+            [i.as_raw_fd(), both.as_raw_fd(), both.as_raw_fd()],
+            false,
+            &[
+                "sh",
+                "-c",
+                "for i in $(seq 300); do echo o$i; echo e$i >&2; done",
+            ],
+            false,
+        );
+        let b = String::from_utf8(read("both")).unwrap();
+        let l: Vec<&str> = b.lines().collect();
+        assert_eq!(
+            (l.len(), l[..4].join(" "), l[598..].join(" ")),
+            (600, "o1 e1 o2 e2".to_string(), "o300 e300".to_string()),
+            "...stdout and stderr to one file (> f 2>&1): every line, in order (one relay for both)"
+        );
+        let (_m, s) = tty();
+        let r = relay(
+            [s.as_raw_fd(), 1, 2],
+            false,
+            &["sh", "-c", "readlink /proc/self/fd/0"],
+            true,
+        );
+        assert_eq!(
+            r.out, b"/dev/null\n",
+            "...a terminal on stdin alone: the command gets /dev/null, not a relay"
+        );
+        // finding 337 (#239), run's relays: the caller's stdout a pipe it reads.
+        assert!(
+            executable(&relay_bin()),
+            "omabox-relay is built (make -C tools/relay)"
+        );
+        let piped = |stdin: RawFd, a: &[&str]| {
+            let (r, w) = pipe().unwrap();
+            let reader = std::thread::spawn(move || read_all(r, None));
+            let t0 = std::time::Instant::now();
+            let rc = relay([stdin, w.as_raw_fd(), w.as_raw_fd()], true, a, false).rc;
+            let ms = t0.elapsed().as_millis();
+            drop(w);
+            (reader.join().unwrap(), rc, ms)
+        };
+        let (out, rc, ms) = piped(i.as_raw_fd(), &["sh", "-c", "sleep 10 & echo hi; exit 3"]);
+        assert_eq!(
+            (out, rc),
+            (b"hi\n".to_vec(), 3),
+            "stdio_relay: a pipe held by a leftover (sleep &) is let go: its output, its status"
+        );
+        assert!(ms < 5000, "...at once ({ms} ms)");
+        let alive = d.join("alive");
+        let (out, _, _) = piped(
+            i.as_raw_fd(),
+            &[
+                "sh",
+                "-c",
+                &format!(
+                    "(sleep 0.5; echo later; echo late >&2; touch {}) & echo hi",
+                    alive.display()
+                ),
+            ],
+        );
+        assert_eq!(out, b"hi\n", "...what the leftover writes later is dropped");
+        let end = std::time::Instant::now() + Duration::from_secs(5);
+        while !alive.exists() && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(alive.exists(), "...and it lives on, its writes not failing");
+        let ri = open("rnd");
+        let (out, _, _) = piped(ri.as_raw_fd(), &["sh", "-c", "sleep 10 & cat"]);
+        assert!(out == rnd, "...200 kB through a held pipe, byte for byte");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6385 MIN_UNIT=3681
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4302 MIN_UNIT=1796
+MIN_CHECKS=6349 MIN_UNIT=3647
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4264 MIN_UNIT=1759
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -699,18 +699,8 @@ t_unit_record() {
   check_match "shot --to-fd: a read-only fd refused too (fd_file)" "shot: fd 3 is not open for writing" "$(OMABOX_JAIL='{}' "$CLI" shot --to-fd 3 --as "$rj/s.png" 3<"$rj/f" 2>&1)"
   # (A jailed agent's omabox keeps the broker's own options to itself; -b NAME reaches the broker for
   # start, stop, hold and sheet, finding 324; --for as it is, or refused here, exit 2: t_unit_rust_jailed's.)
-  # record_marks: wall-clock µs to ms from the first frame (in order; one before it at 0), the
-  # wall-clock time as events has it, WebVTT cues from each to the next (the last to the end), its
-  # text escaped; none, and an earlier take's files go.
-  local rb=$TMP/rmarks/take
-  mkdir -p "$TMP/rmarks"
-  lib record_marks $'1000002500000\tscene two\n1000000500400\tscene <one> & more\n999999900000\tearly' 1000000000000 4000 "$rb" 2>/dev/null
-  check_eq "record_marks: the TSV" "ms time text|0 999999.900 early|500 1000000.500 scene <one> & more|2500 1000002.500 scene two" \
-    "$(tr '\t' ' ' < "$rb.marks.tsv" | paste -sd '|')"
-  check_eq "...the WebVTT" "WEBVTT||1|00:00:00.000 --> 00:00:00.500|early||2|00:00:00.500 --> 00:00:02.500|scene &lt;one&gt; &amp; more||3|00:00:02.500 --> 00:00:04.000|scene two" \
-    "$(paste -sd '|' "$rb.vtt")"
-  lib record_marks "" "" 0 "$rb" 2>/dev/null
-  check_fails "...no marks: an earlier take's files go" test -e "$rb.marks.tsv" -o -e "$rb.vtt"
+  # (record_marks: wall-clock µs to ms from the first frame, WebVTT cues, none: an earlier take's
+  # files go; with a cut, shifted: record_stop.rs record_marks_as_bash, an #[ignore] test; #324.)
   # (record_layout, #225: record.rs record_layouts)
   # The rest of #176 (finding 319): --show-input, --captions and --cut-idle with stop, --glide with
   # start; record_overlay draws rec_input's lines; record_marks shifts marks by the cuts; glide_to.
@@ -725,7 +715,7 @@ t_unit_record() {
   check_match "...pointer hide --glide" "pointer hide: nothing else with it" "$(ob pointer --glide 1s hide 2>&1)"
   # (glide_to: 400 ms is 10 moves, eased, ending there; nothing when it is there: input.rs
   # moves_as_bash_and_awk_make_them)
-  local ri=$TMP/rmarks/input ass
+  local ri=$TMP/rmarks/input ass; mkdir -p "$TMP/rmarks"
   printf '%s\n' "1000000100000 1000000160000 ptr 1280x720 move 100 50 click right" \
     "1000001000000 1000001400000 text a{b}" "1000001000000 1000001400000 secret 21" "1000001000000 1000001400000 combo Return" \
     "x y ptr 1280x720 move 1 1" "1000002000000 1000002050000 ptr 1280x720 move 9999999 1 click" \
@@ -744,9 +734,6 @@ t_unit_record() {
   check "...the pause line's move too" grep -qE '^Dialogue: 2,0:00:04\.02,0:00:04\.06,D,.*\\move\(401\.0,201\.0,601\.0,201\.0\)' <<<"$ass"
   check "...--captions: the mark at the top, until the end" grep -qE '^Dialogue: 4,0:00:00\.50,0:00:05\.00,K,,0,0,0,,\{\\an8\\pos\(1280\.0,40\.0\)\}scene ｛one｝$' <<<"$ass"
   check_eq "...with neither: no Dialogue" 0 "$(probe record_overlay "$ri" "" 1000000000000 0 0 2 2560 1440 5000 0 0 | grep -c '^Dialogue')"
-  lib record_marks $'1000002500000\tafter\n1000000500000\tbefore\n1000001100000\tin' 1000000000000 4000 "$rb" $'30 60\n' 2>/dev/null
-  check_eq "record_marks with a cut (frames 30 to 60, 1 s at 30 fps): one after it 1 s earlier, one in it at its start" \
-    "ms text|500 before|1000 in|1500 after" "$(cut -f1,3 "$rb.marks.tsv" | tr '\t' ' ' | paste -sd '|')"
   # (JQ_MON, finding 311: transforms 1, 3, 5, 7 swap a monitor's sides: record.rs record_layouts)
 }
 
@@ -1084,47 +1071,10 @@ t_unit_json() {
 
 # finding 325: which of a caller's fds a box could reach again through /proc, and so are relayed.
 t_unit_fd_exposed() {
-  local f=$TMP/fdx; echo x > "$f"
-  check "fd_exposed: a file" lib fd_exposed 0 < "$f"
-  echo x > "$f.d"; exec {fd}< "$f.d"; rm -f -- "$f.d"
-  check "...a deleted file still" lib fd_exposed 0 <&"$fd"; exec {fd}<&-
-  check "...a directory" lib fd_exposed 0 < "$TMP"
-  check "...a device (/dev/zero)" lib fd_exposed 0 < /dev/zero
-  check_fails "...not /dev/null" lib fd_exposed 0 < /dev/null
-  check_fails "...not a pipe" lib eval 'echo x | fd_exposed 0'
-  check_fails "...not a closed fd" lib eval 'exec 7>&-; fd_exposed 7'
-  check "...stdout: a file" lib eval "fd_exposed 1 > $f.out"
-  check_fails "...stdout: a pipe" lib eval 'fd_exposed 1 | cat'
-  # stdio_relay: the bytes both ways, the status, the drained output, and a writer of stdin that the
-  # command never reads is not waited for.
-  head -c 200000 /dev/urandom > "$f.rnd"
-  lib stdio_relay cat < "$f.rnd" > "$f.rnd.out"
-  check "stdio_relay: 200 kB through a relayed stdin and stdout, byte for byte" cmp -s "$f.rnd" "$f.rnd.out"
-  local rc=0; lib stdio_relay sh -c 'echo out; echo err >&2; exit 7' < "$f" > "$f.o" 2> "$f.e" || rc=$?
-  check_eq "...stdout, stderr and the exit status each its own" "out|err|7" "$(cat "$f.o")|$(cat "$f.e")|$rc"
-  local t0=$SECONDS
-  lib stdio_relay true < "$f.rnd" > "$f.o"
-  check "...a command that takes none of a 200 kB stdin returns at once ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 10
-  check_eq "...readlink of a relayed fd: a pipe" pipe "$(lib stdio_relay sh -c 'readlink /proc/self/fd/1' > "$f.o" < "$f"; cut -d: -f1 "$f.o")"
-  lib stdio_relay sh -c 'for i in $(seq 300); do echo o$i; echo e$i >&2; done' > "$f.both" 2>&1
-  check_eq "...stdout and stderr to one file (> f 2>&1): every line, in order (one relay for both)" "600|o1 e1 o2 e2|o300 e300" \
-    "$(wc -l < "$f.both")|$(head -n 4 "$f.both" | paste -sd ' ')|$(tail -n 2 "$f.both" | paste -sd ' ')"
-  check_eq "...a terminal on stdin alone: the command gets /dev/null, not a relay" "/dev/null" \
-    "$( (sleep 2) | script -q -e -c "bash -c 'source $TMP/lib/bin/omabox; stdio_relay sh -c \"readlink /proc/self/fd/0\" > $f.tty'" /dev/null >/dev/null 2>&1; cat "$f.tty")"
-  # finding 337 (#239): a process the command leaves running holds neither the caller's pipe nor
-  # `run`; what the command wrote gets through, what the leftover writes later is dropped, and it
-  # lives on (its writes do not fail).
-  local rl="RELAY=$ROOT/tools/relay/omabox-relay RELAY_PIPES=1;" t1 out
-  t1=$(date +%s%N); rc=0
-  out=$(lib eval "$rl stdio_relay sh -c 'sleep 10 & echo hi; exit 3'" 2>&1) || rc=$?
-  check_eq "stdio_relay: a pipe held by a leftover (sleep &) is let go: its output, its status" "hi|3" "$out|$rc"
-  check "...at once ($(( ($(date +%s%N) - t1) / 1000000 )) ms)" test $(( ($(date +%s%N) - t1) / 1000000 )) -lt 5000
-  rm -f -- "$f.alive"
-  out=$(lib eval "$rl stdio_relay sh -c '(sleep 0.5; echo later; echo late >&2; touch $f.alive) & echo hi'" 2>&1)
-  check_eq "...what the leftover writes later is dropped" hi "$out"
-  check "...and it lives on, its writes not failing" until_ok 5 test -f "$f.alive"
-  lib eval "$rl stdio_relay sh -c 'sleep 10 & cat'" < "$f.rnd" | cat > "$f.rnd.held"
-  check "...200 kB through a held pipe, byte for byte" cmp -s "$f.rnd" "$f.rnd.held"
+  # (fd_exposed: exec.rs fd_exposed_as_bash; stdio_relay, the bytes both ways, the status, the
+  # drained output, and with run's relays a leftover holding neither the caller's pipe nor the call,
+  # finding 337: stdio_relay_as_bash, an #[ignore] test t_unit_rust_ignored runs; #324 wave 6-suite.)
+  local f=$TMP/fdx
   # omabox-relay copy itself, on a fifo whose writer (W) lives on: a caller's fd however high (1500,
   # above the 1024 a loop once stopped at) is not held by the copy nor by its draining child, which keeps
   # 0, 1 and 2 only; a caller that blocks SIGURG (a mask exec passes on) still ends the copy.
@@ -7719,43 +7669,8 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   # (broker_check's cases: broker_side.rs's broker_check_allows_and_refuses, #324 wave 6-suite)
   # A save that does not exist: were --from let through, up would stop at "no save", no box started.
   check_match "up --from refused to a jailed agent (finding 100)" "saves are the user's" "$(OMABOX_JAIL=$J "$CLI" up "$P-jf" --from nosuch 2>&1)"
-  # ports for a jailed caller: the host side by state only (#93). The stubs of t_unit_cli's ports check:
-  # one box, its port held by this shell (host), then by another uid.
-  # (The box's server is socket 424242; the host's listener on the port, socket 515151 of uid UID.)
-  local pr=$TMP/rt-jports/omabox; mkdir -p "$pr/$P-jp"; echo '{"net":"connected","jail":"j1"}' > "$pr/$P-jp/box.json"
-  jports() {   # JAILED(0|1) UID ARGS...: cmd_ports with the port held by uid UID
-    local j=$1 u=$2; shift 2
-    env -u OMABOX_JAIL XDG_RUNTIME_DIR="$TMP/rt-jports" bash -c 'source "$1"; P=$2 u=$3; [ "$4" = 0 ] || OMABOX_JAIL={\"id\":\"j1\"}; shift 4
-      list_names() { echo "$P-jp"; }; box_state() { echo up; }; box_pid() { echo $$; }; box_pids() { echo $$; }
-      sock_owners() { echo "424242 $$"; echo "515151 $$"; }
-      tcp_listeners() { if [ "$1" = /proc/self/net ]; then echo "40001 0.0.0.0 $u 515151"; else echo "40001 0.0.0.0 0 424242"; fi; }
-      cmd_ports "$@"' lib "$TMP/lib/bin/omabox" "$P" "$u" "$j" "$@" 2>&1
-  }
-  check_match "ports, not jailed: the host process named" "not this box: bash \\(pid [0-9]+\\) holds it" "$(jports 0 "$(id -u)")"
-  check_eq "ports, jailed: no pid or process in --json" '{"state":"host"}' "$(jports 1 "$(id -u)" --json | jq -c '.[0].host')"
-  check_match "...nor in the text" "not this box: a process of the user's holds it" "$(jports 1 "$(id -u)")"
-  check_eq "...another user's: no uid" '{"state":"other-user"}' "$(jports 1 4242 --json | jq -c '.[0].host')"
-  check_match "...said so" "not this box: another user's process holds it" "$(jports 1 4242)"
-  # Finding 237: the port held by a socket no readable process has (a pasta's), with a box outside the
-  # jail ($P-jo, socket 434343) serving on it too: taken, not `this`; with none, `this` as before.
-  mkdir -p "$pr/$P-jo"; echo '{"net":"connected","jail":"j2"}' > "$pr/$P-jo/box.json"
-  jports_out() {   # OUTSIDE(0|1) ARGS...: jailed, the port's holder unreadable
-    local o=$1; shift
-    env -u OMABOX_JAIL XDG_RUNTIME_DIR="$TMP/rt-jports" bash -c 'source "$1"; P=$2 o=$3; OMABOX_JAIL={\"id\":\"j1\"}; shift 3
-      list_names() { echo "$P-jp"; [ "${1:-}" != all ] || echo "$P-jo"; }
-      box_state() { echo up; }; box_pid() { echo $$; }; box_pids() { echo $$; }
-      sock_owners() { if [ "$NAME" = "$P-jo" ]; then echo "434343 $$"; else echo "424242 $$"; fi; }
-      tcp_listeners() {
-        if [ "$1" = /proc/self/net ]; then echo "40001 0.0.0.0 $(id -u) 515151"
-        elif [ "$NAME" = "$P-jo" ]; then [ "$o" = 0 ] || echo "40001 0.0.0.0 0 434343"
-        else echo "40001 0.0.0.0 0 424242"; fi; }
-      cmd_ports "$@"' lib "$TMP/lib/bin/omabox" "$P" "$o" "$@" 2>&1
-  }
-  check_eq "ports, jailed: a port a box outside the jail serves on too reads as host, not this (finding 237)" \
-    '{"state":"host"}' "$(jports_out 1 --json | jq -c '.[0].host')"
-  check_match "...said, without naming that box" "taken: a box outside this jail serves on it too" "$(jports_out 1)"
-  check_fails "...whose name is not in it" grep -q "$P-jo" <<<"$(jports_out 1; jports_out 1 --json)"
-  check_eq "...with no box outside on it: this, as before" "this" "$(jports_out 0 --json | jq -r '.[0].host.state')"
+  # (ports for a jailed caller, the host side by state only, #93; a port a box outside the jail
+  # serves on too reads as taken, finding 237: ports.rs ports_for_a_jailed_caller; #324.)
   # A path ai-jail hides inside a folder (--mask/--deny-path: a mount inside it that is not a sub-root):
   # jail_policy records it, and --seed must refuse it (#198 security). A same-path bind nested inside a
   # folder is a visible sub-root, not masked.
@@ -8196,17 +8111,10 @@ exec /usr/bin/head -c 50000000 /dev/zero'
   check_eq "...a sheet through the fds, helpers planted: a PNG" PNG "$(head -c 4 "$d/s2" | tail -c 3)"
   check "...of a sheet's size" test "$(stat -c %s "$d/s2")" -lt 20000000
   check_fails "...no folder of its left in the box dir" compgen -G "$XDG_RUNTIME_DIR/omabox/$N/.record-*"
-  # Copies out of a box are capped (#224 re-check): blocks the box reserved (fallocate) are no bound,
-  # and a file swapped for a FIFO after its stat is not read for ever.
-  local bc=$TMP/lib/bin/omabox
-  jo run -b "$N" -- /usr/bin/sh -c 'rm -f ~/.local/bin/*; fallocate -l 64M ~/big && mkfifo ~/fifo'
-  check_match "a fallocated 64 MiB file past box_copy's cap: refused, said" "is 64.0 MiB: more than omabox copies out of a box \\(1.0 MiB\\)" \
-    "$(env -u OMABOX_JAIL bash -c 'source "$1"; select_box "$2"; box_copy /home/sbx/big 1048576 | wc -c' _ "$bc" "$N" 2>&1)"
-  local t0=$SECONDS
-  out=$(env -u OMABOX_JAIL timeout 60 bash -c 'source "$1"; select_box "$2"
-    box_sys() { if [ "$1" = /usr/bin/stat ]; then echo "regular file|10|8|512"; else BOX_SYS=1 box_exec "$@"; fi; }
-    box_copy /home/sbx/fifo 100 | wc -c' _ "$bc" "$N" 2>&1)
-  check "...one swapped for a FIFO after its stat: given up in its time (10 s), not read for ever (${out//$'\n'/ }, $((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 30
+  # (Copies out of a box are capped, #224 re-check: a fallocated file's reserved blocks are no
+  # bound, a file swapped for a FIFO after its stat read under a time: record_stop.rs
+  # box_copy_is_capped, the box's stat given; #324 wave 6-suite.) The planted helpers go.
+  jo run -b "$N" -- /usr/bin/sh -c 'rm -f ~/.local/bin/*'
   # The cap on a stop (OMABOX_RECORD_MAX lowers the 16 GiB): refused, said, the video kept in the box.
   env -u OMABOX_JAIL "$CLI" record -b "$N" start -o "$d/capped.mp4" >/dev/null 2>&1; sleep 0.5
   out=$(env -u OMABOX_JAIL OMABOX_RECORD_MAX=2000 "$CLI" record -b "$N" stop 2>&1)
@@ -12252,18 +12160,9 @@ t_unit_hyprland() {
   # The jailed caller's omabox sends the path absolute (the broker is not in its directory).
   # (The jailed caller's omabox sends the path absolute, the broker not being in its directory:
   # t_unit_rust_jailed's "--hyprland goes absolute".)
-  # Another version than the installed hyprctl's: a warning (the box's answers stubbed).
-  mkdir -p "$d/box"; echo '{"hyprland": "/b/Hyprland"}' > "$d/box/box.json"
-  hv() { bash -c 'source "$1"; D=$2 NAME=x
-    on_box() { if [ "${!#}" = -j ]; then echo "{\"version\": \"0.0.1\"}"; else echo "Hyprland 0.0.1 built from branch x"; fi; }
-    hypr_version' _ "$TMP/lib/bin/omabox" "$d/box" 2>&1; }
-  out=$(hv)
-  check_match "another Hyprland version than hyprctl's: a warning" "warning: box 'x' runs Hyprland 0.0.1, but hyprctl and hyprpm are the installed" "$out"
-  check_eq "...and box.json has its version line" "Hyprland 0.0.1 built from branch x" "$(jq -r .hyprland_version "$d/box/box.json")"
-  # A box on the installed Hyprland (#238): its version line too, and no warning (hyprctl is its own).
-  echo '{}' > "$d/box/box.json"; out=$(hv)
-  check_eq "a box on the installed Hyprland: no warning" "" "$out"
-  check_eq "...and box.json has its version line too (#238)" "Hyprland 0.0.1 built from branch x" "$(jq -r .hyprland_version "$d/box/box.json")"
+  # (Another version than the installed hyprctl's: a warning; box.json gets the box's version line
+  # either way, #238: install.rs hypr_version_as_bash, an #[ignore] test, the box's answers given;
+  # #324 wave 6-suite.)
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-h[12]$" || true)
   check_eq "refusals left no box behind" 0 "$left"
 }
@@ -12329,16 +12228,8 @@ t_unit_quickshell() {
     "$(OMABOX_JAIL=$J "$CLI" up "$P-q2" --quickshell "$d/other/quickshell" --size huge 2>&1)"
   check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-q2" --quickshell "$d/proj/build/quickshell" --size huge 2>&1)"
   # (relay: --quickshell goes absolute: t_unit_rust_jailed's.)
-  # The version line, from inside the box (on_box stubbed): every box's, the build's run by its path.
-  mkdir -p "$d/box"; echo '{"quickshell": "/b/quickshell"}' > "$d/box/box.json"
-  qv() { bash -c 'source "$1"; D=$2 NAME=x
-    on_box() { [ "$3" = /b/quickshell ] || [ "$3" = /usr/bin/quickshell ] || return 1; echo "Quickshell 0.0.1 (revision abc, by $3)"; }
-    qs_version; box_qs' _ "$TMP/lib/bin/omabox" "$d/box" 2>&1; }
-  check_eq "a build: the box's quickshell is it" /b/quickshell "$(qv)"
-  check_eq "...and box.json has its version line, from it" "Quickshell 0.0.1 (revision abc, by /b/quickshell)" "$(jq -r .quickshell_version "$d/box/box.json")"
-  echo '{}' > "$d/box/box.json"
-  check_eq "the installed one otherwise" /usr/bin/quickshell "$(qv)"
-  check_eq "...and its version line too" "Quickshell 0.0.1 (revision abc, by /usr/bin/quickshell)" "$(jq -r .quickshell_version "$d/box/box.json")"
+  # (The version line, from inside the box, every box's, the build's run by its path: install.rs
+  # qs_version_as_bash, the box's answers given; #324 wave 6-suite.)
   local left; left=$(ob ls --json | jq -r '.[].name' | grep -c "^$P-q[12]$" || true)
   check_eq "refusals left no box behind" 0 "$left"
 }
