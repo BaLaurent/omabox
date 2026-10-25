@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6613 MIN_UNIT=3907
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4540 MIN_UNIT=2032
+MIN_CHECKS=6621 MIN_UNIT=3915
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4545 MIN_UNIT=2037
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -12584,13 +12584,42 @@ aq_symbol_checks() {
     else
       check_eq "...up's check of a headless box on NVIDIA: not refused" "rc=0" "$out"
     fi
+    aq_up_gate "$d" "$dir" "$so" "$refused"
   done
+}
+
+# aq_up_gate D DIR SONAME REFUSED: `up` itself on aq_symbol_checks' fake NVIDIA GPU, with DIR's library
+# as the system's aquamarine: a user and mount namespace puts the fake tree over /dev/dri and
+# /sys/class/drm and DIR's library over the system's (its file: the decision is by the symbol, the
+# version said is the system's), with a scratch HOME and runtime dir. Refused: before its lock (no
+# lock file, nothing made); let through: as far as its lock, where a down marker from the future
+# cancels it (the lock taken, no box).
+aq_up_gate() {
+  local d=$1 dir=$2 so=$3 refused=$4 rt=$1/up-$2 out
+  [ -e "/usr/lib/$so" ] || { skip "...up itself on the $dir system's aquamarine" "no /usr/lib/$so here"; return; }
+  unshare -r -m true 2>/dev/null || { skip "...up itself on the $dir system's aquamarine" "no user namespaces here"; return; }
+  mkdir -p "$rt/run/omabox" "$d/up-home/.local/state/omarchy/current/theme"; chmod 700 "$rt/run"
+  [ "$refused" = 1 ] || echo 99999999999 > "$rt/run/omabox/.down-$P-aqs"
+  # shellcheck disable=SC2016 # expanded by the namespace's shell
+  out=$(unshare -r -m bash -c '
+    gt=$1/gt; mount --bind "$gt/dev/dri" /dev/dri && mount --bind "$gt/sys/class/drm" /sys/class/drm &&
+      mount --bind "$(readlink -f "$1/$2/$3")" "/usr/lib/$3" || exit 99
+    env HOME="$1/up-home" XDG_RUNTIME_DIR="$4" OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=/dev/dri/renderD129 "$5" up "$6"
+  ' _ "$d" "$dir" "$so" "$rt/run" "$CLI" "$P-aqs" 2>&1; echo "rc=$?")
+  if [ "$refused" = 1 ]; then
+    check_match "...up itself refuses it" "^omabox: a headless box on NVIDIA \(/dev/dri/renderD129\) needs aquamarine's fix.*rc=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+    check_fails "...before its lock: no lock file" test -e "$rt/run/omabox/.lock-$P-aqs"
+  else
+    check_match "...up itself goes on to its lock (cancelled there by a down)" "^omabox: up: cancelled: omabox down $P-aqs came while it was starting rc=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+    check "...its lock taken" test -e "$rt/run/omabox/.lock-$P-aqs"
+  fi
+  check_fails "...no box made" test -e "$rt/run/omabox/$P-aqs"
 }
 
 # finding 247 (issue #186): `setup --aquamarine` builds whenever boxes would run without omabox's own
 # patches, a system aquamarine with #415 (aq_symbol_checks's stub) included; only this omabox's build
-# is a no-op. Stopped at the clone: the build tools on PATH are stubs that log and fail, and the copy
-# of the CLI `lib` runs has no .git, so it would build into the scratch data dir, never a real one.
+# is a no-op. Stopped at the clone: the build tools on PATH are stubs that log and fail, and the
+# stand-in checkout setup runs from has no .git, so it builds into the scratch data dir, never a real one.
 aq_setup_checks() {
   local d=$1 so=$2 t out build
   local tools=$d/setup-tools data=$d/setup-data cache=$d/setup-cache
