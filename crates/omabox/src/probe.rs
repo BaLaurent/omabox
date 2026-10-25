@@ -49,6 +49,7 @@ pub const NAMES: &[(&str, &str)] = &[
     ("aq_ver_fixed", "VERSION"),
     ("aq_const", "AQ_FIX_SYMBOL|AQ_FIXED_AFTER|AQ_BUILD"),
     ("desk_facts", "BEFORE AFTER"),
+    ("box_pid", "NAME"),
     ("box_pids", "NAME"),
     // Where the input went: keys with the layers holding the keyboard given (kb_layers' answer).
     (
@@ -364,6 +365,11 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             Ok(())
         }
         (b"link_mountable", [p]) => yes(crate::repo::link_mountable(p).is_none()),
+        (b"box_pid", [n]) => match crate::boxes::box_pid(&cat!(ctx.boxes, "/", n)) {
+            crate::boxes::BoxPid::Pid(p) => line(&p),
+            crate::boxes::BoxPid::None => Ok(()),
+            crate::boxes::BoxPid::Unknown => Err(Exit(3)),
+        },
         (b"box_pids", [n]) => {
             ctx.name = n.to_vec();
             ctx.d = cat!(ctx.boxes, "/", n);

@@ -3221,7 +3221,7 @@ t_unit_rust_parity() {
   rp493 "rp-repo-$s8"
   rp_why="449, 493" rp_bash+=('state~^  "e": 1E\+3$' "state~ \./omabox/rp-repo-$s8/box\.json$") rp_rust+=('state~^  "e": 1000$' "state~ \./omabox/rp-repo-$s8/box\.json$")
   rp_also=rp_numbers; parity "a resumed session takes its box over (box.json rewritten)" env
-  check_eq "...to this command's agent" "$$ $(lib proc_start $$)" "$(jq -r '"\(.agent) \(.agent_start)"' "$r/rt/omabox/rp-repo-$s8/box.json")"
+  check_eq "...to this command's agent" "$$ $(probe proc_start $$)" "$(jq -r '"\(.agent) \(.agent_start)"' "$r/rt/omabox/rp-repo-$s8/box.json")"
   rp_why=449 rp_bash=('state~^  "e": 1E\+3$' "state~ \./omabox/rp-repo-$s8/box\.json$") rp_rust=('state~^  "e": 1000$' "state~ \./omabox/rp-repo-$s8/box\.json$")
   parity "...path too" path; rp_also=""
   rp_env=(CLAUDE_CODE_SESSION_ID="$sid" CLAUDE_PID=1); rp493 "rp-repo-$s8"; parity "...not for an agent it does not run under" env
@@ -9534,7 +9534,7 @@ t_agent_session() {
   agent "$s3" --idle 30s & local a3=$!
   agent "$s4" --idle 30s & local a4=$!
   until_ok 40 test -e "$TMP/ag-$a3" -a -e "$TMP/ag-$a4"
-  pid_of() { bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$1"; }
+  pid_of() { probe box_pid "$1"; }
   # Busy until told (#116: a fixed sleep 15 that took 9 s to start under load ended before the check).
   ob run -b "$b3" -- sh -c 'until [ -e /tmp/t116-done ]; do sleep 0.2; done' & local busy=$!
   # The run is use once its command is in the box; a check before that would find the box unused.
@@ -12920,7 +12920,7 @@ t_up_killed() {
   up_ok "$B" --idle 20s --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   local D; D=$(ob path "$B")
   sleep 30 & local starter=$!
-  echo "$starter $(lib proc_start "$starter")" > "$D/starting"; touch -d '-1 hour' "$D/used"
+  echo "$starter $(probe proc_start "$starter")" > "$D/starting"; touch -d '-1 hour' "$D/used"
   check "a box whose up still runs is not idle, whatever its last use" holds 12 bash -c "'$CLI' ls --json | jq -e --arg n '$B' '.[] | select(.name == \$n and .state == \"up\")'"
   kill "$starter" 2>/dev/null; wait "$starter" 2>/dev/null
   check "...its up gone, the idle limit counts" until_ok 20 gone
@@ -12969,7 +12969,7 @@ t_throwaway_killed() {
   until_ok 30 bash -c "'$CLI' ls --json | jq -e '.[] | select(.name | startswith(\"$P-tk-run\"))'"
   local j=("$XDG_RUNTIME_DIR"/omabox/"$P"-tk-run*/box.json)
   check "its box.json records its owner's start time (a reused pid is not it)" \
-    jq -e --arg s "$(lib proc_start "$r")" '.owner_start == $s and $s != ""' "${j[0]}"
+    jq -e --arg s "$(probe proc_start "$r")" '.owner_start == $s and $s != ""' "${j[0]}"
   # Where the time goes, kept for a failure (#222: 20 s under the full suite's load, 4-5 s otherwise):
   # every 0.25 s from the kill, its up (`starting`) and the reaper's last word. The box dir goes with
   # the box, its reap.log too.
@@ -13841,7 +13841,7 @@ t_throwaway_dead() {
   until_ok 30 pgrep -f "omabox _reap $n "
   # The box's PID 1 as the CLI finds it: behind pasta, info.json's child-pid is pasta's numbering (2,
   # which on the host is kthreadd), and the box would stay up for the reaper's "run is gone" branch.
-  local pid; pid=$(D=$XDG_RUNTIME_DIR/omabox/$n lib box_pid)
+  local pid; pid=$(probe box_pid "$n")
   kill -KILL "$r"; wait "$r" 2>/dev/null   # reaped here: no "Killed" job line from bash later
   check "its box is killed before the reaper sees it" kill -KILL "$pid"
   check "the dead box goes within 15 s" until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$n\")'"
@@ -14191,7 +14191,7 @@ t_rust_parity_up() {
   parity "reload by its name" reload "$U"
   parity "restart-shell -b with a name too" restart-shell -b "$U" x
   rp_env=() rp_prep=""
-  rpu_up() { ob up "$U" --no-shell --net isolated >/dev/null 2>&1; bash -c 'source "$1"; select_box "$2"; box_pid' _ "$TMP/lib/bin/omabox" "$U" > "$r/rpu-pid1"; }
+  rpu_up() { ob up "$U" --no-shell --net isolated >/dev/null 2>&1; probe box_pid "$U" > "$r/rpu-pid1"; }
   # (its PID 1 recorded before each side's down, in rpu_up: gone after it, or not)
   rpu_gone() { echo "== dir $(test -e "$XDG_RUNTIME_DIR/omabox/$U" && echo there || echo gone)"; echo "== reaper $(pgrep -fc "omabox _reap $U " || true)"
     echo "== HOME $(test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$U" && echo there || echo gone)"
