@@ -27,9 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # The Rust half (#324): formatted, lint-clean, its own tests.
-      - name: cargo fmt, clippy, test
+      # The Rust half (#324): formatted, lint-clean, its own tests, and the release build install.sh
+      # and a package make.
+      - name: cargo fmt, clippy, test, build
         run: |
           cargo fmt --all --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
+          cargo build --release --locked

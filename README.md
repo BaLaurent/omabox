@@ -52,7 +52,7 @@ real desktop saw no window at all.
 
 ```bash
 git clone https://github.com/diogochaves/omabox && cd omabox
-./install.sh                            # packages (sudo only if some are missing), aquamarine's fix, tools, links
+./install.sh                            # packages (sudo only if some are missing), tools, omabox, aquamarine's fix, links
 ./install.sh --check                    # the same, then start a box, screenshot it, tear it down
 ```
 

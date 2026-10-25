@@ -10179,6 +10179,22 @@ from them.
     writer: back in its 10 s, nothing copied. The suite also hardened aq_up_gate: its down marker is
     there for a refusal too, so an up that should have refused stops at its lock.
 
+522. **install.sh ran omabox before building it, and wrote the binary in place** (2026-10-25, #324
+    wave 6-flip, proposal D2). Its aquamarine step ran `bin/omabox setup --aquamarine` before the
+    tools and `build/omabox` were built, and `install -D` wrote `build/omabox` under its own name, so
+    a caller could exec a half-written file; a cargo with no toolchain (rustup's) failed in cargo's
+    words mid-build. Harmless while bash was the entry; not once `bin/omabox` is the binary. **Fix:**
+    install.sh checks `cargo --version` first (a rustup with no default toolchain is told
+    `rustup default stable`), builds the tools, then the binary into `build/omabox.new` and renames
+    it over `build/omabox`, and only then runs `setup --aquamarine` and `setup`; the suite's own
+    build renames too. release.sh builds the tarball as a package does before it writes the
+    checksum (a fresh extract, `cargo fetch --locked` into a CARGO_HOME of its own, `cargo build
+    --frozen` with no network, the binary's `--version` the tag's): a tag that cannot build offline
+    is never uploaded. CI adds `cargo build --release --locked`. `test/run.sh --installed` puts the
+    binary where the package's recipe would, by the tree's shape (a `bin/omabox` linking to
+    `../build/omabox`: the binary there; a bash one: none). Tests: t_unit_install (a stand-in cargo;
+    a cargo that cannot build; tools before any omabox run; `build/omabox.new` then a rename).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # install.sh: set up omabox on an Omarchy machine. Idempotent: re-run after pulling.
 #
-#   ./install.sh           packages (sudo only if some are missing), aquamarine's fix, tools, then
-#                          omabox setup: links, settings dir, the agent guard (asked)
+#   ./install.sh           packages (sudo only if some are missing; Arch's rust when there is no
+#                          cargo), the tools and omabox itself (cargo, into build/omabox), aquamarine's
+#                          fix, then omabox setup: links, settings dir, the agent guard (asked)
 #   ./install.sh --check   the same, then start a box, screenshot it and tear it down
 set -euo pipefail
 
@@ -30,7 +31,7 @@ hv=$(Hyprland --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -
 
 step "Packages"
 mapfile -t missing < <(pacman -T "${PKGS[@]}" || true)
-# The Rust half (#324): Arch's rust, unless a rustup or another cargo is already on PATH.
+# omabox is built from crates/ (#324): Arch's rust, unless a rustup or another cargo is already on PATH.
 command -v cargo >/dev/null || missing+=(rust)
 if [ ${#missing[@]} -gt 0 ]; then
   echo "missing: ${missing[*]}"
@@ -41,21 +42,28 @@ fi
 # `omabox shot --window` captures a window by its toplevel id (grim -T, 1.5+; NOTES finding 81).
 grim -h 2>&1 | grep -q -- '^ *-T ' || die "this grim cannot capture a window (no -T): omabox needs grim 1.5 or later"
 
-# A checkout builds it into build/prefix, for every box this checkout starts (the suite needs it for
-# NVIDIA and confirm-close): nothing to do while the system's aquamarine has the fix (finding 125).
-step "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"
-"$ROOT/bin/omabox" setup --aquamarine || die "omabox setup --aquamarine failed"
+# A cargo that is there but cannot build (a rustup with no default toolchain) says so in its own words.
+cargo --version >/dev/null 2>&1 ||
+  die "cargo is there but cannot build: $(cargo --version 2>&1 | head -n 1) (with rustup: rustup default stable)"
 
+# Built before anything runs omabox (#324 wave 6-flip, proposal D2).
 step "Tools"
 # (Not `make && echo`: set -e ignores a failure on the left of &&, and install.sh would carry on.)
 for t in pointer keyboard wlfd peek still burst tree relay events; do
   make -s -C "$ROOT/tools/$t" || die "building tools/$t failed"
   echo "tools/$t"
 done
-# The commands the Rust half has taken over (#324): build/omabox, which bin/omabox hands them to.
+# omabox itself (crates/omabox): into build/omabox by a rename, so no caller ever runs a half-written
+# file, and a command running meanwhile keeps the binary it started with (finding 66).
 cargo build --release --locked -q --manifest-path "$ROOT/Cargo.toml" || die "building crates/omabox failed"
-install -Dm755 "$ROOT/target/release/omabox" "$ROOT/build/omabox"
+install -Dm755 "$ROOT/target/release/omabox" "$ROOT/build/omabox.new" || die "installing build/omabox failed"
+mv -f "$ROOT/build/omabox.new" "$ROOT/build/omabox" || die "installing build/omabox failed"
 echo "build/omabox"
+
+# A checkout builds it into build/prefix, for every box this checkout starts (the suite needs it for
+# NVIDIA and confirm-close): nothing to do while the system's aquamarine has the fix (finding 125).
+step "aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415)"
+"$ROOT/bin/omabox" setup --aquamarine || die "omabox setup --aquamarine failed"
 
 # What each user needs (links: omabox, the agent skill, the bar widget; the settings dir; the agent
 # guard, asked for): `omabox setup`, which a package's users run themselves (finding 126).

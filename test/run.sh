@@ -74,7 +74,7 @@ tools_ready() {
   # bin/omabox hands its commands. Not part of an install yet: there every command runs in bash.
   [ "${1:-}" = installed ] && return 0
   out=$(flock "$ROOT/tools" sh -c 'cargo build --release --locked -q --manifest-path "$1/Cargo.toml" &&
-    install -Dm755 "$1/target/release/omabox" "$1/build/omabox"' _ "$ROOT" 2>&1) ||
+    install -Dm755 "$1/target/release/omabox" "$1/build/omabox.new" && mv -f "$1/build/omabox.new" "$1/build/omabox"' _ "$ROOT" 2>&1) ||
     { printf 'building crates/omabox failed (cargo, from rust or rustup):\n%s\n' "$out"; return 1; }
 }
 
@@ -97,8 +97,14 @@ if [ "${1:-}" = --installed ]; then
     [ -x "$t" ] && [ -f "$t" ] || continue
     cp "$t" "$inst/tree/${t#"$ROOT"/}"
   done
+  # omabox itself where the package's recipe puts it, by the tree's shape (#324 wave 6-flip): a
+  # bin/omabox that links to ../build/omabox is the binary there; a bash bin/omabox stays as it is,
+  # with no binary (the recipe builds none for it).
+  if [ -L "$inst/tree/bin/omabox" ]; then
+    rm -f "$inst/tree/bin/omabox"; cp "$ROOT/build/omabox" "$inst/tree/bin/omabox" || exit 2
+  fi
   chmod -R a-w "$inst/tree"
-  # The suite's probe (#324 wave 6-suite): the checkout's binary, outside the tree, so the install
+  # The suite's probe (#324 wave 6-suite): the checkout's binary, outside the tree, so a bash install
   # keeps every command in bash (it has no build/omabox) while the suite reads its helpers.
   mkdir -p "$inst/probe/bin"; cp "$ROOT/build/omabox" "$inst/probe/bin/omabox" || exit 2
   # shellcheck disable=SC2016 # expanded by the namespace's shell
@@ -13529,7 +13535,8 @@ t_unit_install() {
   # cargo under this HOME has no toolchain (rustup's, or mise's shim, which refuses a config it has
   # not been told to trust): the Rust half's build (#324) is this checkout's binary put where cargo
   # would leave it.
-  printf '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --manifest-path ] && m=$2; shift; done\nd=$(dirname "$m")/target/release\nmkdir -p "$d" && cp "%s/build/omabox" "$d/omabox"\n' "$ROOT" > "$stub/cargo"
+  # (--version: the stand-in's, or a rustup's with no toolchain while $stub/notoolchain is there)
+  printf '#!/bin/sh\nif [ "$1" = --version ]; then [ ! -e "%s/notoolchain" ] || { echo "error: rustup could not choose a version of cargo to run" >&2; exit 1; }; echo "cargo (stand-in)"; exit 0; fi\nwhile [ $# -gt 0 ]; do [ "$1" = --manifest-path ] && m=$2; shift; done\nd=$(dirname "$m")/target/release\nmkdir -p "$d" && cp "%s/build/omabox" "$d/omabox"\n' "$stub" "$ROOT" > "$stub/cargo"
   chmod +x "$stub/sudo" "$stub/pacman" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell" "$stub/cargo"
   echo omabox-no-such-package > "$stub/missing"
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); local rc=$?
@@ -13540,14 +13547,33 @@ t_unit_install() {
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); rc=$?
   check_match "a failed tool build stops install.sh" "building tools/keyboard failed" "$out"
   check_eq "...with a failure" 1 "$rc"
-  check_match "...its aquamarine step before that built nothing (the stand-in build)" "boxes use a private build.*: nothing to build" "$out"
+  check_fails "...before anything ran omabox (built first: its aquamarine step comes after)" grep -q "nothing to build" <<<"$out"
   rm "$stub/make"
+  : > "$stub/notoolchain"
+  out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); rc=$?
+  check_match "a cargo that cannot build (rustup, no toolchain): said, how to set one" \
+    "cargo is there but cannot build: error: rustup could not choose.*rustup default stable" "$out"
+  check_eq "...stopping install.sh before the tools" "1 0" "$rc $(grep -c '^tools/' <<<"$out")"
+  rm "$stub/notoolchain"
   mkdir -p "$h/.claude/skills/omabox"
   check_match "a real dir where a link goes is refused" "is not a link" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)"
   rmdir "$h/.claude/skills/omabox"
   check "install.sh in a clean HOME" env HOME="$h" PATH="$stub:$PATH" "$c/install.sh"
   check_eq "...built every tool in its own ROOT" "$(cd "$c/tools" && printf '%s\n' */Makefile | sed 's|\(.*\)/Makefile|\1/omabox-\1|')" \
     "$(cd "$c/tools" && for f in */omabox-*; do [ -x "$f" ] && echo "$f"; done)"
+  check "...and omabox, at build/omabox" cmp -s "$ROOT/build/omabox" "$c/build/omabox"
+  # finding 66's successor (#324 wave 6-flip): build/omabox is replaced by a rename, so a command
+  # running from it keeps its file (the one open here) and no caller runs a half-written one.
+  local ino0 fd; ino0=$(stat -c %i "$c/build/omabox"); exec {fd}< "$c/build/omabox"
+  printf '#!/bin/sh\necho "$*" >> "%s/install-called"\nexec /usr/bin/install "$@"\n' "$stub" > "$stub/install"; chmod +x "$stub/install"
+  check "...run again: built again" env HOME="$h" PATH="$stub:$PATH" "$c/install.sh"
+  check_eq "...written as build/omabox.new (never build/omabox itself)" "-Dm755 $c/target/release/omabox $c/build/omabox.new" \
+    "$(grep -F target/release/omabox "$stub/install-called")"
+  check_fails "...then renamed: a new file at build/omabox, not one rewritten in place" test "$(stat -c %i "$c/build/omabox")" = "$ino0"
+  rm "$stub/install"
+  check_eq "...the file a running command has stays whole" "$(stat -c %s "$ROOT/build/omabox")" "$(stat -L -c %s "/proc/$BASHPID/fd/$fd")"
+  check_fails "...no temp file left" test -e "$c/build/omabox.new"
+  exec {fd}<&-
   check_eq "...and nothing in the checkout under test (#187)" "$tools0" "$(stat -c '%n %.9Y' "$ROOT"/tools/*/omabox-* 2>&1)"
   check_eq "the skill is a link" "$c/skill" "$(readlink "$h/.claude/skills/omabox")"
   check_fails "...not the feedback skill: opt-in (finding 326)" test -L "$h/.claude/skills/omabox-feedback"
