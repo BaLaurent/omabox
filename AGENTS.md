@@ -26,6 +26,9 @@ says which), else `omabox setup --aquamarine` builds one.
 
 ## Non-negotiables
 
+The ones the program itself must hold are `SECURITY.md`'s rules (S1-S10), each with where it is
+enforced and its test. A change that adds or weakens one updates its row there.
+
 - **Never disturb the real desktop.** No focus changes, cursor warps, workspace switches or
   windows on the user's session unless the user asked for one (e.g. interactive mode). When you
   must touch the host Hyprland, open things `silent` on the configured workspace (`omabox config
