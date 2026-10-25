@@ -12393,7 +12393,7 @@ t_unit_aquamarine() {
   mkdir -p "$d/sys" "$d/co/lib" "$d/user/lib" "$d/stale/lib" "$d/home"
   : > "$d/sys/libaquamarine.so.0.15.0"; ln -s libaquamarine.so.0.15.0 "$d/sys/$so"
   : > "$d/user/lib/libaquamarine.so.0.15.1"; ln -s libaquamarine.so.0.15.1 "$d/user/lib/$so"; echo abc1234 > "$d/user/.omabox-commit"
-  pick() { OMABOX_AQUAMARINE="" lib aq_pick "$@" 2>&1; }
+  pick() { OMABOX_AQUAMARINE="" probe aq_pick_dirs "$@" 2>&1; }
   check_eq "no private build: the system's, 0.15.0 lacks the fix" "system||0.15.0|0" "$(pick "$so" "$d/sys" "$d/co/lib")"
   check_eq "a private build with the soname: used, with its commit, fixed" "private|$d/user/lib|0.15.1@abc1234|1" \
     "$(pick "$so" "$d/sys" "$d/co/lib" "$d/user/lib")"
@@ -12401,8 +12401,8 @@ t_unit_aquamarine() {
   check_eq "...the first one listed (a checkout's before the user's)" "private|$d/co/lib|0.15.1|1" \
     "$(pick "$so" "$d/sys" "$d/co/lib" "$d/user/lib")"
   check_eq "OMABOX_AQUAMARINE=system: the system's all the same" "system||0.15.0|0" \
-    "$(OMABOX_AQUAMARINE=system lib aq_pick "$so" "$d/sys" "$d/co/lib" 2>&1)"
-  check_match "...anything else refused" "OMABOX_AQUAMARINE is system or unset" "$(OMABOX_AQUAMARINE=yes lib aq_pick "$so" "$d/sys" 2>&1)"
+    "$(OMABOX_AQUAMARINE=system probe aq_pick_dirs "$so" "$d/sys" "$d/co/lib" 2>&1)"
+  check_match "...anything else refused" "OMABOX_AQUAMARINE is system or unset" "$(OMABOX_AQUAMARINE=yes probe aq_pick_dirs "$so" "$d/sys" "$d/co/lib" 2>&1)"
   if command -v cc >/dev/null; then
     echo 'int aq(void) { return 0; }' > "$d/aq.c"
     cc -shared -fPIC -Wl,-soname,libaquamarine.so.13 -o "$d/stale/lib/libaquamarine.so.0.14.0" "$d/aq.c"
@@ -12418,7 +12418,7 @@ t_unit_aquamarine() {
   done
   aq_symbol_checks "$d"
   check_match "a soname the system lacks" "Hyprland links libaquamarine.so.99, which is not in $d/sys" "$(pick libaquamarine.so.99 "$d/sys")"
-  check_fails "no soname at all: no answer (not a match on the dir)" lib aq_pick "" "$d/sys" "$d/user/lib"
+  check_fails "no soname at all: no answer (not a match on the dir)" probe aq_pick_dirs "" "$d/sys" "$d/user/lib"
   # What needs the fix, on this machine's system aquamarine (OMABOX_AQUAMARINE=system).
   if aq_unfixed env OMABOX_AQUAMARINE=system "$CLI"; then
     check_match "without the fix: up --confirm-close refused, saying why and what to run" \
@@ -12428,7 +12428,7 @@ t_unit_aquamarine() {
     check_match "...config confirm-close on: set, with a note" "note: confirm-close needs aquamarine's fix.*confirm-close=on" \
       "$(HOME=$d/home OMABOX_AQUAMARINE=system "$CLI" config confirm-close on 2>&1 | tr '\n' ' ')"
     local n nv=""
-    for n in /dev/dri/renderD*; do [ "$(lib render_driver "$n")" != nvidia ] || { nv=$n; break; }; done
+    for n in /dev/dri/renderD*; do [ "$(probe render_driver "$n")" != nvidia ] || { nv=$n; break; }; done
     if [ -n "$nv" ]; then
       check_match "...a headless box on NVIDIA refused, saying what to run" "a headless box on NVIDIA \($nv\) needs aquamarine's fix.*omabox setup --aquamarine" \
         "$(OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=$nv ob up "$P-aq" 2>&1)"
@@ -12459,7 +12459,7 @@ t_unit_aq_worktree() {
   local d=$TMP/$P-aqwt so=libaquamarine.so.14 M W X S SW out
   M=$d/main W="$d/wt one" X=$d/wt-rel S=$d/sub SW=$d/subwt
   gw() { git -c user.name=t -c user.email=t@t -c protocol.file.allow=always "$@" >/dev/null 2>&1; }
-  mkdir -p "$M" "$S" "$d/sys" "$d/bin"
+  mkdir -p "$M" "$S" "$d/sys" "$d/bin" "$d/root/usr"; ln -s "$d/sys" "$d/root/usr/lib"
   for r in "$M" "$S"; do gw -C "$r" init -q && echo x > "$r/f" && gw -C "$r" add f && gw -C "$r" commit -qm one; done
   gw -C "$M" worktree add -q -b "$P-aqwt" "$W"
   gw -C "$M" worktree add -q -b "$P-aqwt-rel" "$X"
@@ -12469,11 +12469,11 @@ t_unit_aq_worktree() {
   : > "$d/sys/libaquamarine.so.0.15.0"; ln -s libaquamarine.so.0.15.0 "$d/sys/$so"
   # A git that records being run: aq_main_lib never runs it, in a jail or out.
   printf '#!/bin/sh\necho "$*" >> %q/git-ran\nexit 1\n' "$d" > "$d/bin/git"; chmod +x "$d/bin/git"
-  main_lib() { PATH=$d/bin:$PATH lib aq_main_lib "$@" 2>&1; }
+  main_lib() { PATH=$d/bin:$PATH probe aq_main_lib "$@" 2>&1; }
   check_eq "a worktree, no build in the main checkout: nothing" "" "$(main_lib "$W")"
   mkdir -p "$M/build/prefix/lib"
   : > "$M/build/prefix/lib/libaquamarine.so.0.15.1"; ln -s libaquamarine.so.0.15.1 "$M/build/prefix/lib/$so"
-  lib eval 'echo "$AQ_BUILD"' > "$M/build/prefix/.omabox-commit"
+  probe aq_const AQ_BUILD > "$M/build/prefix/.omabox-commit"
   local common; common=$(git -C "$W" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
   check_eq "a worktree: the main checkout's build/prefix/lib, where git's common dir says" "${common%/.git}/build/prefix/lib" "$(main_lib "$W")"
   check_eq "...one whose .git names its gitdir relative to it: the same" "$M/build/prefix/lib" "$(main_lib "$X")"
@@ -12482,9 +12482,9 @@ t_unit_aq_worktree() {
   check_eq "the main checkout itself: nothing (its own build/prefix is first already)" "" "$(main_lib "$M")"
   check_eq "a submodule's worktree: nothing (its common dir is in .git/modules)" "" "$(main_lib "$SW")"
   check_eq "no checkout (an installed omabox): nothing" "" "$(main_lib "$d/sys")"
-  # resolve DIR: which aquamarine a box from checkout DIR runs, and how --version says it.
-  resolve() { bash -c 'source "$1"; ROOT=$2 AQ_SYSDIR=$3 AQ_USER=$4; aq_resolve "$5" && echo "$AQ_KIND|$AQ_LIB|$AQ_MAIN|$(aq_desc)"' \
-    lib "$TMP/lib/bin/omabox" "$1" "$d/sys" "$d/user" "$so" 2>&1; }
+  # resolve DIR: which aquamarine a box from checkout DIR runs, and how --version says it (the system's
+  # in the root's /usr/lib, no build in the user's data dir).
+  resolve() { PATH=$d/bin:$PATH XDG_DATA_HOME=$d/user OMABOX_AQUAMARINE='' probe aq_resolve "$so" "$1" "$d/root" 2>&1; }
   out=$(resolve "$W")
   check_match "a box from the worktree runs the main checkout's build" "^private\|$M/build/prefix/lib\|$M/build/prefix\|" "$out"
   check_match "...said so" "a private build, 0\.15\.1@[^ ]* \($M/build/prefix, the main checkout's: this worktree has no usable one\)$" "$out"
@@ -12506,12 +12506,15 @@ t_unit_aq_worktree() {
     skip "a build not readable is not used" "running as root reads everything"
   fi
   rm -rf "$M/build"
-  check_eq "the main checkout's build gone: nothing, quietly" "" "$(main_lib "$W")"  # up from a worktree whose tools are not built (a fresh one): make, never install.sh there.
+  check_eq "the main checkout's build gone: nothing, quietly" "" "$(main_lib "$W")"
+  # up from a worktree whose tools are not built (a fresh one): make, never install.sh there. The
+  # binary in a stand-in checkout with no tools/ (.git a file: a worktree's; a dir: a main checkout's).
+  local co
+  for co in "$d/co-wt" "$d/co-main"; do mkdir -p "$co/build"; cp "$PROBE" "$co/build/omabox"; done
+  echo "gitdir: $M/.git/worktrees/x" > "$d/co-wt/.git"; mkdir -p "$d/co-main/.git"
   check_match "up from a worktree without its tools: build them with make, not install.sh" \
-    "missing .*: in a git worktree, build them: for m in .*/tools/\*/Makefile; do make -C" \
-    "$(bash -c 'source "$1"; ROOT=$2 KEYBOARD=$2/tools/keyboard/omabox-keyboard; check_install /dev/null' lib "$TMP/lib/bin/omabox" "$W" 2>&1)"
-  check_match "...a main checkout's: install.sh" "missing .*: run install.sh$" \
-    "$(bash -c 'source "$1"; ROOT=$2 KEYBOARD=$2/tools/keyboard/omabox-keyboard; check_install /dev/null' lib "$TMP/lib/bin/omabox" "$M" 2>&1)"
+    "missing .*: in a git worktree, build them: for m in .*/tools/\*/Makefile; do make -C" "$("$d/co-wt/build/omabox" _rust probe check_install 2>&1)"
+  check_match "...a main checkout's: install.sh" "missing .*: run install.sh$" "$("$d/co-main/build/omabox" _rust probe check_install 2>&1)"
 }
 
 # finding 246 (issue #48): the system's aquamarine has the fix when it exports what #415 added, whatever
@@ -12520,8 +12523,8 @@ t_unit_aq_worktree() {
 aq_symbol_checks() {
   local d=$1/sym so out real="" c common
   so=$(probe hypr_aq_soname) || { no "the soname Hyprland links"; return; }
-  mkdir -p "$d/stub" "$d/patched" "$d/stock" "$d/home/.local/state/omarchy/current/theme" "$d/boxes" \
-    "$d/dri" "$d/drm/renderD129" "$d/pci/0000:01:00.0" "$d/drivers/nvidia"
+  local gt=$d/gt
+  mkdir -p "$d/stub" "$d/patched" "$d/stock" "$gt/dev/dri" "$gt/sys/class/drm/renderD129" "$gt/sys/bus/pci/devices/0000:01:00.0" "$d/drivers/nvidia"
   # sys DIR: which aquamarine boxes run when DIR is the system's (no private build).
   sys() { probe aq_pick "$so" "$1" 2>&1; }
   # A library of the stock version exporting #415's CWaylandOutput::applyConfigure, and nothing else.
@@ -12568,27 +12571,25 @@ aq_symbol_checks() {
   else
     skip "the system's aquamarine has the fix as its library says" "no /usr/lib/$so here"
   fi
-  # What follows the answer: confirm-close in the settings (the widget's switch), and `up` of a headless
-  # box on NVIDIA (t_unit_gpu's fake GPU), stopped at the box's lock, which comes after the refusals.
-  : > "$d/dri/renderD129"; ln -s "$d/pci/0000:01:00.0" "$d/drm/renderD129/device"; ln -s "$d/drivers/nvidia" "$d/pci/0000:01:00.0/driver"
-  gate() {
-    HOME=$d/home OMABOX_AQUAMARINE=system OMABOX_RENDER_NODE=$d/dri/renderD129 lib eval "AQ_SYSDIR='$1' DRI='$d/dri' SYSDRM='$d/drm'
-      BOXES='$d/boxes' CONFIG='$d/home/config' KEYBOARD=/usr/bin/true POINTER=/usr/bin/true STILL=/usr/bin/true EVENTS=/usr/bin/true; $2" 2>&1
-  }
-  local dir avail refused
+  # What follows the answer: confirm-close in the settings (the widget's switch, config --json's), and
+  # up's refusal of a headless box on NVIDIA (t_unit_gpu's fake GPU), each as config and up ask it, on
+  # a root whose /usr/lib is that system dir and whose devices are the fake GPU's (no checkout build).
+  : > "$gt/dev/dri/renderD129"; ln -s "$gt/sys/bus/pci/devices/0000:01:00.0" "$gt/sys/class/drm/renderD129/device"
+  ln -s "$d/drivers/nvidia" "$gt/sys/bus/pci/devices/0000:01:00.0/driver"
+  local dir avail refused rt
   for dir in stub patched stock; do
     [ -e "$d/$dir/$so" ] || continue
+    rt=$d/root-$dir; mkdir -p "$rt/usr"; ln -sfn "$d/$dir" "$rt/usr/lib"; ln -sfn "$gt/dev" "$rt/dev"; ln -sfn "$gt/sys" "$rt/sys"
     if [ "$(sys "$d/$dir" | cut -d'|' -f3)" = 1 ]; then avail=true refused=0; else avail=false refused=1; fi
     check_eq "the $dir system's: config --json confirm-close-available $avail" "$avail" \
-      "$(gate "$d/$dir" 'cmd_config --json 2>/dev/null' | jq .confirm_close_available)"
-    out=$(gate "$d/$dir" "lock_file() { echo 'at the lock'; exit 0; }; cmd_up '$P-aqs'")
+      "$(OMABOX_AQUAMARINE=system probe confirm_close_available "$d/noco" "$rt" 2>/dev/null)"
+    out=$(OMABOX_AQUAMARINE=system probe nvidia_needs_fix /dev/dri/renderD129 "$d/noco" "$rt" 2>&1; echo "rc=$?")
     if [ "$refused" = 1 ]; then
-      check_match "...up of a headless box on NVIDIA refused" "a headless box on NVIDIA \($d/dri/renderD129\) needs aquamarine's fix" "$out"
+      check_match "...up's check of a headless box on NVIDIA: refused" "a headless box on NVIDIA \(/dev/dri/renderD129\) needs aquamarine's fix.*rc=1$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
     else
-      check_match "...up of a headless box on NVIDIA not refused (stopped at its lock)" "at the lock$" "$out"
+      check_eq "...up's check of a headless box on NVIDIA: not refused" "rc=0" "$out"
     fi
   done
-  check_fails "...no box made" test -e "$d/boxes/$P-aqs"
 }
 
 # finding 247 (issue #186): `setup --aquamarine` builds whenever boxes would run without omabox's own
@@ -12602,16 +12603,24 @@ aq_setup_checks() {
   for t in git cmake ninja hyprwayland-scanner pkg-config c++; do
     printf '#!/bin/sh\necho "%s $*" >> "%s/log"\nexit 1\n' "$t" "$tools" > "$tools/$t"; chmod +x "$tools/$t"
   done
-  # setup_aq [FORCE]: setup --aquamarine with the stub as the system's 0.15.0, on stub build tools.
-  setup_aq() {
-    : > "$tools/log"
-    XDG_DATA_HOME=$data XDG_CACHE_HOME=$cache PATH=$tools:$PATH \
-      lib eval "AQ_SYSDIR='$d/stub'; setup_aquamarine ${1:-0}" 2>&1
-  }
-  out=$(setup_aq)
+  # What setup decides over the stub as the system's (its root's /usr/lib), from no checkout build.
+  local sr=$d/setup-root; mkdir -p "$sr/usr"; ln -sfn "$d/stub" "$sr/usr/lib"
+  out=$(probe aq_build_needed 0 "$d/noco" "$sr" 2>&1; echo "rc=$?")
   check_fails "setup --aquamarine over a system aquamarine with #415: not \"nothing to build\"" grep -q "nothing to build" <<<"$out"
   check_match "...says it lacks omabox's own fixes, and builds them" \
-    "has the fix for nested Wayland outputs but not omabox's own \(keys held .*\).*building aquamarine [^ ]+ .* into $data/omabox/aquamarine" "$out"
+    "has the fix for nested Wayland outputs but not omabox's own \(keys held .*\).*rc=0$" "$(tr '\n' ' ' <<<"$out" | sed 's/ $//')"
+  # setup_aq [--force]: setup --aquamarine itself, run by a stand-in checkout's binary (the real one's
+  # files but for build/ and .git, so it builds into the data dir), on stub build tools, the system's
+  # aquamarine the machine's; nothing of the user's: HOME and the XDG dirs are scratch ones.
+  local fr=$d/setup-co e
+  mkdir -p "$fr/build"; for e in "$ROOT"/*; do [ "${e##*/}" = build ] || ln -s "$e" "$fr/${e##*/}"; done
+  cp "$PROBE" "$fr/build/omabox"
+  setup_aq() {
+    : > "$tools/log"
+    HOME=$d/setup-home XDG_DATA_HOME=$data XDG_CACHE_HOME=$cache PATH=$tools:$PATH "$fr/build/omabox" setup --aquamarine "$@" 2>&1
+  }
+  out=$(setup_aq)
+  check_match "setup --aquamarine with no build: builds, into the data dir" "building aquamarine [^ ]+ .* into $data/omabox/aquamarine" "$out"
   check_match "...as far as the clone (the stub git), into the scratch cache" \
     "^git clone -q https://github.com/hyprwm/aquamarine $cache/omabox-aquamarine$" "$(cat "$tools/log")"
   # A build of this omabox's (AQ_BUILD) in the data dir: the only no-op, and --force builds all the same.
@@ -12623,7 +12632,7 @@ aq_setup_checks() {
   out=$(setup_aq)
   check_match "...over this omabox's build ($build): nothing to build" "this omabox's build: nothing to build" "$out"
   check_eq "...no tool run" "" "$(cat "$tools/log")"
-  out=$(setup_aq 1)
+  out=$(setup_aq --force)
   check_match "...--force builds it all the same" "building aquamarine .*could not clone" "$(tr '\n' ' ' <<<"$out")"
   echo 7bb8bdf4+keys > "$data/omabox/aquamarine/.omabox-commit"
   out=$(setup_aq)
@@ -12631,7 +12640,7 @@ aq_setup_checks() {
   rm -rf "$data/omabox/aquamarine"
   # What `setup` says of each (aq_note). (`monitor add` refuses a box's aquamarine without +appid:
   # t_unit_rust_parity4.)
-  note_of() { lib eval "AQ_KIND='$1' AQ_LIB='$data/lib' AQ_VER='$2' AQ_FIXED='$3'; aq_note" 2>&1; }
+  note_of() { probe aq_note "$1" "$data/lib" "$2" "$3" 2>&1; }
   check_match "setup's note on a system aquamarine with #415: omabox's own fixes, setup --aquamarine" \
     "^note: the system's aquamarine has the fix .*, but not omabox's own fixes \(keys held .*\): omabox setup --aquamarine$" "$(note_of system 0.15.0 1)"
   check_match "...without #415: both" "^note: headless boxes on NVIDIA and confirm-close need .*, and interactive boxes omabox's own fixes .*: omabox setup --aquamarine$" \
@@ -12736,14 +12745,14 @@ t_unit_quickshell() {
   check_match "...and with --no-shell, which starts no shell" "--quickshell runs the box's shell, and --no-shell starts none" \
     "$(ob up "$P-q1" --quickshell /usr/bin/quickshell --no-shell 2>&1)"
   check_match "run takes it for a throwaway (and refuses the same)" "is not an ELF binary" "$(ob run --quickshell "$d/wrapper" -- true 2>&1)"
-  if command -v cc >/dev/null && [ -n "$(lib qt_box)" ]; then
+  if command -v cc >/dev/null && [ -n "$(probe qt_box)" ]; then
     # A build against another Qt minor: what qt_version_tag it refers to (every Qt program does).
-    local qt; qt=$(lib qt_box)
+    local qt; qt=$(probe qt_box)
     mkdir -p "$d/b0" "$d/b1" "$d/lib"
     printf 'extern const char qt_version_tag;\n__asm__(".symver qt_version_tag, qt_version_tag@Qt_%s");\nconst char *const tag = &qt_version_tag;\nint main(void) { return tag == 0; }\n' "6.0" > "$d/old.c"
     cc -fPIC -pie -o "$d/b0/quickshell" "$d/old.c" -l:libQt6Core.so.6 2>/dev/null
     check_match "a build against another Qt is refused, naming both" \
-      "was built against Qt 6.0, but the box has Qt $(lib qt_version).*Qt's private API" "$(ob up "$P-q1" --quickshell "$d/b0/quickshell" 2>&1)"
+      "was built against Qt 6.0, but the box has Qt $(probe qt_version).*Qt's private API" "$(ob up "$P-q1" --quickshell "$d/b0/quickshell" 2>&1)"
     # The box's Qt, but a library the box lacks.
     sed "s/Qt_6\.0/Qt_$qt/" "$d/old.c" > "$d/same.c"; echo 'int aq(void) { return 0; }' > "$d/miss.c"
     cc -shared -fPIC -Wl,-soname,libomaboxmissing.so.1 -o "$d/lib/libomaboxmissing.so" "$d/miss.c" &&
@@ -12810,10 +12819,10 @@ t_quickshell() {
   sv saves rm "$S" >/dev/null 2>&1
   # A build against another patch release of the box's Qt (the binary does not say which): its own
   # --private-check-compat, asked in the box before the session starts, ends the box (a stub of it).
-  if command -v cc >/dev/null && [ -n "$(lib qt_box)" ]; then
+  if command -v cc >/dev/null && [ -n "$(probe qt_box)" ]; then
     local d=$TMP/$P-qscompat; mkdir -p "$d/b"
     printf '%s\n' '#include <stdio.h>' '#include <string.h>' 'extern const char qt_version_tag;' \
-      "__asm__(\".symver qt_version_tag, qt_version_tag@Qt_$(lib qt_box)\");" 'const char *const tag = &qt_version_tag;' \
+      "__asm__(\".symver qt_version_tag, qt_version_tag@Qt_$(probe qt_box)\");" 'const char *const tag = &qt_version_tag;' \
       'int main(int c, char **v) { if (c > 1 && !strcmp(v[1], "--private-check-compat")) {' \
       '  printf("\033[31mCOMPATIBILITY WARNING: Quickshell was built against Qt 6.0.1 but the system has updated to Qt 6.0.2 without rebuilding the package.\n\033[0m"); return 1; }' \
       '  return tag == 0; }' > "$d/c.c"

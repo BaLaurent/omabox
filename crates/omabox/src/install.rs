@@ -495,6 +495,18 @@ pub fn aq_pick_system(ctx: &Ctx, soname: &[u8], sys: &[u8]) -> Option<Aq> {
     aq_pick_env(ctx, soname, sys, &[], b"system")
 }
 
+/// aq_pick SONAME SYS DIRS..., with OMABOX_AQUAMARINE as the environment has it (`_rust probe
+/// aq_pick_dirs`).
+pub fn aq_pick_dirs(ctx: &Ctx, soname: &[u8], sys: &[u8], dirs: &[Vec<u8>]) -> Option<Aq> {
+    aq_pick_env(
+        ctx,
+        soname,
+        sys,
+        dirs,
+        &shell::env_or_empty("OMABOX_AQUAMARINE"),
+    )
+}
+
 /// config --json's confirm_close_available: false only when the aquamarine boxes would use (from
 /// checkout CO, the system's under ROOT) lacks the fix; quiet.
 pub fn confirm_close_available_in(ctx: &Ctx, co: &[u8], root: &[u8]) -> bool {

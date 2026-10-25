@@ -29,8 +29,19 @@ pub const NAMES: &[(&str, &str)] = &[
     ("soft_note", "RECORD DRIVER [OTHER]"),
     ("gpu_rows", "FILE"),
     ("pmon_figures", "PIDS"),
+    // Which aquamarine boxes run, and what follows from it; the system's under ROOT.
     ("hypr_aq_soname", ""),
     ("aq_pick", "SONAME SYSDIR"),
+    ("aq_pick_dirs", "SONAME SYSDIR [DIR...]"),
+    ("aq_main_lib", "CHECKOUT"),
+    ("aq_resolve", "SONAME CHECKOUT ROOT"),
+    ("confirm_close_available", "CHECKOUT ROOT"),
+    ("nvidia_needs_fix", "NODE CHECKOUT ROOT"),
+    ("aq_build_needed", "FORCE CHECKOUT ROOT"),
+    ("aq_note", "KIND LIB VER FIXED"),
+    ("check_install", ""),
+    ("qt_box", ""),
+    ("qt_version", ""),
     ("aq_has_fix", "FILE"),
     ("aq_ver_fixed", "VERSION"),
     ("aq_const", "AQ_FIX_SYMBOL|AQ_FIXED_AFTER|AQ_BUILD"),
@@ -226,6 +237,58 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
                 aq.desc()
             ))
         }
+        (b"aq_pick_dirs", [so, sys, dirs @ ..]) => {
+            let aq = crate::install::aq_pick_dirs(&ctx, so, sys, &owned(dirs)).ok_or(Exit(1))?;
+            line(&cat!(
+                aq.kind,
+                "|",
+                aq.lib,
+                "|",
+                aq.ver,
+                "|",
+                if aq.fixed { "1" } else { "0" }
+            ))
+        }
+        (b"aq_main_lib", [co]) => line(&crate::install::aq_main_lib(co).unwrap_or_default()),
+        (b"aq_resolve", [so, co, r]) => {
+            let env = crate::shell::env_or_empty("OMABOX_AQUAMARINE");
+            let aq = crate::install::aq_resolve_in(&ctx, so, &env, co, r).ok_or(Exit(1))?;
+            line(&cat!(aq.kind, "|", aq.lib, "|", aq.main, "|", aq.desc()))
+        }
+        (b"confirm_close_available", [co, r]) => {
+            line(if crate::install::confirm_close_available_in(&ctx, co, r) {
+                b"true"
+            } else {
+                b"false"
+            })
+        }
+        (b"nvidia_needs_fix", [n, co, r]) => {
+            let n = crate::render::RenderNode::new(n).ok_or(Exit(2))?;
+            let w = crate::install::hypr_aq_soname(&ctx)?;
+            let env = crate::shell::env_or_empty("OMABOX_AQUAMARINE");
+            let aq = crate::install::aq_resolve_in(&ctx, &w, &env, co, r).ok_or(Exit(1))?;
+            crate::install::nvidia_needs_fix_in(&ctx, &aq, &n, r)
+        }
+        (b"aq_build_needed", [force, co, r]) => {
+            let w = crate::install::hypr_aq_soname(&ctx)?;
+            let aq = crate::install::aq_resolve_in(&ctx, &w, b"", co, r).ok_or(Exit(1))?;
+            yes(crate::install::aq_build_needed(&aq, *force == b"1"))
+        }
+        (b"aq_note", [kind, lib, ver, fixed]) => crate::cmd::setup::aq_note(&crate::install::Aq {
+            kind: kind.to_vec(),
+            lib: lib.to_vec(),
+            ver: ver.to_vec(),
+            fixed: *fixed == b"1",
+            main: Vec::new(),
+        }),
+        // (the render node is checked after the helpers: a placeholder one, never opened here)
+        (b"check_install", []) => {
+            let n = crate::render::RenderNode::new(b"/dev/dri/renderD128").ok_or(Exit(2))?;
+            let aq = crate::install::check_install(&ctx, &n, None)?;
+            line(&aq.desc())
+        }
+        (b"qt_box", []) => line(&crate::install::qt_box()),
+        (b"qt_version", []) => line(&crate::install::qt_version()),
         (b"aq_has_fix", [f]) => crate::install::aq_has_fix(f).then_some(()).ok_or(Exit(1)),
         (b"aq_ver_fixed", [v]) => crate::install::aq_ver_fixed(v).then_some(()).ok_or(Exit(1)),
         (b"aq_const", [c]) => match *c {
