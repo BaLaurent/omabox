@@ -84,9 +84,9 @@ For each finding:
 gh issue list -R diogochaves/omabox --state all --search "<two or three key words>" --limit 10
 ```
 
-Also grep omabox's `NOTES.md` (findings, the Open list) and `UPSTREAM.md`. They sit beside its
-`bin/`: `readlink -f "$(command -v omabox)"` is `<dir>/bin/omabox`, so `<dir>/NOTES.md` (a
-checkout, or `/usr/lib/omabox` for a package). Not there: skip the grep.
+Also grep omabox's `NOTES.md` (findings, the Open list) and `UPSTREAM.md`. They sit in the tree of its
+binary: `readlink -f "$(command -v omabox)"` is `<dir>/build/omabox` in a checkout or `<dir>/bin/omabox`
+in a package (`/usr/lib/omabox`), so `<dir>/NOTES.md` either way. Not there: skip the grep.
 
 - **An open issue matches:** propose a comment only if this session adds something (another trigger,
   a version, a smaller repro). Otherwise `known`, with its link.

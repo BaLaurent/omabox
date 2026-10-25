@@ -11,13 +11,21 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   connected box reaches, on the host's loopback or through any of its other addresses (a docker
   bridge, a VPN), TCP and UDP; an isolated box's `--allow` refuses them. None by default. Needs `nft`
   (nftables) when set. A value that is not a list of ports refuses every `up` (exit 2) rather than
-  being ignored; `OMABOX_BASH=1 up` refuses a connected box while the list is set. Set it with
+  being ignored. Set it with
   `omabox config protect-ports 8080,5432` (checked as `up` reads it, kept sorted; `default` removes
   it); `omabox config` lists it, `--json` as `protect_ports`
   ([#355](https://github.com/diogochaves/omabox/issues/355)).
 
 ### Changed
 
+- **omabox is one binary, built by `./install.sh`, which now needs Rust**: `bin/omabox` is a link to
+  `build/omabox`, built from `crates/omabox` (install.sh installs Arch's `rust` when there is no
+  `cargo`; the first build fetches its crates). Pull and run `./install.sh` in one go: until it has
+  run, `omabox` is missing, new agent sessions start without the guard, and ai-jail with omabox's
+  maps does not start. Take boxes down before the upgrade, and restart agents running in ai-jail.
+  Every path in your HOME (`~/.local/bin/omabox`, ai-jail's maps, the broker's unit, the guard's hook)
+  stays as it was; what changed beside it is under "Changes from the bash omabox" below
+  ([#324](https://github.com/diogochaves/omabox/issues/324)).
 - **An interactive box's monitor windows have a class of their own**: `aquamarine-omabox-<token>`
   where it was `aquamarine` (the box's first window keeps `aquamarine`), each with a host rule of its
   own that keeps it on the box's workspace, silent, and stays until your Hyprland next reloads its

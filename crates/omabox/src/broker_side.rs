@@ -2,7 +2,7 @@
 //! omabox-relay's `listen` ran this omabox for a caller inside ai-jail. broker_init finds the
 //! caller's jail and reads its policy from the jail's own bwrap (OMABOX_JAIL, which everything that
 //! matters reads and every omabox this one starts inherits); broker_check says what a jailed agent
-//! may ask, before any command runs (internal `_` ones too). A call bash hands over has had both.
+//! may ask, before any command runs (internal `_` ones too).
 
 use crate::cat;
 use crate::exit::{Ctx, Res};

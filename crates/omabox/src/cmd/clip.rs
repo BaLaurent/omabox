@@ -44,21 +44,13 @@ fn agent_caller() -> Option<Vec<u8>> {
     let agent_re = shell::Re::new("claude-code|@openai/codex|opencode|pi-coding-agent|hermes")?;
     let mut p = me.clone();
     while shell::is_num(&p) && shell::test_int(&p).is_some_and(|n| n > 1) {
-        // (this process's environment as the caller gave it to bin/omabox: the exec made it ours)
-        let env = if p == me {
-            crate::exec::caller_environ()
-                .map(<[u8]>::to_vec)
-                .or_else(|| std::fs::read(shell::path(&cat!("/proc/", p, "/environ"))).ok())
-        } else {
-            std::fs::read(shell::path(&cat!("/proc/", p, "/environ"))).ok()
-        }
-        .unwrap_or_default();
+        let env = std::fs::read(shell::path(&cat!("/proc/", p, "/environ"))).unwrap_or_default();
         let kv = env
             .split(|&c| c == 0)
             .find(|r| marks.is_match(r))
             .map(<[u8]>::to_vec)
             .unwrap_or_default();
-        // (this process named omabox: bash named it bash, its comm until it handed over, finding 441)
+        // (this process named omabox: bash's was bash, its comm, finding 441)
         let comm = if p == me {
             b"omabox".to_vec()
         } else {

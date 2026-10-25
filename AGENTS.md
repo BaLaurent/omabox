@@ -7,16 +7,20 @@ If `.local/AGENTS.md` exists, read it first: this checkout's private notes (git-
 add to the ones here).
 
 Read first: `NOTES.md`: architecture, reproduce steps, what was verified, findings, dead ends,
-open gaps. `bin/omabox` is the CLI, being ported to Rust (#324): `crates/omabox`, built into `build/omabox` (run that or `bin/omabox`, never cargo's `target/`: the binary finds its checkout from where it is),
-runs the commands in `RUST_CMDS`, which `bin/omabox` hands it; `share/` runs inside the box, `tools/` holds the C helpers (pointer,
+open gaps. `bin/omabox` is the CLI: a tracked link to `build/omabox`, the binary built from `crates/omabox` (Rust, #324)
+by `install.sh` and the suite (run `bin/omabox` or `build/omabox`, never cargo's `target/`: the binary finds its checkout
+from where it is); bash's omabox as it was at the switch is `test/oracle/omabox.bash`, the suite's parity oracle until
+wave 6b ends (not maintained, never shipped); `share/` runs inside the box, `tools/` holds the C helpers (pointer,
 keyboard, wlfd, peek, still, relay, events), `install.sh` sets a machine up, `skill/` is the agent skill (linked for Claude
 Code, Codex, OpenCode, pi and Hermes), `skill-feedback/` the opt-in `omabox-feedback` skill (`omabox setup --feedback-skill`), `plugin/` is the bar widget, `test/run.sh` is the regression
 suite (run it in full before each commit; box tests run in parallel, `-j 1` one at a time to pin a
 leak to one test; `test/run.sh unit` is the fast tier; a failure's evidence
 is in `~/.local/state/omabox/test/`; a peek the user opens at its `t<pid>-*` boxes is noted and
 skips the checks it holds up, but one opened by an omabox older than the suite fails it).
-A linked worktree (`git worktree add`, no `build/`): the suite builds its `tools/*` with make (by
-hand: `make -C tools/NAME`; never `install.sh` there, which would link your omabox to the worktree),
+A linked worktree (`git worktree add`, no `build/`) or a fresh clone has a dangling `bin/omabox` until it is
+built: the suite builds it (cargo, into `build/omabox`) and its `tools/*` with make (by hand: `cargo build
+--release --locked` then `install -Dm755 target/release/omabox build/omabox`, `make -C tools/NAME`; never
+`install.sh` there, which would link your omabox to the worktree),
 and its boxes use the main checkout's `build/prefix` when it has none of its own (`omabox --version`
 says which), else `omabox setup --aquamarine` builds one.
 `spike/` is the original record; the CLI supersedes it.
@@ -52,8 +56,9 @@ says which), else `omabox setup --aquamarine` builds one.
 
 ## Conventions
 
-- Bash for the CLI unless a part clearly needs C (like `tools/pointer`). `set -euo pipefail`,
-  shellcheck-clean.
+- Rust for the CLI (`crates/omabox`: `cargo fmt`, `cargo clippy --all-targets -D warnings`, its tests);
+  C where a tool needs it (like `tools/pointer`); bash for `share/` (in the box), `install.sh`,
+  `release.sh`, `docs/demo.sh` and `test/run.sh`: `set -euo pipefail`, shellcheck-clean.
 - Under `set -e`, a `$(...)` that may fail goes in an assignment with `|| fallback`, never bare inside
   an argument, and the last command of an `&&` chain must be allowed to fail if it is not the point of
   the line.
@@ -67,4 +72,5 @@ says which), else `omabox setup --aquamarine` builds one.
 Hyprland 0.56.2 (Lua config, `hyprctl eval`, dispatch syntax `hl.dsp.*`), aquamarine 0.15.0
 system + patched 0.15.1@7bb8bdf4 in `build/prefix` (headless NVIDIA boxes and confirm-close need it
 until a release has PR #415; everything else runs on the system's),
-labwc 0.20.2 as parent compositor, quickshell 0.3.1.
+labwc 0.20.2 as parent compositor, quickshell 0.3.1. The binary (since 2026-10-25): Rust 1.99 (edition 2024,
+`rust-version` 1.85).

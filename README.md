@@ -59,7 +59,10 @@ git clone https://github.com/diogochaves/omabox && cd omabox
 `install.sh` then runs `omabox setup`, which links `~/.local/bin/omabox`, the agent skill (wherever
 Omarchy puts its own skills: `~/.agents`, `~/.claude`, `~/.codex`, `~/.pi/agent`, `~/.hermes`) and
 the bar widget, and asks whether to put the widget in your bar and to turn on the
-[agent guard](#the-agent-guard) (or: `omarchy plugin enable chaves.omabox`, `omabox guard on`). **Update** with `git pull && ./install.sh`;
+[agent guard](#the-agent-guard) (or: `omarchy plugin enable chaves.omabox`, `omabox guard on`). omabox is built
+from Rust: `install.sh` installs Arch's `rust` when there is no `cargo` (a rustup needs a default
+toolchain), and the first build fetches its crates. **Update** with `git pull && ./install.sh` in one go
+(until it has run, `bin/omabox` links to a binary not built yet);
 run it after a Hyprland upgrade too: a private aquamarine whose soname Hyprland no longer links is
 skipped for the system's (`omabox --version` says which one boxes use). **From a checkout to the
 package** (once Omarchy's repository has it): `omabox setup --remove` in the checkout first; if you
@@ -671,7 +674,8 @@ Wayland connection.
 
 | Path | What |
 |---|---|
-| `bin/omabox` | the CLI (bash) |
+| `bin/omabox` | the CLI: a link to `build/omabox`, the binary `install.sh` builds from `crates/omabox` (Rust) |
+| `crates/omabox` | omabox's source (a package builds it with cargo and installs the binary at `bin/omabox`) |
 | `share/` | runs inside the box: session, Hyprland config, shell launcher |
 | `tools/pointer`, `tools/keyboard` | virtual pointer and keyboard; `wtype` sends the wrong keys under Hyprland |
 | `tools/wlfd` | hands an interactive box its one connection to your compositor |

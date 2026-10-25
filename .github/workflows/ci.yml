@@ -19,9 +19,10 @@ jobs:
           curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz | tar -xJ
           sudo install shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
           shellcheck --version
-      # Every shell script but spike/ (the original record, superseded by the CLI).
+      # Every shell script but spike/ (the original record, superseded by the CLI) and the test oracle
+      # (bash's omabox as it was at the switch to the binary, #324: not maintained).
       - name: shellcheck
-        run: shellcheck bin/omabox install.sh release.sh docs/demo.sh test/run.sh share/*.sh share/bin/* $(grep -l "^#!" share/guard/*)
+        run: shellcheck install.sh release.sh docs/demo.sh test/run.sh share/*.sh share/bin/* $(grep -l "^#!" share/guard/*)
 
   rust:
     runs-on: ubuntu-latest

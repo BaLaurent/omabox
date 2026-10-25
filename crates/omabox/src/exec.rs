@@ -1084,34 +1084,10 @@ fn mapfile0(v: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-/// The caller's environment as it came to bin/omabox, from OMABOX_ENVIRON_FD (its /proc/PID/environ,
-/// read before bash's globals overwrote the names they share with it); the fd closed after.
-static CALLER_ENVIRON: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
-
-pub fn caller_environ_take() {
-    let fd = shell::env_or_empty("OMABOX_ENVIRON_FD");
-    let fd = std::str::from_utf8(&fd)
-        .ok()
-        .and_then(|f| f.parse::<RawFd>().ok());
-    let got = fd.filter(|&f| f > 2).map(|f| {
-        // SAFETY: bash opened it for this process alone and names it here; read once, then closed.
-        let file = unsafe { std::fs::File::from_raw_fd(f) };
-        read_all(file.into(), None)
-    });
-    let _ = CALLER_ENVIRON.set(got);
-}
-
-/// The caller's environment as it came, when bash handed it over.
-pub fn caller_environ() -> Option<&'static [u8]> {
-    CALLER_ENVIRON.get().and_then(|e| e.as_deref())
-}
-
-/// A variable of the caller's as it was when omabox started (run --pass): from what came, not from
-/// this process's environment (finding 74). A jailed caller's comes as OMABOX_RELAY_PASS_NAME
-/// (relay_call). None when it is not there. Called straight, what came is /proc/self/environ, as
-/// bash's caller_env reads /proc/$$/environ: main takes OMABOX_BASH and the hand-off's variables out
-/// of this process's environment, and `OMABOX_BASH=1 omabox run --pass OMABOX_BASH` said it was not
-/// in it (finding 514).
+/// A variable of the caller's as it was when omabox started (run --pass): what came, as
+/// /proc/self/environ holds it (bash's caller_env read /proc/$$/environ, before its globals overwrote
+/// the names they share with it: finding 74; finding 514). A jailed caller's comes as
+/// OMABOX_RELAY_PASS_NAME (relay_call). None when it is not there.
 pub fn caller_env(name: &[u8]) -> Option<Vec<u8>> {
     let k = if jail::in_jail() {
         cat!("OMABOX_RELAY_PASS_", name)
@@ -1124,9 +1100,6 @@ pub fn caller_env(name: &[u8]) -> Option<Vec<u8>> {
             .find_map(|e| e.strip_prefix(lead.as_slice()))
             .map(<[u8]>::to_vec)
     };
-    if let Some(Some(env)) = CALLER_ENVIRON.get() {
-        return find(env);
-    }
     match std::fs::read("/proc/self/environ") {
         Ok(env) => find(&env),
         Err(_) => std::env::var_os(OsStr::from_bytes(&k)).map(|v| v.as_bytes().to_vec()),

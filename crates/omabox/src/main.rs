@@ -1,7 +1,6 @@
-//! omabox's Rust half (#324). bin/omabox hands it the commands it has taken over, with the words as
-//! bash's main has them by then: `-b NAME` moved after the command, `--opt=value` split, `--help`,
-//! the relay and the broker already dealt with (OMABOX_ROOT set). Called straight (build/omabox),
-//! it runs that front itself (front.rs, wave 6-front).
+//! omabox (#324): one binary, built from this crate into build/omabox, which bin/omabox links to (an
+//! install has it at bin/omabox). It runs the front itself (front.rs): `-b NAME`, `--opt=value`,
+//! `--help`, the relay and the broker.
 mod args;
 mod boxes;
 mod broker_side;
@@ -58,13 +57,11 @@ mod win;
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-/// OMABOX_ROOT and OMABOX_CALL_US as bash's hand-off set them.
-static HANDOFF: std::sync::OnceLock<(Option<OsString>, Option<OsString>)> =
-    std::sync::OnceLock::new();
+/// When this omabox was called, in µs (bash's CALL_US, taken before anything else).
+static CALL_US: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 
 type Run = fn(&mut exit::Ctx, &[Vec<u8>]) -> exit::Res<()>;
 
@@ -94,39 +91,17 @@ fn main() -> ExitCode {
     // that came ignored stays ignored, for it and its children (sig::catch leaves it).
     sig::catch(libc::SIGQUIT, quit_ignored);
     sig::set_main();
-    // What bash's hand-off adds to the environment is this call's, not its children's (bin/omabox up
-    // and down, a box's command, git): kept here and taken out, before any thread.
-    // (Called straight, the call's time is now: bash's CALL_US, taken before anything else.)
-    let handed = std::env::var_os("OMABOX_ROOT").is_some();
-    let _ = HANDOFF.set((
-        std::env::var_os("OMABOX_ROOT"),
-        if handed {
-            std::env::var_os("OMABOX_CALL_US")
-        } else {
-            Some(OsString::from_vec(marks::epoch_us()))
-        },
-    ));
+    let _ = CALL_US.set(marks::epoch_us());
     let _ = ROOT.set(find_root());
-    exec::caller_environ_take();
-    // SAFETY: at the start, before any other thread reads the environment.
-    unsafe {
-        std::env::remove_var("OMABOX_ROOT");
-        std::env::remove_var("OMABOX_CALL_US");
-        std::env::remove_var("OMABOX_ENVIRON_FD");
-        // (bash's: this call's only, not what it starts; called straight, the binary is the call)
-        std::env::remove_var("OMABOX_BASH");
+    let args = std::env::args_os().skip(1);
+    // BOXES: bash's first line refuses a call without XDG_RUNTIME_DIR, whatever it asks.
+    let runtime = shell::env_or_empty("XDG_RUNTIME_DIR");
+    if runtime.is_empty() {
+        exit::say("XDG_RUNTIME_DIR is not set");
+        return ExitCode::from(1);
     }
-    let mut args = std::env::args_os().skip(1);
-    let (cmd, rest): (OsString, Vec<OsString>) = if handed {
-        (args.next().unwrap_or_default(), args.collect())
-    } else {
-        // BOXES: bash's first line refuses a call without XDG_RUNTIME_DIR, whatever it asks.
-        let runtime = shell::env_or_empty("XDG_RUNTIME_DIR");
-        if runtime.is_empty() {
-            exit::say("XDG_RUNTIME_DIR is not set");
-            return ExitCode::from(1);
-        }
-        let argv: Vec<Vec<u8>> = args.map(OsString::into_vec).collect();
+    let argv: Vec<Vec<u8>> = args.map(OsString::into_vec).collect();
+    let (cmd, rest): (OsString, Vec<OsString>) =
         match front::front(&cat!(runtime, "/omabox"), &argv) {
             Ok(Some(c)) => (
                 OsString::from_vec(c.cmd),
@@ -134,8 +109,7 @@ fn main() -> ExitCode {
             ),
             Ok(None) => return ExitCode::SUCCESS,
             Err(exit::Exit(rc)) => return ExitCode::from(rc),
-        }
-    };
+        };
     let ported: Option<Run> = match cmd.to_str() {
         Some("path") => Some(cmd::path::run),
         Some("env") => Some(cmd::env::run),
@@ -187,9 +161,7 @@ fn main() -> ExitCode {
         Some("help" | "-h" | "--help") => Some(|_, a| help::run(a)),
         _ => None,
     };
-    // BOXES: bash refuses a call without XDG_RUNTIME_DIR before it hands one over.
-    let runtime = shell::env_or_empty("XDG_RUNTIME_DIR");
-    if let (Some(run), false) = (ported, runtime.is_empty()) {
+    if let Some(run) = ported {
         let words: Vec<Vec<u8>> = rest.into_iter().map(OsString::into_vec).collect();
         let mut ctx = exit::Ctx::new(cmd.as_encoded_bytes(), cat!(runtime, "/omabox"));
         let r = run(&mut ctx, &words);
@@ -201,7 +173,6 @@ fn main() -> ExitCode {
         };
     }
     match cmd.to_str() {
-        // The suite's proof that the hand-off reaches this binary, and with what.
         // The suite's read-only probe of the helpers it once sourced from bin/omabox (probe.rs).
         Some("_rust") if rest.first().is_some_and(|a| a == "probe") => {
             let words: Vec<Vec<u8>> = rest.into_iter().skip(1).map(OsString::into_vec).collect();
@@ -209,14 +180,6 @@ fn main() -> ExitCode {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(exit::Exit(rc)) => ExitCode::from(rc),
             }
-        }
-        Some("_rust") => {
-            let words: Vec<String> = rest
-                .iter()
-                .map(|a| a.to_string_lossy().into_owned())
-                .collect();
-            println!("rust {}", words.join(" "));
-            ExitCode::SUCCESS
         }
         // The suite's check that the options table here is bash's CMD_OPTS (t_unit_rust_front).
         Some("_rust-opts") => match rest
@@ -275,10 +238,7 @@ fn main() -> ExitCode {
             }
             None => ExitCode::from(2),
         },
-        // A command bash handed here that this build does not have: a binary older than its bash
-        // (a pull without ./install.sh). Bash runs it, told not to hand it back. Called straight,
-        // the front's: a command omabox does not have.
-        _ if handed => back_to_bash(cmd, rest),
+        // (the front's: a command omabox does not have)
         _ => {
             let exit::Exit(rc) = help::unknown_command(cmd.as_encoded_bytes());
             ExitCode::from(rc)
@@ -289,14 +249,11 @@ fn main() -> ExitCode {
 extern "C" fn quit_ignored(_: libc::c_int) {}
 
 /// ROOT: the checkout (or install) this binary belongs to, found once at the start, before anything
-/// could replace the file: OMABOX_ROOT from bash's hand-off, else the parent of the directory the
-/// binary is in (build/omabox, or bin/omabox once that is the binary: D1).
+/// could replace the file: the parent of the directory the binary is in, through any link (a
+/// checkout's build/omabox, an install's bin/omabox, a jail's ~/.local/bin/omabox: D1).
 static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 fn find_root() -> PathBuf {
-    if let Some((Some(r), _)) = HANDOFF.get() {
-        return PathBuf::from(r);
-    }
     let exe = std::env::current_exe().unwrap_or_default();
     exe.parent()
         .and_then(|p| p.parent())
@@ -308,62 +265,7 @@ pub fn root() -> PathBuf {
     ROOT.get_or_init(find_root).clone()
 }
 
-/// Whether PATH is this very binary (the same file, through any link).
-fn is_this_binary(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    match (std::fs::metadata(path), std::fs::metadata("/proc/self/exe")) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
-        _ => false,
-    }
-}
-
-fn back_to_bash(cmd: OsString, rest: Vec<OsString>) -> ExitCode {
-    let script = root().join("bin/omabox");
-    // Only to a bash omabox that handed the call here: bin/omabox as this binary would hand it
-    // straight back, for ever (proposal D7's M3).
-    if is_this_binary(&script) {
-        exit::say(cat!(
-            "this omabox has no command ",
-            cmd.as_encoded_bytes(),
-            ", and no bash omabox to hand it to (",
-            shell::bytes(&script),
-            " is this binary)"
-        ));
-        return ExitCode::from(126);
-    }
-    let mut c = crate::sig::command(&script);
-    c.arg(cmd).args(rest);
-    // This process's environment, but where bash's globals overwrote a variable the caller exported
-    // under the same name (ROOT, BOXES, ...): the caller's value (finding 74). What the broker set
-    // (OMABOX_JAIL) or took out (its peer's pidfd, closed by now) stays as it is.
-    if let Some(env) = exec::caller_environ() {
-        for e in env.split(|&b| b == 0).filter(|e| !e.is_empty()) {
-            let i = e.iter().position(|&b| b == b'=').unwrap_or(e.len());
-            let (k, v) = (
-                OsString::from_vec(e[..i].to_vec()),
-                OsString::from_vec(e.get(i + 1..).unwrap_or_default().to_vec()),
-            );
-            if std::env::var_os(&k).is_some_and(|now| now != v) {
-                c.env(k, v);
-            }
-        }
-    }
-    c.env("OMABOX_BASH", "1");
-    if let Some((_, Some(us))) = HANDOFF.get() {
-        c.env("OMABOX_CALL_US", us);
-    }
-    let err = c.exec();
-    eprintln!("omabox: could not run {}: {err}", script.display());
-    ExitCode::from(126)
-}
-
-/// CALL_US: when this omabox was called, in µs (bash's hand-off says it; now when it does not).
+/// CALL_US: when this omabox was called, in µs.
 pub fn call_us() -> Vec<u8> {
-    if let Some((_, Some(us))) = HANDOFF.get() {
-        let b = us.as_encoded_bytes();
-        if !b.is_empty() && b.iter().all(u8::is_ascii_digit) {
-            return b.to_vec();
-        }
-    }
-    marks::epoch_us()
+    CALL_US.get().cloned().unwrap_or_else(marks::epoch_us)
 }

@@ -6,8 +6,8 @@
 //! teardown never ran), so is the box. An agent session's own box (finding 93) goes when the agent's
 //! process does. An interactive box closed by its user is cleared; one that died any other way stays,
 //! logs and all, until `down` (finding 71). Exits when the box goes, or when a new box took the name.
-//! It is the Rust half's (bin/omabox hands `_reap` over): its command line is `ROOT/build/omabox _reap
-//! NAME CREATED` (in build's bin/ before wave 6-front), which kill_reapers knows.
+//! Its command line is `ROOT/bin/omabox _reap NAME CREATED` (up's self-spawn; bash's hand-off made
+//! it `ROOT/build/omabox _reap ...` before the switch), which kill_reapers knows.
 
 use crate::boxes::{BoxPid, agent_alive, box_alive, box_pid, meta, touch};
 use crate::cat;

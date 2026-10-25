@@ -254,7 +254,8 @@ pub fn kill_box_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> bool {
     true
 }
 
-/// kill_reapers: the selected box's reaper (`bash $ROOT/bin/omabox _reap NAME ...`, or this half's
+/// kill_reapers: the selected box's reaper (`$ROOT/bin/omabox _reap NAME ...`, the binary's since the
+/// switch; bash's `bash $ROOT/bin/omabox _reap NAME ...` before it, or the port's
 /// `$ROOT/build/omabox _reap NAME ...` that bash's hand-off exec'd), unless that is us: nothing
 /// may be left running for a box that is gone (#115, finding 178). pgrep -f's match of its command
 /// line (its words joined by spaces), looked for in /proc here.
@@ -289,9 +290,10 @@ pub fn reaper_pids(root: &[u8], name: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-/// Whether CMDLINE (NUL-ended words) is box NAME's reaper: `(/usr/bin/)?bash ROOT/bin/omabox _reap
-/// NAME ` at its start, or this half's, `ROOT/build(/bin)?/omabox _reap NAME ` (bash's hand-off
-/// exec'd it; in build's bin/ before wave 6-front).
+/// Whether CMDLINE (NUL-ended words) is box NAME's reaper: `((/usr/bin/)?bash )?ROOT/bin/omabox _reap
+/// NAME ` at its start (the binary's since the switch, #324 wave 6-flip; bash's before it), or the
+/// port's, `ROOT/build(/bin)?/omabox _reap NAME ` (bash's hand-off exec'd it; in build's bin/ before
+/// wave 6-front).
 fn reaper_line(cmdline: &[u8], root: &[u8], name: &[u8]) -> bool {
     let words = cmdline.strip_suffix(b"\0").unwrap_or(cmdline);
     let line: Vec<u8> = words
@@ -299,7 +301,7 @@ fn reaper_line(cmdline: &[u8], root: &[u8], name: &[u8]) -> bool {
         .map(|&c| if c == 0 { b' ' } else { c })
         .collect();
     let tail = cat!(root, "/bin/omabox _reap ", name, " ");
-    [b"bash ".as_slice(), b"/usr/bin/bash "]
+    [b"".as_slice(), b"bash ", b"/usr/bin/bash "]
         .iter()
         .any(|pre| line.starts_with(&cat!(pre, tail)))
         || line
@@ -1535,13 +1537,17 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "reads the test oracle (test/oracle/, not in a tarball): test/run.sh runs it"]
     fn programs_are_bash_s() {
-        let script =
-            std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../bin/omabox")).unwrap();
+        let script = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test/oracle/omabox.bash"
+        ))
+        .unwrap();
         for p in JQ_INLINE {
             assert!(
                 crate::exit::contains(&script, p.as_bytes()),
-                "not in bin/omabox: {p}"
+                "not in the oracle: {p}"
             );
         }
     }
@@ -1852,6 +1858,10 @@ mod tests {
             r,
             n
         ));
+        // (the binary's own, since the switch: no bash before it)
+        assert!(reaper_line(b"/r/bin/omabox\0_reap\0b1\x00123\x00", r, n));
+        assert!(!reaper_line(b"/r/bin/omabox\0_reap\0b10\x00123\x00", r, n));
+        assert!(!reaper_line(b"/x/r/bin/omabox\0_reap\0b1\x00123\x00", r, n));
         assert!(!reaper_line(
             b"bash\0/r/bin/omabox\0_reap\0b10\x00123\x00",
             r,

@@ -29,17 +29,17 @@ report it privately, as [SECURITY.md](SECURITY.md) says, not in an issue.
 ## Changing it
 
 ```bash
-./install.sh           # builds the tools and aquamarine's fix (omabox setup --aquamarine)
+./install.sh           # builds the tools, omabox itself (cargo, into build/omabox) and aquamarine's fix
 test/run.sh unit       # the fast tier, no box
 test/run.sh            # the whole suite in real, headless boxes, side by side (~1.5 min on 16 CPUs); before a PR
 test/run.sh -j 1       # the same, one test at a time (~8.5 min): what a leak is pinned to, exactly
 OMABOX_AQUAMARINE=system test/run.sh   # on the system's aquamarine, as a package without the fix runs
 test/run.sh --installed   # against omabox installed read-only at /usr/lib/omabox, as a package would (a throwaway namespace)
-shellcheck bin/omabox install.sh docs/demo.sh test/run.sh share/*.sh share/bin/* $(grep -l "^#!" share/guard/*)
-cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test   # the Rust half
+shellcheck install.sh release.sh docs/demo.sh test/run.sh share/*.sh share/bin/* $(grep -l "^#!" share/guard/*)
+cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test   # omabox itself (crates/omabox)
 ```
 
-CI runs that shellcheck (version 0.11.0) and the cargo checks on every pull request. It cannot run the suite: that needs
+CI runs that shellcheck (version 0.11.0), the cargo checks and the release build on every pull request. It cannot run the suite: that needs
 a Hyprland session, so run it yourself and say in the pull request what passed.
 
 Read [AGENTS.md](AGENTS.md) first, whether you are a person or an agent: it has the rules the code

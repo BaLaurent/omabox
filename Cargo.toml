@@ -1,5 +1,5 @@
-# omabox's Rust half (#324): the commands it has taken over from bin/omabox. Built into build/omabox by
-# install.sh and the suite; bin/omabox hands those commands to it.
+# omabox (#324): one binary, built into build/omabox by install.sh and the suite; bin/omabox is a
+# link to it (a package installs it at bin/omabox).
 [workspace]
 members = ["crates/omabox"]
 resolver = "3"

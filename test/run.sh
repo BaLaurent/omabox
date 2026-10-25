@@ -70,16 +70,20 @@ tools_ready() {
           "$([ ! -f "$ROOT/.git" ] || echo ", run from the main checkout, not this worktree")" "$out"; return 1; }
     echo "built tools/$t (it was missing or older than its sources)"
   done
-  # The Rust half (#324): cargo's own check says whether it is current; build/omabox is where
-  # bin/omabox hands its commands. Not part of an install yet: there every command runs in bash.
-  [ "${1:-}" = installed ] && return 0
+  # omabox itself (#324): cargo's own check says whether it is current; build/omabox is what bin/omabox
+  # links to, renamed into place (finding 522). An install has its binary at bin/omabox.
+  if [ "${1:-}" = installed ]; then
+    [ -x "$ROOT/bin/omabox" ] || { echo "bin/omabox is missing from this install"; return 1; }
+    return 0
+  fi
   out=$(flock "$ROOT/tools" sh -c 'cargo build --release --locked -q --manifest-path "$1/Cargo.toml" &&
     install -Dm755 "$1/target/release/omabox" "$1/build/omabox.new" && mv -f "$1/build/omabox.new" "$1/build/omabox"' _ "$ROOT" 2>&1) ||
     { printf 'building crates/omabox failed (cargo, from rust or rustup):\n%s\n' "$out"; return 1; }
 }
 
 # --installed (issue #50, finding 128): the suite against omabox as a package installs it. This
-# checkout's tracked files and built tools, read-only at /usr/lib/omabox with /usr/bin/omabox linking
+# checkout's tracked files (as a release tarball has them), built tools and binary (at bin/omabox, as
+# the recipe puts it: finding 522), read-only at /usr/lib/omabox with /usr/bin/omabox linking
 # to it, in a throwaway mount namespace: overlays on /usr/lib and /usr/bin made as root of a user
 # namespace, then back to your own uid in one below it (unshare sets no no_new_privs, which boxes
 # behind pasta need: finding 89). The suite run there is the install's own copy, its ROOT
@@ -92,7 +96,8 @@ if [ "${1:-}" = --installed ]; then
   inst=$(mktemp -d) || exit 2
   trap 'chmod -R u+w "$inst" 2>/dev/null; rm -rf "$inst"' EXIT
   mkdir -p "$inst/tree" "$inst/up/lib" "$inst/up/bin" "$inst/work/lib" "$inst/work/bin"
-  git -C "$ROOT" ls-files -z | (cd "$ROOT" && tar --null -cf - -T -) | tar -xf - -C "$inst/tree" || exit 2
+  # (as a release tarball has them: not the test oracle, export-ignored)
+  git -C "$ROOT" ls-files -z -- . ':!test/oracle' | (cd "$ROOT" && tar --null -cf - -T -) | tar -xf - -C "$inst/tree" || exit 2
   for t in "$ROOT"/tools/*/omabox-*; do
     [ -x "$t" ] && [ -f "$t" ] || continue
     cp "$t" "$inst/tree/${t#"$ROOT"/}"
@@ -103,10 +108,8 @@ if [ "${1:-}" = --installed ]; then
   if [ -L "$inst/tree/bin/omabox" ]; then
     rm -f "$inst/tree/bin/omabox"; cp "$ROOT/build/omabox" "$inst/tree/bin/omabox" || exit 2
   fi
+  [ -x "$inst/tree/bin/omabox" ] || { echo "--installed: no runnable bin/omabox in the install"; exit 2; }
   chmod -R a-w "$inst/tree"
-  # The suite's probe (#324 wave 6-suite): the checkout's binary, outside the tree, so a bash install
-  # keeps every command in bash (it has no build/omabox) while the suite reads its helpers.
-  mkdir -p "$inst/probe/bin"; cp "$ROOT/build/omabox" "$inst/probe/bin/omabox" || exit 2
   # shellcheck disable=SC2016 # expanded by the namespace's shell
   unshare -r -m bash -c '
     set -e; i=$1; shift
@@ -114,7 +117,7 @@ if [ "${1:-}" = --installed ]; then
     mkdir /usr/lib/omabox; mount --bind "$i/tree" /usr/lib/omabox; mount -o remount,bind,ro /usr/lib/omabox
     mount -t overlay overlay -o "lowerdir=/usr/bin,upperdir=$i/up/bin,workdir=$i/work/bin" /usr/bin
     ln -s ../lib/omabox/bin/omabox /usr/bin/omabox
-    exec unshare -U --map-user="$1" --map-group="$2" env OMABOX_TEST_INSTALLED=1 OMABOX_TEST_PROBE="$i/probe/bin/omabox" /usr/lib/omabox/test/run.sh "${@:3}"
+    exec unshare -U --map-user="$1" --map-group="$2" env OMABOX_TEST_INSTALLED=1 /usr/lib/omabox/test/run.sh "${@:3}"
   ' _ "$inst" "$(id -u)" "$(id -g)" "$@"
   exit $?
 fi
@@ -122,22 +125,36 @@ fi
 # checkout never is, so the suite tells them apart by itself (it once failed 13 checks run from a real
 # install, which sets no OMABOX_TEST_INSTALLED: that marks --installed's user namespace only).
 INSTALLED=0; [ -w "$ROOT" ] || INSTALLED=1
-# The CLI under test (#324 wave 6-front, A7): the binary, called as users will call it once
-# bin/omabox is it (its own front, no hand-off), the suite's own build (tools_ready). BASH_CLI is bash's
-# bin/omabox: parity's bash leg, lib, and the tests of bash itself (its hand-off, its text). An install
-# has no binary: both are its bin/omabox, every command in bash.
-BASH_CLI=$ROOT/bin/omabox
-CLI=$ROOT/build/omabox
-[ "$INSTALLED" = 0 ] || CLI=$BASH_CLI
+# The CLI under test: bin/omabox, as users call it (#324 wave 6-flip): in a checkout the link to
+# ../build/omabox, the suite's own build (tools_ready); in an install the binary itself. BASH_CLI is
+# the test oracle, bash's omabox as it was at the switch (test/oracle/omabox.bash, run from a copy:
+# below), for parity's bash leg and lib until wave 6b ends; an install has none (export-ignored).
+CLI=$ROOT/bin/omabox
+ORACLE=$ROOT/test/oracle/omabox.bash
 # probe NAME ARGS: the Rust helper NAME's answer (`_rust probe`, read-only, its list in probe.rs), what
-# the suite's startup and box tests once sourced bin/omabox for. --installed's binary sits outside its
-# tree (OMABOX_TEST_PROBE).
-PROBE=$ROOT/build/omabox
-[ "$INSTALLED" = 0 ] || PROBE=${OMABOX_TEST_PROBE:-$PROBE}
+# the suite's startup and box tests once sourced bin/omabox for.
+PROBE=$CLI
 probe() { "$PROBE" _rust probe "$@"; }
 P=t$$                      # box name prefix
 export OMABOX_SUITE=$P     # marks what the suite starts on the host, for the leak detector
 TMP=$(mktemp -d)
+# The oracle as bash's leg runs it: a copy of this run's in the checkout's build/ (inside the repo, so
+# a stand-in box that runs each leg's omabox sees it at the same path; its errors say ".../bin/omabox:
+# line N:", as bin/omabox's did), its ROOT this checkout (its self-spawns, `$ROOT/bin/omabox up
+# --owner` and the reaper, reach the binary, as they reached it through the hand-off before), its
+# hand-off cut (RUST= empty: every command stays in bash), and its down's match of a reaper taking
+# the binary's (`ROOT/bin/omabox _reap NAME`, no bash before it: finding 523), as it took the
+# hand-off's `ROOT/build/omabox _reap NAME` before. Never sourced but by lib below.
+ORACLE_DIR=$ROOT/build/oracle/$P
+BASH_CLI=$ORACLE_DIR/bin/omabox
+if [ -f "$ORACLE" ] && [ "$INSTALLED" = 0 ]; then
+  mkdir -p "$ORACLE_DIR/bin"
+  sed -e "s|^ROOT=\$(cd .*|ROOT=$(printf %q "$ROOT")|" -e 's|^RUST=\$ROOT/build/omabox$|RUST=|' \
+    -e 's|pgrep -f ".((/usr/bin/)?bash \$(re_quote "\$ROOT/bin/omabox")|pgrep -f "^(((/usr/bin/)?bash )?$(re_quote "$ROOT/bin/omabox")|' "$ORACLE" > "$BASH_CLI"
+  chmod +x "$BASH_CLI"
+  [ "$(grep -c -e "^ROOT=$(printf %q "$ROOT")\$" -e '^RUST=$' -e 'pgrep -f ".(((/usr/bin/)?bash )?\$(re_quote' "$BASH_CLI")" = 3 ] ||
+    { echo "the test oracle's ROOT= or RUST= line, or its reaper match, is not where the suite sets it"; exit 2; }
+fi
 pass=0 fail=0 failed=() skips=()
 STRICT=${OMABOX_TEST_STRICT:-0}
 # A full run's floor: a test that silently stops checking shows up here even when everything that
@@ -161,7 +178,7 @@ cleanup() {
   rm -f "${XDG_RUNTIME_DIR:-/run/user/$UID}/omabox"/.{lock,down,expired}-"$P"-* 2>/dev/null
   [ ${#SERVERS[@]} = 0 ] || kill "${SERVERS[@]}" 2>/dev/null
   [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
-  rm -rf "$TMP"
+  rm -rf "$TMP" "$ORACLE_DIR"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -362,10 +379,10 @@ reaper_waits() { local r; r=$(pgrep -f "omabox _reap $1 " | head -n 1) && lock_w
 # (from $ROOT it would be "omabox", which `omabox up` in the checkout also takes).
 tmp_repo() { local r=$TMP/$P-$1; mkdir -p "$r" && git -C "$r" init -q && echo "$r"; }
 
-# The CLI's functions without its dispatch at the end, for the pure ones (a file: it finds its ROOT
-# from its own path).
+# The oracle's functions without its dispatch at the end, for the comparisons that read bash's (until
+# wave 6b ends; an install has no oracle).
 mkdir -p "$TMP/lib/bin"
-sed '/^main "\$@"; exit$/d' "$BASH_CLI" > "$TMP/lib/bin/omabox"
+[ ! -f "$BASH_CLI" ] || sed '/^main "\$@"; exit$/d' "$BASH_CLI" > "$TMP/lib/bin/omabox"
 lib() { bash -c 'source "$1"; shift; "$@"' lib "$TMP/lib/bin/omabox" "$@"; }
 
 # --- the leak detector (finding 80) --------------------------------------------------------------
@@ -612,7 +629,7 @@ t_unit_rec_ff() {
   check_eq "every ffmpeg and ffprobe a recording runs in the box goes through rec_ff: bounded, run once more on a timeout (finding 356)" "" "$out"
   check "...the check read them ($calls)" test "${calls% calls}" -ge 14
   # (the check's own: the crate with rec_ff's calls renamed, each of them unbounded)
-  m=$TMP/recff-crate; rm -rf "$m"; cp -r "$src" "$m"
+  m=$TMP/recff-crate; rm -rf "$m"; cp -r "$src" "$m"; chmod -R u+w "$m"   # (an install's tree is read-only)
   sed -i 's/\brec_ff(/sys_ff(/g; s/\bff_line(/sys_line(/g; s/\brec_ff_subst(/sys_subst(/g' "$m/cmd/record_stop.rs"
   check_eq "...it finds the 13 calls finding 356 bounded, rec_ff's taken away" 13 "$(python3 -c "$REC_FF" "$m" | sed '$d' | wc -l)"
   # (rec_ff itself, a run out of time run once more, stuck once, a failure not a timeout:
@@ -1318,25 +1335,7 @@ t_unit_run_named_dead() {
 
 # Finding 345: what runs in the box's pid namespace is given only the fds it is meant to have
 # (fds_only): there any box process could open the others again through /proc/PID/fd, a caller's own
-# (`omabox gdb ... 7<FILE`) included. NS_FDS FILE: each stdio_relay call that is not through fds_only,
-# each nsenter line with -p that neither is an array nor has fds_only, and each line running such an
-# array (ns, caps) outside one, as LINE: TEXT (once a line); then "N calls", how many it read.
-NS_FDS='
-import re, sys
-bad = []; n = 0
-for i, l in enumerate(open(sys.argv[1]), 1):
-    t = l.strip()
-    if t.startswith("#") or t.startswith("stdio_relay()"): continue
-    for m in re.finditer(r"(?<![\w-])stdio_relay\s+(\S+)(\s+(\S+))?", t):
-        n += 1
-        if m.group(1) != "fds_only" and not (m.group(1) == "ns_held" and m.group(3) == "fds_only"): bad.append("%d: %s" % (i, t))
-    if re.search(r"(?<![\w-])nsenter\s", t) and re.search(r"(?<![\w-])-p(?![\w-])", t):
-        n += 1
-        if "fds_only" not in t and not re.search(r"=\(nsenter\s", t): bad.append("%d: %s" % (i, t))
-    if re.search(r"\"\$\{(ns|caps)\[@\]\}\"", t) and "fds_only" not in t and "=(" not in t: bad.append("%d: %s" % (i, t))
-bad = list(dict.fromkeys(bad))
-print("\n".join(bad + ["%d calls" % n]))
-'
+# (`omabox gdb ... 7<FILE`) included. (Bash's NS_FDS scan of bin/omabox went with the flip, #324.)
 # NS_FDS_RS DIR: finding 345 over the crate's sources in DIR (their tests left out), where it holds by
 # construction: a child enters a box only through an enter::Plan applied in exec::command (or in
 # `_enter`'s own exec, enter::main, which box_pty starts with only its fds), and command closes every fd
@@ -1460,102 +1459,19 @@ t_unit_ns_fds() {
   check_eq "every child entering a box's pid namespace keeps only the fds it is given, in the binary (finding 345)" "" "$(sed '$d' <<<"$out")"
   check "...the check read its entries ($n)" test "$n" -ge 8
   # The check itself, on a copy: an entry applied elsewhere, and command's rule taken out, found.
-  t=$TMP/nsfds-rs; rm -rf "$t"; cp -r "$ROOT/crates/omabox/src" "$t"
+  t=$TMP/nsfds-rs; rm -rf "$t"; cp -r "$ROOT/crates/omabox/src" "$t"; chmod -R u+w "$t"   # (an install's tree is read-only)
   printf 'fn planted(c: &mut Command, p: Plan) {\n    p.apply(&mut c);\n}\n' > "$t/planted.rs"
   sed -i 's/let only = fds.only || fds.enter.is_some_and(|p| p.pid_ns());/let only = fds.only;/' "$t/exec.rs"
   check_eq "...on a copy: an entry applied outside command, and command's rule gone, both found" \
     "planted.rs exec.rs" "$(python3 -c "$NS_FDS_RS" "$t" | sed '$d' | cut -d: -f1 | paste -sd' ')"
   rm -rf "$t"
-  out=$(python3 -c "$NS_FDS" "$BASH_CLI")
-  n=$(tail -n 1 <<<"$out"); n=${n%% *}
-  check_eq "every call into the box's pid namespace runs through fds_only (finding 345)" "" "$(sed '$d' <<<"$out")"
-  check "...the check read them ($n calls)" test "$n" -ge 9
-  git -C "$ROOT" cat-file -e 2a611a1:bin/omabox 2>/dev/null || { skip "...it finds the calls fixed in finding 345" "no 2a611a1 (0.6.1) here"; return; }
-  check_eq "...it finds the six calls finding 345 put through it" 6 \
-    "$(python3 -c "$NS_FDS" <(git -C "$ROOT" show 2a611a1:bin/omabox) | sed '$d' | wc -l)"
 }
 
 # #218, finding 307: on_box enters the box's user and mount namespaces, not its pid namespace, so a
 # kill there takes a pid read from the box's /proc as the host's (finding 289: it signalled four host
-# pids once). on_box_kills FILE|DIR...: each on_box call, and each nsenter without -p, whose command
-# (quoted scripts and heredocs included) runs kill, pkill or killall, as FILE:LINE CALL; then "N calls",
-# how many it read. Comments are skipped, and a kill after the call ends (`on_box x; kill $p`) is the
-# host's own, about a host pid.
-ON_BOX_KILLS='
-import os, re, sys
-SQ, DQ = chr(39), chr(34)
-call = re.compile(r"(?<![\w$./^-])(on_box|nsenter)(?![\w-])")
-kill = re.compile(r"(?<![\w$.-])(kill|pkill|killall)(?![\w-])")
-defn = re.compile(r"[ \t]*\(")
-heredoc = re.compile(r"<<-?\s*[" + SQ + DQ + r"]?(\w+)")
-def where(line, end):
-    # The line read up to END: code, string or comment there (quotes, $( in quotes, # comments).
-    stack, i = ["c"], 0
-    while i < end:
-        c, top = line[i], stack[-1]
-        if top == SQ:
-            if c == SQ: stack.pop()
-        elif top == DQ:
-            if c == "\\": i += 1
-            elif c == DQ: stack.pop()
-            elif line.startswith("$(", i): stack.append("c"); i += 1
-        else:
-            if c == "\\": i += 1
-            elif c in SQ + DQ: stack.append(c)
-            elif c == "#" and (i == 0 or line[i - 1] in " \t;("): return "comment"
-            elif c == "(": stack.append("c")
-            elif c == ")" and len(stack) > 1: stack.pop()
-        i += 1
-    return "code" if stack[-1] == "c" else "string"
-def text(s, i):
-    # The simple command from I: up to an unquoted ; & | ) or newline, quotes and heredocs kept.
-    q, depth, j = None, 0, i
-    while j < len(s):
-        c = s[j]
-        if q == SQ:
-            if c == SQ: q = None
-        elif q == DQ:
-            if c == "\\": j += 1
-            elif c == DQ: q = None
-        elif c == "\\": j += 1
-        elif c in SQ + DQ: q = c
-        elif c == "#" and s[j - 1] in " \t": break
-        elif c == "(": depth += 1
-        elif c == ")":
-            if depth == 0: break
-            depth -= 1
-        elif c == "&" and (s[j - 1] in "<>" or s[j + 1:j + 2] == ">"): pass
-        elif depth == 0 and c in ";&|\n": break
-        j += 1
-    t = s[i:j]
-    for m in heredoc.finditer(t):
-        e = re.compile(r"^\s*" + m.group(1) + r"\s*$", re.M).search(s, j)
-        if e: t += s[j:e.end()]
-    return t
-files = []
-for a in sys.argv[1:]:
-    if os.path.isdir(a): files += sorted(os.path.join(d, f) for d, _, fs in os.walk(a) for f in fs)
-    else: files.append(a)
-calls = 0
-for path in files:
-    s = open(path, errors="replace").read()
-    starts = [0] + [m.end() for m in re.finditer(r"\n", s)]
-    for m in call.finditer(s):
-        n = s.count("\n", 0, m.start())
-        line = s[starts[n]:s.find("\n", m.start()) % (len(s) + 1)]
-        if where(line, m.start() - starts[n]) != "code": continue
-        if defn.match(s, m.end()): continue   # its definition
-        t = text(s, m.end())
-        if m.group(1) == "nsenter" and (re.search(r"\s(-p|--pid)\b", t) or "[@]" in t): continue
-        calls += 1
-        k = kill.search(t)
-        if k:
-            print("%s:%d: %s %s" % (path, n + 1 + t.count("\n", 0, k.start()), m.group(1), " ".join(t.split())[:100]))
-print("%d calls" % calls)
-'
-on_box_kills() { python3 -c "$ON_BOX_KILLS" "$@"; }
+# pids once). (Bash's ON_BOX_KILLS scan of bin/omabox went with the flip, #324: ON_BOX_KILLS_RS.)
 t_unit_on_box_kill() {
-  local out calls base
+  local out calls
   # The binary's (#324 wave 6-flip): on_box and its kin over the crate.
   out=$(python3 -c "$ON_BOX_KILLS_RS" "$ROOT/crates/omabox/src")
   calls=${out##*$'\n'}; out=${out%"$calls"}
@@ -1584,39 +1500,6 @@ fn e(ctx: &Ctx) {
 PLANTED
   check_eq "...on planted calls: a kill through on_box by a variable and in a script, found; window.kill, box_exec, a comment and libc::kill not" \
     "planted.rs:3 planted.rs:6 4 calls" "$(python3 -c "$ON_BOX_KILLS_RS" "$t" | sed -E 's/^([^:]*:[0-9]+):.*/\1/' | paste -sd' ')"
-  rm -rf "$t"
-  out=$(on_box_kills "$ROOT/bin/omabox" "$ROOT/share" 2>&1)
-  calls=${out##*$'\n'}; out=${out%"$calls"}
-  check_match "on_box_kills read bin/omabox's calls (else it would pass on nothing)" '^([6-9][0-9]|[1-9][0-9]{2,}) calls$' "$calls"
-  check_eq "no on_box call (nor nsenter without -p) signals: a box's pid there is the host's; kill from box_exec or nsenter -p (finding 289, #218)" "" "$out"
-  # The check itself, on a copy with calls planted: the seven kills found, at their lines; a kill after
-  # the call, Hyprland's window.kill, kill_box, a comment, nsenter -p and timeout -k are not.
-  local t=$TMP/obk; mkdir -p "$t"; cp "$ROOT/bin/omabox" "$t/omabox"; base=$(wc -l < "$t/omabox")
-  cat >> "$t/omabox" <<'PLANTED'
-planted() {
-  on_box kill "$p"
-  x=$(on_box pkill -f shell)
-  on_box timeout 2 /usr/bin/killall quickshell || true
-  on_box sh -c 'p=$(cat "$XDG_RUNTIME_DIR/x.pid")
-    [ -z "$p" ] || kill -TERM "$p"' sh
-  with_mods "$mods" on_box sh <<'END'
-echo x
-kill 5
-END
-  y="$(on_box sh -c "kill -0 $p")"
-  nsenter -t "$bp" -U -m -- kill 7
-  on_box true; kill "$x"
-  on_box tail --pid="$p" -F -- f & kill $!
-  on_box hyprctl dispatch "hl.dsp.window.kill()" 2>&1 | kill_box
-  # on_box kill 1
-  nsenter -t "$bp" -U -m -p -- kill 9
-  on_box timeout -k 1 2 hyprctl version 2>&1
-}
-PLANTED
-  out=$(on_box_kills "$t/omabox" 2>&1 | while IFS=: read -r f l _; do
-    if [ "$f" = "$t/omabox" ]; then echo "$((l - base))"; else echo "$f"; fi; done | paste -sd' ')
-  check_eq "...planted kills through on_box and nsenter -U -m: each found, at its kill's line; the rest not" \
-    "2 3 4 6 9 11 12 $((${calls%% *} + 11)) calls" "$out"
   rm -rf "$t"
 }
 
@@ -1702,18 +1585,41 @@ t_unit_down_jail_race() {
   rm -rf "$r/rt/omabox/uc"
 }
 
-# finding 66: an edit to bin/omabox (linked from ~/.local/bin) while a command runs must not change
-# what that command runs. A copy with a pause, rewritten in place mid-run, as an editor would.
-t_unit_live_edit() {
-  mkdir -p "$TMP/live/bin"
-  sed 's/^main() {$/main() { sleep 1/' "$BASH_CLI" > "$TMP/live/bin/omabox"; chmod +x "$TMP/live/bin/omabox"
-  "$TMP/live/bin/omabox" help > "$TMP/live/out" 2>&1 & local p=$!
-  until_ok 5 pgrep -P "$p" -x sleep >/dev/null   # mid-run: in main's pause (a fixed 0.3 s could come first)
-  python3 -c 'import sys; p = sys.argv[1]; n = len(open(p).read()); open(p, "w").write("#!/bin/bash\n" + "q\n" * n)' "$TMP/live/bin/omabox"
-  wait "$p"; local rc=$?
-  check_eq "an in-place edit mid-run does not break the running command" 0 "$rc"
-  check_match "...which finishes as it started" "omabox up" "$(cat "$TMP/live/out")"
+# The layout (#324 wave 6-flip, proposal D1): bin/omabox is a tracked link to ../build/omabox, the
+# binary install.sh builds, and the binary's ROOT is the parent of the directory it really is in,
+# through any link: a checkout through ~/.local/bin, a package's /usr/bin, and ai-jail's map, where it
+# is alone. Each in a tree of the test's own (the binary copied; VERSION, share/ and tools/ where the
+# layout has them). Finding 66's successor (a command running while its file is replaced) is
+# t_unit_install's rename.
+t_unit_layout() {
+  if [ "$INSTALLED" = 0 ]; then
+    check_eq "bin/omabox is tracked as a link to ../build/omabox" "120000 ../build/omabox" \
+      "$(git -C "$ROOT" ls-files -s bin/omabox | cut -d' ' -f1) $(readlink "$ROOT/bin/omabox")"
+  else check_fails "an install's bin/omabox is the binary, no link" test -L "$ROOT/bin/omabox"; fi
+  local t=$TMP/layout b; rm -rf "$t"
+  b=$(readlink -f "$CLI")
+  # (path takes no box from the tree: its answer is BOXES/NAME; which's refusal names ROOT's guard)
+  rootof() { XDG_RUNTIME_DIR=$TMP "$1" _rust probe root 2>&1; }
+  mkdir -p "$t/co/bin" "$t/co/build" "$t/home/.local/bin"
+  cp "$b" "$t/co/build/omabox"; ln -s ../build/omabox "$t/co/bin/omabox"; ln -s "$t/co/bin/omabox" "$t/home/.local/bin/omabox"
+  check_eq "a checkout: ~/.local/bin/omabox -> bin/omabox -> build/omabox, ROOT the checkout" "$t/co" "$(rootof "$t/home/.local/bin/omabox")"
+  mkdir -p "$t/usr/bin" "$t/usr/lib/omabox/bin"; cp "$b" "$t/usr/lib/omabox/bin/omabox"; ln -s ../lib/omabox/bin/omabox "$t/usr/bin/omabox"
+  check_eq "a package: /usr/bin/omabox -> /usr/lib/omabox/bin/omabox, ROOT /usr/lib/omabox" "$t/usr/lib/omabox" "$(rootof "$t/usr/bin/omabox")"
+  mkdir -p "$t/jail/.local/bin"; cp "$b" "$t/jail/.local/bin/omabox"
+  check_eq "alone, as ai-jail maps it: ROOT ~/.local" "$t/jail/.local" "$(rootof "$t/jail/.local/bin/omabox")"
+  check_eq "...its help, with no file beside it" "omabox: a contained, invisible Hyprland + Omarchy desktop for agents." "$(XDG_RUNTIME_DIR=$TMP "$t/jail/.local/bin/omabox" help 2>&1 | head -n 1)"
+  # VERSION compiled in (A5): a build in a tree whose VERSION differs says its own.
+  echo 9.9.9-tree > "$t/co/VERSION"
+  check_eq "...and its version, compiled in (a tree's VERSION that differs is not read)" "omabox $(cat "$ROOT/VERSION")" \
+    "$(XDG_RUNTIME_DIR=$TMP "$t/co/bin/omabox" --version 2>&1 | head -n 1)"
+  # Not built yet (a fresh clone or worktree): the link dangles, said by the shell.
+  rm "$t/co/build/omabox"
+  check_match "not built: bin/omabox dangles (No such file or directory)" "No such file or directory" "$("$t/co/bin/omabox" help 2>&1)"
+  # A word the binary lacks: the front's unknown command, no hand-off anywhere (exit 2).
+  local out rc; out=$(XDG_RUNTIME_DIR=$TMP "$CLI" _rust-nosuch 2>&1); rc=$?
+  check_eq "an unknown word is the front's unknown command" "2 omabox: unknown command: _rust-nosuch (omabox help lists the commands and their options)" "$rc $out"
   check_eq "session.sh is one block (it runs for the box's life)" "}" "$(tail -n 1 "$ROOT/share/session.sh")"
+  rm -rf "$t"
 }
 
 # Settings (finding 70): `omabox config` in a HOME of the test's own; values that reach the host's Lua
@@ -1723,7 +1629,6 @@ t_unit_config() {
   cfg() { HOME=$h "$CLI" config "$@" 2>&1; }
   # (protect-ports: the Rust half's key, finding 480; bash's half lists the first five)
   local dflt="workspace=9 confirm-close=off bar-icon=always gpu=auto shot-fit=off protect-ports="
-  [ -x "$ROOT/build/omabox" ] || dflt=${dflt% protect-ports=}
   check_eq "defaults" "$dflt" "$(cfg | tr '\n' ' ' | sed 's/ $//')"
   check_eq "set a workspace" workspace=4 "$(cfg workspace 4)"
   # Omarchy 4.5's scratchpad is its Quake console (#292, finding 423): `special` still works, saying
@@ -1751,22 +1656,20 @@ t_unit_config() {
   # protect-ports (finding 480, the Rust half's): what config writes is what up reads. up's reader
   # (net.rs's) on the file it wrote: an isolated box's --allow of a port it lists is refused before
   # anything is made. A config that cannot be read refuses every up (finding 482: S10 fails closed).
-  if [ -x "$ROOT/build/omabox" ]; then
-    local pph=$TMP/conf-pp prt=$TMP/conf-pp-rt; mkdir -p "$pph" "$prt"
-    check_eq "config protect-ports ' 8080, 5432': its normal form" protect-ports=5432,8080 "$(HOME=$pph "$CLI" config protect-ports ' 8080, 5432' 2>&1)"
-    check_eq "...written so in the file" protect-ports=5432,8080 "$(grep protect-ports "$pph/.config/omabox/config")"
-    local ppo ppr; ppo=$(HOME=$pph XDG_RUNTIME_DIR=$prt "$CLI" up "$P-pp" --no-shell --net isolated --allow 9,5432 2>&1); ppr=$?
-    check_eq "...and up reads that value: --allow 5432 refused, exit 1" "1 omabox: up: --allow 5432: a protected port (protect-ports in ~/.config/omabox/config), which no box reaches" "$ppr $ppo"
+  local pph=$TMP/conf-pp prt=$TMP/conf-pp-rt; mkdir -p "$pph" "$prt"
+  check_eq "config protect-ports ' 8080, 5432': its normal form" protect-ports=5432,8080 "$(HOME=$pph "$CLI" config protect-ports ' 8080, 5432' 2>&1)"
+  check_eq "...written so in the file" protect-ports=5432,8080 "$(grep protect-ports "$pph/.config/omabox/config")"
+  local ppo ppr; ppo=$(HOME=$pph XDG_RUNTIME_DIR=$prt "$CLI" up "$P-pp" --no-shell --net isolated --allow 9,5432 2>&1); ppr=$?
+  check_eq "...and up reads that value: --allow 5432 refused, exit 1" "1 omabox: up: --allow 5432: a protected port (protect-ports in ~/.config/omabox/config), which no box reaches" "$ppr $ppo"
+  check_fails "...nothing of the box made" test -e "$prt/omabox/$P-pp"
+  if [ "$(id -u)" != 0 ]; then
+    chmod 000 "$pph/.config/omabox/config"
+    ppo=$(HOME=$pph XDG_RUNTIME_DIR=$prt "$CLI" up "$P-pp" --no-shell 2>&1); ppr=$?
+    check_eq "a config that cannot be read: up refused, exit 2" 2 "$ppr"
+    check_match "...saying why" "config cannot be read \(Permission denied\): no box starts until it can" "$ppo"
     check_fails "...nothing of the box made" test -e "$prt/omabox/$P-pp"
-    if [ "$(id -u)" != 0 ]; then
-      chmod 000 "$pph/.config/omabox/config"
-      ppo=$(HOME=$pph XDG_RUNTIME_DIR=$prt "$CLI" up "$P-pp" --no-shell 2>&1); ppr=$?
-      check_eq "a config that cannot be read: up refused, exit 2" 2 "$ppr"
-      check_match "...saying why" "config cannot be read \(Permission denied\): no box starts until it can" "$ppo"
-      check_fails "...nothing of the box made" test -e "$prt/omabox/$P-pp"
-      chmod 600 "$pph/.config/omabox/config"
-    else skip "a config that cannot be read refuses up" "root reads it"; fi
-  else skip "config protect-ports, as up reads it" "no build/omabox (protect-ports is the Rust half's)"; fi
+    chmod 600 "$pph/.config/omabox/config"
+  else skip "a config that cannot be read refuses up" "root reads it"; fi
   check_eq "default removes it" workspace=9 "$(cfg workspace default)"
   check_eq "the rest of the file is kept" "confirm-close=on bar-icon=auto" "$(grep -v '^#' "$h/.config/omabox/config" | tr '\n' ' ' | sed 's/ $//')"
   echo "workspace=9'); os.execute('x" >> "$h/.config/omabox/config"
@@ -2683,44 +2586,13 @@ print(p.pid, flush=True); time.sleep(60)' "$1" env OMABOX_OWN_SESSION="${2-1}" "
   kill -KILL "$parent" "$pid" 2>/dev/null || true
 }
 
-# The Rust half's binary (#324), for a parity test: in a checkout the suite built it (tools_ready), so
-# one missing fails, never skips (that would hide a thousand cases); an install has none, every command
-# running in bash there.
+# The test oracle (#324 wave 6-flip), for a parity test: a checkout has it (tracked), so one missing
+# fails, never skips (that would hide a thousand cases); an install has none (export-ignored).
 rust_built() {
-  [ -x "$ROOT/build/omabox" ] && return 0
-  if [ "$INSTALLED" = 1 ]; then skip "$1" "no build/omabox (an install: every command runs in bash)"
-  else no "$1" "no build/omabox in this checkout (the suite builds it: tools_ready)"; fi
+  [ -x "$BASH_CLI" ] && return 0
+  if [ "$INSTALLED" = 1 ]; then skip "$1" "no test oracle (an install has none: bash's omabox is not shipped)"
+  else no "$1" "no test oracle in this checkout ($ORACLE)"; fi
   return 1
-}
-
-# The Rust half (#324): bin/omabox hands the commands in RUST_CMDS to build/omabox with main's
-# words (-b after the command, a command's --opt=value split); OMABOX_BASH=1 keeps them in bash; a command the
-# binary lacks (one older than its bash) goes back to bash, told not to hand it over again.
-t_unit_rust_handoff() {
-  local out rc
-  check_eq "a taken-over command runs in Rust, with main's words" "rust -b b1 x" "$("$BASH_CLI" _rust -b b1 x 2>&1)"
-  out=$(OMABOX_BASH=1 "$BASH_CLI" _rust 2>&1); rc=$?
-  check_eq "OMABOX_BASH=1: bash keeps it (it has no _rust: exit 2)" "2 omabox: unknown command: _rust (omabox help lists the commands and their options)" "$rc $out"
-  out=$(OMABOX_ROOT=$ROOT "$ROOT/build/omabox" _rust-nosuch 2>&1); rc=$?
-  check_eq "a command the binary lacks goes back to bash" "2 omabox: unknown command: _rust-nosuch (omabox help lists the commands and their options)" "$rc $out"
-  # Never to itself (wave 6-front, A2): with bin/omabox the binary (a copy, or the flip's link to
-  # ../build/omabox), a word it lacks is one line and 126, not a loop (timeout: 124 if it loops).
-  local t=$TMP/rh
-  rm -rf "$t"; mkdir -p "$t/a/bin" "$t/b/bin" "$t/b/build"
-  cp "$ROOT/build/omabox" "$t/a/bin/omabox"; cp "$ROOT/build/omabox" "$t/b/build/omabox"; ln -s ../build/omabox "$t/b/bin/omabox"
-  out=$(OMABOX_ROOT=$t/a timeout 10 "$t/a/bin/omabox" _rust-nosuch 2>&1); rc=$?
-  check_eq "...not to itself: bin/omabox this binary, one line, exit 126" \
-    "126 omabox: this omabox has no command _rust-nosuch, and no bash omabox to hand it to ($t/a/bin/omabox is this binary)" "$rc $out"
-  out=$(OMABOX_ROOT=$t/b timeout 10 "$t/b/build/omabox" _rust-nosuch 2>&1); rc=$?
-  check_eq "...nor through bin/omabox linked to it" \
-    "126 omabox: this omabox has no command _rust-nosuch, and no bash omabox to hand it to ($t/b/bin/omabox is this binary)" "$rc $out"
-  # A5: the version it was built from, not its tree's file (a build older than its checkout).
-  mkdir -p "$t/v/build"; cp "$ROOT/build/omabox" "$t/v/build/omabox"; echo 9.9.9-tree > "$t/v/VERSION"
-  check_eq "a build in a tree whose VERSION differs says its own" "omabox $(cat "$ROOT/VERSION")" "$(XDG_RUNTIME_DIR=$TMP "$t/v/build/omabox" --version 2>&1 | head -n 1)"
-  # Called straight, the binary runs its own front: the words as a user gives them.
-  check_eq "called straight: its own front (-b moved after the command)" "rust -b b1 x" "$("$ROOT/build/omabox" _rust -b b1 x 2>&1)"
-  out=$("$ROOT/build/omabox" _rust-nosuch 2>&1); rc=$?
-  check_eq "...and an unknown word is the front's unknown command" "2 omabox: unknown command: _rust-nosuch (omabox help lists the commands and their options)" "$rc $out"
 }
 
 # The Rust half's parity (#324), which every wave reuses: `parity LABEL ARGS...` runs `omabox ARGS` both
@@ -2773,7 +2645,7 @@ rp_differs() {
   [ -n "$fb" ] && [ "$fb" = "$fr" ] || rp_bad+="the expected difference names fields [$fb] for bash, [$fr] for Rust: one set, both sides; "
   rp_fields=$fb
   for side in bash "${others[@]}"; do
-    ws=("${rp_bash[@]}"); [ "$side" = bash ] || [ ! -x "$ROOT/build/omabox" ] || ws=("${rp_rust[@]}")
+    ws=("${rp_bash[@]}"); [ "$side" = bash ] || ws=("${rp_rust[@]}")
     for w in "${ws[@]}"; do
       [[ $w =~ $re ]] || { rp_bad+="$side: '$w' is not FIELD=TEXT, FIELD~ERE or FIELD!~ERE; "; continue; }
       f=$d/$side.${BASH_REMATCH[1]} op=${BASH_REMATCH[2]} want=${BASH_REMATCH[3]}
@@ -2795,27 +2667,22 @@ rp_differs() {
     done
   done
   rm -f "$d"/*.rest
-  [ -x "$ROOT/build/omabox" ] || return 0
   for o in "${others[@]}"; do
     for f in $rp_fields; do cmp -s "$d/bash.$f" "$d/$o.$f" && rp_bad+="$f: the same both ways ($o), so no difference; "; done
   done
   return 0
 }
-# The legs (wave 6-front): bash (BASH_CLI, OMABOX_BASH=1) and direct ($CLI, the binary called as users
-# will call it once it is bin/omabox: its own front, no OMABOX_ROOT, no environ fd), compared. The
-# hand-off leg (bash's front handing the command over, A2) went at A7; RP_LEGS="rust direct" runs it
-# too, for a local look; an expected difference's rp_rust is every leg's. Under --installed (no
-# binary) $CLI is bash's bin/omabox: bash both ways.
+# The legs: bash (the oracle, BASH_CLI, OMABOX_BASH=1) and direct ($CLI, bin/omabox: the binary as
+# users call it), compared. The hand-off leg (bash's front handing the command over, A2) went at A7,
+# and with the flip (#324 wave 6-flip) the hand-off itself; an expected difference's rp_rust is the
+# direct leg's. Under --installed there is no oracle: rust_built skips.
 # A parity wrap that runs the leg's omabox in a stand-in box: rp_wrap=(bash -c "$RP_IN_BOX" rp-in CLI BOX
 # [WORDS...]). --pass OMABOX_BASH only where the leg sets it: the direct leg has none, and a --pass of
 # it there is refused (125), as every leg's was at 27d9613 while the binary could not see it (finding
 # 514), so those parity cases compared nothing.
 # shellcheck disable=SC2016 # the wrap's bash expands them
 RP_IN_BOX='c=$1 b=$2; shift 2; exec "$c" run -b "$b" ${OMABOX_BASH+--pass OMABOX_BASH} -- "$@"'
-rp_legs() {
-  if [ ! -x "$ROOT/build/omabox" ]; then echo direct
-  else echo "${RP_LEGS:-direct}"; fi
-}
+rp_legs() { echo direct; }
 parity() {
   local label=$1 side d=$TMP/rp-out.$BASHPID legs cli; shift
   local -a legenv
@@ -2823,13 +2690,14 @@ parity() {
   # (RP_ONLY=RE: only the cases whose label matches, to work on a few; RP_DIFF=FILE: a failing case's
   # whole difference appended there)
   [ -z "${RP_ONLY:-}" ] || [[ $label =~ $RP_ONLY ]] || { rp_why="" rp_bash=() rp_rust=(); return 0; }
+  # (no oracle, an install's case: skipped, as rust_built skips the unit tier's)
+  [ -x "$BASH_CLI" ] || { skip "$label" "no test oracle (an install has none)"; rp_why="" rp_bash=() rp_rust=(); return 0; }
   mkdir -p "$d"
   for side in bash "${legs[@]}"; do
     [ -z "$rp_prep" ] || "$rp_prep"
     cli=$BASH_CLI
     case $side in
       bash) legenv=(OMABOX_BASH=1) ;;
-      rust) legenv=(OMABOX_BASH=) ;;
       *) legenv=() cli=$CLI ;;
     esac
     (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL -u OMABOX_RELAY_DEFAULT -u SELECT_PLAIN -u OMABOX_BASH \
@@ -3019,8 +2887,8 @@ t_unit_rust_parity() {
   }
   rp_prep=rp_fixture
   rp_fixture
-  check_eq "path runs in the binary, no bash behind it" "$r/rt/omabox/dead1" \
-    "$(cd "$r/norepo" && XDG_RUNTIME_DIR=$r/rt OMABOX_ROOT=/nonexistent "$ROOT/build/omabox" path dead1 2>&1)"
+  check_eq "path runs in the binary" "$r/rt/omabox/dead1" \
+    "$(cd "$r/norepo" && XDG_RUNTIME_DIR=$r/rt "$CLI" path dead1 2>&1)"
   parity "path: the default box's dir" path
   parity "path NAME" path dead1
   parity "path -b NAME" path -b dead1
@@ -3309,19 +3177,19 @@ t_unit_rust_parity() {
   # stand-ins' Hyprland that does not answer.
   local v
   for v in LAYER_SPAN_JQ WIN_JQ WIN_SEL_JQ WIN_DESC_JQ DESK_FACTS_JQ DESK_TARGET_JQ LAYER_LIST_JQ JQ_MON CLIP_BOX_COPY CLIP_BOX_TYPES AGENT_MARKS; do
-    check_eq "the Rust half's $v is bash's" "$(lib eval "printf %s \"\$$v\"")" "$("$ROOT/build/omabox" _rust-jq "$v")"
+    check_eq "the Rust half's $v is bash's" "$(lib eval "printf %s \"\$$v\"")" "$("$CLI" _rust-jq "$v")"
   done
   # Its programs that are inline in bash's functions: each in bash's omabox (BASH_CLI) as it is (a
   # path, .[0] and length aside).
   local script p missing="" n=0; script=$(cat "$BASH_CLI")
-  while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"$p"* ]] || missing+="[$p] "; done < <("$ROOT/build/omabox" _rust-jq --inline)
+  while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"$p"* ]] || missing+="[$p] "; done < <("$CLI" _rust-jq --inline)
   check_eq "the Rust half's $n inline jq programs are in bash's omabox, byte for byte" "" "$missing"
   # record's (recprog.rs, wave 4b): each as bash's omabox has it between its quotes, and what
   # gen_recprog.py takes out of it now.
   n=0 missing=""
-  while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"'$p'"* ]] || missing+="[$p] "; done < <("$ROOT/build/omabox" _rust-jq --recprog)
+  while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"'$p'"* ]] || missing+="[$p] "; done < <("$CLI" _rust-jq --recprog)
   check_eq "record's $n programs are in bash's omabox, quoted as they are there" "" "$missing"
-  check "...and recprog.rs is what gen_recprog.py takes out of bash's omabox" cmp -s <("$ROOT/build/omabox" _rust-jq --recprog) <(python3 -I "$ROOT/crates/omabox/gen_recprog.py" "$BASH_CLI" --list)
+  check "...and recprog.rs is what gen_recprog.py takes out of bash's omabox" cmp -s <("$CLI" _rust-jq --recprog) <(python3 -I "$ROOT/crates/omabox/gen_recprog.py" "$BASH_CLI" --list)
   rp_w3() {
     rp_w2
     local d=$r/rt/omabox c
@@ -5283,7 +5151,7 @@ PYEOF
 )
     local tf=$r/rt/omabox/fki/run/omabox.appid.WAYLAND-2 tok=${rp4_tok:-}
     # (BASH:RUST, where the halves differ on purpose; both bash's under --installed)
-    case $tok in *:*) if [ "$1" = bash ] || [ ! -x "$ROOT/build/omabox" ]; then tok=${tok%%:*}; else tok=${tok#*:}; fi ;; esac
+    case $tok in *:*) if [ "$1" = bash ]; then tok=${tok%%:*}; else tok=${tok#*:}; fi ;; esac
     case $tok in
       gone) [ ! -e "$tf" ] || why+="${why:+; }its class token left" ;;
       kept) [ -e "$tf" ] || why+="${why:+; }its class token gone" ;;
@@ -5296,8 +5164,8 @@ PYEOF
     local label=$1 side bad=0; shift
     for side in bash rust; do
       "$rp_prep"
-      local how=OMABOX_BASH=1 cli=$BASH_CLI; [ "$side" = bash ] || how=OMABOX_BASH= cli=$CLI
-      (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
+      local how=(OMABOX_BASH=1) cli=$BASH_CLI; [ "$side" = bash ] || how=() cli=$CLI
+      (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME ${rp_env[@]+"${rp_env[@]}"} ${how[@]+"${how[@]}"} XDG_RUNTIME_DIR="$rp_rt" \
         ${rp_wrap[@]+"${rp_wrap[@]}"} "$cli" "$@" >/dev/null 2>&1 </dev/null) || true
       rp4_safe "$side" || bad=1
     done
@@ -5310,8 +5178,8 @@ PYEOF
     for side in bash rust; do
       want=$wb; [ "$side" = bash ] || want=$wr
       "$rp_prep"
-      local how=OMABOX_BASH=1 cli=$BASH_CLI; [ "$side" = bash ] || how=OMABOX_BASH= cli=$CLI
-      rc=0; (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME ${rp_env[@]+"${rp_env[@]}"} "$how" XDG_RUNTIME_DIR="$rp_rt" \
+      local how=(OMABOX_BASH=1) cli=$BASH_CLI; [ "$side" = bash ] || how=() cli=$CLI
+      rc=0; (cd "$rp_dir" && env -u OMABOX -u OMABOX_NAME ${rp_env[@]+"${rp_env[@]}"} ${how[@]+"${how[@]}"} XDG_RUNTIME_DIR="$rp_rt" \
         ${rp_wrap[@]+"${rp_wrap[@]}"} "$cli" "$@" >/dev/null 2>&1 </dev/null) || rc=$?
       [ "$rc" = "${want%% *}" ] || { bad=1 why+="${why:+; }$side: exit $rc, not ${want%% *}"; }
       rp4_want=${want#* } rp4_safe "$side" || bad=1
@@ -5357,7 +5225,7 @@ PYEOF
   rp_wrap=(env RP_LINGER=2 "$r/rp-sig" group-TERM "$st/create-sent")
   rp_why=453 rp_bash=('state~^output remove WAYLAND-2') rp_rust=('state~^output remove WAYLAND-2')
   parity "monitor add, interactive, and group-TERM before the create reaches the box: removed after it, the token gone (finding 429)" monitor -b fki add 800x600
-  local rp4_rm="remove create remove"; [ ! -x "$ROOT/build/omabox" ] || rp4_rm="create remove"
+  local rp4_rm="create remove"
   check_eq "...a remove before the create, then one after it (bash); one after it (Rust)" "$rp4_rm" \
     "$(grep -oE '^output (create|remove)' "$st/hypr.log" | sed 's/output //' | paste -sd' ')"
   rp_wrap=(env RP_LINGER=2 "$r/rp-sig" group-HUP "$st/create-sent") rp4_want="" rp4_tok=""
@@ -5404,7 +5272,7 @@ PYEOF
   # token stays, for a box that has yet to read it (there is none to read it here).
   rp4_hang() { rp4_imain; echo 12 > "$st/create.arrive"; }
   rp_wrap=() rp4_pre=(rp4_hang) rp4_want=none rp4_tok=kept
-  local rp4_rm2=2; [ ! -x "$ROOT/build/omabox" ] || rp4_rm2=1
+  local rp4_rm2=1
   parity "monitor add, interactive, the create past timeout 10: unclear, removed, nothing made (finding 429)" monitor -b fki add 800x600
   check_eq "...the box never got it, the remove sent (twice in bash, once in Rust)" "0 $rp4_rm2" \
     "$(grep -c '^output create' "$st/hypr.log" 2>/dev/null || true) $(grep -c '^output remove WAYLAND-2' "$st/hypr.log" 2>/dev/null || true)"
@@ -5586,7 +5454,6 @@ EOF
   rp_also=rp_also
   rp_rj_prep() { rm -rf "$r/out"; mkdir -p "$r/out"; echo "a video" > "$r/out/old.mp4"; printf 'old\t1\n' > "$r/out/old.marks.tsv"; }
   rp_prep=rp_rj_prep
-  local -x RP_LEGS=direct
   parity "jailed: ls goes to the broker, with the caller's default box and PATH" ls
   parity "jailed: -b N path" -b rjx path
   parity "jailed: run --pass, its value as an entry (the real relay reads --env-fd)" run --pass RJ_SECRET -- env
@@ -5664,9 +5531,11 @@ EOF
   parity "jailed: ls, no broker on the socket: 1" ls
   rm -f "$r/rt/omabox/.broker/sock"; mv "$r/rt/omabox/.broker/sock.away" "$r/rt/omabox/.broker/sock"
 
-  # Alone, as ai-jail maps it: bash's file and the binary, each alone in a HOME's .local/bin.
+  # Alone, as ai-jail maps it: bash's file (the oracle as it was, its ROOT its own dir's parent, its
+  # hand-off cut) and the binary, each alone in a HOME's .local/bin.
   mkdir -p "$r/a-bash/.local/bin" "$r/a-rust/.local/bin" "$r/abin"
-  cp "$BASH_CLI" "$r/a-bash/.local/bin/omabox"; cp "$ROOT/build/omabox" "$r/a-rust/.local/bin/omabox"
+  sed 's|^RUST=\$ROOT/build/omabox$|RUST=|' "$ORACLE" > "$r/a-bash/.local/bin/omabox"; chmod +x "$r/a-bash/.local/bin/omabox"
+  cp -L "$CLI" "$r/a-rust/.local/bin/omabox"
   cp "$r/bin/unshare" "$r/abin/unshare"
   cat > "$r/abin/omabox-relay" <<'EOF'
 #!/bin/bash
@@ -5755,7 +5624,7 @@ t_unit_rust_front() {
   # binary's own front (front.rs), the other two bash's.
   local k want got bad=""
   for k in $(lib eval 'echo "${!CMD_OPTS[@]}"') $(lib eval 'echo $COMMANDS') screenshot logs list _reap; do
-    want=$(lib cmd_opts "$k" 2>/dev/null | xargs) got=$("$ROOT/build/omabox" _rust-opts "$k" 2>/dev/null | xargs)
+    want=$(lib cmd_opts "$k" 2>/dev/null | xargs) got=$("$CLI" _rust-opts "$k" 2>/dev/null | xargs)
     [ "$want" = "$got" ] || bad+="$k: bash [$want] rust [$got]; "
   done
   check_eq "each command's options are bash's CMD_OPTS" "" "$bad"
@@ -5800,27 +5669,25 @@ t_unit_rust_front() {
   parity "--version --json=1" --version --json=1
   # (bash's first line refuses it in bash's words, the hand-off's too; the direct leg in omabox's)
   rp_why=501 rp_bash=(err~'^.*bin/omabox: line [0-9]+: XDG_RUNTIME_DIR: XDG_RUNTIME_DIR is not set$') rp_rust=('err=omabox: XDG_RUNTIME_DIR is not set')
-  RP_LEGS=direct rp_rt="" rp_snap=0 parity "an empty XDG_RUNTIME_DIR" help
+  rp_rt="" rp_snap=0 parity "an empty XDG_RUNTIME_DIR" help
   # A3, the broker's side: broker_init and broker_check, run before any command, omabox's own `_`
   # ones too. Its fixture: a stand-in jail, a copy of bash named ai-jail starting a real bwrap with a
   # pid namespace of its own (as ai-jail does; the broker trusts the names, not the files), whose
-  # caller reaches a broker of each leg through omabox-relay (bash's, the hand-off's, the binary's
-  # own), on a HOME of the test's own. rp_wrap's jcall picks the leg's broker by OMABOX_BASH, as
-  # parity sets it.
+  # caller reaches a broker of each leg through omabox-relay (the oracle's, the binary's), on a HOME
+  # of the test's own. rp_wrap's jcall picks the leg's broker by OMABOX_BASH, as parity sets it.
   local R=$ROOT/tools/relay/omabox-relay leg
   if [ -x "$R" ]; then
     mkdir -p "$r/aj" "$r/proj/hidden" "$r/home"
     cp "$(command -v bash)" "$r/aj/ai-jail"
-    for leg in bash rust direct; do
+    for leg in bash direct; do
       local bcmd=(/usr/bin/env OMABOX_BASH=1 "$BASH_CLI")
-      [ "$leg" != rust ] || bcmd=(/usr/bin/env OMABOX_BASH= "$BASH_CLI")
-      [ "$leg" != direct ] || bcmd=("$ROOT/build/omabox")
+      [ "$leg" != direct ] || bcmd=("$CLI")
       HOME=$r/home XDG_RUNTIME_DIR=$r/rt "$R" listen --socket "$r/b-$leg.sock" -- "${bcmd[@]}" >/dev/null 2>&1 & SERVERS+=($!)
     done
-    for leg in bash rust direct; do until_ok 5 test -S "$r/b-$leg.sock" >/dev/null; done
+    for leg in bash direct; do until_ok 5 test -S "$r/b-$leg.sock" >/dev/null; done
     # (JAIL_OUT=1: the caller in a bwrap whose parent is not ai-jail; JAIL_NET=0: --unshare-net)
     printf '%s\n' '#!/bin/bash' \
-      'leg=direct; [ "${OMABOX_BASH+x}" != x ] || { leg=rust; [ "$OMABOX_BASH" != 1 ] || leg=bash; }' \
+      'leg=direct; [ "${OMABOX_BASH:-}" != 1 ] || leg=bash' \
       'shift; r=$JC_DIR; cd "$r/proj" || exit 99' \
       'if [ -n "${JAIL_OUT:-}" ]; then exec bwrap --unshare-pid --die-with-parent --ro-bind / / --dev /dev --proc /proc -- "$JC_RELAY" call "$r/b-$leg.sock" -- "$@"; fi' \
       'net=(); [ "${JAIL_NET:-1}" = 1 ] || net=(--unshare-net)' \
@@ -5858,7 +5725,7 @@ t_unit_rust_front() {
     # (protect-ports: bash's broker knew no such key; the binary's names why it refuses it)
     rp_why=502 rp_bash=("err=omabox: config: a jailed agent does not change omabox's settings")
     rp_rust=("err=omabox: config: protect-ports is not for a jailed agent (which host ports are protected is the user's to know)")
-    RP_LEGS=direct parity "broker: config protect-ports refused, said why (#373)" config protect-ports
+    parity "broker: config protect-ports refused, said why (#373)" config protect-ports
     JAIL_OUT=1 parity "broker: a caller in no ai-jail" ls
     JAIL_OUT=1 parity "broker: ...run's own code then" run -- true
     JAIL_NET=0 parity "broker: a jail without the network: ls" ls
@@ -5875,7 +5742,7 @@ t_unit_rust_front() {
   # it came (bash's own +1 undone by exec) and no `_`; the binary passes the caller's as they are.
   rp_env=(SHLVL=3 _=/caller) rp_sed='/^(SHLVL|_)=/!d'
   rp_why=504 rp_bash=(out=SHLVL=3) rp_rust=($'out=SHLVL=3\n_=/caller')
-  RP_LEGS=direct parity "a host child's SHLVL and _ (guard exec)" guard exec -- /usr/bin/env
+  parity "a host child's SHLVL and _ (guard exec)" guard exec -- /usr/bin/env
   rp_env=() rp_sed=""
   parity "-b N shot --help" -b rpf shot --help
   parity "-b N run -h" -b rpf run -h
@@ -7723,17 +7590,18 @@ t_leak_control() {
 # jailed caller is refused, without a jail.
 t_unit_jail_policy() {
   local d=$TMP/jp; mkdir -p "$d/proj/in" "$d/other" "$d/under/x"
-  # (wave 6-front, A3: each read both ways, the Rust half's broker_side the same bytes and status;
-  # what differs is gathered in JP_DIFF and checked at the end)
+  # (wave 6-front, A3: each read both ways, the binary's broker_side the same bytes and status as
+  # the oracle's; what differs is gathered in JP_DIFF and checked at the end. An install has no
+  # oracle: the binary's answers alone are checked.)
   JP_DIFF=""
   jp_both() {
     local jpin=$TMP/jp-in.$BASHPID b r brc=0 rrc=0
     if [ "$1" = jail_policy ]; then cat > "$jpin"; else : > "$jpin"; fi
-    b=$(lib "$@" < "$jpin" 2>&1) || brc=$?
-    if [ -x "$ROOT/build/omabox" ]; then
-      r=$("$ROOT/build/omabox" _rust-jail "$@" < "$jpin" 2>&1) || rrc=$?
+    r=$("$CLI" _rust-jail "$@" < "$jpin" 2>&1) || rrc=$?
+    if [ -f "$BASH_CLI" ]; then
+      b=$(lib "$@" < "$jpin" 2>&1) || brc=$?
       [ "$b|$brc" = "$r|$rrc" ] || JP_DIFF+="$*: bash [$b] $brc, rust [$r] $rrc; "
-    fi
+    else b=$r brc=$rrc; fi
     [ -z "$b" ] || printf '%s\n' "$b"
     return "$brc"
   }
@@ -7847,7 +7715,7 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   check_match "seed_spec refuses the renamed folder's masked file" "does not go into the box" \
     "$(cd "$d/proj" && OMABOX_JAIL="$("$PROBE" _rust-jail jail_mounts "$jp" "$mi" | jq -c '. + {id: "1 2", cwd: ""}')" probe seed_spec "config2/.env:.config/leak" 2>&1)"
   # (git_rev for a jailed caller, #198 security: install.rs's git_rev_runs_no_git_for_a_jailed_caller)
-  [ ! -x "$ROOT/build/omabox" ] || check_eq "jail_policy and jail_mounts: the Rust half's broker reads each case as bash's" "" "$JP_DIFF"
+  check_eq "jail_policy and jail_mounts: the Rust half's broker reads each case as bash's" "" "$JP_DIFF"
 }
 
 # #210: a jailed caller's folder goes into its box with what the jail hides in it covered again, and the
@@ -8004,10 +7872,9 @@ t_run_stdio() {
   # The leader of the command's session in the box (finding 494) is a fork of omabox: it showed the
   # caller's whole call, so `run -- pgrep -f WORD` found it by the command's own words (finding 511).
   check_fails "run -- pgrep -f WORD: nothing in the box has the words of run's own call (finding 511)" ob run -b "$B" -- pgrep -f t511-word
-  # (the keeper is the binary's: bash's nsenter waits outside the box, an install's every command)
+  # (the keeper is the binary's: bash's nsenter waited outside the box)
   # shellcheck disable=SC2016 # the box's sh expands it
-  [ "$CLI" = "$BASH_CLI" ] ||
-    check_eq "...the session's leader shows its name alone" omabox-session "$(ob run -b "$B" -- sh -c 'tr -d "\0" < /proc/$PPID/cmdline' 2>&1)"
+  check_eq "...the session's leader shows its name alone" omabox-session "$(ob run -b "$B" -- sh -c 'tr -d "\0" < /proc/$PPID/cmdline' 2>&1)"
   # --pass of a variable omabox takes out of its own environment (OMABOX_BASH, for this call only):
   # the caller's, as it came (finding 514; the binary said it was not there).
   # shellcheck disable=SC2016 # the box's sh expands it
@@ -8122,19 +7989,10 @@ signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGURG}); os.execv(sys.argv[1],
     cat "$d/held.$i" >> "$d/held.err"
   done
   hits=$(ob run -b "$B" -- sh -c 'wc -l < /tmp/held-hits' 2>/dev/null) || hits=0
-  # The Rust half's entry makes the command's stderr the caller's before the exec, so no box process
+  # The binary's entry makes the command's stderr the caller's before the exec, so no box process
   # holds that stderr at all (finding 490; bash's nsenter left it to the inner bash's first line).
-  if [ -x "$ROOT/build/omabox" ]; then
-    check_eq "a box process looking for the entry's stderr in 10 runs: never finds it" "0|0000000000" "${hits:-0}|$rcs"
-    check_fails "...nothing of its in any stderr" grep -q 'forged' "$d/held.err"
-  elif [ "${hits:-0}" -gt 0 ]; then
-    check_eq "a box process writing to nsenter's stderr ($hits times in 10 runs): every run's status 0" 0000000000 "$rcs"
-    check_fails "...no line in omabox's words from it" grep -q 'forged-in-box' "$d/held.err"
-    check_fails "...no escape" grep -q $'\e' "$d/held.err"
-    check "...at most 3 nsenter lines a run (got $forged)" test "$forged" -le 3
-    check "...no flood: $(stat -c %s "$d/held.err") bytes in all 10 stderrs" test "$(stat -c %s "$d/held.err")" -lt 8000
-    check "...each run returns promptly (the slowest: $max ms)" test "$max" -lt 4000
-  else skip "a box process writing to nsenter's stderr" "its writer never caught one in 10 runs"; fi
+  check_eq "a box process looking for the entry's stderr in 10 runs: never finds it" "0|0000000000" "${hits:-0}|$rcs"
+  check_fails "...nothing of its in any stderr" grep -q 'forged' "$d/held.err"
   ob down "$B" >/dev/null 2>&1
 }
 # HELD_WRITER, in a box: writes other output (escapes, 64 KiB) to nsenter's stderr of the box's
@@ -8514,7 +8372,7 @@ t_jail() {
   # The broker as systemd starts it: a few variables, the socket handed over. It runs the binary
   # straight where there is one (wave 6-front, A3: its own front and broker side), as it will once
   # bin/omabox is the binary.
-  local bcli=$CLI; [ ! -x "$ROOT/build/omabox" ] || bcli=$ROOT/build/omabox
+  local bcli=$CLI
   env -i HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" LANG="${LANG:-C.UTF-8}" USER="$USER" \
     systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$bcli" >"$br/log" 2>&1 & SERVERS+=($!)
   until_ok 5 test -S "$br/sock" >/dev/null
@@ -8742,7 +8600,7 @@ t_jail_recipe() {
   [ -x "$R" ] || { no "omabox in ai-jail with the recipe's maps" "tools/relay not built"; return; }
   mkdir -p "$br"; repo=$(tmp_repo jrecipe); echo hi > "$repo/README"
   env -i HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" LANG="${LANG:-C.UTF-8}" USER="$USER" \
-    systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$ROOT/build/omabox" >"$br/log" 2>&1 & SERVERS+=($!)
+    systemd-socket-activate -E HOME -E XDG_RUNTIME_DIR -E LANG -E USER -l "$br/sock" "$R" listen -- "$CLI" >"$br/log" 2>&1 & SERVERS+=($!)
   until_ok 5 test -S "$br/sock" >/dev/null
   cat > "$repo/t.sh" <<EOF
 export PATH=\$HOME/.local/bin:/usr/bin
@@ -8759,7 +8617,7 @@ r usage omabox windows -b $B --jsno
 r host omabox host -- true
 r down omabox down $B
 EOF
-  out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$ROOT/build/omabox:$HOME/.local/bin/omabox" \
+  out=$(cd "$repo" && timeout 180 ai-jail --no-save-config --map "$CLI:$HOME/.local/bin/omabox" \
     --map "$R:$HOME/.local/bin/omabox-relay" --map "$ROOT/skill" --map "$br" --env OMABOX_BROKER_SOCK="$br/sock" bash t.sh </dev/null 2>&1)
   printf '%s\n' "$out" > "$TMP/jail-recipe.out"
   sect() { awk -v s="== $1" '$0 == s {on = 1; next} /^== / {on = 0} on' "$TMP/jail-recipe.out" | tr '\n' ' '; }
@@ -8926,9 +8784,6 @@ EOF
   mkdir -p "$TMP/rt-ls2/omabox/$P-lsd"; echo '{"mode":"headless","size":"1x1@60","net":"none","idle":0}' > "$TMP/rt-ls2/omabox/$P-lsd/box.json"
   check_eq "ls: a dir with box.json and no info.json is listed, dead" "$P-lsd dead" \
     "$(XDG_RUNTIME_DIR=$TMP/rt-ls2 "$CLI" ls --json | jq -r '.[] | "\(.name) \(.state)"')"
-  # --from's save dir is resolved once, in an assignment (finding 163): a $(save_dir ...) inside cp's
-  # argument is not an error under set -e, and a save removed meanwhile made the source /home/.
-  check_fails "no \$(save_dir ...) inside a cp argument" grep -n 'cp .*\$(save_dir' "$ROOT/bin/omabox"
   # run -d's -q, --print-log and --replace (issues #42, #29; findings 109, 110)
   check_match "run -q without -d refused" "go with -d" "$(ob run -b "$P-x" -q -- true 2>&1)"
   check_match "run --replace without -d refused" "go with -d" "$(ob run -b "$P-x" --replace -- true 2>&1)"
@@ -9040,11 +8895,8 @@ t_unit_keys_to_box() {
   check_match "...and ls says so under the box" "^  keys-to-box: on" "$(XDG_RUNTIME_DIR=$rt "$CLI" ls | sed -n 3p)"
   if command -v luac >/dev/null; then check "passthrough.lua compiles" luac -p "$ROOT/share/passthrough.lua"
   else skip "passthrough.lua compiles" "no luac"; fi
-  # (#110: each side a number first; two empty extractions compared equal)
-  local lv cv; lv=$(sed -n 's/^local VERSION = \([0-9]*\)$/\1/p' "$ROOT/share/passthrough.lua"); cv=$(sed -n 's/^PASS_VERSION=\([0-9]*\) .*/\1/p' "$BASH_CLI")
-  check_match "passthrough.lua's VERSION read" '^[0-9]+$' "$lv"
-  check_match "PASS_VERSION read" '^[0-9]+$' "$cv"
-  check_eq "PASS_VERSION is passthrough.lua's VERSION" "$lv" "$cv"
+  # (the binary reads passthrough.lua's VERSION at build time, #368: reap.rs
+  # pass_check_is_the_lua_version; a build fails without it)
 }
 
 # finding 88: an agent session's default box is its own.
@@ -11892,7 +11744,7 @@ t_unit_setup() {
 echo "%s $*" >> "$HOME/stub.log"
 ' "$a" > "$sst/$a"; chmod +x "$sst/$a"; done
     for a in ' n' 'n ' $'	N'; do
-      for hf in 1 ""; do
+      for hf in $([ ! -f "$BASH_CLI" ] || echo 1) ""; do
         rm -rf "$sh2"; mkdir -p "$sh2"
         printf '%s
 ' "$a" | env -u CLAUDE_CONFIG_DIR -u CODEX_HOME HOME="$sh2" XDG_DATA_HOME="$sh2/.local/share" XDG_CACHE_HOME="$sh2/.cache" \
@@ -15884,8 +15736,7 @@ t_monitors_window() {
   check_match "...the box stays up" " up " "$("${in[@]}" ls | grep '^wm ')"
   "${in[@]}" monitor -b wm remove WAYLAND-4 >/dev/null 2>&1
   # (read at once: the remove waits for the screens' new scales, #382, finding 519; bash's does not)
-  [ "$CLI" = "$BASH_CLI" ] ||
-    check_eq "...the main screen at scale 1 as the remove returns" 1 "$("${in[@]}" monitor -b wm list --json | jq -r '.[] | select(.name == "WAYLAND-1") | .scale')"
+  check_eq "...the main screen at scale 1 as the remove returns" 1 "$("${in[@]}" monitor -b wm list --json | jq -r '.[] | select(.name == "WAYLAND-1") | .scale')"
   check_eq "removing the last monitor: the main window tiles again, filling the workspace" '[{"ws":"9","floating":false,"at":[12,12],"size":[3416,1416]}]' "$(boxwins)"
   check "...its screen its window's size again, at scale 1" until_ok 3 mons 'map("\(.name) \(.mode) \(.scale)") | join("|")' "WAYLAND-1 3416x1416@60 1"
   # The Rust half's parity (#324, wave 4a): an interactive box's monitor as a window on the stand-in,
@@ -16009,8 +15860,7 @@ t_unit_guard_settings() {
   # GUARD_* sourced): Claude Code's, Codex's, and Codex's config block.
   local co=$TMP/guard-co hook chook f=$TMP/envfile
   mkdir -p "$co/bin" "$co/share/guard"
-  if [ "$CLI" = "$BASH_CLI" ]; then cp "$CLI" "$co/bin/omabox"
-  else mkdir -p "$co/build"; cp "$CLI" "$co/build/omabox"; ln -s ../build/omabox "$co/bin/omabox"; fi
+  mkdir -p "$co/build"; cp -L "$CLI" "$co/build/omabox"; ln -s ../build/omabox "$co/bin/omabox"
   # gh_hooks: the three texts, a line between the last two, after `guard on` and `guard on codex`.
   gh_hooks() {
     local hh; hh=$(mktemp -d "$TMP/gh.XXXX")
@@ -19820,7 +19670,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)

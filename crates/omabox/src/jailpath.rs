@@ -435,10 +435,13 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "reads the test oracle (test/oracle/, not in a tarball): test/run.sh runs it"]
     fn the_verify_script_is_bashs() {
-        let script =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../bin/omabox"))
-                .unwrap();
+        let script = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test/oracle/omabox.bash"
+        ))
+        .unwrap();
         assert!(script.contains(&format!("<<'PY'\n{JAIL_VERIFY_PY}PY\n")));
     }
 

@@ -17,7 +17,7 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
   then `pacman -Q aquamarine` at or past that tag, or a package patched with #415 (`OMABOX_AQUAMARINE=system
   omabox --version` says "patched with the fix": `AQ_FIX_SYMBOL`, finding 246). Once it is, `omabox
   --version` names the system's copy with no warning and `up` refuses nothing for want of it
-  (`AQ_FIXED_AFTER` in `bin/omabox`, 0.15.1: correct it if that release lacks the fix). The private
+  (`AQ_FIXED_AFTER` in `crates/omabox/src/install.rs`, 0.15.1: correct it if that release lacks the fix). The private
   build stays all the same while omabox carries patches of its own (held keys, the pointer's and the
   cursor's entries below: `setup --aquamarine` builds them whatever the system's copy has, finding
   247), on that release's commit instead of `AQ_COMMIT`.
@@ -55,8 +55,8 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Waiting for:** a release containing commit `588b545` ("pasta: Add --no-pidns to keep spawned
   command in caller's PID namespace", 2026-09-06). Arch has `passt 2026_07_28` (2026-09-23).
 - **Check:** `pasta --help | grep -- --no-pidns`.
-- **Then drop:** in `bin/omabox`, `pasta_pid`, `box_pasta`, the `pasta.pid` branch of `box_pid`,
-  `kill_box`'s pasta fallback and pasta's `-P "$D/pasta.pid"`; add `--no-pidns` to the pasta
+- **Then drop:** in `crates/omabox`, `pasta_pid`, `box_pasta`, the `pasta.pid` branch of `box_pid`
+  (`boxes.rs`, `ready.rs`), `kill_box`'s pasta fallback and pasta's `-P "$D/pasta.pid"` (`up_box.rs`); add `--no-pidns` to the pasta
   command. Also: the `pid` and `pasta.pid` mentions in README, NOTES' architecture and AGENTS.md's
   teardown line, `t_isolated_no_pidfile`, and `t_stale_pid`'s pasta.pid checks. `t_race` and
   `t_pasta_dies` find pasta by its `-P` file: match bwrap's arguments in its command line instead.
@@ -150,7 +150,7 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 
 ## Omarchy: `plugin enable` right after `rescanPlugins` (#9304): no change planned
 
-- setup's widget prompt (`setup_widget` in `bin/omabox`) retries `omarchy plugin enable` (20 x
+- setup's widget prompt (`cmd/setup.rs`'s `widget` in `crates/omabox`) retries `omarchy plugin enable` (20 x
   0.2 s) while it says "is not known": `rescanPlugins` returns before the shell has discovered the
   plugin (NOTES finding 133). Upstream: #9304 and #11115, with fixes in #11117, #11118 and #7754 (a
   targeted `discoverPlugins`; `plugin add --enable` discovers first). The retry is harmless where

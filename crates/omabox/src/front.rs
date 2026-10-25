@@ -1,8 +1,6 @@
-//! The front of the CLI (#324 wave 6-front, A2): what bash's main does with a call's words before
-//! a command reads them, for a call that comes to this binary straight (build/omabox, and
-//! bin/omabox once it is the binary). `-b NAME` before the command moved after it (global_box),
-//! `--opt=value` split (eq_split), `CMD --help` answered, the guard's mark made. A call bash hands
-//! over (OMABOX_ROOT set) comes with all of that done, and skips it.
+//! The front of the CLI (#324 wave 6-front, A2): what bash's main did with a call's words before
+//! a command reads them. `-b NAME` before the command moved after it (global_box), `--opt=value`
+//! split (eq_split), `CMD --help` answered, the guard's mark made.
 
 use crate::args::cmd_opts;
 use crate::cat;

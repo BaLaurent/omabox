@@ -14,6 +14,8 @@ use crate::install::{AQ_BUILD, AQ_FIX_SYMBOL, AQ_FIXED_AFTER};
 
 /// The helpers the probe answers for, and the words each takes.
 pub const NAMES: &[(&str, &str)] = &[
+    // ROOT, as the binary found it from where it is (t_unit_layout, #324 wave 6-flip).
+    ("root", ""),
     ("host_session", ""),
     // A screen mode as up reads it: `host` the user's focused monitor (a read-only hyprctl there).
     ("parse_mode", "MODE"),
@@ -188,6 +190,7 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
     };
     let a: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
     match (name.as_slice(), a.as_slice()) {
+        (b"root", []) => line(&crate::paths::root()),
         (b"host_session", []) => {
             let (sig, wl) = crate::host::host_session_die(&ctx)?;
             line(&cat!(sig, " ", wl))

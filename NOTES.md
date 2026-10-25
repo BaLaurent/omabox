@@ -66,7 +66,8 @@ no mount point, or the system bus is there: finding 177).
 `./install.sh` (add `--check` to start a box, screenshot it and tear it down). Idempotent; sudo only
 if packages are missing. Verified from scratch on this machine (build/ removed, tools cleaned): clones
 and builds aquamarine at the pinned commit, checks Hyprland still links the soname the private build
-provides, builds `tools/`, links `~/.local/bin/omabox` and `~/.claude/skills/omabox`: 17 s, check passed.
+provides, builds `tools/`, links `~/.local/bin/omabox` and `~/.claude/skills/omabox`: 17 s, check passed
+(before the Rust omabox: its first build adds 15 s to a minute, finding 523).
 Then: `omabox up && omabox shot`. It also links the bar widget (`plugin/`) as
 `~/.config/omarchy/plugins/chaves.omabox`, off until `omarchy plugin enable chaves.omabox` (finding 40).
 
@@ -78,7 +79,12 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    aquamarine's build deps, and what the box runs that Omarchy
    already has (quickshell, gtk3, xdg-terminal-exec, dbus). `sudo pacman -S --needed` only for the
    missing ones.
-2. aquamarine's fix into a private prefix, `omabox setup --aquamarine` (only headless NVIDIA boxes
+2. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `burst`, `tree`, `relay`, `events`
+   (need `wayland-scanner`; protocol XML is vendored). Then omabox itself (finding 523): `cargo build
+   --release --locked`, `install -Dm755 target/release/omabox build/omabox.new`, `mv -f
+   build/omabox.new build/omabox` (`bin/omabox` is a link to it; Arch's `rust` when there is no cargo,
+   a rustup with a default toolchain otherwise; the first build fetches its crates).
+3. aquamarine's fix into a private prefix, `omabox setup --aquamarine` (only headless NVIDIA boxes
    and confirm-close need it, finding 125; a no-op once the system's aquamarine is past 0.15.1):
    ```
    git clone https://github.com/hyprwm/aquamarine build/aquamarine
@@ -90,8 +96,6 @@ What it does, step by step (each is safe to repeat; `install.sh` is the source o
    (installed beside the old one, then swapped in). It must provide the soname the installed Hyprland
    links (`ldd $(command -v Hyprland)`), or `up` skips it for the system's; only the nested Hyprland
    loads it. Outside a checkout it goes to `~/.local/share/omabox/aquamarine`.
-3. Tools: `make -C tools/pointer`, `keyboard`, `wlfd`, `peek`, `still`, `burst`, `tree`, `relay`, `events`
-   (need `wayland-scanner`; protocol XML is vendored).
 4. `omabox setup` (finding 126): links `~/.local/bin/omabox` → `bin/omabox`; `skill/` as
    `skills/omabox` in `~/.agents` and `~/.claude` (and `~/.codex`, `~/.pi/agent`, `~/.hermes` when
    those exist; `skill-feedback/` as `skills/omabox-feedback` beside it only with `--feedback-skill`,
@@ -8814,7 +8818,9 @@ from them.
     (without it, the real inotifywait runs), t_plugin_link and t_plugin_check (the box shell's watch
     is still the stand-in). Omarchy's runtime-smoke-test.sh: 22 of 22, three runs.
 
-425. **The CLI's Rust half, and how a command gets there** (2026-10-21, #324). The port is wave by
+425. **The CLI's Rust half, and how a command gets there** (2026-10-21, #324; **amended
+    2026-10-25: the hand-off below is gone, finding 523**: `bin/omabox` is now the binary, through a
+    link to `build/omabox`, and bash's omabox is the suite's oracle only). The port is wave by
     wave, the suite the spec. `bin/omabox` stays the entry point (setup's links, the box's view of the
     repo, ai-jail's maps all name it): its `main` hands a command in `RUST_CMDS` to
     `build/bin/omabox` (crates/omabox, built by install.sh and the suite with cargo) right before its
@@ -10194,6 +10200,38 @@ from them.
     binary where the package's recipe would, by the tree's shape (a `bin/omabox` linking to
     `../build/omabox`: the binary there; a bash one: none). Tests: t_unit_install (a stand-in cargo;
     a cargo that cannot build; tools before any omabox run; `build/omabox.new` then a rename).
+
+523. **The switch: `bin/omabox` is the binary** (2026-10-25, #324 wave 6-flip; proposal D1, D2, D5,
+    the verdict's clean break). `bin/omabox` is a tracked link to `../build/omabox`, the binary
+    install.sh and the suite build from `crates/omabox` (renamed into place, finding 522); bash's
+    16,000 lines moved to `test/oracle/omabox.bash` (`git log --follow -B -C` finds its history;
+    export-ignored: never in a tarball or package). Every path written into a HOME names `$ROOT/bin/omabox` and keeps
+    working: `~/.local/bin/omabox`, ai-jail's map (bwrap binds the link's target: the binary, alone,
+    its ROOT `~/.local`), the broker unit's `listen -- $ROOT/bin/omabox`, the guard hook's `-x` test
+    and its stamp. The binary's ROOT is the parent of the directory it really is in (a checkout's
+    `build/`, a package's `/usr/lib/omabox/bin/`, a jail's `~/.local/bin/`); its self-spawns stay
+    `ROOT/bin/omabox` (after a rebuild, `/proc/self/exe` is "(deleted)"). What went from the binary:
+    the hand-off (bash's shaped words, `OMABOX_ROOT`, `OMABOX_CALL_US`, `OMABOX_ENVIRON_FD`,
+    `back_to_bash`, the `_rust` hand-off probe; `_rust probe` and `_rust-jq` stay): a caller's values
+    of those names now pass through as in 1.0, and `run --pass` reads `/proc/self/environ`. The
+    reaper's command line is now `ROOT/bin/omabox _reap NAME CREATED` with no `bash` before it, which
+    `down`'s match did not take (it wanted `bash ` before `ROOT/bin/omabox`): it does now, or a down
+    would have left the reaper of every box started after the switch until it saw its box gone.
+    The suite runs bin/omabox as users do (`CLI`, through the link); parity's bash leg runs a copy of
+    the oracle made for the run in the checkout's `build/oracle/` (inside the repo, so a stand-in box
+    running each leg's omabox sees it; its error lines still say `.../bin/omabox: line N:`), its ROOT
+    set to the checkout, its hand-off cut, and its down's reaper match taking the binary's reaper as it
+    took the hand-off's (without that, bash's down of a box up left its reaper: t_rust_parity_up), until
+    wave 6b ends; an install has no oracle, so parity skips there. Six `#[test]`s that read bash's text read the oracle and are `#[ignore]`d (a
+    tarball has none; `t_unit_rust_ignored` runs them). Not built yet (a fresh clone, a new worktree, a
+    pull without `./install.sh`), `bin/omabox` dangles: the shell's "No such file or directory", new
+    agent sessions unguarded, ai-jail with omabox's maps not starting: the release notes' first lines.
+    Tests: t_unit_layout (the link; ROOT through `~/.local/bin`, `/usr/bin` and alone; VERSION compiled
+    in; the dangling link; the front's unknown command), ready.rs's reapers_by_their_command_line,
+    t_unit_install, t_jail and t_jail_recipe with bin/omabox mapped as users map it. Deleted:
+    t_unit_rust_handoff (the hand-off), t_unit_live_edit (finding 66 was bash reading its script as it
+    ran; its successor is finding 522's rename), t_unit_cli's `$(save_dir)` grep (a bash `set -e`
+    property, finding 163), and bash's NS_FDS and ON_BOX_KILLS scans (finding 521 has the crate's).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
