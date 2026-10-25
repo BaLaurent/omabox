@@ -415,7 +415,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 
 /// events_since MARK: (OFFSET, MIN_MS): a mark's name or a byte offset (MIN_MS 0), or a time ago such
 /// as 30s, 2m or 1h (offset 0, the events from then on).
-fn events_since(ctx: &Ctx, v: &[u8]) -> Res<(i64, i64)> {
+pub fn events_since(ctx: &Ctx, v: &[u8]) -> Res<(i64, i64)> {
     if shell::re_match("^[0-9]{1,15}$", v) {
         return Ok((shell::dec(v).unwrap_or(0), 0));
     }

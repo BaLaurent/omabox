@@ -54,6 +54,18 @@ pub const NAMES: &[(&str, &str)] = &[
     ("usage_text", ""),
     ("shot_fit_default", ""),
     ("repo_git_dirs", "[TOP]"),
+    // Durations whose refusals are said (their words checked).
+    ("idle_duration", "VALUE HOW"),
+    ("pause_ms", "WHAT VALUE"),
+    ("ready_timeout", ""),
+    ("mods_add", "SO_FAR MODS"),
+    ("events_since", "VALUE [D NAME]"),
+    // cpu's samples read from a stand-in /proc, and its awk on samples (stdin).
+    ("cpu_sample", "PROC PID..."),
+    ("cpu_threads", "PROC PID..."),
+    ("cpu_tame", "NAME"),
+    ("cpu_report", "CLK [PID [APP]]"),
+    ("cpu_table", ""),
 ];
 
 /// One line a word: the probe's own usage, for a name it does not have.
@@ -224,13 +236,11 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             yes(crate::ready::box_held(&ctx, pid))
         }
         // What is not covered on stdout (its words, as `$(jail_verify ... 2>&1)` has them), 1.
-        (b"jail_verify", [d, bp, srcs @ ..]) => {
-            let srcs: Vec<Vec<u8>> = srcs.iter().map(|s| s.to_vec()).collect();
-            crate::jailpath::jail_verify(d, bp, &srcs).or_else(|w| {
+        (b"jail_verify", [d, bp, srcs @ ..]) => crate::jailpath::jail_verify(d, bp, &owned(srcs))
+            .or_else(|w| {
                 out(w)?;
                 Err(Exit(1))
-            })
-        }
+            }),
         (b"jail_sees", [p]) => line(&crate::jailpath::jail_sees(p).ok_or(Exit(1))?),
         (b"jail_masked", [p]) => yes(crate::jailpath::jail_masked(p)),
         (b"default_name", []) => line(&crate::select::default_name()),
@@ -268,6 +278,62 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             }
             Ok(())
         }
+        (b"idle_duration", [v, how]) => {
+            let how = String::from_utf8_lossy(how);
+            match crate::cmd::check::idle_duration(v, &how) {
+                Ok(s) => line(s.to_string().as_bytes()),
+                Err(rc) => Err(Exit(u8::try_from(rc).unwrap_or(1))),
+            }
+        }
+        (b"pause_ms", [what, v]) => {
+            let what = String::from_utf8_lossy(what);
+            line(
+                crate::input::pause_ms(&ctx, &what, v)?
+                    .to_string()
+                    .as_bytes(),
+            )
+        }
+        // (OMABOX_READY_TIMEOUT's, whole seconds)
+        (b"ready_timeout", []) => line(crate::ready::ready_timeout(&ctx)?.to_string().as_bytes()),
+        (b"mods_add", [so_far, mods]) => line(&crate::input::mods_add(&ctx, so_far, mods)?),
+        // OFFSET MIN_MS; a mark's from D's events.marks (NAME the box's, for its words).
+        (b"events_since", [v, rest @ ..]) if matches!(rest.len(), 0 | 2) => {
+            if let [d, n] = rest {
+                ctx.d = d.to_vec();
+                ctx.name = n.to_vec();
+            }
+            let (off, ms) = crate::cmd::events::events_since(&ctx, v)?;
+            line(format!("{off} {ms}").as_bytes())
+        }
+        (b"cpu_sample", [proc, pids @ ..]) => {
+            for l in crate::cmd::cpu::cpu_sample_in(proc, &owned(pids)) {
+                line(&l)?;
+            }
+            Ok(())
+        }
+        (b"cpu_threads", [proc, pids @ ..]) => {
+            for l in crate::cmd::cpu::cpu_threads_in(proc, &owned(pids)) {
+                line(&l)?;
+            }
+            Ok(())
+        }
+        (b"cpu_tame", [n]) => line(&crate::cmd::cpu::cpu_tame(n)),
+        // (awk -v clk= -v want= -v app= CPU_REPORT_AWK, as cpu runs it; then CPU_TABLE_AWK)
+        (b"cpu_report", [clk, rest @ ..]) if rest.len() <= 2 => {
+            let none: &[u8] = b"";
+            let want = rest.first().copied().unwrap_or(none);
+            let app = rest.get(1).copied().unwrap_or(none);
+            let a = crate::jq::Args::new(&["-v"])
+                .arg(cat!("clk=", clk))
+                .arg("-v")
+                .arg(cat!("want=", want))
+                .arg("-v")
+                .arg(cat!("app=", app))
+                .arg(crate::jqprog::CPU_REPORT_AWK)
+                .into_words();
+            awk_stdin(&a)
+        }
+        (b"cpu_table", []) => awk_stdin(&[crate::jqprog::CPU_TABLE_AWK.as_bytes().to_vec()]),
         (b"covers_held", [n]) => {
             ctx.name = n.to_vec();
             ctx.d = cat!(ctx.boxes, "/", n);
@@ -275,6 +341,19 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         }
         _ => Err(usage()),
     }
+}
+
+/// awk ARGS over this process's stdin, as the command runs it on its own samples.
+fn awk_stdin(args: &[Vec<u8>]) -> Res<()> {
+    let mut input = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::stdin(), &mut input).map_err(|_| Exit(1))?;
+    let r = crate::jq::tool("awk", args, Some(&input), crate::jq::Err::Inherit);
+    out(&r.out)?;
+    if r.rc == 0 { Ok(()) } else { Err(Exit(1)) }
+}
+
+fn owned(v: &[&[u8]]) -> Vec<Vec<u8>> {
+    v.iter().map(|x| x.to_vec()).collect()
 }
 
 /// A test's answer as its status: 0 yes, 1 no.

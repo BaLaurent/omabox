@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6752 MIN_UNIT=4047
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4709 MIN_UNIT=2201
+MIN_CHECKS=6735 MIN_UNIT=4030
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4692 MIN_UNIT=2184
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -802,28 +802,20 @@ t_unit_record() {
 # One duration grammar (#273, finding 385): ms, s, m, h, decimals, a bare number seconds; the bare
 # numbers that meant minutes or milliseconds up to 0.8.0 are refused since 1.0 (#287), naming the unit.
 t_unit_duration() {
-  check_eq "ms_duration: 300ms 2 1.5s 2m 1h 1.5h" "300 2000 1500 120000 3600000 5400000" \
-    "$(for v in 300ms 2 1.5s 2m 1h 1.5h; do lib ms_duration "$v"; done | paste -sd ' ')"
-  check_fails "...0 is no duration (at least 1 ms)" lib ms_duration 0
-  check_fails "...a unit it does not know (2d)" lib ms_duration 2d
-  check_fails "...nor a negative one" lib ms_duration -1
-  check_eq "s_duration: seconds, decimals only where they are: 5 1.5s 500ms 2m" "5 1.5 0.5 120" \
-    "$(for v in 5 1.5s 500ms 2m; do lib s_duration "$v"; done | paste -sd ' ')"
-  check_eq "...0 in any unit when let in" "0 0" "$(lib s_duration 0 zero) $(lib s_duration 0s zero)"
-  check_fails "...not otherwise" lib s_duration 0
+  # (ms_duration's and s_duration's values, 0, 2d and -1 refused: num.rs durations_as_bash)
   # up --idle: units; a bare number other than 0 (minutes up to 0.8.0) is refused, naming the unit.
   check_eq "idle 90s 30m 2h 1.5h 0 0s" "90 1800 7200 5400 0 0" \
-    "$(for v in 90s 30m 2h 1.5h 0 0s; do lib idle_duration "$v" "--idle "; done 2>/dev/null | paste -sd ' ')"
-  check_eq "...500ms rounds up to a second" 1 "$(lib idle_duration 500ms "--idle ")"
+    "$(for v in 90s 30m 2h 1.5h 0 0s; do probe idle_duration "$v" "--idle "; done 2>/dev/null | paste -sd ' ')"
+  check_eq "...500ms rounds up to a second" 1 "$(probe idle_duration 500ms "--idle ")"
   local out rc
-  out=$(lib idle_duration 45 "--idle " 2>&1); rc=$?
+  out=$(probe idle_duration 45 "--idle " 2>&1); rc=$?
   check_eq "...a bare 45: refused (2), one line naming what to write, nothing read" \
     "2|omabox: --idle 45 is refused since 1.0 (a bare number was minutes there, and is seconds everywhere else): write --idle 45m" "$rc|$out"
   check_match "...OMABOX_IDLE's in its own words, leading zero decimal" "OMABOX_IDLE=010 is refused since 1\.0 .*: write OMABOX_IDLE=10m$" \
-    "$(lib idle_duration 010 OMABOX_IDLE= 2>&1 >/dev/null)"
-  check_eq "...0 and a unit: nothing said" "" "$(lib idle_duration 0 "--idle " 2>&1 >/dev/null; lib idle_duration 2h "--idle " 2>&1 >/dev/null)"
-  check_fails "...a bare 1.5 (never an --idle: not read as seconds either)" lib idle_duration 1.5 "--idle "
-  check_fails "...2d refused" lib idle_duration 2d "--idle "
+    "$(probe idle_duration 010 OMABOX_IDLE= 2>&1 >/dev/null)"
+  check_eq "...0 and a unit: nothing said" "" "$(probe idle_duration 0 "--idle " 2>&1 >/dev/null; probe idle_duration 2h "--idle " 2>&1 >/dev/null)"
+  check_fails "...a bare 1.5 (never an --idle: not read as seconds either)" probe idle_duration 1.5 "--idle "
+  check_fails "...2d refused" probe idle_duration 2d "--idle "
   check_match "up --idle junk: refused, naming the forms" "up: --idle takes a duration like 30m, 2h or 90s, or 0 \(never\), got soon" \
     "$(ob up "$P-d1" --idle soon --confirm-close 2>&1)"
   check_match "...OMABOX_IDLE junk: named as such" "up: OMABOX_IDLE= takes a duration.*got soon" \
@@ -838,18 +830,18 @@ t_unit_duration() {
   check_match "OMABOX_READY_TIMEOUT junk: refused before a box starts" "OMABOX_READY_TIMEOUT takes a duration, like 30s or 2m.*got soon" \
     "$(OMABOX_READY_TIMEOUT=soon ob up "$P-d1" --confirm-close 2>&1)"
   check_eq "...30s and 1.5m are whole seconds" "30 90" \
-    "$(lib eval 'READY_TIMEOUT=30s; ready_timeout; a=$READY_TIMEOUT; READY_TIMEOUT=1.5m; ready_timeout; echo "$a $READY_TIMEOUT"')"
+    "$(OMABOX_READY_TIMEOUT=30s probe ready_timeout) $(OMABOX_READY_TIMEOUT=1.5m probe ready_timeout)"
   # keys -s and pointer sleep: units; a bare whole number (ms up to 0.8.0) is refused; usage errors exit 2.
   check_eq "pause_ms: 300ms 1.5s 0 2m" "300 1500 0 120000" \
-    "$(for v in 300ms 1.5s 0 2m; do lib pause_ms "keys -s" "$v"; done 2>/dev/null | paste -sd ' ')"
+    "$(for v in 300ms 1.5s 0 2m; do probe pause_ms "keys -s" "$v"; done 2>/dev/null | paste -sd ' ')"
   check_match "...a bare 300: refused (2), naming what to write, nothing read" \
     "^2 omabox: keys -s 300 is refused since 1\.0 \(a bare number was milliseconds there, and is seconds everywhere else\): write keys -s 300ms" \
-    "$(out=$(lib pause_ms "keys -s" 300 2>&1); echo "$? $out")"
+    "$(out=$(probe pause_ms "keys -s" 300 2>&1); echo "$? $out")"
   check_match "...pointer sleep's in its words" "pointer sleep 50 is refused since 1\.0 .*write pointer sleep 50ms" \
-    "$(lib pause_ms "pointer sleep" 50 2>&1 >/dev/null)"
+    "$(probe pause_ms "pointer sleep" 50 2>&1 >/dev/null)"
   local v; for v in 1.5 -1 11m x; do
     check_match "...$v refused, exit 2" "^2 omabox: keys -s takes a duration up to 10m, like 300ms or 1.5s, got $v$" \
-      "$(out=$(lib pause_ms "keys -s" "$v" 2>&1); echo "$? $out")"
+      "$(out=$(probe pause_ms "keys -s" "$v" 2>&1); echo "$? $out")"
   done
   check_match "keys -s 1.5: refused before any box is asked" "keys -s takes a duration.*got 1.5" "$(ob keys -b "$P-nope" -s 1.5 a 2>&1)"
   check_match "keys -s 300: refused before any box is asked" "^omabox: keys -s 300 is refused since 1\.0 .*300ms" "$(ob keys -b "$P-nope" -s 300 a 2>&1)"
@@ -858,7 +850,7 @@ t_unit_duration() {
   check_match "keys -t -s still types -s (a value is -t's, whatever it looks like)" "no box .$P-nope. is up" \
     "$(ob keys -b "$P-nope" -t -s 2>&1)"
   check_match "pointer -- sleep 2x: refused" "pointer sleep takes a duration.*got 2x" "$(ob pointer -b "$P-nope" -- sleep 2x 2>&1)"
-  check_eq "human_duration: 90 reads 90s, 7200 2h" "90s 2h" "$(lib human_duration 90) $(lib human_duration 7200)"
+  # (human_duration: 90 reads 90s, 7200 2h: num.rs durations_as_bash)
 }
 
 # #273 (finding 385): short flags with one meaning, --active and --output wherever their long forms
@@ -19438,19 +19430,19 @@ t_unit_cpu() {
   printf 'Rss:   2048 kB\nPss:   1024 kB\n' > "$f/10/smaps_rollup"
   printf '11 (sleep) S 1 10 10 0 -1 4194304 100 0 0 0 1 2 0 0 20 0 3 0 6000 1000000 300 18446744073709551615\n' > "$f/11/stat"
   check_eq "cpu_sample: pid, start, utime+stime, RSS, PSS, pid in the box, the name as one field" \
-    $'10 5000 300 2048 1024 7 my_?odd?_app\n11 6000 3 0 - 11 sleep' "$(lib cpu_sample "$f" 10 11 12)"
+    $'10 5000 300 2048 1024 7 my_?odd?_app\n11 6000 3 0 - 11 sleep' "$(probe cpu_sample "$f" 10 11 12)"
   # Two samples 2 s apart at 100 ticks/s: pid 10 (box 7) used 100 ticks (50%), 11 exited, 12 started
   # with 50 ticks (25%); a pid reused by another process (start time) is another process.
   printf 'S 1000000000\n10 5000 300 2048 1024 7 a\n11 6000 3 0 - 11 b\n13 100 70 10 - 13 d\nS 3000000000\n10 5000 400 4096 1024 7 a\n12 7000 50 100 - 12 c\n13 900 10 10 - 13 d\n' > "$f/s"
-  out=$(lib cpu_report 100 < "$f/s")
+  out=$(probe cpu_report 100 < "$f/s")
   check_eq "cpu_report: % of one core over the window, busiest first, a total" \
     $'p 10 7 a 50.0 4096 1024 0 0\np 12 12 c 25.0 100 - 1 0\np 13 13 d 5.0 10 - 1 0\np 11 11 b 0.0 0 - 0 1\np 13 13 d 0.0 10 - 0 1\ntotal 80.0 4216 1024' "$out"
-  check_eq "...--pid: the box's number" $'p 10 7 a 50.0 4096 1024 0 0\ntotal 50.0 4096 1024' "$(lib cpu_report 100 7 < "$f/s")"
-  check_eq "...or the host's" "p 10 7 a 50.0 4096 1024 0 0" "$(lib cpu_report 100 10 < "$f/s" | head -1)"
-  check_eq "...a pid not there at the start: none" "total 0.0 0 -" "$(lib cpu_report 100 12 < "$f/s")"
-  check_eq "...--app: by name" $'p 12 12 c 25.0 100 - 1 0\ntotal 25.0 100 -' "$(lib cpu_report 100 "" c < "$f/s")"
-  check_eq "cpu_tame: as cpu_sample names" "my_?odd?_app" "$(lib cpu_tame 'my (odd) app')"
-  out=$(lib cpu_report 100 < "$f/s" | lib cpu_table)
+  check_eq "...--pid: the box's number" $'p 10 7 a 50.0 4096 1024 0 0\ntotal 50.0 4096 1024' "$(probe cpu_report 100 7 < "$f/s")"
+  check_eq "...or the host's" "p 10 7 a 50.0 4096 1024 0 0" "$(probe cpu_report 100 10 < "$f/s" | head -1)"
+  check_eq "...a pid not there at the start: none" "total 0.0 0 -" "$(probe cpu_report 100 12 < "$f/s")"
+  check_eq "...--app: by name" $'p 12 12 c 25.0 100 - 1 0\ntotal 25.0 100 -' "$(probe cpu_report 100 "" c < "$f/s")"
+  check_eq "cpu_tame: as cpu_sample names" "my_?odd?_app" "$(probe cpu_tame 'my (odd) app')"
+  out=$(probe cpu_report 100 < "$f/s" | probe cpu_table)
   check_match "cpu_table: a header, then the rows" $'^  PROCESS +PID +CPU +RSS +PSS\n  a +7 +50.0% +4.0M +1.0M\n' "$out"
   check_match "...one that started, and one that exited, said" $'\n  c +12 +25.0% +0.1M +-  \\(started in the window\\)\n.*\n  b +11 +0.0% +0.0M +-  \\(exited in the window\\)' "$out"
   check_match "...the total last" $'\n  total +80.0% +4.1M +1.0M$' "$out"
@@ -19461,7 +19453,7 @@ t_unit_cpu() {
   printf '14 (QSG Render) S 1 10 10 0 -1 4194304 100 0 0 0 200 20 0 0 20 0 3 0 5100 1000000 300 18446744073709551615\n' > "$f/10/task/14/stat"
   printf 'NSpid:\t14\t9\n' > "$f/10/task/14/status"
   check_eq "cpu_threads: the process's key, tid, start, utime+stime, tid in the box, the name as one field" \
-    $'t 10 5000 10 5000 30 7 my_?odd?_app\nt 10 5000 14 5100 220 9 QSG_Render' "$(lib cpu_threads "$f" 10 12)"
+    $'t 10 5000 10 5000 30 7 my_?odd?_app\nt 10 5000 14 5100 220 9 QSG_Render' "$(probe cpu_threads "$f" 10 12)"
   # Process 10's threads over the same 2 s: tid 14 60 ticks (30%), 16 started (10%), 15 exited, two
   # named R kept apart; they follow their process, busiest first, before the next process.
   printf '%s\n' 'S 1000000000' '10 5000 300 2048 1024 7 a' 't 10 5000 10 5000 100 7 a' 't 10 5000 14 5100 100 9 R' \
@@ -19469,9 +19461,9 @@ t_unit_cpu() {
     't 10 5000 14 5100 160 9 R' 't 10 5000 16 5300 20 11 R' '11 6000 4 0 - 11 b' > "$f/t"
   check_eq "cpu_report --threads: each thread under its process, busiest first, one that started or exited said" \
     $'p 10 7 a 50.0 2048 1024 0 0\nt 14 9 R 30.0 0 0\nt 16 11 R 10.0 1 0\nt 10 7 a 5.0 0 0\nt 15 10 R 0.0 0 1\np 11 11 b 0.5 0 - 0 0\ntotal 50.5 2048 1024' \
-    "$(lib cpu_report 100 < "$f/t")"
-  check_eq "...--pid: that process and its threads" 5 "$(lib cpu_report 100 7 < "$f/t" | grep -c '^[pt] ')"
-  out=$(lib cpu_report 100 < "$f/t" | lib cpu_table)
+    "$(probe cpu_report 100 < "$f/t")"
+  check_eq "...--pid: that process and its threads" 5 "$(probe cpu_report 100 7 < "$f/t" | grep -c '^[pt] ')"
+  out=$(probe cpu_report 100 < "$f/t" | probe cpu_table)
   check_match "cpu_table: threads indented under their process, by the box's tid, no memory" \
     $'\n  a +7 +50.0% +2.0M +1.0M\n    R +9 +30.0%\n    R +11 +10.0%  \\(started in the window\\)\n    a +7 +5.0%\n    R +10 +0.0%  \\(exited in the window\\)\n  b +11 ' "$out"
   check_match "cpu --threads alone: refused, with what to name" "--threads is for one app's threads: name it with --pid PID or --app NAME" \
@@ -19501,22 +19493,11 @@ t_unit_pointer() {
   check_match "scroll: --in or --window" "not both" "$(ob scroll -b "$P-x" --in a -w b 1 2 3 2>&1)"
   check_match "scroll: --quiet goes with --wait" "go with --wait" "$(ob scroll -b "$P-x" --quiet 1s 1 2 3 2>&1)"
   # (scroll is a jailed agent's: broker_side.rs's broker_check_allows_and_refuses)
-  check_eq "pointer marks: peek's words only" "move 1 2 scroll 15 scroll -3" "$(lib pointer_marks move 1 2 source wheel scroll 15 hscroll -3)"
+  # (pointer marks: peek's words only; wheel_note's notches; steps_to; path_rects; --mod's names, each
+  # once, added to earlier ones: input.rs pointer_cases_as_bash and options_as_bash_reads_them)
   # #167: scroll --mod as click's; a wheel's rounding to whole notches said.
   check_match "scroll --mod junk refused" "not a modifier" "$(ob scroll -b "$P-x" --mod meta 1 2 3 2>&1)"
-  check_eq "wheel_note: 20 is one notch" "DY 20 is 1 notch (15)" "$(lib wheel_note 20 0)"
-  check_eq "...whole notches: nothing" "" "$(lib wheel_note 45 -30)"
-  check_eq "...both, a small one at least a notch, negative" "DY 5 is 1 notch (15), DX -37 is 2 notches (-30)" "$(lib wheel_note 5 -37)"
-  check_eq "...a fraction" "DX 7.5 is 1 notch (15)" "$(lib wheel_note 0 7.5)"
-  check_eq "steps_to: N moves, the last on the target" "move 3 7 move 6 14 move 10 21" "$(lib eval 'SEQ=(); steps_to 0 0 10 21 3; echo "${SEQ[*]}"')"
-  check_eq "...leftwards and up too" "move 5 5 move 0 0" "$(lib eval 'SEQ=(); steps_to 10 10 0 0 2; echo "${SEQ[*]}"')"
-  check_eq "path_rects (drag --wait): the cursor's rect at each point" "84,84,64,64 34,34,64,64 -16,-16,64,64" \
-    "$(lib eval 'SEQ=(); steps_to 100 100 0 0 2; path_rects 100 100 "${SEQ[@]}" | xargs')"
-  check_eq "...999 steps: 30 rects (omabox-still takes 32), from the start to the end" "30 -16,-16 984,984" \
-    "$(lib eval 'SEQ=(); steps_to 0 0 1000 1000 999; path_rects 0 0 "${SEQ[@]}"' | awk -F, '{ n++; if (n == 1) a = $1 "," $2; e = $1 + $3 - 64 "," $2 + $4 - 64 } END { print n, a, e }')"
-  check_eq "--mod: names, any case, each once, in order given" "ctrl+shift+super" "$(lib mods_add "" Control,shift+CTRL+win)"
-  check_eq "...added to earlier ones" "alt+ctrl" "$(lib mods_add alt ctrl+alt)"
-  check_match "...not a modifier: refused" "'hyper' is not a modifier" "$(lib mods_add "" ctrl+hyper 2>&1)"
+  check_match "--mod: not a modifier, refused" "'hyper' is not a modifier" "$(probe mods_add "" ctrl+hyper 2>&1)"
   check_match "click --steps 0 refused" "--steps is 1-999" "$(ob click -b "$P-x" --steps 0 1 1 2>&1)"
   check_match "pointer --steps 1000 refused" "--steps is 1-999" "$(ob pointer -b "$P-x" --steps 1000 -- move 1 1 2>&1)"
   check_match "click --mod junk refused" "not a modifier" "$(ob click -b "$P-x" --mod meta 1 1 2>&1)"
@@ -20451,12 +20432,12 @@ t_unit_inspect() {
     <<<"$(ob log -b "$P-x" --grep -i 'plugin|error' 2>&1)"
   check_match "log --grep -x: an option taken for the expression, refused" "--grep takes RE" "$(ob log -b "$P-x" --grep -x 2>&1)"
   # (log is a jailed agent's (its own boxes only: select_box): broker_side.rs's broker_check_allows_and_refuses)
-  check_eq "events --since OFFSET" "123 0" "$(lib events_since 123)"
-  check_match "events --since 30s: from then on" "^0 [0-9]{13}$" "$(lib events_since 30s)"
+  check_eq "events --since OFFSET" "123 0" "$(probe events_since 123)"
+  check_match "events --since 30s: from then on" "^0 [0-9]{13}$" "$(probe events_since 30s)"
   mkdir -p "$TMP/ev"; printf 'm1 10\nm2 20\nm1 30\n' > "$TMP/ev/events.marks"
-  check_eq "events --since MARK: its latest offset" "30 0" "$(D=$TMP/ev NAME=x lib events_since m1)"
-  check_match "...one there is not, said" "no mark 'm9'" "$(D=$TMP/ev NAME=x lib events_since m9 2>&1)"
-  check_match "events --since junk refused" "takes a mark's name" "$(lib events_since '-x' 2>&1)"
+  check_eq "events --since MARK: its latest offset" "30 0" "$(probe events_since m1 "$TMP/ev" x)"
+  check_match "...one there is not, said" "no mark 'm9'" "$(probe events_since m9 "$TMP/ev" x 2>&1)"
+  check_match "events --since junk refused" "takes a mark's name" "$(probe events_since '-x' 2>&1)"
   check_match "events --mark: a tame name" "starts with a letter" "$(ob events -b "$P-x" --mark '9;x' 2>&1)"
   check_match "events --mark goes alone" "goes alone" "$(ob events -b "$P-x" --mark m --grep x 2>&1)"
   check_match "events --until or -f" "not both" "$(ob events -b "$P-x" --until x -f 2>&1)"

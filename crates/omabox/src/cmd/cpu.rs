@@ -327,9 +327,14 @@ fn ticks(st: &[Vec<u8>]) -> String {
 /// cpu_sample PID...: a line each, "HOSTPID START TICKS RSS PSS BOXPID NAME" (PSS - when
 /// smaps_rollup cannot be read); one gone meanwhile is skipped. Read without a fork per process.
 fn cpu_sample(pids: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    cpu_sample_in(b"/proc", pids)
+}
+
+/// cpu_sample with PROC as /proc (the suite's fixtures: `_rust probe cpu_sample`).
+pub fn cpu_sample_in(proc: &[u8], pids: &[Vec<u8>]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for p in pids {
-        let Some(l) = first_line(&cat!("/proc/", p, "/stat")) else {
+        let Some(l) = first_line(&cat!(proc, "/", p, "/stat")) else {
             continue;
         };
         let (comm, st) = stat_parts(&l);
@@ -337,14 +342,14 @@ fn cpu_sample(pids: &[Vec<u8>]) -> Vec<Vec<u8>> {
             continue;
         }
         let (mut rss, mut pss, mut bp) = (b"0".to_vec(), b"-".to_vec(), p.clone());
-        for f in line_words(&cat!("/proc/", p, "/status")) {
+        for f in line_words(&cat!(proc, "/", p, "/status")) {
             match f.first().map(Vec::as_slice) {
                 Some(b"VmRSS:") => rss = f.get(1).cloned().unwrap_or_default(),
                 Some(b"NSpid:") => bp = f.last().cloned().unwrap_or_default(),
                 _ => {}
             }
         }
-        for f in line_words(&cat!("/proc/", p, "/smaps_rollup")) {
+        for f in line_words(&cat!(proc, "/", p, "/smaps_rollup")) {
             if f.first().map(Vec::as_slice) == Some(b"Pss:") {
                 pss = f.get(1).cloned().unwrap_or_default();
                 break;
@@ -376,9 +381,14 @@ fn cpu_sample(pids: &[Vec<u8>]) -> Vec<Vec<u8>> {
 /// cpu_threads PID...: "t HOSTPID START TID TSTART TICKS BOXTID NAME" for each thread of each
 /// process (#242), in C's order of the task dir.
 fn cpu_threads(pids: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    cpu_threads_in(b"/proc", pids)
+}
+
+/// cpu_threads with PROC as /proc.
+pub fn cpu_threads_in(proc: &[u8], pids: &[Vec<u8>]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for p in pids {
-        let Some(l) = first_line(&cat!("/proc/", p, "/stat")) else {
+        let Some(l) = first_line(&cat!(proc, "/", p, "/stat")) else {
             continue;
         };
         let (_, st) = stat_parts(&l);
@@ -386,7 +396,7 @@ fn cpu_threads(pids: &[Vec<u8>]) -> Vec<Vec<u8>> {
             continue;
         }
         let pst = st[19].clone();
-        let dir = cat!("/proc/", p, "/task");
+        let dir = cat!(proc, "/", p, "/task");
         let mut tids: Vec<Vec<u8>> = std::fs::read_dir(shell::path(&dir))
             .map(|rd| {
                 rd.flatten()

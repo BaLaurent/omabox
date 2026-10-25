@@ -484,6 +484,52 @@ mod tests {
         );
     }
 
+    /// t_unit_pointer's cases (#167, drag --wait), as bash's helpers gave them.
+    #[test]
+    fn pointer_cases_as_bash() {
+        assert_eq!(
+            pointer_marks(&w(&[
+                "move", "1", "2", "source", "wheel", "scroll", "15", "hscroll", "-3"
+            ])),
+            b"move 1 2 scroll 15 scroll -3"
+        );
+        assert_eq!(wheel_note(b"20", b"0"), b"DY 20 is 1 notch (15)");
+        assert_eq!(wheel_note(b"45", b"-30"), b"");
+        assert_eq!(
+            wheel_note(b"5", b"-37"),
+            b"DY 5 is 1 notch (15), DX -37 is 2 notches (-30)"
+        );
+        assert_eq!(wheel_note(b"0", b"7.5"), b"DX 7.5 is 1 notch (15)");
+        let mut s = Vec::new();
+        steps_to(&mut s, [0, 0, 10, 21], 3);
+        assert_eq!(
+            s,
+            w(&["move", "3", "7", "move", "6", "14", "move", "10", "21"])
+        );
+        let mut s = Vec::new();
+        steps_to(&mut s, [10, 10, 0, 0], 2);
+        assert_eq!(s, w(&["move", "5", "5", "move", "0", "0"]));
+        let mut s = Vec::new();
+        steps_to(&mut s, [100, 100, 0, 0], 2);
+        assert_eq!(
+            path_rects(100, 100, &s),
+            Some(w(&["84,84,64,64", "34,34,64,64", "-16,-16,64,64"]))
+        );
+        // 999 steps: 30 rects (omabox-still takes 32), from the start to the end.
+        let mut s = Vec::new();
+        steps_to(&mut s, [0, 0, 1000, 1000], 999);
+        let r = path_rects(0, 0, &s).unwrap();
+        assert_eq!(r.len(), 30);
+        let xywh = |v: &[u8]| -> Vec<i64> {
+            v.split(|&c| c == b',')
+                .map(|n| std::str::from_utf8(n).unwrap().parse().unwrap())
+                .collect()
+        };
+        let (a, e) = (xywh(&r[0]), xywh(&r[29]));
+        assert_eq!((a[0], a[1]), (-16, -16));
+        assert_eq!((e[0] + e[2] - 64, e[1] + e[3] - 64), (984, 984));
+    }
+
     #[test]
     fn words_of_scroll_and_pointer() {
         assert_eq!(wheel_note(b"20", b"0"), b"DY 20 is 1 notch (15)");
@@ -518,6 +564,12 @@ mod parse_tests {
             Ok(b"ctrl+super".to_vec())
         );
         assert_eq!(mods_add(&c, b"ctrl", b"ctrl+alt"), Ok(b"ctrl+alt".to_vec()));
+        // (t_unit_pointer's: names, any case, each once, in order given; added to earlier ones)
+        assert_eq!(
+            mods_add(&c, b"", b"Control,shift+CTRL+win"),
+            Ok(b"ctrl+shift+super".to_vec())
+        );
+        assert_eq!(mods_add(&c, b"alt", b"ctrl+alt"), Ok(b"alt+ctrl".to_vec()));
         assert_eq!(mods_add(&c, b"", b"+"), Err(Exit(2)));
         assert_eq!(mods_add(&c, b"", b"nope"), Err(Exit(2)));
         assert_eq!(steps_arg(&c, "click", b"999"), Ok(999));

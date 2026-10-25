@@ -221,6 +221,33 @@ pub fn human_duration(s: i64) -> String {
 mod tests {
     use super::*;
 
+    /// t_unit_duration's (one grammar, #273, finding 385), as bash's ms_duration, s_duration and
+    /// human_duration read them.
+    #[test]
+    fn durations_as_bash() {
+        let ms: Vec<Option<i64>> = ["300ms", "2", "1.5s", "2m", "1h", "1.5h"]
+            .iter()
+            .map(|v| ms_duration(v.as_bytes()))
+            .collect();
+        assert_eq!(
+            ms,
+            [300, 2000, 1500, 120_000, 3_600_000, 5_400_000].map(Some)
+        );
+        for bad in ["0", "2d", "-1"] {
+            assert_eq!(ms_duration(bad.as_bytes()), None, "{bad}");
+        }
+        let s: Vec<Option<String>> = ["5", "1.5s", "500ms", "2m"]
+            .iter()
+            .map(|v| s_duration(v.as_bytes(), false))
+            .collect();
+        assert_eq!(s, ["5", "1.5", "0.5", "120"].map(|x| Some(x.to_string())));
+        assert_eq!(s_duration(b"0", true).as_deref(), Some("0"));
+        assert_eq!(s_duration(b"0s", true).as_deref(), Some("0"));
+        assert_eq!(s_duration(b"0", false), None);
+        assert_eq!(human_duration(90), "90s");
+        assert_eq!(human_duration(7200), "2h");
+    }
+
     #[test]
     fn durations() {
         assert_eq!(ms_duration(b"500ms"), Some(500));
