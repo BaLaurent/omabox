@@ -156,6 +156,40 @@ impl Ctx {
         Exit(self.die_rc.unwrap_or(2))
     }
 
+    /// deprecated OLD NEW (#287): the one helper every deprecation warning goes through, `omabox:
+    /// deprecated: OLD: write NEW (refused in X.Y)`, the next minor release of the one this was
+    /// built from; OMABOX_STRICT=1 refuses the form at once (usage_die). 1.0 has no live
+    /// deprecation: nothing calls it yet (bash's was called only by the suite too).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn deprecated(&self, old: &[u8], new: &[u8]) -> Res<()> {
+        const VERSION: &str = include_str!("../../../VERSION");
+        let mut p = VERSION.trim().split('.');
+        let v = match (
+            p.next().map(str::parse::<u64>),
+            p.next().map(str::parse::<u64>),
+        ) {
+            (Some(Ok(a)), Some(Ok(b))) => format!("{a}.{}", b + 1),
+            _ => "the next minor release".to_string(),
+        };
+        if crate::shell::env_or_empty("OMABOX_STRICT") == b"1" {
+            return Err(self.usage_die(crate::cat!(
+                "deprecated: ",
+                old,
+                ": write ",
+                new,
+                " (refused now: OMABOX_STRICT=1)"
+            )));
+        }
+        say(crate::cat!(
+            "deprecated: ",
+            old,
+            ": write ",
+            new,
+            format!(" (refused in {v})")
+        ));
+        Ok(())
+    }
+
     /// Exit as die would, for a refusal a helper has said already.
     pub fn refused(&self) -> Exit {
         match self.die_rc {
@@ -219,5 +253,52 @@ mod tests {
         c.die_rc = Some(125);
         assert_eq!(c.die("a"), Exit(125));
         assert_eq!(c.refused(), Exit(125));
+    }
+
+    // t_unit_deprecated (#287): one line on stderr, naming the new form and the release that
+    // refuses it; OMABOX_STRICT=1 refuses it at once (2, or run's own failure).
+    #[test]
+    fn deprecated_as_bash() {
+        let v = include_str!("../../../VERSION");
+        let mut p = v.trim().split('.');
+        let (a, b): (u64, u64) = (
+            p.next().unwrap().parse().unwrap(),
+            p.next().unwrap().parse().unwrap(),
+        );
+        let next = format!("{a}.{}", b + 1);
+        let mut ctx = Ctx::new(b"up", Vec::new());
+        let dep = |ctx: &Ctx, strict: Option<&str>| {
+            heard(|| {
+                crate::shell::with_env(&[("OMABOX_STRICT", strict)], || {
+                    ctx.deprecated(b"up --old", b"up --new")
+                })
+            })
+        };
+        let (r, said) = dep(&ctx, None);
+        assert!(r.is_ok());
+        assert_eq!(
+            said,
+            format!("omabox: deprecated: up --old: write up --new (refused in {next})\n"),
+            "deprecated: one line on stderr, naming the new form and the release that refuses it; then read"
+        );
+        assert!(
+            dep(&ctx, Some("0")).0.is_ok(),
+            "...OMABOX_STRICT=0: the same"
+        );
+        let (r, said) = dep(&ctx, Some("1"));
+        assert_eq!(
+            (r.err().map(|e| e.0), said.as_str()),
+            (
+                Some(2),
+                "omabox: deprecated: up --old: write up --new (refused now: OMABOX_STRICT=1) (omabox help up)\n"
+            ),
+            "...OMABOX_STRICT=1: refused at once, exit 2, nothing read"
+        );
+        ctx.die_rc = Some(125);
+        assert_eq!(
+            dep(&ctx, Some("1")).0.err().map(|e| e.0),
+            Some(125),
+            "...under run: run's own failure, 125"
+        );
     }
 }

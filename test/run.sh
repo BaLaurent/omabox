@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6349 MIN_UNIT=3647
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4264 MIN_UNIT=1759
+MIN_CHECKS=6345 MIN_UNIT=3643
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4255 MIN_UNIT=1750
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -600,26 +600,17 @@ t_unit_parse_mode() {
 }
 
 t_unit_rec_ff() {
-  local out calls t0 f=$TMP/recff-once
-  out=$(python3 -c "$REC_FF" "$BASH_CLI"); calls=${out##*$'\n'}; out=${out%"$calls"}
+  local out calls m src=$ROOT/crates/omabox/src
+  [ -d "$src" ] || { skip "every ffmpeg and ffprobe a recording runs goes through rec_ff" "no crate here (an install)"; return; }
+  out=$(python3 -c "$REC_FF" "$src"); calls=${out##*$'\n'}; out=${out%"$calls"}
   check_eq "every ffmpeg and ffprobe a recording runs in the box goes through rec_ff: bounded, run once more on a timeout (finding 356)" "" "$out"
   check "...the check read them ($calls)" test "${calls% calls}" -ge 14
-  if git -C "$ROOT" cat-file -e 7416abd:bin/omabox 2>/dev/null; then
-    check_eq "...it finds the 13 calls finding 356 bounded" 13 "$(python3 -c "$REC_FF" <(git -C "$ROOT" show 7416abd:bin/omabox) | sed '$d' | wc -l)"
-  else skip "...it finds the calls finding 356 bounded" "no 7416abd here"; fi
-  # rec_ff itself, its box_sys the host's here, on commands that only wait (OMABOX_RECORD_FF_SECS 1).
-  # shellcheck disable=SC2016 # the inner bash's
-  local run='box_sys() { "$@"; }; OMABOX_RECORD_FF_SECS=$1; shift; rc=0; rec_ff "$@" || rc=$?; echo "rc=$rc"'
-  t0=$SECONDS
-  out=$(lib bash -c "source $TMP/lib/bin/omabox; $run" x 1 -o /usr/bin/sh -c 'echo x; exec sleep 30' 2>&1 | paste -sd '|')
-  check_eq "rec_ff: a run out of time is run once more, then said; the last run's output, exit 124" \
-    "omabox: record: sh did not finish in 1 s (stuck: finding 356): killed, run once more|omabox: record: sh did not finish in 1 s again: killed|x|rc=124" "$out"
-  check "...in its two bounds ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -le 8
-  rm -f "$f"
-  out=$(lib bash -c "source $TMP/lib/bin/omabox; $run" x 1 -o /usr/bin/sh -c '[ -e "$1" ] && echo ok && exit 0; : > "$1"; exec sleep 30' sh "$f" 2>&1 | paste -sd '|')
-  check_eq "...stuck once: run again, its output and exit" "omabox: record: sh did not finish in 1 s (stuck: finding 356): killed, run once more|ok|rc=0" "$out"
-  check_eq "...a failure that is not a timeout: not run again" "rc=1" "$(lib bash -c "source $TMP/lib/bin/omabox; $run" x 1 /usr/bin/false 2>&1 | paste -sd '|')"
-  check_eq "...the bound: 60 s, and 5 s a second of 1080p at 30 fps" "60 61 360" "$(lib rec_ff_bound 0 0) $(lib rec_ff_bound 1 1) $(lib rec_ff_bound 1800 2073600)"
+  # (the check's own: the crate with rec_ff's calls renamed, each of them unbounded)
+  m=$TMP/recff-crate; rm -rf "$m"; cp -r "$src" "$m"
+  sed -i 's/\brec_ff(/sys_ff(/g; s/\bff_line(/sys_line(/g; s/\brec_ff_subst(/sys_subst(/g' "$m/cmd/record_stop.rs"
+  check_eq "...it finds the 13 calls finding 356 bounded, rec_ff's taken away" 13 "$(python3 -c "$REC_FF" "$m" | sed '$d' | wc -l)"
+  # (rec_ff itself, a run out of time run once more, stuck once, a failure not a timeout:
+  # record_stop.rs rec_ff_runs_once_more, an #[ignore] test; its bound: bounds; #324 wave 6-suite.)
 }
 t_unit_record() {
   # Refused before any box is looked at (finding 297).
@@ -827,22 +818,32 @@ t_unit_flag_forms() {
 # #287: every deprecation warning goes through one helper, `omabox: deprecated: OLD: write NEW
 # (refused in X.Y)`; OMABOX_STRICT=1 refuses the form at once. 1.0 has no live deprecation: called here.
 t_unit_deprecated() {
-  local v out rc; v=$(awk -F. '{ print $1 "." $2 + 1 }' "$ROOT/VERSION")
-  out=$(lib eval "ROOT=$ROOT; "'MAIN_CMD=up; deprecated "up --old" "up --new"; echo read' 2>&1); rc=$?
-  check_eq "deprecated: one line on stderr, naming the new form and the release that refuses it; then read" \
-    "0|omabox: deprecated: up --old: write up --new (refused in $v)"$'\n'"read" "$rc|$out"
-  check_eq "...OMABOX_STRICT=0: the same" 0 "$(OMABOX_STRICT=0 lib eval 'deprecated a b' 2>/dev/null; echo $?)"
-  out=$(OMABOX_STRICT=1 lib eval 'MAIN_CMD=up; deprecated "up --old" "up --new"; echo read' 2>&1); rc=$?
-  check_eq "...OMABOX_STRICT=1: refused at once, exit 2, nothing read" \
-    "2|omabox: deprecated: up --old: write up --new (refused now: OMABOX_STRICT=1) (omabox help up)" "$rc|$out"
-  check_eq "...under run: run's own failure, 125" 125 "$(OMABOX_STRICT=1 lib eval 'DIE_RC=125; deprecated a b' 2>/dev/null; echo $?)"
-  check_eq "...no other warning names a form 1.0 refuses (each goes through deprecated)" "" \
-    "$(grep -nE 'say "warning:.*(refused in|deprecat)|say "deprecat' "$ROOT/bin/omabox" | grep -vF 'say "deprecated: $1: write $2 (refused in $v)"')"
+  # (deprecated itself: one line naming the new form and the release that refuses it, OMABOX_STRICT=1
+  # refusing it at once: exit.rs deprecated_as_bash; #324 wave 6-suite.)
+  # (Over the crate's sources, their tests and deprecated's own body left out: each string that says
+  # a form is refused in a release or deprecated, as FILE:LINE: TEXT.)
+  local src=$ROOT/crates/omabox/src scan='
+import os, re, sys
+for root, _, files in sorted(os.walk(sys.argv[1])):
+    for f in sorted(files):
+        if not f.endswith(".rs"): continue
+        p = os.path.join(root, f); L = open(p).read().split("\n"); skip = False
+        for i, l in enumerate(L):
+            if l == "#[cfg(test)]" and i + 1 < len(L) and L[i + 1].startswith("mod tests"): break
+            if re.match(r"\s*pub fn deprecated\(", l): skip = True
+            elif skip and re.match(r"    \}$", l): skip = False; continue
+            if not skip and re.search(r"\"[^\"]*(refused in |deprecat)", l): print("%s:%d: %s" % (p, i + 1, l.strip()))
+'
+  if [ -d "$src" ]; then
+    check_eq "...no other warning names a form 1.0 refuses (each goes through deprecated)" "" "$(python3 -c "$scan" "$src")"
+    check_match "...the scan reads deprecated's own words when not left out (its own check)" "exit\.rs:[0-9]+: \"deprecated: \"," \
+      "$(python3 -c "${scan/pub fn deprecated/pub fn no_such_fn}" "$src")"
+  else skip "...no other warning names a form 1.0 refuses" "no crate here (an install)"; fi
   check_eq "OMABOX_STRICT is documented: help exit-codes, the reference, README's Stability" "3" \
     "$( { ob help exit-codes | grep -c OMABOX_STRICT=1; grep -c OMABOX_STRICT "$ROOT/skill/reference.md"
          awk '/^## Stability$/ {on = 1; next} on && /^## / {exit} on' "$ROOT/README.md" | grep -c OMABOX_STRICT; } | grep -c '^[1-9]')"
   check_eq "...and no claim of semantic versioning anywhere" "" \
-    "$(grep -rliE 'semantic versioning|semver' "$ROOT/README.md" "$ROOT/CHANGELOG.md" "$ROOT/skill" "$ROOT/bin/omabox")"
+    "$(grep -rliE 'semantic versioning|semver' "$ROOT/README.md" "$ROOT/CHANGELOG.md" "$ROOT/skill" "$ROOT/crates" 2>/dev/null)"
 }
 
 # #273 part B: one meaning per exit code. A usage error (an unknown option or word, a value missing
@@ -1331,24 +1332,43 @@ bad = list(dict.fromkeys(bad))
 print("\n".join(bad + ["%d calls" % n]))
 '
 # Finding 356: every ffmpeg and ffprobe a recording runs in the box goes through rec_ff (a time bound,
-# and once more after a timeout): ffmpeg 9.0.1 deadlocks now and then. REC_FF FILE: each line that
-# runs one (by /usr/bin, or by name with an option after it in an inner script) neither through
-# rec_ff nor under /usr/bin/timeout, but record_audio_start's (record_audio_end ends it), as LINE:
-# TEXT; then "N calls", how many it read.
+# and once more after a timeout): ffmpeg 9.0.1 deadlocks now and then. REC_FF DIR: over the crate's
+# sources in DIR (their tests left out), each /usr/bin/ffmpeg or ffprobe whose argv neither is given
+# to rec_ff, ff_line, rec_ff_subst or a closure of the file that calls rec_ff (as written, or as a
+# variable passed to one) nor runs under its own /usr/bin/timeout -k (audio's), but `executable`
+# checks, as FILE:LINE: TEXT; then "N calls", how many it read (#324 wave 6-suite: was bin/omabox's).
 REC_FF='
-import re, sys
-bad = []; n = 0; fn = ""
-run = re.compile(r"(?<!-x )/usr/bin/ff(mpeg|probe)\b|(^|[;|&(]|\b(do|then|exec)|--)\s*ff(mpeg|probe)\s+-")
-for i, l in enumerate(open(sys.argv[1]), 1):
-    t = l.strip()
-    m = re.match(r"(\w+)\(\)\s*\{", t)
-    if m: fn = m.group(1)
-    if t.startswith("#") or not run.search(t): continue
-    n += 1
-    if re.search(r"(?<![\w-])rec_ff\s+(-[oe]\s+)?/usr/bin/ff(mpeg|probe)\b", t): continue
-    if re.search(r"/usr/bin/timeout\s+-k\s+\S+\s+\S+\s+/usr/bin/ff(mpeg|probe)\b", t): continue
-    if fn == "record_audio_start" and re.search(r"setsid --\s+ffmpeg\s", t): continue
-    bad.append("%d: %s" % (i, t))
+import os, re, sys
+bad = []; n = 0
+lit = re.compile(r"\"/usr/bin/ff(mpeg|probe)\"")
+for root, _, files in sorted(os.walk(sys.argv[1])):
+    for f in sorted(files):
+        if not f.endswith(".rs"): continue
+        p = os.path.join(root, f); L = open(p).read().split("\n")
+        end = next((i for i in range(len(L) - 1) if L[i] == "#[cfg(test)]" and L[i + 1].startswith("mod tests")), len(L))
+        ok_calls = {"rec_ff", "ff_line", "rec_ff_subst"}
+        for i in range(end):
+            m = re.match(r"\s*let (\w+) = \|", L[i])
+            if m and any("rec_ff(" in x for x in L[i:i + 6]): ok_calls.add(m.group(1))
+        for i in range(end):
+            t = L[i].strip()
+            if t.startswith("//") or not lit.search(t): continue
+            n += 1
+            if "executable(" in t: continue
+            back = L[max(i - 4, 0):i]
+            if any("\"/usr/bin/timeout\"" in x for x in back) and any("\"-k\"" in x for x in back + [L[i]]): continue
+            call = None
+            for x in reversed(L[max(i - 6, 0):i]):
+                m = re.search(r"\b(\w+)\($", x.strip())
+                if m and m.group(1) not in ("w", "vec"): call = m.group(1); break
+                if re.match(r"let ", x.strip()): break
+            if call in ok_calls: continue
+            m = re.search(r"let (mut )?(\w+) = ", L[i]) or (re.search(r"let (mut )?(\w+) = ", L[i - 1]) if i else None)
+            if m:
+                j = i
+                while j < end and not L[j].startswith("}"): j += 1
+                if re.search(r"\b(%s)\([^;]*&%s\b" % ("|".join(ok_calls), m.group(2)), "\n".join(L[i:j])): continue
+            bad.append("%s:%d: %s" % (os.path.relpath(p, sys.argv[1]), i + 1, t))
 print("\n".join(bad + ["%d calls" % n]))
 '
 # FD_SEEN, in a box: every fd of any of its processes naming a file called fdprobe-*, a line in
@@ -8996,8 +9016,14 @@ t_unit_agent_session() {
   check_fails "...not a pid that runs with another start time (reused)" probe owner_alive $$ "1$ostart"
   check "...a pid alone when no start was recorded" probe owner_alive $$ ""
   check_fails "...and none for a pid gone" probe owner_alive "$nopid" ""
-  check_fails "no bare cmd_down in the reaper (it would end it when the down fails)" \
-    grep -nE '^\s*DOWN_IF_CREATED=.*cmd_down "\$NAME"\s*$' "$BASH_CLI"
+  # (In the crate: each down the reaper makes is a statement that drops its answer, so a down that
+  # fails, Ok(false), is tried again at the next poll; a `?` ends it on a refusal only.)
+  local reap=$ROOT/crates/omabox/src/cmd/reap.rs
+  if [ -f "$reap" ]; then
+    check_eq "no down in the reaper whose failure ends it (it would end the reaper when the down fails)" "" \
+      "$(awk '/^#\[cfg\(test\)\]/ { exit } /down\(ctx/ && !/^[[:space:]]*down\(ctx, (true|false)\)\?;[[:space:]]*$/ { print FNR ": " $0 }' "$reap")"
+    check "...the check read them ($(grep -c 'down(ctx, ' "$reap") downs)" test "$(grep -c 'down(ctx, ' "$reap")" -ge 6
+  else skip "no down in the reaper whose failure ends it" "no crate here (an install)"; fi
   # (agent_proc fails when its agent's start time cannot be read, it exited meanwhile: select.rs
   # agent_proc_needs_a_start)
   # A command run outside any repo (default-SESSION) while the session's box came from its repo (#136):
@@ -13383,8 +13409,8 @@ t_unit_install() {
   local c=$TMP/ic-root so tools0
   mkdir -p "$c/build/prefix/lib"
   git -C "$ROOT" ls-files -z | (cd "$ROOT" && tar --null -cf - -T -) | tar -xf - -C "$c"
-  so=$(lib hypr_aq_soname) && : > "$c/build/prefix/lib/$so"
-  lib eval 'echo "$AQ_BUILD"' > "$c/build/prefix/.omabox-commit"
+  so=$(probe hypr_aq_soname) && : > "$c/build/prefix/lib/$so"
+  probe aq_const AQ_BUILD > "$c/build/prefix/.omabox-commit"
   tools0=$(stat -c '%n %.9Y' "$ROOT"/tools/*/omabox-* 2>&1)
   mkdir -p "$h" "$stub"
   printf '#!/bin/sh\necho "$*" >> "%s/sudo-called"; exit 1\n' "$stub" > "$stub/sudo"
@@ -15850,19 +15876,34 @@ t_unit_guard_settings() {
   mkdir -p "$h/alt"
   CLAUDE_CONFIG_DIR=$h/alt HOME=$h "$CLI" guard on >/dev/null 2>&1
   check "CLAUDE_CONFIG_DIR is honoured" jq -e '.hooks.SessionStart' "$h/alt/settings.json"
-  # The hooks of an omabox at $co (a copy of the CLI, as a checkout or package would have it).
+  # The hooks of an omabox at $co (a copy of the CLI, as a checkout or package would have it), as its
+  # `guard on` writes them in a HOME of their own (#324 wave 6-suite, D5: they were bin/omabox's
+  # GUARD_* sourced): Claude Code's, Codex's, and Codex's config block.
   local co=$TMP/guard-co hook chook f=$TMP/envfile
-  mkdir -p "$co/bin" "$co/share/guard"; cp "$TMP/lib/bin/omabox" "$co/bin/omabox"; chmod +x "$co/bin/omabox"
+  mkdir -p "$co/bin" "$co/share/guard"
+  if [ "$CLI" = "$BASH_CLI" ]; then cp "$CLI" "$co/bin/omabox"
+  else mkdir -p "$co/build"; cp "$CLI" "$co/build/omabox"; ln -s ../build/omabox "$co/bin/omabox"; fi
+  # gh_hooks: the three texts, a line between the last two, after `guard on` and `guard on codex`.
+  gh_hooks() {
+    local hh; hh=$(mktemp -d "$TMP/gh.XXXX")
+    HOME=$hh "$co/bin/omabox" guard on >/dev/null 2>&1; HOME=$hh "$co/bin/omabox" guard on codex >/dev/null 2>&1
+    local q='.hooks.SessionStart[].hooks[] | select(.command | contains("omabox-guard")) | .command'
+    jq -r "$q" "$hh/.claude/settings.json"; printf '\0'
+    jq -r "$q" "$hh/.codex/hooks.json"; printf '\0'
+    sed -n '/^# >>> omabox guard/,/^# <<< omabox guard/p' "$hh/.codex/config.toml"
+  }
+  local -a gh
   # Finding 346: share/guard/hook-version is a hash of what `guard on` writes for each agent, its
   # path and stamps left out (here: a copy with no stamps, its ROOT made a placeholder), so a change to
   # the hook that does not bump it fails here.
-  local stamps; stamps=$(bash -c 'source "$1"; for t in "$GUARD_HOOK" "$GUARD_CODEX_HOOK
-$GUARD_CODEX"; do printf %s "${t//"$ROOT"/@ROOT@}" | sha256sum | cut -c1-12; done' _ "$co/bin/omabox" | paste -sd' ')
+  mapfile -d '' -t gh < <(gh_hooks)
+  local stamps; stamps=$(for t in "${gh[0]%$'\n'}" "${gh[1]%$'\n'}"$'\n'"${gh[2]%$'\n'}"; do printf %s "${t//"$co"/@ROOT@}" | sha256sum | cut -c1-12; done | paste -sd' ')
+  check_match "...the hooks read from what guard on wrote" "^if .*omabox-guard.*# >>> omabox guard.*# <<< omabox guard$" "$(printf %s "${gh[*]}" | tr '\n' ' ' | sed 's/ $//')"
   check_eq "share/guard/hook-version is the hash of what guard on writes (changed the hook? write [$stamps] there)" \
     "$stamps" "$(cat "$ROOT/share/guard/hook-version")"
   cp "$ROOT/share/guard/hook-version" "$co/share/guard/"
-  hook=$(bash -c 'source "$1"; printf %s "$GUARD_HOOK"' _ "$co/bin/omabox")
-  chook=$(bash -c 'source "$1"; printf %s "$GUARD_CODEX_HOOK"' _ "$co/bin/omabox")
+  mapfile -d '' -t gh < <(gh_hooks)
+  hook=${gh[0]%$'\n'} chook=${gh[1]%$'\n'}
   check_eq "the hooks carry the stamps" 2 "$(grep -cF -e "= '${stamps% *}' ]" -e "= '${stamps#* }' ]" <<<"$hook
 $chook")"
   local stale='omabox guard: this hook is outdated \(omabox changed it\): tell the user to run omabox guard on to renew it$'

@@ -42,6 +42,22 @@ enum Ff {
 /// rec_ff MODE /usr/bin/FFMPEG ARG... (finding 356): in the box under timeout, a run that ran out of
 /// time run once more, a second said, 124. Its status, and (captured) its output and a newline.
 fn rec_ff(ctx: &mut Ctx, mode: Ff, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
+    rec_ff_with(ctx, mode, argv, |ctx, a| {
+        Ok(match mode {
+            Ff::Out => sys_cap(ctx, a, Some(16_777_216), Err2::Null, true),
+            Ff::Err => sys_cap(ctx, a, Some(16_777_216), Err2::Out, true),
+            Ff::Plain { to_err } => (sys_run(ctx, a, to_err, Err2::Inherit, true)?, Vec::new()),
+        })
+    })
+}
+
+/// rec_ff, each run made by RUN (in the box: sys_cap, sys_run): its status and what it captured.
+fn rec_ff_with(
+    ctx: &mut Ctx,
+    mode: Ff,
+    argv: &[Vec<u8>],
+    mut run: impl FnMut(&mut Ctx, &[Vec<u8>]) -> Res<(i32, Vec<u8>)>,
+) -> Res<(i32, Vec<u8>)> {
     let mut secs = match FF_SECS.load(Ordering::SeqCst) {
         0 => REC_FF_FLOOR,
         s => s,
@@ -59,11 +75,7 @@ fn rec_ff(ctx: &mut Ctx, mode: Ff, argv: &[Vec<u8>]) -> Res<(i32, Vec<u8>)> {
     let tool = shell::basename(argv.first().map_or(&b""[..], |x| x));
     let (mut rc, mut o) = (0, Vec::new());
     for t in 1..=2 {
-        (rc, o) = match mode {
-            Ff::Out => sys_cap(ctx, &a, Some(16_777_216), Err2::Null, true),
-            Ff::Err => sys_cap(ctx, &a, Some(16_777_216), Err2::Out, true),
-            Ff::Plain { to_err } => (sys_run(ctx, &a, to_err, Err2::Inherit, true)?, Vec::new()),
-        };
+        (rc, o) = run(ctx, &a)?;
         if rc != 124 && rc != 137 {
             break;
         }
@@ -2204,6 +2216,12 @@ mod tests {
     fn bounds() {
         assert_eq!(ff_bound(0, 0), 60);
         assert_eq!(ff_bound(30, 1920 * 1080), 65);
+        // (t_unit_rec_ff's: 60 s, and 5 s a second of 1080p at 30 fps)
+        assert_eq!(
+            (ff_bound(1, 1), ff_bound(1800, 2_073_600)),
+            (61, 360),
+            "the bound: 60 s, and 5 s a second of 1080p at 30 fps"
+        );
         assert_eq!(rec_crf(Some(1)), "12");
         assert_eq!(rec_crf(None), "18");
         assert_eq!(replace_all(b"a=pass,b=pass", b"pass", b"x"), b"a=x,b=x");
@@ -2334,6 +2352,66 @@ mod tests {
             copy_argv(b"f", 104_857_600)[3],
             b"20",
             "...and a second more a 10 MiB"
+        );
+    }
+
+    // t_unit_rec_ff (finding 356): rec_ff on commands that only wait, each run here on the host
+    // (bash's box_sys stub), its bound 1 s (OMABOX_RECORD_FF_SECS): a run out of time is run once
+    // more, then said, exit 124; stuck once: run again; a failure that is not a timeout: not again.
+    #[test]
+    #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
+    fn rec_ff_runs_once_more() {
+        let host = |_: &mut Ctx, a: &[Vec<u8>]| -> Res<(i32, Vec<u8>)> {
+            let o = std::process::Command::new(std::ffi::OsStr::from_bytes(&a[0]))
+                .args(a[1..].iter().map(|x| std::ffi::OsStr::from_bytes(x)))
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+            Ok((o.status.code().unwrap_or(128), o.stdout))
+        };
+        let ff = |mode: Ff, a: &[&str]| {
+            let mut ctx = Ctx::new(b"record", Vec::new());
+            let a: Vec<Vec<u8>> = a.iter().map(|x| x.as_bytes().to_vec()).collect();
+            let (r, said) = crate::exit::heard(|| {
+                shell::with_env(&[("OMABOX_RECORD_FF_SECS", Some("1"))], || {
+                    rec_ff_with(&mut ctx, mode, &a, host)
+                })
+            });
+            let (rc, out) = r.unwrap();
+            format!("{said}{}rc={rc}", String::from_utf8_lossy(&out))
+        };
+        let t0 = std::time::Instant::now();
+        assert_eq!(
+            ff(Ff::Out, &["/usr/bin/sh", "-c", "echo x; exec sleep 30"]),
+            "omabox: record: sh did not finish in 1 s (stuck: finding 356): killed, run once more\nomabox: record: sh did not finish in 1 s again: killed\nx\nrc=124",
+            "rec_ff: a run out of time is run once more, then said; the last run's output, exit 124"
+        );
+        assert!(
+            t0.elapsed() <= std::time::Duration::from_secs(8),
+            "...in its two bounds"
+        );
+        let f = std::env::temp_dir().join(format!("omabox-recff-{}", std::process::id()));
+        let _ = std::fs::remove_file(&f);
+        let fs = f.display().to_string();
+        assert_eq!(
+            ff(
+                Ff::Out,
+                &[
+                    "/usr/bin/sh",
+                    "-c",
+                    "[ -e \"$1\" ] && echo ok && exit 0; : > \"$1\"; exec sleep 30",
+                    "sh",
+                    &fs
+                ]
+            ),
+            "omabox: record: sh did not finish in 1 s (stuck: finding 356): killed, run once more\nok\nrc=0",
+            "...stuck once: run again, its output and exit"
+        );
+        let _ = std::fs::remove_file(&f);
+        assert_eq!(
+            ff(Ff::Plain { to_err: false }, &["/usr/bin/false"]),
+            "rc=1",
+            "...a failure that is not a timeout: not run again"
         );
     }
 }
