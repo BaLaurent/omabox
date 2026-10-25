@@ -40,6 +40,7 @@ pub const NAMES: &[(&str, &str)] = &[
     ("aq_build_needed", "FORCE CHECKOUT ROOT"),
     ("aq_note", "KIND LIB VER FIXED"),
     ("check_install", ""),
+    ("clean_locale", ""),
     ("qt_box", ""),
     ("qt_version", ""),
     ("aq_has_fix", "FILE"),
@@ -287,6 +288,7 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             let aq = crate::install::check_install(&ctx, &n, None)?;
             line(&aq.desc())
         }
+        (b"clean_locale", []) => line(crate::upspec::clean_locale().as_bytes()),
         (b"qt_box", []) => line(&crate::install::qt_box()),
         (b"qt_version", []) => line(&crate::install::qt_version()),
         (b"aq_has_fix", [f]) => crate::install::aq_has_fix(f).then_some(()).ok_or(Exit(1)),

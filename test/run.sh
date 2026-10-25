@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6618 MIN_UNIT=3913
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4545 MIN_UNIT=2037
+MIN_CHECKS=6613 MIN_UNIT=3907
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4540 MIN_UNIT=2032
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -1096,17 +1096,14 @@ t_unit_json() {
   check_eq "wait still --window --ignore: no warning (only the box asked)" "omabox: no box '$P-nobox' is up (start one with: omabox up $P-nobox)" \
     "$("$CLI" wait still --window foo --ignore "1,1 2x2" -b "$P-nobox" 2>&1)"
   check_fails "...click --window --wait -g --ignore: none" grep -q warning <<<"$("$CLI" click --window foo --wait -g "0,0 9x9" --ignore "1,1 2x2" 1 1 -b "$P-nobox" 2>&1)"
-  check_eq "settle_in_window: -g's and --ignore's regions moved by the window's place, the cursor's (--ignore) and the rest kept" \
-    "--region 110,55,9,9 --mask 101,51,2,2 --quiet 300 --ignore 5,5,64,64 --strict|100 50" \
-    "$(lib eval 'SETTLE_ARGS=(--region 10,5,9,9 --mask 1,1,2,2 --quiet 300 --ignore 5,5,64,64 --strict); settle_in_window 100 50; echo "${SETTLE_ARGS[*]}|$SETTLE_ORIGIN"')"
-  check_eq "...a settle_opts_check given a --window marks it, none does not" "1 0" \
-    "$(lib eval 'SETTLE_WAIT=1; settle_opts_check 1; a=$SETTLE_WINDOW; SETTLE_WINDOW=0; settle_opts_check 0; echo "$a $SETTLE_WINDOW"')"
+  # (settle_in_window, -g's and --ignore's regions moved by the window's place, and settle_opts_check
+  # marking a --window: settle.rs in_window_and_opts_check_as_bash)
   local out; out=$("$CLI" keys --delay 5 a -b "$P-nobox" 2>&1); rc=$?
   check_match "keys --delay: refused (2), naming -s DURATION (#287)" "^2\|omabox: keys --delay is refused since 1\.0: for a pause between keys, -s DURATION" "$rc|$out"
   # The promise written down: each command that takes --json has its row in the reference's JSON table.
   local tab c bad=""
   tab=$(awk '/^## JSON$/ {on = 1; next} on && /^## / {exit} on && /^\| `/' "$ROOT/skill/reference.md")
-  for c in $(lib eval 'for c in "${!CMD_OPTS[@]}"; do [[ " ${CMD_OPTS[$c]//$'"'\\n'"'/ } " == *" --json "* ]] && echo "$c"; done' | sort); do
+  for c in $(probe cmd_opts_keys | while read -r k; do probe cmd_opts "$k" | grep -qx -- --json && echo "$k"; done | sort); do
     case $c in run|keys|click|scroll|drag) c=--wait ;; esac
     grep -qF -- "\`$c " <<<"$tab" || grep -qF -- "\`$c\`" <<<"$tab" || bad+=" $c"
   done
@@ -7619,10 +7616,8 @@ t_unit_leak_scan() {
   kill "$fp" "$fo" 2>/dev/null; wait "$fp" "$fo" 2>/dev/null
   check_match "...once it is closed: a failure" "FAIL.* x" "$(EVID=$TMP/hs held "$P-held" no x y 2>&1 | head -1)"
   # Who asked, as `omabox peek` hands it to the peek process.
-  check_eq "peek_marker: a command the suite ran" "OMABOX_SUITE=t9" "$(OMABOX_SUITE=t9 MAIN_CMD=peek lib peek_marker)"
-  check_eq "...omabox peek run by you (no OMABOX_SUITE)" "OMABOX_PEEK_BY=you" "$(env -u OMABOX_SUITE MAIN_CMD=peek bash -c 'source "$1"; peek_marker' _ "$TMP/lib/bin/omabox")"
-  check_eq "...any other command: none (the suite fails on its peek)" "" "$(env -u OMABOX_SUITE MAIN_CMD=up bash -c 'source "$1"; peek_marker' _ "$TMP/lib/bin/omabox")"
-  check_eq "...an OMABOX_SUITE that is not a tame word: none" "" "$(OMABOX_SUITE="t1' x" MAIN_CMD=peek lib peek_marker)"
+  # (peek_marker: a command the suite ran, `omabox peek` by you, any other command none, an
+  # OMABOX_SUITE that is not a tame word none: peek.rs peek_marker_as_bash)
   check_match "a virtual keyboard's keys" "^leak: keys from a virtual keyboard \(hl-virtual-keyboard-unknown\)" "$(scan 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
   check_eq "...not one named as yours (OMABOX_TEST_HOST_KEYBOARDS)" "" "$(OMABOX_TEST_HOST_KEYBOARDS='^hl-virtual-keyboard-unknown$' leaks 'activelayout>>hl-virtual-keyboard-unknown,English (US)')"
   check_eq "...nor Omarchy's input method (fcitx5, on every focus change of yours)" "" "$(leaks 'activelayout>>hl-virtual-keyboard-fcitx5,English (US)')"
@@ -11323,7 +11318,7 @@ t_unit_check() {
 # back.
 t_clean() {
   local B=$P-cln K=$P-clk H out lang
-  lang=$(lib clean_locale)
+  lang=$(probe clean_locale)
   # (a host LC_TIME of another language: the clean box must not take it, finding 363)
   check "up --clean" env LC_TIME=pt_BR.UTF-8 "$CLI" up "$B" --clean
   H=$(ob path -b "$B")/home

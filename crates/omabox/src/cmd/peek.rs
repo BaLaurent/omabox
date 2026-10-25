@@ -324,3 +324,25 @@ fn focus_pid(ctx: &Ctx, pid: &[u8]) -> Res<()> {
         &cat!("hl.dispatch(hl.dsp.focus({ window = 'pid:", pid, "' }))"),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// t_unit_leak_scan's peek_marker (finding 121): a command the suite ran; `omabox peek` by you;
+    /// any other command none; an OMABOX_SUITE that is not a tame word none.
+    #[test]
+    fn peek_marker_as_bash() {
+        let mut ctx = Ctx::new(b"peek", b"/x".to_vec());
+        let m = |ctx: &Ctx, suite: Option<&str>| {
+            shell::with_env(&[("OMABOX_SUITE", suite)], || {
+                String::from_utf8(peek_marker(ctx)).unwrap()
+            })
+        };
+        assert_eq!(m(&ctx, Some("t9")), "OMABOX_SUITE=t9");
+        assert_eq!(m(&ctx, None), "OMABOX_PEEK_BY=you");
+        assert_eq!(m(&ctx, Some("t1' x")), "");
+        ctx.main_cmd = b"up".to_vec();
+        assert_eq!(m(&ctx, None), "");
+    }
+}

@@ -1047,4 +1047,52 @@ mod tests {
             b"the scratchpad (SUPER+S shows it)"
         );
     }
+
+    /// t_unit_json's settle_in_window (F8, #287): -g's and --ignore's regions (--region, --mask)
+    /// moved by the window's place, the cursor's --ignore and the rest kept, the origin kept; and
+    /// settle_opts_check given a --window marks it, none does not.
+    #[test]
+    fn in_window_and_opts_check_as_bash() {
+        let c = Ctx::new(b"wait", b"/x".to_vec());
+        let w = |v: &[&str]| v.iter().map(|a| a.as_bytes().to_vec()).collect::<Vec<_>>();
+        let mut s = Settle {
+            args: w(&[
+                "--region",
+                "10,5,9,9",
+                "--mask",
+                "1,1,2,2",
+                "--quiet",
+                "300",
+                "--ignore",
+                "5,5,64,64",
+                "--strict",
+            ]),
+            ..Settle::default()
+        };
+        assert!(s.in_window(&c, b"100", b"50").is_ok());
+        assert_eq!(
+            s.args,
+            w(&[
+                "--region",
+                "110,55,9,9",
+                "--mask",
+                "101,51,2,2",
+                "--quiet",
+                "300",
+                "--ignore",
+                "5,5,64,64",
+                "--strict",
+            ])
+        );
+        assert_eq!(s.origin, Some((b"100".to_vec(), b"50".to_vec())));
+        let mut s = Settle {
+            wait: true,
+            ..Settle::default()
+        };
+        assert!(s.opts_check(&c, 1).is_ok());
+        let a = s.window;
+        s.window = false;
+        assert!(s.opts_check(&c, 0).is_ok());
+        assert_eq!((a, s.window), (true, false));
+    }
 }
