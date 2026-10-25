@@ -139,7 +139,7 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
 MIN_CHECKS=6735 MIN_UNIT=4030
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4692 MIN_UNIT=2184
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4689 MIN_UNIT=2180
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -1218,20 +1218,20 @@ signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGURG}); os.execv(sys.argv[1],
 
 # finding 63: what may go into a box, and where.
 t_unit_mount_rules() {
-  check "HOME refused" lib refuse_src "$HOME"
-  check "HOME/.ssh refused" lib refuse_src "$HOME/.ssh"
-  check "HOME/.config refused (holds omarchy's api keys)" lib refuse_src "$HOME/.config"
-  check "the runtime dir refused" lib refuse_src "$XDG_RUNTIME_DIR"
-  check "/run/user refused (contains it)" lib refuse_src /run/user
-  check "/tmp refused" lib refuse_src /tmp
-  check_fails "a repo inside /tmp is fine" lib refuse_src "$TMP"
-  check_fails "a plugin inside ~/.config/omarchy/plugins is fine" lib refuse_src "$HOME/.config/omarchy/plugins/x"
-  check "HOME/.config/omarchy itself refused (api keys)" lib refuse_src "$HOME/.config/omarchy"
+  check "HOME refused" probe refuse_src "$HOME"
+  check "HOME/.ssh refused" probe refuse_src "$HOME/.ssh"
+  check "HOME/.config refused (holds omarchy's api keys)" probe refuse_src "$HOME/.config"
+  check "the runtime dir refused" probe refuse_src "$XDG_RUNTIME_DIR"
+  check "/run/user refused (contains it)" probe refuse_src /run/user
+  check "/tmp refused" probe refuse_src /tmp
+  check_fails "a repo inside /tmp is fine" probe refuse_src "$TMP"
+  check_fails "a plugin inside ~/.config/omarchy/plugins is fine" probe refuse_src "$HOME/.config/omarchy/plugins/x"
+  check "HOME/.config/omarchy itself refused (api keys)" probe refuse_src "$HOME/.config/omarchy"
   # finding 228: what is inside ~/.config/omarchy, as real files in a fake HOME (a missing path passed
   # here once for the wrong reason). Only plugins/ and themes/; seed_home's look (branding, extensions).
   local fh=$TMP/mr-home o; o=$fh/.config/omarchy
   # shellcheck disable=SC2329 # called below
-  fhlib() { env HOME="$fh" bash -c 'source "$1"; shift; "$@"' lib "$TMP/lib/bin/omabox" "$@"; }
+  fhlib() { env HOME="$fh" "$PROBE" _rust probe "$@"; }
   mkdir -p "$o/plugins/x.y" "$o/themes/t" "$o/hooks" "$o/branding" "$fh/proj/fixtures"
   echo fake > "$o/api-keys.env"; echo 'echo hi' > "$o/hooks/post-update"
   check_match "a file inside ~/.config/omarchy refused (api-keys.env)" "it is inside .*/.config/omarchy/" "$(fhlib refuse_src "$o/api-keys.env")"
@@ -1251,56 +1251,51 @@ t_unit_mount_rules() {
   check "...through a dotfiles link, api-keys.env still refused" fhlib refuse_src "$fh/omarchy-real/api-keys.env"
   check "...and the dir that holds it" fhlib refuse_src "$fh/omarchy-real"
   check_fails "...a plugin there still fine" fhlib refuse_src "$fh/omarchy-real/plugins/x.y"
-  # A jailed caller's relative --seed SRC goes absolute (the broker runs in /); DEST is the box's.
-  printf '#!/bin/sh\nprintf "%%s|" "$@"\n' > "$TMP/mr-relay"; chmod +x "$TMP/mr-relay"
-  local out; out=$(cd "$fh/proj" && bash -c 'source "$1"; RELAY=$2; relay_call up --seed fixtures:.config/x --seed nowhere:y' _ "$TMP/lib/bin/omabox" "$TMP/mr-relay")
-  check_match "relay: a relative --seed SRC goes absolute, DEST as given" "\|--seed\|$fh/proj/fixtures:\.config/x\|" "$out"
-  check_match "...one that is not there as given, for the broker to say so" "\|--seed\|nowhere:y\|" "$out"
-  out=$(cd "$fh" && bash -c 'source "$1"; RELAY=$2; relay_call up --theme-dir proj' _ "$TMP/lib/bin/omabox" "$TMP/mr-relay")
-  check_match "relay: a relative --theme-dir goes absolute (#170)" "\|--theme-dir\|$fh/proj\|" "$out"
+  # (A jailed caller's relative --seed SRC goes absolute, one not there as given, DEST the box's; a
+  # relative --theme-dir absolute, #170: t_unit_rust_jailed's.)
   # #98: omabox's own saves and box HOMEs, and other tools' tokens
   local x
   for x in .local/share/omabox .local/share/omabox/saves .cache/omabox .config/gh .config/gcloud .azure \
            .config/op .git-credentials .config/git/credentials; do
-    check "HOME/$x refused" lib refuse_src "$HOME/$x"
+    check "HOME/$x refused" probe refuse_src "$HOME/$x"
   done
   # finding 336: the coding agents' and the browsers' own stores (their logins), said as a secret store's
   for x in .claude .claude.json .codex .config/opencode .local/share/opencode .pi .hermes .gemini .mozilla \
            .config/chromium .config/google-chrome .config/BraveSoftware .config/vivaldi .config/microsoft-edge .pki; do
-    check "HOME/$x refused" lib refuse_src "$HOME/$x/x"
+    check "HOME/$x refused" probe refuse_src "$HOME/$x/x"
   done
-  check_match "...said as the other stores are" "^it is inside $HOME/\.claude/ \(secrets or live sockets\)$" "$(lib refuse_src "$HOME/.claude")"
+  check_match "...said as the other stores are" "^it is inside $HOME/\.claude/ \(secrets or live sockets\)$" "$(probe refuse_src "$HOME/.claude")"
   check "...CLAUDE_CONFIG_DIR and CODEX_HOME where they are set" \
-    env CLAUDE_CONFIG_DIR="$TMP/mr-cc" CODEX_HOME="$TMP/mr-cx" bash -c 'source "$1"; refuse_src "$2/mr-cc/x" && refuse_src "$2/mr-cx"' _ "$TMP/lib/bin/omabox" "$TMP"
-  check_fails "...unset, nothing more refused" env -u CLAUDE_CONFIG_DIR -u CODEX_HOME bash -c 'source "$1"; refuse_src "$2"' _ "$TMP/lib/bin/omabox" "$TMP"
-  check_fails "HOME/code is fine" lib refuse_src "$HOME/code"
-  check "/ refused" lib refuse_src /
-  check_fails "a repo is fine" lib refuse_src "$ROOT"
-  check_fails "mise's installs are fine" lib refuse_src "${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs"
-  check "dest /home refused (hides /home/sbx)" lib refuse_dest /home
-  check "dest /opt refused (hides /opt/omabox)" lib refuse_dest /opt
-  check "dest /usr/x refused" lib refuse_dest /usr/x
-  check_fails "dest /sbx is fine" lib refuse_dest /sbx
-  check_fails "dest /mnt/x is fine" lib refuse_dest /mnt/x
-  check_fails "dest inside /tmp is fine (a repo in /tmp)" lib refuse_dest /tmp/x/repo
-  check "dest /tmp refused" lib refuse_dest /tmp
-  check "dest /tmp/.X11-unix refused" lib refuse_dest /tmp/.X11-unix
-  check_eq "//usr normalised to /usr" "/usr" "$(lib robind_spec "$ROOT://usr" | cut -f2)"
+    env CLAUDE_CONFIG_DIR="$TMP/mr-cc" CODEX_HOME="$TMP/mr-cx" sh -c '"$0" _rust probe refuse_src "$1/mr-cc/x" && "$0" _rust probe refuse_src "$1/mr-cx"' "$PROBE" "$TMP"
+  check_fails "...unset, nothing more refused" env -u CLAUDE_CONFIG_DIR -u CODEX_HOME "$PROBE" _rust probe refuse_src "$TMP"
+  check_fails "HOME/code is fine" probe refuse_src "$HOME/code"
+  check "/ refused" probe refuse_src /
+  check_fails "a repo is fine" probe refuse_src "$ROOT"
+  check_fails "mise's installs are fine" probe refuse_src "${MISE_DATA_DIR:-$HOME/.local/share/mise}/installs"
+  check "dest /home refused (hides /home/sbx)" probe refuse_dest /home
+  check "dest /opt refused (hides /opt/omabox)" probe refuse_dest /opt
+  check "dest /usr/x refused" probe refuse_dest /usr/x
+  check_fails "dest /sbx is fine" probe refuse_dest /sbx
+  check_fails "dest /mnt/x is fine" probe refuse_dest /mnt/x
+  check_fails "dest inside /tmp is fine (a repo in /tmp)" probe refuse_dest /tmp/x/repo
+  check "dest /tmp refused" probe refuse_dest /tmp
+  check "dest /tmp/.X11-unix refused" probe refuse_dest /tmp/.X11-unix
+  check_eq "//usr normalised to /usr" "/usr" "$(probe robind_spec "$ROOT://usr" | cut -f2)"
   # --seed SRC:DEST (#80): DEST is in the box HOME, however written; never above it.
-  check_eq "seed: DEST relative to the box HOME" "$ROOT/VERSION"$'\t'".config/x/v" "$(lib seed_spec "$ROOT/VERSION:.config/x/v")"
+  check_eq "seed: DEST relative to the box HOME" "$ROOT/VERSION"$'\t'".config/x/v" "$(probe seed_spec "$ROOT/VERSION:.config/x/v")"
   check_eq "seed: ~/ and /home/sbx/ are the box HOME" ".config/v .config/v" \
-    "$(lib seed_spec "$ROOT/VERSION:~/.config/v" | cut -f2) $(lib seed_spec "$ROOT/VERSION:/home/sbx/.config/v" | cut -f2)"
-  check_match "seed: .. out of the HOME refused" "must be inside the box HOME" "$(lib seed_spec "$ROOT/VERSION:a/../../x" 2>&1)"
-  check_match "seed: another absolute DEST refused" "DEST is in the box HOME" "$(lib seed_spec "$ROOT/VERSION:/etc/x" 2>&1)"
-  check_match "seed: the HOME itself refused" "must be inside the box HOME" "$(lib seed_spec "$ROOT/VERSION:~/" 2>&1)"
-  check_match "seed: no DEST refused" "SRC:DEST" "$(lib seed_spec "$ROOT/VERSION" 2>&1)"
+    "$(probe seed_spec "$ROOT/VERSION:~/.config/v" | cut -f2) $(probe seed_spec "$ROOT/VERSION:/home/sbx/.config/v" | cut -f2)"
+  check_match "seed: .. out of the HOME refused" "must be inside the box HOME" "$(probe seed_spec "$ROOT/VERSION:a/../../x" 2>&1)"
+  check_match "seed: another absolute DEST refused" "DEST is in the box HOME" "$(probe seed_spec "$ROOT/VERSION:/etc/x" 2>&1)"
+  check_match "seed: the HOME itself refused" "must be inside the box HOME" "$(probe seed_spec "$ROOT/VERSION:~/" 2>&1)"
+  check_match "seed: no DEST refused" "SRC:DEST" "$(probe seed_spec "$ROOT/VERSION" 2>&1)"
   # --monitor SPEC (#122)
-  check_eq "monitor: WxH, at 60, scale 1, right" "1080x1920@60 1 right" "$(lib monitor_spec 1080x1920)"
-  check_eq "monitor: rate, scale, below" "2560x1440@144 1.6 below" "$(lib monitor_spec 2560x1440@144,scale=1.6,below)"
-  check_eq "monitor: X,Y" "800x600@60 1 0,1080" "$(lib monitor_spec 800x600,0,1080)"
-  check_eq "monitor: X,Y then scale" "800x600@60 2 100,0" "$(lib monitor_spec 800x600,100,0,scale=2)"
+  check_eq "monitor: WxH, at 60, scale 1, right" "1080x1920@60 1 right" "$(probe monitor_spec 1080x1920)"
+  check_eq "monitor: rate, scale, below" "2560x1440@144 1.6 below" "$(probe monitor_spec 2560x1440@144,scale=1.6,below)"
+  check_eq "monitor: X,Y" "800x600@60 1 0,1080" "$(probe monitor_spec 800x600,0,1080)"
+  check_eq "monitor: X,Y then scale" "800x600@60 2 100,0" "$(probe monitor_spec 800x600,100,0,scale=2)"
   local bad; for bad in 1080 0x100 1080x1920,scale=5 1080x1920,scale=0.5 1080x1920,scale=1.234 1080x1920,left 1080x1920,above 1080x1920,5 1080x1920,up ""; do
-    check_fails "monitor: '$bad' refused" lib monitor_spec "$bad"
+    check_fails "monitor: '$bad' refused" probe monitor_spec "$bad"
   done
 }
 
@@ -5997,6 +5992,16 @@ EOF
   check_match "jailed: shot sends its OMABOX_SHOT_FIT" "env: OMABOX_RELAY_SHOT_FIT=1280(\||$)" "$rjo"
   rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" OMABOX_SHOT_FIT= "$CLI" shot -o "$r/out/sf.png" 2>&1 | paste -sd '|')
   check_fails "...none when it has none" grep -q SHOT_FIT <<<"$rjo"
+  # (relay_call's, from t_unit_mount_rules: a relative --seed SRC goes absolute, DEST as given; one not
+  # there as given, for the broker to say so; a relative --theme-dir absolute, #170)
+  mkdir -p "$r/proj/fixtures" "$r/proj/th"
+  rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" up rjx --seed fixtures:.config/x --seed nowhere:y --theme-dir th 2>&1 | paste -sd '|')
+  check_match "jailed: a relative --seed SRC goes absolute, DEST as given" "broker: \[--seed\]\|broker: \[$r/proj/fixtures:\.config/x\]" "$rjo"
+  check_match "...one that is not there as given" "broker: \[--seed\]\|broker: \[nowhere:y\]" "$rjo"
+  check_match "...a relative --theme-dir goes absolute" "broker: \[--theme-dir\]\|broker: \[$r/proj/th\]" "$rjo"
+  # (relay_shot's, from t_unit_pixel: --since names a path of the jail's)
+  rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" shot --since a.png 2>&1)
+  check_match "jailed: shot --since refused" "not for a jailed agent" "$rjo"
   parity "jailed: shot -o FILE, filled by the broker, placed" shot -o "$r/out/s.png"
   parity "jailed: shot FILE as a word" shot "$r/out/s2.png" --fit 2
   parity "jailed: shot, two files" shot "$r/out/a.png" -o "$r/out/b.png"
@@ -18541,7 +18546,7 @@ t_unit_pixel() {
   check_match "...--since is --changed" "crops by itself" "$(ob shot -b "$P-x" --since x.png -g 0,0,9,9 2>&1)"
   check_match "shot --ignore without --changed refused" "goes with --changed" "$(ob shot -b "$P-x" --ignore "0,0 9x9" 2>&1)"
   check_match "shot --ignore takes a region" 'is "X,Y WxH"' "$(ob shot -b "$P-x" --changed --ignore 9 2>&1)"
-  check_match "shot --since from a jail refused (a path of the jail's)" "not for a jailed agent" "$(lib relay_shot x -- --since a.png 2>&1)"
+  # (shot --since from a jail refused, a path of the jail's: t_unit_rust_jailed's)
   # diff_box: the box around what differs, a corner too (--burst --diff read a change there as none,
   # or as the box of what did not change); none when the same; a mask leaves a change out.
   local d=$TMP/diffbox; mkdir -p "$d"
@@ -18549,12 +18554,12 @@ t_unit_pixel() {
   magick "$d/a.png" -fill '#102031' -draw 'point 0,0' "$d/corner.png"
   magick "$d/a.png" -fill white -draw 'rectangle 0,0 99,40' "$d/half.png"
   magick "$d/a.png" -fill white -draw 'rectangle 10,10 19,19' -draw 'rectangle 80,60 89,69' "$d/two.png"
-  check_eq "diff_box: the same image: nothing" "" "$(lib diff_box "$d/a.png" "$d/a.png")"
-  check_eq "...one corner pixel, one level of blue" "0 0 1 1" "$(lib diff_box "$d/a.png" "$d/corner.png")"
-  check_eq "...the top half" "0 0 100 41" "$(lib diff_box "$d/a.png" "$d/half.png")"
-  check_eq "...two squares apart: one box around both" "10 10 80 60" "$(lib diff_box "$d/a.png" "$d/two.png")"
-  check_eq "...one masked: the other" "10 10 10 10" "$(lib diff_box "$d/a.png" "$d/two.png" 75,55,20,20)"
-  check_eq "diff_parts: each square, to 8 px outwards" $'8 8 16 16\n80 56 16 16' "$(lib diff_parts "$d/a.png" "$d/two.png" | sort -n)"
+  check_eq "diff_box: the same image: nothing" "" "$(probe diff_box "$d/a.png" "$d/a.png")"
+  check_eq "...one corner pixel, one level of blue" "0 0 1 1" "$(probe diff_box "$d/a.png" "$d/corner.png")"
+  check_eq "...the top half" "0 0 100 41" "$(probe diff_box "$d/a.png" "$d/half.png")"
+  check_eq "...two squares apart: one box around both" "10 10 80 60" "$(probe diff_box "$d/a.png" "$d/two.png")"
+  check_eq "...one masked: the other" "10 10 10 10" "$(probe diff_box "$d/a.png" "$d/two.png" 75,55,20,20)"
+  check_eq "diff_parts: each square, to 8 px outwards" $'8 8 16 16\n80 56 16 16' "$(probe diff_parts "$d/a.png" "$d/two.png" | sort -n)"
 }
 
 # shot --burst (#132, finding 212) in a box: frames at their times, a contact sheet, an action after the

@@ -66,6 +66,14 @@ pub const NAMES: &[(&str, &str)] = &[
     ("cpu_tame", "NAME"),
     ("cpu_report", "CLK [PID [APP]]"),
     ("cpu_table", ""),
+    // Where two images differ (magick reads them).
+    ("diff_box", "A B [MASK...]"),
+    ("diff_parts", "A B [MASK...]"),
+    // What a box may mount, and where (the reason on stdout, 0, when refused; 1 when it may).
+    ("refuse_src", "PATH [look]"),
+    ("refuse_dest", "PATH"),
+    ("robind_spec", "DIR[:DEST]"),
+    ("monitor_spec", "SPEC"),
 ];
 
 /// One line a word: the probe's own usage, for a name it does not have.
@@ -334,6 +342,29 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             awk_stdin(&a)
         }
         (b"cpu_table", []) => awk_stdin(&[crate::jqprog::CPU_TABLE_AWK.as_bytes().to_vec()]),
+        (b"diff_box", [a, b, masks @ ..]) => {
+            match crate::shots::diff_box(a, b, &owned(masks)).ok_or(Exit(1))? {
+                Some([x, y, w, h]) => line(format!("{x} {y} {w} {h}").as_bytes()),
+                None => Ok(()),
+            }
+        }
+        (b"diff_parts", [a, b, masks @ ..]) => {
+            for p in crate::shots::diff_parts(a, b, &owned(masks)) {
+                line(&p.join(&b' '))?;
+            }
+            Ok(())
+        }
+        (b"refuse_src", [p]) => refused(crate::repo::refuse_src(p)),
+        (b"refuse_src", [p, l]) if *l == b"look" => refused(crate::repo::refuse_src_look(p)),
+        (b"refuse_dest", [p]) => refused(crate::upspec::refuse_dest(p)),
+        (b"robind_spec", [spec]) => {
+            let (src, dest) = crate::upspec::robind_spec(spec).ok_or(Exit(1))?;
+            line(&cat!(src, "\t", dest))
+        }
+        (b"monitor_spec", [spec]) => {
+            let m = crate::mon::monitor_spec(spec).map_err(|()| Exit(1))?;
+            line(&m.join(&b' '))
+        }
         (b"covers_held", [n]) => {
             ctx.name = n.to_vec();
             ctx.d = cat!(ctx.boxes, "/", n);
@@ -354,6 +385,14 @@ fn awk_stdin(args: &[Vec<u8>]) -> Res<()> {
 
 fn owned(v: &[&[u8]]) -> Vec<Vec<u8>> {
     v.iter().map(|x| x.to_vec()).collect()
+}
+
+/// A refusal's reason said (0), or 1 when there is none.
+fn refused(why: Option<Vec<u8>>) -> Res<()> {
+    match why {
+        Some(m) => line(&m),
+        None => Err(Exit(1)),
+    }
 }
 
 /// A test's answer as its status: 0 yes, 1 no.
