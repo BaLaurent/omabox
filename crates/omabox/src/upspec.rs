@@ -698,6 +698,48 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    // clean_keep and clean_text (t_unit_check's four cases).
+    #[test]
+    fn clean_as_bash() {
+        assert_eq!(
+            clean_keep(b"clock,animations,clock"),
+            Ok(b"clock,animations".to_vec()),
+            "--keep: comma-separated, once each"
+        );
+        let (r, said) = crate::exit::heard(|| clean_keep(b"clock,blur"));
+        assert_eq!(r, Err(()));
+        assert!(
+            said.contains(
+                "takes animations, bar, clock, fonts, locale, pointer, wallpaper (comma-separated), got blur"
+            ),
+            "--keep: anything else refused, naming what it takes: {said}"
+        );
+        assert_eq!(
+            String::from_utf8(clean_text(
+                b"",
+                b"tokyo-night",
+                b"isolated",
+                b"en_US.UTF-8",
+                b"UTC"
+            ))
+            .unwrap(),
+            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, none of your fonts, no pointer, no network, animations off",
+            "clean_text: all of it"
+        );
+        assert_eq!(
+            String::from_utf8(clean_text(
+                b"bar,wallpaper,clock,animations,locale,fonts",
+                b"nord",
+                b"connected",
+                b"",
+                b""
+            ))
+            .unwrap(),
+            "your bar, theme nord, no pointer",
+            "...what --keep takes back, and a network"
+        );
+    }
+
     #[test]
     fn addresses() {
         let ok = |a: &str, want: &str| {

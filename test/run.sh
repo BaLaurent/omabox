@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6621 MIN_UNIT=3915
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4545 MIN_UNIT=2037
+MIN_CHECKS=6579 MIN_UNIT=3873
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4500 MIN_UNIT=1992
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -1062,20 +1062,7 @@ t_unit_json() {
     "$(j=$("$CLI" check diff "$d/a.png" "$d/a.png" --json); echo "$(jq -r '"\(.result) \(.regions | tojson) \(.specks.count) \(.size)"' <<<"$j") $?")"
   check_eq "...another size: size {from, to}" '{"from":"200x100","to":"300x100"}' "$("$CLI" check diff "$d/a.png" "$d/c.png" --json | jq -c .size)"
   check_eq "...without --json, its lines as before" $'10,10 51x31 (1581 px)\nspecks: 0, 0 px' "$("$CLI" check diff "$d/a.png" "$d/b.png")"
-  # check run --json's object (check_compare_json), on a baseline and a run made here.
-  mkdir -p "$d/base" "$d/out/run1"
-  cp "$d/a.png" "$d/base/p1.png"; cp "$d/a.png" "$d/base/p2.png"; cp "$d/a.png" "$d/base/gone.png"
-  cp "$d/a.png" "$d/out/run1/p1.png"; cp "$d/b.png" "$d/out/run1/p2.png"; cp "$d/a.png" "$d/out/run1/p3.png"
-  local f; for f in base/p1 base/p2 base/gone out/run1/p1 out/run1/p2 out/run1/p3; do echo "of screen" > "$d/$f.point"; done
-  echo "settled no" >> "$d/out/run1/p2.point"
-  rc=0; j=$(lib eval "CHECK_PY=$ROOT/share/check.py; check_compare_json $d/out $d/base ''" 2>/dev/null) || rc=$?
-  check_eq "check run --json: result, counts, exit 1" "changed 4 1 1 1 1 1" \
-    "$(jq -r '"\(.result) \(.counts | "\(.checkpoints) \(.same) \(.changed) \(.new) \(.missing)")"' <<<"$j") $rc"
-  check_eq "...each checkpoint's id and result" "p1:same p2:changed p3:new gone:missing" "$(jq -r '[.checkpoints[] | "\(.id):\(.result)"] | join(" ")' <<<"$j")"
-  check_eq "...a changed one: its region, marked copy, not still" '[{"x":10,"y":10,"w":51,"h":31,"pixels":1581}] true false' \
-    "$(jq -r '.checkpoints[1] | "\(.regions | tojson) \(.marked | endswith("p2.diff.png")) \(.still)"' <<<"$j")"
-  check_eq "...base, shots, the report" "$d/base $d/out/run1 true" "$(jq -r '"\(.base) \(.shots) \(.report | endswith("report.png"))"' <<<"$j")"
-  check_fails "...its gathering file gone" test -e "$d/out/.check.jsonl"
+  # check run --json's object (check_compare_json): check.rs compare_json_as_bash (#[ignore]).
   check_match "check run: --json is not --approve's" "check run: --json reports a check .* not --approve" "$("$CLI" check run --approve --json -- true 2>&1)"
   rc=0; j=$("$CLI" check run --json --base "$d/none" -- true 2>/dev/null) || rc=$?
   check_eq "check run --json with no baseline: {result: no_baseline}, exit 4" "no_baseline 4" "$(jq -r .result <<<"$j") $rc"
@@ -11099,107 +11086,9 @@ t_unit_check() {
     rc=0; out=$(ob check diff "$d/a.png" "$d/wide.png") || rc=$?
     check_eq "...another size: said, exit 1" "size 200x100 -> 201x100|1" "$out|$rc"
     check_fails "...one file only refused" ob check diff "$d/a.png"
-    # Holes (finding 362): the sentinel enclosed by surfaces, not the wallpaper around them.
-    local hl="CHECK_PY=$ROOT/share/check.py; check_holes"
-    magick -size 400x300 xc:'#ff00ff' -fill '#202030' -draw 'rectangle 10,10 190,289' -draw 'rectangle 200,10 389,289' \
-      -fill '#ff00ff' -draw 'rectangle 60,100 99,129' "$d/hole.png"
-    check_eq "holes: one inside a window; the gap between two windows reaches the margin, open" \
-      $'60,100 40x30 1200\ncorners 0' "$(lib eval "$hl $d/hole.png screen" 2>&1)"
-    check_eq "...a region cutting it: its part, in the region's pixels" $'10,10 20x20 400\ncorners 0' \
-      "$(lib eval "$hl $d/hole.png screen '50 90 30 30'" 2>&1)"
-    check_eq "...a region beside it: none" "corners 0" "$(lib eval "$hl $d/hole.png screen '250 90 30 30'" 2>&1)"
-    magick -size 400x300 xc:'#ff00ff' -fill '#7aa2f7' -draw 'rectangle 10,10 389,289' -fill '#ff00ff' -draw 'rectangle 12,12 387,287' \
-      -fill '#202030' -draw 'roundrectangle 12,12 387,287 14,14' "$d/round.png"
-    check_eq "...rounded content inside a window's border: its 4 corners, no hole" "corners 4" "$(lib eval "$hl $d/round.png screen" 2>&1)"
-    magick -size 400x300 xc:'#ff00ff' -fill '#202030' -draw 'rectangle 10,10 389,289' -fill '#ff00ff' -draw 'rectangle 380,100 399,140' "$d/edge.png"
-    check_eq "...a gap that reaches the screen's edge: open wallpaper" "corners 0" "$(lib eval "$hl $d/edge.png screen" 2>&1)"
-    magick -size 200x100 xc:none -fill '#202030' -draw 'roundrectangle 0,0 199,99 12,12' \
-      \( -size 40x20 xc:none \) -geometry +50+30 -compose copy -composite \( -size 20x30 xc:none \) -geometry +180+40 -compose copy -composite "$d/win.png"
-    check_eq "...a window's own pixels: its transparent parts, one at its edge too; its rounded corners not" \
-      $'50,30 40x20 800\n180,40 20x30 600\ncorners 4' "$(lib eval "$hl $d/win.png window" 2>&1)"
-    check_eq "...an opaque window: none" "corners 0" "$(lib eval "$hl $d/a.png window" 2>&1)"
-    printf 'of screen\nholes checked\nhole 10,10 5x5 25\n' > "$d/hb.point"
-    printf 'of screen\nholes checked\nhole 12,12 5x5 25\nhole 100,100 5x5 25\n' > "$d/hn.point"
-    check_eq "...new holes: those the baseline has none overlapping" "100,100 5x5 25" "$(lib check_new_holes "$d/hb.point" "$d/hn.point" 2>&1)"
-    check_eq "...a baseline from before holes: all of them" $'12,12 5x5 25\n100,100 5x5 25' "$(lib check_new_holes "$d/a.json" "$d/hn.point" 2>&1)"
-    # --approve on made runs (finding 363): each checkpoint's speck is twice the largest stray part
-    # between its runs (0 when they agreed to the pixel), and one image of the baseline is written.
-    local cp="CHECK_PY=$ROOT/share/check.py" ap=$d/ap
-    mkdir -p "$ap/run1" "$ap/run2" "$ap/run3"
-    for k in 1 2 3; do
-      printf 'of screen\nsettled yes\ntree none\nholes off: test\n' > "$ap/run$k/p.point"
-      printf 'of screen\nsettled yes\ntree none\nholes off: test\n' > "$ap/run$k/q.point"
-      cp "$d/a.png" "$ap/run$k/q.png"
-    done
-    cp "$d/a.png" "$ap/run1/p.png"; cp "$d/specks.png" "$ap/run2/p.png"; cp "$d/a.png" "$ap/run3/p.png"
-    echo '{"gpu":"x","locale":"en_US.UTF-8","timezone":"UTC"}' > "$ap/env.json"
-    rc=0; out=$(lib eval "$cp; check_approve $ap $d/apbase '' 3" 2>&1) || rc=$?
-    check_match "approve: a checkpoint whose runs differ by a pixel: specks under 16 px (twice 1, 16 at least)" \
-      '(^|'$'\n'')baseline p \(specks under 16 px left out: the runs. largest stray part was 1 px\)' "$out"
-    check_match "...one whose runs agreed: specks under 8 px" '(^|'$'\n'')baseline q \(specks under 8 px left out: the runs agreed to the pixel\)' "$out"
-    check_eq "...kept in its .point" "speck 16|speck 8" "$(grep '^speck' "$d/apbase/p.point")|$(grep '^speck' "$d/apbase/q.point")"
-    check_match "...the baseline's image, and to look at it" $'overview: [^\n]*/ap/baseline.png [^\n]*\ncheck: look at it before you keep this baseline' "$out"
-    check "...written" test -s "$ap/baseline.png"
-    rc=0; out=$(lib eval "$cp; check_approve $ap $d/apbase2 5 3" 2>&1) || rc=$?
-    check_match "...--speck given: that one" '(^|'$'\n'')baseline q \(specks under 5 px left out \(--speck\)\)' "$out"
-    check_eq "...in the .point" "speck 5" "$(grep '^speck' "$d/apbase2/q.point")"
-    # Checkpoints of one window share its largest speck (the noise is the app's).
-    mkdir -p "$d/aw/run1" "$d/aw/run2" "$d/aw/run3"
-    for k in 1 2 3; do
-      printf 'of window W\nsettled yes\ntree none\nholes off: test\n' > "$d/aw/run$k/w1.point"
-      printf 'of window W\ncrop 0,0 50x50\nsettled yes\ntree none\nholes off: test\n' > "$d/aw/run$k/w2.point"
-      cp "$ap/run$k/p.png" "$d/aw/run$k/w1.png"; cp "$d/a.png" "$d/aw/run$k/w2.png"
-    done
-    cp "$ap/env.json" "$d/aw/"
-    out=$(lib eval "$cp; check_approve $d/aw $d/awbase '' 3" 2>&1)
-    check_match "...a crop of a window whose runs agreed takes the window's speck, said" \
-      $'(^|\n)speck    w2: under 16 px, as the other checkpoints of its window' "$out"
-    check_eq "...in its .point" "speck 16" "$(grep '^speck' "$d/awbase/w2.point")"
-    for k in 1 2 3; do cp "$d/a.png" "$d/aw/run$k/w1.png"; done
-    rc=0; out=$(lib eval "$cp; check_approve $d/aw $d/awbase0 '' 3" 2>&1) || rc=$?
-    check_eq "...a window whose checkpoints all agreed: 8 for both, exit 0" "speck 8|speck 8|0" \
-      "$(grep '^speck' "$d/awbase0/w1.point")|$(grep '^speck' "$d/awbase0/w2.point")|$rc"
-    # A check with each checkpoint's speck: a 10 px part, so p (speck 16) is the same and says what it
-    # left out, q (8, its runs agreed) changes; a baseline from before specks were measured: 32.
-    mkdir -p "$ap/c/run1"
-    cp "$ap/run1/p.point" "$ap/run1/q.point" "$ap/c/run1/"
-    magick "$d/a.png" -fill '#c1c0d0' -draw 'rectangle 150,80 154,81' "$ap/c/run1/p.png"; cp "$ap/c/run1/p.png" "$ap/c/run1/q.png"
-    cp "$ap/env.json" "$ap/c/"
-    rc=0; out=$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1) || rc=$?
-    check_match "check: the same, saying what it left out" $'(^|\n)same     p \(1 speck left out, the largest 10 px\)\n' "$out"
-    check_match "...where the runs agreed (8): changed" $'(^|\n)changed  q: 1 region' "$out"
-    check_match "...counted, exit 1" $'check: 1 of 2 same, 1 changed;[^|]*\|1$' "$out|$rc"
-    sed -i '/^speck /d' "$d/apbase/q.point"
-    rc=0; out=$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1) || rc=$?
-    check_match "...a baseline without a speck: 32, as before" $'(^|\n)same     q \(1 speck left out, the largest 10 px\)' "$out"
-    rc=0; out=$(lib eval "$cp; check_compare $ap/c $d/apbase 0" 2>&1) || rc=$?
-    check_match "...--speck 0 by hand wins" $'(^|\n)changed  p: 1 region' "$out"
-    rm -f "$ap/c/run1/q.point"
-    printf 'of screen\nsettled yes\ntree none\nholes off: test\n' > "$ap/c/run1/r.point"; cp "$d/a.png" "$ap/c/run1/r.png"
-    rc=0; out=$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1) || rc=$?
-    check_match "...new and missing counted" $'check: 1 of 3 same, 1 new, 1 missing;[^|]*\|1$' "$out|$rc"
-    echo '{"gpu":"x","locale":"pt_BR.UTF-8","timezone":"America/Sao_Paulo"}' > "$d/apbase/check.json"
-    check_match "...another locale and timezone said" 'another setup \(locale pt_BR.UTF-8 -> en_US.UTF-8, timezone America/Sao_Paulo -> UTC\)' \
-      "$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1)"
-    echo '{"gpu":"x"}' > "$d/apbase/check.json"
-    check_fails "...not for a baseline from before they were recorded" grep -q 'another setup' <<<"$(lib eval "$cp; check_compare $ap/c $d/apbase ''" 2>&1)"
-    # One change in several checkpoints (#257): said once, a later one "as" the first, no card of its own.
-    local gb=$d/gbase gc=$d/gc id
-    mkdir -p "$gb" "$gc/run1"
-    for id in s1 s2 s3; do
-      printf 'of screen\nsettled yes\ntree none\nholes off: test\nspeck 8\n' > "$gb/$id.point"; cp "$d/a.png" "$gb/$id.png"
-      printf 'of screen\nsettled yes\ntree none\nholes off: test\n' > "$gc/run1/$id.point"
-    done
-    cp "$d/new.png" "$gc/run1/s1.png"; cp "$d/new.png" "$gc/run1/s2.png"
-    magick "$d/a.png" -fill '#c0c0d0' -draw 'rectangle 120,60 160,80' "$gc/run1/s3.png"
-    cp "$ap/env.json" "$gc/"; cp "$ap/env.json" "$gb/check.json"
-    rc=0; out=$(lib eval "$cp; check_compare $gc $gb ''" 2>&1) || rc=$?
-    check_match "check: one change in two checkpoints: the second said as the first" \
-      $'(^|\n)changed  s2: as s1 \\(its 1 region\\)\n' "$out"
-    check_fails "...not its regions again" grep -q '^changed  s2: 1 region' <<<"$out"
-    check_match "...another change: its own lines" $'(^|\n)changed  s3: 1 region' "$out"
-    check_match "...each counted as changed, the alike said; exit 1" $'check: 0 of 3 same, 3 changed \\(1 as another\\);[^|]*\\|1$' "$out|$rc"
-    check "...its diff image written all the same" test -s "$gc/s2.diff.png"
+    # Holes (finding 362), check_new_holes, --approve's specks and window specks, check_compare's
+    # same/changed/new/missing, its setup line and one change in several checkpoints (#257): check.rs
+    # holes_as_bash, new_holes_as_bash, approve_and_compare_as_bash (#[ignore]: t_unit_rust_ignored).
     # The report (finding 361): every change in one image, each region cropped beside its baseline.
     magick -size 1920x1080 xc:'#202030' -fill '#c0c0d0' -draw 'rectangle 100,100 300,140' -draw 'rectangle 1500,900 1700,940' "$d/big.png"
     magick "$d/big.png" -fill '#c0c0d0' -draw 'rectangle 100,100 306,140' -draw 'rectangle 1500,950 1700,990' "$d/big2.png"
@@ -11258,30 +11147,13 @@ t_unit_check() {
   else
     skip "check diff on made images" "no magick (imagemagick)"
   fi
-  # Whether a box's screen can show holes: a clean box whose background is still the sentinel's.
-  mkdir -p "$d/hbox/home/.local/state/omarchy/current"
-  echo '{}' > "$d/hbox/box.json"
-  check_eq "holes off: not a clean box" "not a clean box" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
-  echo '{"clean": {"keep": ["clock", "wallpaper"]}}' > "$d/hbox/box.json"
-  check_eq "...--keep wallpaper" "--keep wallpaper" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
-  echo '{"clean": {"keep": []}}' > "$d/hbox/box.json"
-  ln -sfn /home/sbx/.config/omabox/clean-wallpaper.png "$d/hbox/home/.local/state/omarchy/current/background"
-  check_eq "...clean, the sentinel's wallpaper: on" "" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
-  ln -sfn /home/sbx/.local/state/omarchy/current/theme/backgrounds/1.jpg "$d/hbox/home/.local/state/omarchy/current/background"
-  check_match "...a theme's wallpaper since" "not the sentinel" "$(lib eval "D=$d/hbox; check_holes_off" 2>&1)"
-  # --keep: a list of what the clean desktop keeps, once each.
-  check_eq "--keep: comma-separated, once each" "clock,animations" "$(lib clean_keep clock,animations,clock 2>&1)"
-  check_match "--keep: anything else refused, naming what it takes" "takes animations, bar, clock, fonts, locale, pointer, wallpaper.*got blur" \
-    "$(lib clean_keep clock,blur 2>&1)"
-  check_eq "clean_text: all of it" "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, none of your fonts, no pointer, no network, animations off" \
-    "$(lib eval 'CLEAN_LANG=en_US.UTF-8 CLEAN_ZONE=UTC; clean_text tokyo-night isolated')"
-  check_eq "...what --keep takes back, and a network" "your bar, theme nord, no pointer" \
-    "$(lib eval 'CLEAN_KEEP=bar,wallpaper,clock,animations,locale,fonts; clean_text nord connected')"
+  # Whether a box's screen can show holes (check.rs holes_off_as_bash); --keep and what a clean box
+  # is (upspec.rs clean_as_bash).
   # The clean locale (finding 363): en_US.UTF-8 when the system has it, else C.UTF-8.
   if locale -a 2>/dev/null | grep -qix 'en_US.utf-\{0,1\}8'; then
-    check_eq "clean_locale: en_US.UTF-8 (this system has it)" en_US.UTF-8 "$(lib clean_locale)"
+    check_eq "clean_locale: en_US.UTF-8 (this system has it)" en_US.UTF-8 "$(probe clean_locale)"
   else
-    check_eq "clean_locale: C.UTF-8 (this system has no en_US)" C.UTF-8 "$(lib clean_locale)"
+    check_eq "clean_locale: C.UTF-8 (this system has no en_US)" C.UTF-8 "$(probe clean_locale)"
   fi
   # Refused before any box is made.
   check_match "up --keep without --clean refused" "--keep goes with --clean" "$(ob up "$P-uck" --keep clock 2>&1)"
@@ -11304,13 +11176,7 @@ t_unit_check() {
     rc=0; read -r -a hargs <<<"$how"; OMABOX_CHECK_OUT=$d/o ob "${hargs[@]}" >/dev/null 2>&1 || rc=$?
     check_eq "omabox $how: exit 2 (not 1, changed)" 2 "$rc"
   done
-  # --ignore (#281): in the window's own coordinates (or the screen's), like -g; into the shot's pixels.
-  check_eq "check_ignore_px: a crop at 100,0 at scale 1: less its origin" "50 5 20 10" "$(lib check_ignore_px 100 0 400 26 400 26 150 5 20 10)"
-  check_eq "...at scale 2: twice that" "100 10 40 20" "$(lib check_ignore_px 100 0 400 26 800 52 150 5 20 10)"
-  check_eq "...at 1.5, rounded outwards (1.5 to 6)" "1 1 5 5" "$(lib check_ignore_px 0 0 100 100 150 150 1 1 3 3)"
-  check_eq "...cut to the shot" "0 0 10 26" "$(lib check_ignore_px 100 0 400 26 400 26 90 -5 20 40)"
-  rc=0; out=$(lib check_ignore_px 100 0 400 26 400 26 900 0 10 10) || rc=$?
-  check_eq "...none of it in the shot: fails" "|1" "$out|$rc"
+  # --ignore (#281) into the shot's pixels: check.rs ignore_px_as_bash.
   check_eq "check: no box was made" "" "$(ob ls 2>/dev/null | grep -F "$P-uck" || true)"
 }
 

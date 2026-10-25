@@ -55,6 +55,15 @@ pub fn say(m: impl AsRef<[u8]>) {
 thread_local! {
     /// This test thread's said lines, while heard runs.
     static HEARD: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+    /// Whether out's lines are heard too (heard_all).
+    static HEAR_OUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether this test thread hears out's lines (heard_all): what a `>/dev/null` around a helper
+/// leaves to the hearing instead of moving fd 1, which every test thread shares.
+#[cfg(test)]
+pub fn hearing_out() -> bool {
+    HEAR_OUT.with(std::cell::Cell::get)
 }
 
 /// F's result and the lines it said (say's, its refusals' words), as `2>&1` gave the suite; on this
@@ -65,6 +74,15 @@ pub fn heard<T>(f: impl FnOnce() -> T) -> (T, String) {
     let r = f();
     let got = HEARD.with(|h| h.replace(was)).unwrap_or_default();
     (r, String::from_utf8_lossy(&got).into_owned())
+}
+
+/// heard, out's lines too, in the order said: what `2>&1` gave the suite of a helper that prints.
+#[cfg(test)]
+pub fn heard_all<T>(f: impl FnOnce() -> T) -> (T, String) {
+    let was = HEAR_OUT.with(|h| h.replace(true));
+    let r = heard(f);
+    HEAR_OUT.with(|h| h.set(was));
+    r
 }
 
 /// What bash's globals hold for one call: the refusal conventions and the box selected.
@@ -170,6 +188,16 @@ pub fn contains(hay: &[u8], needle: &[u8]) -> bool {
 /// Lines on stdout. A write that fails (stdout closed) ends the command, 1, as bash's echo under
 /// set -e does.
 pub fn out(v: impl AsRef<[u8]>) -> Res<()> {
+    #[cfg(test)]
+    if hearing_out()
+        && HEARD.with(|h| {
+            h.borrow_mut()
+                .as_mut()
+                .map(|h| h.extend_from_slice(v.as_ref()))
+        }) == Some(())
+    {
+        return Ok(());
+    }
     let mut o = std::io::stdout().lock();
     o.write_all(v.as_ref())
         .and_then(|()| o.flush())

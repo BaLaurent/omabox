@@ -66,7 +66,13 @@ fn w<A: AsRef<[u8]>>(v: &[A]) -> Vec<Vec<u8>> {
     v.iter().map(|s| s.as_ref().to_vec()).collect()
 }
 
+/// CHECK_PY: the checkout's share/check.py (a #[test]'s binary has no checkout: the source tree's).
 fn check_py() -> Vec<u8> {
+    #[cfg(test)]
+    return concat!(env!("CARGO_MANIFEST_DIR"), "/../../share/check.py")
+        .as_bytes()
+        .to_vec();
+    #[cfg(not(test))]
     shell::bytes(&crate::root().join("share/check.py")).to_vec()
 }
 
@@ -2288,6 +2294,10 @@ fn check_compare_json(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>) -
     let jsonl = cat!(outd, "/.check.jsonl");
     put(&jsonl, b"")?;
     let (crc, sum) = {
+        // (a #[test] hearing out's lines keeps fd 1, which its other threads share)
+        #[cfg(test)]
+        let _o = (!crate::exit::hearing_out()).then(|| crate::exec::Redir::null(1));
+        #[cfg(not(test))]
         let _o = crate::exec::Redir::null(1);
         match check_compare(ctx, outd, base, speck, Some(&jsonl)) {
             Ok(s) => (0, s),
@@ -3127,6 +3137,7 @@ fn check_approve(ctx: &Ctx, outd: &[u8], base: &[u8], speck: Option<i64>, runs: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exit;
 
     #[test]
     fn ignore_regions_in_shot_pixels() {
@@ -3214,6 +3225,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    #[test]
+    fn ignore_px_as_bash() {
+        // (t_unit_check's check_ignore_px: OX OY LW LH IW IH X Y W H)
+        let t = |v| ignore_px(v).map(|b| String::from_utf8(b).unwrap());
+        assert_eq!(
+            t([100, 0, 400, 26, 400, 26, 150, 5, 20, 10]).as_deref(),
+            Some("50 5 20 10"),
+            "a crop at 100,0 at scale 1: less its origin"
+        );
+        assert_eq!(
+            t([100, 0, 400, 26, 800, 52, 150, 5, 20, 10]).as_deref(),
+            Some("100 10 40 20"),
+            "...at scale 2: twice that"
+        );
+        assert_eq!(
+            t([0, 0, 100, 100, 150, 150, 1, 1, 3, 3]).as_deref(),
+            Some("1 1 5 5"),
+            "...at 1.5, rounded outwards (1.5 to 6)"
+        );
+        assert_eq!(
+            t([100, 0, 400, 26, 400, 26, 90, -5, 20, 40]).as_deref(),
+            Some("0 0 10 26"),
+            "...cut to the shot"
+        );
+        assert_eq!(
+            t([100, 0, 400, 26, 400, 26, 900, 0, 10, 10]),
+            None,
+            "...none of it in the shot: fails"
+        );
+    }
+
     /// A scratch dir of this test's own, empty.
     fn scratch(tag: &str) -> std::path::PathBuf {
         let d = std::env::temp_dir().join(format!("omabox-check-{tag}-{}", std::process::id()));
@@ -3252,6 +3294,602 @@ mod tests {
             check_new_holes(&pb(&d.join("a.json")), &pb(&d.join("hn.point"))),
             vec![b"12,12 5x5 25".to_vec(), b"100,100 5x5 25".to_vec()],
             "...a baseline from before holes: all of them"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // check_holes_off (t_unit_check's four cases): whether a box's screen can show holes.
+    #[test]
+    fn holes_off_as_bash() {
+        let d = scratch("hoff");
+        let bg = d.join("home/.local/state/omarchy/current/background");
+        std::fs::create_dir_all(bg.parent().unwrap()).unwrap();
+        let mut ctx = Ctx::new(b"check", b"/x".to_vec());
+        ctx.d = pb(&d);
+        let off = |json: &str| {
+            write(&d.join("box.json"), json);
+            String::from_utf8(check_holes_off(&ctx)).unwrap()
+        };
+        assert_eq!(off("{}"), "not a clean box", "holes off: not a clean box");
+        assert_eq!(
+            off(r#"{"clean": {"keep": ["clock", "wallpaper"]}}"#),
+            "--keep wallpaper"
+        );
+        std::os::unix::fs::symlink("/home/sbx/.config/omabox/clean-wallpaper.png", &bg).unwrap();
+        assert_eq!(
+            off(r#"{"clean": {"keep": []}}"#),
+            "",
+            "...clean, the sentinel's wallpaper: on"
+        );
+        std::fs::remove_file(&bg).unwrap();
+        std::os::unix::fs::symlink(
+            "/home/sbx/.local/state/omarchy/current/theme/backgrounds/1.jpg",
+            &bg,
+        )
+        .unwrap();
+        assert!(
+            off(r#"{"clean": {"keep": []}}"#).contains("not the sentinel"),
+            "...a theme's wallpaper since"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `magick ARGS...`, which must work.
+    fn mg(args: &[&std::ffi::OsStr]) {
+        let st = std::process::Command::new("magick")
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(st.success(), "magick {args:?}");
+    }
+
+    macro_rules! os {
+        ($($a:expr),* $(,)?) => { &[$(AsRef::<std::ffi::OsStr>::as_ref(&$a)),*] };
+    }
+
+    /// t_unit_check's made images: a.png (a block), specks.png (two stray pixels), new.png (a new
+    /// block).
+    fn images(d: &std::path::Path) {
+        mg(os![
+            "-size",
+            "200x100",
+            "xc:#202030",
+            "-fill",
+            "#c0c0d0",
+            "-draw",
+            "rectangle 20,20 80,40",
+            d.join("a.png")
+        ]);
+        mg(os![
+            d.join("a.png"),
+            "-fill",
+            "#c1c0d0",
+            "-draw",
+            "point 150,80",
+            "-draw",
+            "point 10,90",
+            d.join("specks.png")
+        ]);
+        mg(os![
+            d.join("a.png"),
+            "-fill",
+            "#c0c0d0",
+            "-draw",
+            "rectangle 120,20 160,40",
+            d.join("new.png")
+        ]);
+    }
+
+    // check_holes SHOT KIND [REGION] (finding 362; t_unit_check's seven cases).
+    #[test]
+    #[ignore = "runs magick and python: run by test/run.sh (cargo test -- --ignored)"]
+    fn holes_as_bash() {
+        let d = scratch("holes");
+        images(&d);
+        let p = |n: &str| pb(&d.join(n));
+        mg(os![
+            "-size",
+            "400x300",
+            "xc:#ff00ff",
+            "-fill",
+            "#202030",
+            "-draw",
+            "rectangle 10,10 190,289",
+            "-draw",
+            "rectangle 200,10 389,289",
+            "-fill",
+            "#ff00ff",
+            "-draw",
+            "rectangle 60,100 99,129",
+            d.join("hole.png")
+        ]);
+        let h = |f: &str, kind: &str, within: &str| {
+            String::from_utf8(check_holes(&p(f), kind, within.as_bytes()).unwrap()).unwrap()
+        };
+        assert_eq!(
+            h("hole.png", "screen", ""),
+            "60,100 40x30 1200\ncorners 0",
+            "holes: one inside a window; the gap between two windows reaches the margin, open"
+        );
+        assert_eq!(
+            h("hole.png", "screen", "50 90 30 30"),
+            "10,10 20x20 400\ncorners 0",
+            "...a region cutting it: its part, in the region's pixels"
+        );
+        assert_eq!(
+            h("hole.png", "screen", "250 90 30 30"),
+            "corners 0",
+            "...a region beside it: none"
+        );
+        mg(os![
+            "-size",
+            "400x300",
+            "xc:#ff00ff",
+            "-fill",
+            "#7aa2f7",
+            "-draw",
+            "rectangle 10,10 389,289",
+            "-fill",
+            "#ff00ff",
+            "-draw",
+            "rectangle 12,12 387,287",
+            "-fill",
+            "#202030",
+            "-draw",
+            "roundrectangle 12,12 387,287 14,14",
+            d.join("round.png")
+        ]);
+        assert_eq!(
+            h("round.png", "screen", ""),
+            "corners 4",
+            "...rounded content inside a window's border: its 4 corners, no hole"
+        );
+        mg(os![
+            "-size",
+            "400x300",
+            "xc:#ff00ff",
+            "-fill",
+            "#202030",
+            "-draw",
+            "rectangle 10,10 389,289",
+            "-fill",
+            "#ff00ff",
+            "-draw",
+            "rectangle 380,100 399,140",
+            d.join("edge.png")
+        ]);
+        assert_eq!(
+            h("edge.png", "screen", ""),
+            "corners 0",
+            "...a gap that reaches the screen's edge: open wallpaper"
+        );
+        mg(os![
+            "-size",
+            "200x100",
+            "xc:none",
+            "-fill",
+            "#202030",
+            "-draw",
+            "roundrectangle 0,0 199,99 12,12",
+            "(",
+            "-size",
+            "40x20",
+            "xc:none",
+            ")",
+            "-geometry",
+            "+50+30",
+            "-compose",
+            "copy",
+            "-composite",
+            "(",
+            "-size",
+            "20x30",
+            "xc:none",
+            ")",
+            "-geometry",
+            "+180+40",
+            "-compose",
+            "copy",
+            "-composite",
+            d.join("win.png")
+        ]);
+        assert_eq!(
+            h("win.png", "window", ""),
+            "50,30 40x20 800\n180,40 20x30 600\ncorners 4",
+            "...a window's own pixels: its transparent parts, one at its edge too; its rounded corners not"
+        );
+        assert_eq!(
+            h("a.png", "window", ""),
+            "corners 0",
+            "...an opaque window: none"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn check_ctx() -> Ctx {
+        let mut ctx = Ctx::new(b"check", b"/x".to_vec());
+        ctx.die_rc = Some(2);
+        ctx.parsed();
+        ctx
+    }
+
+    /// Whether OUT has a line starting with LEAD.
+    fn line_at(out: &str, lead: &str) -> bool {
+        out.lines().any(|l| l.starts_with(lead))
+    }
+
+    /// The `^speck` line of a .point.
+    fn speck_of(p: &std::path::Path) -> String {
+        std::fs::read_to_string(p)
+            .unwrap()
+            .lines()
+            .filter(|l| l.starts_with("speck"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    const SCREEN: &str = "of screen\nsettled yes\ntree none\nholes off: test\n";
+    const ENV: &str = r#"{"gpu":"x","locale":"en_US.UTF-8","timezone":"UTC"}"#;
+
+    // check_approve and check_compare on made runs (finding 363, #257; t_unit_check's cases).
+    #[test]
+    #[ignore = "runs magick and python: run by test/run.sh (cargo test -- --ignored)"]
+    fn approve_and_compare_as_bash() {
+        let d = scratch("ap");
+        images(&d);
+        let ctx = check_ctx();
+        let cp = |a: &str, b: &std::path::Path| {
+            std::fs::copy(d.join(a), b).unwrap();
+        };
+        // --approve: each checkpoint's speck is twice the largest stray part between its runs (8 when
+        // they agreed to the pixel), and one image of the baseline is written.
+        let ap = d.join("ap");
+        for k in 1..=3 {
+            let r = ap.join(format!("run{k}"));
+            std::fs::create_dir_all(&r).unwrap();
+            write(&r.join("p.point"), SCREEN);
+            write(&r.join("q.point"), SCREEN);
+            cp("a.png", &r.join("q.png"));
+            cp(
+                if k == 2 { "specks.png" } else { "a.png" },
+                &r.join("p.png"),
+            );
+        }
+        write(&ap.join("env.json"), ENV);
+        let approve = |outd: &std::path::Path, base: &str, speck: Option<i64>| {
+            exit::heard_all(|| check_approve(&ctx, &pb(outd), &pb(&d.join(base)), speck, 3))
+        };
+        let (rc, out) = approve(&ap, "apbase", None);
+        assert_eq!(rc, Ok(()), "{out}");
+        assert!(
+            out.lines().any(
+                |l| l.starts_with("baseline p (specks under 16 px left out: the runs")
+                    && l.contains("largest stray part was 1 px)")
+            ),
+            "approve: a checkpoint whose runs differ by a pixel: specks under 16 px (twice 1, 16 at least): {out}"
+        );
+        assert!(
+            line_at(
+                &out,
+                "baseline q (specks under 8 px left out: the runs agreed to the pixel)"
+            ),
+            "...one whose runs agreed: specks under 8 px: {out}"
+        );
+        assert_eq!(
+            (
+                speck_of(&d.join("apbase/p.point")),
+                speck_of(&d.join("apbase/q.point"))
+            ),
+            ("speck 16".into(), "speck 8".into()),
+            "...kept in its .point"
+        );
+        let ls: Vec<&str> = out.lines().collect();
+        assert!(
+            ls.windows(2).any(|w| w[0].starts_with("overview: ")
+                && w[0].contains("/ap/baseline.png ")
+                && w[1].starts_with("check: look at it before you keep this baseline")),
+            "...the baseline's image, and to look at it: {out}"
+        );
+        assert!(
+            std::fs::metadata(ap.join("baseline.png")).is_ok_and(|m| m.len() > 0),
+            "...written"
+        );
+        let (_, out) = approve(&ap, "apbase2", Some(5));
+        assert!(
+            line_at(&out, "baseline q (specks under 5 px left out (--speck))"),
+            "...--speck given: that one: {out}"
+        );
+        assert_eq!(
+            speck_of(&d.join("apbase2/q.point")),
+            "speck 5",
+            "...in the .point"
+        );
+        // Checkpoints of one window share its largest speck (the noise is the app's).
+        let aw = d.join("aw");
+        for k in 1..=3 {
+            let r = aw.join(format!("run{k}"));
+            std::fs::create_dir_all(&r).unwrap();
+            write(
+                &r.join("w1.point"),
+                "of window W\nsettled yes\ntree none\nholes off: test\n",
+            );
+            write(
+                &r.join("w2.point"),
+                "of window W\ncrop 0,0 50x50\nsettled yes\ntree none\nholes off: test\n",
+            );
+            std::fs::copy(ap.join(format!("run{k}/p.png")), r.join("w1.png")).unwrap();
+            cp("a.png", &r.join("w2.png"));
+        }
+        write(&aw.join("env.json"), ENV);
+        let (_, out) = approve(&aw, "awbase", None);
+        assert!(
+            line_at(
+                &out,
+                "speck    w2: under 16 px, as the other checkpoints of its window"
+            ),
+            "...a crop of a window whose runs agreed takes the window's speck, said: {out}"
+        );
+        assert_eq!(
+            speck_of(&d.join("awbase/w2.point")),
+            "speck 16",
+            "...in its .point"
+        );
+        for k in 1..=3 {
+            cp("a.png", &aw.join(format!("run{k}/w1.png")));
+        }
+        let (rc, _) = approve(&aw, "awbase0", None);
+        assert_eq!(
+            (
+                speck_of(&d.join("awbase0/w1.point")),
+                speck_of(&d.join("awbase0/w2.point")),
+                rc
+            ),
+            ("speck 8".into(), "speck 8".into(), Ok(())),
+            "...a window whose checkpoints all agreed: 8 for both, exit 0"
+        );
+        // A check with each checkpoint's speck: a 10 px part, so p (speck 16) is the same and says what
+        // it left out, q (8, its runs agreed) changes; a baseline from before specks were measured: 32.
+        let c = ap.join("c");
+        let c1 = c.join("run1");
+        std::fs::create_dir_all(&c1).unwrap();
+        std::fs::copy(ap.join("run1/p.point"), c1.join("p.point")).unwrap();
+        std::fs::copy(ap.join("run1/q.point"), c1.join("q.point")).unwrap();
+        mg(os![
+            d.join("a.png"),
+            "-fill",
+            "#c1c0d0",
+            "-draw",
+            "rectangle 150,80 154,81",
+            c1.join("p.png")
+        ]);
+        std::fs::copy(c1.join("p.png"), c1.join("q.png")).unwrap();
+        write(&c.join("env.json"), ENV);
+        let base = d.join("apbase");
+        let compare = |speck: Option<i64>| {
+            exit::heard_all(|| check_compare(&ctx, &pb(&c), &pb(&base), speck, None).map(|_| ()))
+        };
+        let (rc, out) = compare(None);
+        assert!(
+            out.lines()
+                .any(|l| l == "same     p (1 speck left out, the largest 10 px)"),
+            "check: the same, saying what it left out: {out}"
+        );
+        assert!(
+            line_at(&out, "changed  q: 1 region"),
+            "...where the runs agreed (8): changed: {out}"
+        );
+        assert!(
+            line_at(&out, "check: 1 of 2 same, 1 changed;") && rc == Err(Exit(1)),
+            "...counted, exit 1: {out}"
+        );
+        let qp = base.join("q.point");
+        let kept: String = std::fs::read_to_string(&qp)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with("speck "))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        write(&qp, &kept);
+        let (_, out) = compare(None);
+        assert!(
+            line_at(&out, "same     q (1 speck left out, the largest 10 px)"),
+            "...a baseline without a speck: 32, as before: {out}"
+        );
+        let (_, out) = compare(Some(0));
+        assert!(
+            line_at(&out, "changed  p: 1 region"),
+            "...--speck 0 by hand wins: {out}"
+        );
+        std::fs::remove_file(c1.join("q.point")).unwrap();
+        write(&c1.join("r.point"), SCREEN);
+        cp("a.png", &c1.join("r.png"));
+        let (rc, out) = compare(None);
+        assert!(
+            line_at(&out, "check: 1 of 3 same, 1 new, 1 missing;") && rc == Err(Exit(1)),
+            "...new and missing counted: {out}"
+        );
+        write(
+            &base.join("check.json"),
+            r#"{"gpu":"x","locale":"pt_BR.UTF-8","timezone":"America/Sao_Paulo"}"#,
+        );
+        let (_, out) = compare(None);
+        assert!(
+            out.contains(
+                "another setup (locale pt_BR.UTF-8 -> en_US.UTF-8, timezone America/Sao_Paulo -> UTC)"
+            ),
+            "...another locale and timezone said: {out}"
+        );
+        write(&base.join("check.json"), r#"{"gpu":"x"}"#);
+        let (_, out) = compare(None);
+        assert!(
+            !out.contains("another setup"),
+            "...not for a baseline from before they were recorded: {out}"
+        );
+        // One change in several checkpoints (#257): said once, a later one "as" the first.
+        let (gb, gc) = (d.join("gbase"), d.join("gc"));
+        let g1 = gc.join("run1");
+        std::fs::create_dir_all(&gb).unwrap();
+        std::fs::create_dir_all(&g1).unwrap();
+        for id in ["s1", "s2", "s3"] {
+            write(
+                &gb.join(format!("{id}.point")),
+                &format!("{SCREEN}speck 8\n"),
+            );
+            cp("a.png", &gb.join(format!("{id}.png")));
+            write(&g1.join(format!("{id}.point")), SCREEN);
+        }
+        cp("new.png", &g1.join("s1.png"));
+        cp("new.png", &g1.join("s2.png"));
+        mg(os![
+            d.join("a.png"),
+            "-fill",
+            "#c0c0d0",
+            "-draw",
+            "rectangle 120,60 160,80",
+            g1.join("s3.png")
+        ]);
+        write(&gc.join("env.json"), ENV);
+        write(&gb.join("check.json"), ENV);
+        let (rc, out) =
+            exit::heard_all(|| check_compare(&ctx, &pb(&gc), &pb(&gb), None, None).map(|_| ()));
+        assert!(
+            out.lines()
+                .any(|l| l == "changed  s2: as s1 (its 1 region)"),
+            "check: one change in two checkpoints: the second said as the first: {out}"
+        );
+        assert!(
+            !line_at(&out, "changed  s2: 1 region"),
+            "...not its regions again: {out}"
+        );
+        assert!(
+            line_at(&out, "changed  s3: 1 region"),
+            "...another change: its own lines: {out}"
+        );
+        assert!(
+            line_at(&out, "check: 0 of 3 same, 3 changed (1 as another);") && rc == Err(Exit(1)),
+            "...each counted as changed, the alike said; exit 1: {out}"
+        );
+        assert!(
+            std::fs::metadata(gc.join("s2.diff.png")).is_ok_and(|m| m.len() > 0),
+            "...its diff image written all the same"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // check run --json's object (check_compare_json; t_unit_json's cases), on a baseline and a run
+    // made here.
+    #[test]
+    #[ignore = "runs magick and python: run by test/run.sh (cargo test -- --ignored)"]
+    fn compare_json_as_bash() {
+        let d = scratch("json");
+        mg(os!["-size", "200x100", "xc:white", d.join("a.png")]);
+        mg(os![
+            "-size",
+            "200x100",
+            "xc:white",
+            "-fill",
+            "black",
+            "-draw",
+            "rectangle 10,10 60,40",
+            d.join("b.png")
+        ]);
+        for (f, src) in [
+            ("base/p1", "a"),
+            ("base/p2", "a"),
+            ("base/gone", "a"),
+            ("out/run1/p1", "a"),
+            ("out/run1/p2", "b"),
+            ("out/run1/p3", "a"),
+        ] {
+            let p = d.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::copy(d.join(format!("{src}.png")), p.with_extension("png")).unwrap();
+        }
+        for f in [
+            "base/p1",
+            "base/p2",
+            "base/gone",
+            "out/run1/p1",
+            "out/run1/p2",
+            "out/run1/p3",
+        ] {
+            write(&d.join(f).with_extension("point"), "of screen\n");
+        }
+        write(&d.join("out/run1/p2.point"), "of screen\nsettled no\n");
+        let ctx = check_ctx();
+        let (rc, out) = exit::heard_all(|| {
+            check_compare_json(&ctx, &pb(&d.join("out")), &pb(&d.join("base")), None)
+        });
+        let j: serde_json::Value =
+            serde_json::from_str(out.lines().last().unwrap_or_default()).unwrap();
+        let c = &j["counts"];
+        assert_eq!(
+            (
+                j["result"].as_str(),
+                [
+                    &c["checkpoints"],
+                    &c["same"],
+                    &c["changed"],
+                    &c["new"],
+                    &c["missing"]
+                ]
+                .map(|v| v.as_i64()),
+                rc
+            ),
+            (Some("changed"), [4, 1, 1, 1, 1].map(Some), Err(Exit(1))),
+            "check run --json: result, counts, exit 1"
+        );
+        let ids: Vec<String> = j["checkpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| {
+                format!(
+                    "{}:{}",
+                    p["id"].as_str().unwrap(),
+                    p["result"].as_str().unwrap()
+                )
+            })
+            .collect();
+        assert_eq!(
+            ids.join(" "),
+            "p1:same p2:changed p3:new gone:missing",
+            "...each checkpoint's id and result"
+        );
+        let p2 = &j["checkpoints"][1];
+        assert_eq!(
+            (
+                p2["regions"].to_string(),
+                p2["marked"]
+                    .as_str()
+                    .is_some_and(|m| m.ends_with("p2.diff.png")),
+                &p2["still"]
+            ),
+            (
+                r#"[{"x":10,"y":10,"w":51,"h":31,"pixels":1581}]"#.to_string(),
+                true,
+                &serde_json::Value::Bool(false)
+            ),
+            "...a changed one: its region, marked copy, not still"
+        );
+        assert_eq!(
+            (
+                j["base"].as_str(),
+                j["shots"].as_str(),
+                j["report"]
+                    .as_str()
+                    .is_some_and(|r| r.ends_with("report.png"))
+            ),
+            (
+                Some(d.join("base").to_str().unwrap()),
+                Some(d.join("out/run1").to_str().unwrap()),
+                true
+            ),
+            "...base, shots, the report"
+        );
+        assert!(
+            !d.join("out/.check.jsonl").exists(),
+            "...its gathering file gone"
         );
         let _ = std::fs::remove_dir_all(&d);
     }
