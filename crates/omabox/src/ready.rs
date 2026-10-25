@@ -321,17 +321,30 @@ pub fn rm_box(ctx: &Ctx) {
 }
 
 /// rm_tree WHAT PATH...: rm -rf, after making each dir writable again (a user manager's mode-000
-/// runtime dirs; an app's read-only folder in HOME, #264); -P: a link is never followed out of the
-/// tree. Says what is left, rm's first line. Whether all went.
+/// runtime dirs; an app's read-only folder in HOME, #264). A link is never followed out of the tree:
+/// chmod -R follows none it meets inside one, and a PATH that is a link is left out of the chmod
+/// (rm removes the link). Not chmod's -P, which coreutils has only since 9.5: an older chmod refused
+/// it and made nothing writable (finding 524). Says what is left, rm's first line. Whether all went.
 pub fn rm_tree(what: &[u8], paths: &[Vec<u8>]) -> bool {
+    rm_tree_with("chmod", what, paths)
+}
+
+/// rm_tree with CHMOD as its chmod (a test's stand-in for an older one).
+fn rm_tree_with(chmod: &str, what: &[u8], paths: &[Vec<u8>]) -> bool {
     let args = |p: &Vec<u8>| -> OsString { os(p).to_os_string() };
-    let mut c = crate::sig::command("chmod");
-    c.args(["-R", "-P", "u+rwX", "--"])
-        .args(paths.iter().map(args))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    let _ = crate::sig::run_status(c);
+    let trees: Vec<&Vec<u8>> = paths
+        .iter()
+        .filter(|p| !shell::path(p).is_symlink())
+        .collect();
+    if !trees.is_empty() {
+        let mut c = crate::sig::command(chmod);
+        c.args(["-R", "u+rwX", "--"])
+            .args(trees.into_iter().map(args))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = crate::sig::run_status(c);
+    }
     let mut c = crate::sig::command("rm");
     c.args(["-rf", "--"])
         .args(paths.iter().map(args))
@@ -1462,30 +1475,73 @@ mod tests {
         std::fs::create_dir_all(format!("{r}/outside/keep")).unwrap();
         mode(&format!("{r}/outside/keep"), 0o555);
         std::os::unix::fs::symlink(format!("{r}/outside"), format!("{r}/cache/omabox/b3")).unwrap();
+        // (b5: a box whose HOME is a link, given to rm_tree itself)
+        std::fs::create_dir_all(format!("{r}/run/omabox/b5")).unwrap();
+        std::os::unix::fs::symlink(format!("{r}/outside"), format!("{r}/cache/omabox/b5")).unwrap();
         let mut ctx = Ctx::new(b"down", format!("{r}/run/omabox").into_bytes());
         ctx.name = b"b1".to_vec();
         ctx.d = format!("{r}/run/omabox/b1").into_bytes();
+        let mut ctx5 = Ctx::new(b"down", format!("{r}/run/omabox").into_bytes());
+        ctx5.name = b"b5".to_vec();
+        ctx5.d = format!("{r}/run/omabox/b5").into_bytes();
         let env = [("XDG_CACHE_HOME", Some(format!("{r}/cache")))];
         let env: Vec<(&str, Option<&str>)> = env.iter().map(|(k, v)| (*k, v.as_deref())).collect();
         let ((), said) = crate::exit::heard(|| {
             shell::with_env(&env, || {
                 rm_box(&ctx);
+                rm_box(&ctx5);
                 sweep_homes(&ctx);
             })
         });
-        let left: Vec<bool> = ["run/omabox/b1", "cache/omabox/b1", "cache/omabox/b2"]
-            .iter()
-            .map(|p| std::path::Path::new(&format!("{r}/{p}")).exists())
-            .collect();
+        let left: Vec<bool> = [
+            "run/omabox/b1",
+            "cache/omabox/b1",
+            "cache/omabox/b2",
+            "run/omabox/b5",
+        ]
+        .iter()
+        .map(|p| std::path::Path::new(&format!("{r}/{p}")).exists())
+        .collect();
         assert_eq!(
             (said.as_str(), left),
-            ("", vec![false, false, false]),
+            ("", vec![false, false, false, false]),
             "rm_box: the box dir and its HOME go, read-only dirs and all; sweep_homes: a gone box's too"
+        );
+        assert!(
+            std::fs::symlink_metadata(format!("{r}/cache/omabox/b5")).is_err(),
+            "...a HOME that is a link: the link goes"
         );
         let keep = std::fs::metadata(format!("{r}/outside/keep")).unwrap();
         assert!(
             keep.permissions().readonly(),
             "...a link in the cache is not followed (what it points to keeps its modes)"
+        );
+        // (a chmod as coreutils' before 9.5, Ubuntu 24.04's, which refuses -P: finding 524)
+        std::fs::create_dir_all(format!("{r}/old")).unwrap();
+        std::fs::write(
+            format!("{r}/old/chmod"),
+            "#!/bin/sh\nfor a; do [ \"$a\" != -P ] || { echo \"chmod: invalid option -- 'P'\" >&2; exit 1; }; done\nexec chmod \"$@\"\n",
+        )
+        .unwrap();
+        mode(&format!("{r}/old/chmod"), 0o755);
+        mk("b6");
+        let gone = crate::exit::heard(|| {
+            rm_tree_with(
+                &format!("{r}/old/chmod"),
+                b"box 'b6'",
+                &[
+                    format!("{r}/run/omabox/b6").into_bytes(),
+                    format!("{r}/cache/omabox/b6").into_bytes(),
+                ],
+            )
+        });
+        assert_eq!(
+            (
+                gone,
+                std::path::Path::new(&format!("{r}/cache/omabox/b6")).exists()
+            ),
+            ((true, String::new()), false),
+            "...with a chmod that has no -P too"
         );
         // (rm's own complaint: HOMEs' folder not writable, so the HOME itself cannot go; not as root)
         if crate::procfs::euid() != 0 {
@@ -1909,6 +1965,9 @@ mod tests {
             b"this machine has no other GPU: compare against a baseline measured in this same box"
         ));
         assert!(soft_note(br#"{"renderer":"AMD","software":false}"#, b"", None).is_empty());
+        if !crate::exec::tools_or_skip("software_said's egl_render", &["awk"]) {
+            return;
+        }
         assert_eq!(
             egl_render(
                 b"x\nOpenGL core profile renderer: AMD R\nOpenGL ES profile renderer: AMD ES\n"

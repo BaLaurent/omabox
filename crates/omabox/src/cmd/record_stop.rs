@@ -2327,6 +2327,9 @@ mod tests {
     // file swapped for a FIFO after its stat is read under a time for its size, not for ever.
     #[test]
     fn box_copy_is_capped() {
+        if !crate::exec::tools_or_skip("box_copy_is_capped", &["awk"]) {
+            return;
+        }
         let mut ctx = Ctx::new(b"record", Vec::new());
         ctx.name = b"jr".to_vec();
         let (n, said) = crate::exit::heard(|| {

@@ -1411,6 +1411,22 @@ pub fn executable_on_path(name: &[u8]) -> bool {
         .any(|p| executable(&p) && shell::path(&p).is_file())
 }
 
+/// tools_or_skip TEST TOOL... (tests only): every TOOL is on PATH, or TEST says it skips and which
+/// are missing. A test that runs a host tool omabox runs (tar, grep, awk) checks it first: a package's
+/// clean chroot has only the recipe's depends on PATH (#324).
+#[cfg(test)]
+pub fn tools_or_skip(test: &str, tools: &[&str]) -> bool {
+    let miss: Vec<&str> = tools
+        .iter()
+        .copied()
+        .filter(|t| !executable_on_path(t.as_bytes()))
+        .collect();
+    if !miss.is_empty() {
+        eprintln!("skip {test}: no {} on PATH", miss.join(", "));
+    }
+    miss.is_empty()
+}
+
 // --- the relays ---------------------------------------------------------------------------------------
 
 /// relay_out N: fd N goes through a relay: a box could reach it (fd_exposed), or it is a pipe or a

@@ -1551,9 +1551,19 @@ mod tests {
 
     #[test]
     fn audio_list_as_bash() {
-        // (only its shape: what is installed here varies)
+        // (only its shape: what is installed here varies) the missing names, in their order, each
+        // once, joined by ", " (finding 462)
         if let Err(m) = audio_packages() {
-            assert!(!m.is_empty() && !m.contains(&b' '));
+            let all = ["pipewire", "wireplumber", "pipewire-pulse", "pactl"];
+            let m = String::from_utf8(m).unwrap();
+            let at: Vec<Option<usize>> = m
+                .split(", ")
+                .map(|n| all.iter().position(|a| *a == n))
+                .collect();
+            assert!(
+                at.iter().all(Option::is_some) && at.windows(2).all(|w| w[0] < w[1]),
+                "{m}"
+            );
         }
     }
 

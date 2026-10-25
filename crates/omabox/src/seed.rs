@@ -2075,6 +2075,9 @@ mod tests {
 
     #[test]
     fn seed_copies_as_bash() {
+        if !crate::exec::tools_or_skip("seed_copies_as_bash", &["tar"]) {
+            return;
+        }
         let s = sc_tmp("seed");
         let c = sc_cx();
         let h = |x: &str| format!("{s}/{x}");
@@ -2498,6 +2501,9 @@ mod tests {
 
     #[test]
     fn content_refused() {
+        if !crate::exec::tools_or_skip("content_refused", &["grep"]) {
+            return;
+        }
         let d = tmp("content");
         let f = cat!(d, "/f");
         for (text, bad) in [
@@ -2583,6 +2589,9 @@ mod tests {
 
     #[test]
     fn desk_walk_lists() {
+        if !crate::exec::tools_or_skip("desk_walk_lists", &["grep"]) {
+            return;
+        }
         let d = tmp("desk");
         let ctx = Ctx::new(b"up", b"/x".to_vec());
         for f in [
@@ -2616,6 +2625,9 @@ mod tests {
 
     #[test]
     fn copies_keep_links_and_leave_hidden_out() {
+        if !crate::exec::tools_or_skip("copies_keep_links_and_leave_hidden_out", &["tar"]) {
+            return;
+        }
         let d = tmp("copy");
         let src = cat!(d, "/src");
         put(&cat!(src, "/a/b.conf"), "x");
@@ -2781,6 +2793,9 @@ mod tests {
     /// as files; the suite checks the list itself through the probe (desk_files DESK, the same lines).
     #[test]
     fn desk_files_copy_as_bash() {
+        if !crate::exec::tools_or_skip("desk_files_copy_as_bash", &["grep"]) {
+            return;
+        }
         let d = sc_tmp("desk");
         let k = format!("{d}/desk");
         for x in ["plugins", "profiles/deep", "my-secrets", "hooks", ".git"] {
@@ -2859,6 +2874,9 @@ mod tests {
     /// --desk-shell plugin's copied unsaid; --no-seed extensions: nothing.
     #[test]
     fn extensions_as_bash() {
+        if !crate::exec::tools_or_skip("extensions_as_bash", &["tar", "grep"]) {
+            return;
+        }
         let d = sc_tmp("ext");
         let e = format!("{d}/desk/extensions");
         sc_mk(&format!("{e}/tx-scripts"));

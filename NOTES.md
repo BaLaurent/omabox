@@ -7758,6 +7758,7 @@ from them.
     complaint, and `down` goes on. Tests: t_unit_rm_tree (a read-only HOME, a mode-000 runtime dir,
     a gone box's HOME, a link not followed, a failure said), t_up_again (a box whose app made the
     folder: HOME gone, `down` says only that the box is down; both failed on the old code).
+    Amended by finding 524: `chmod -R` without `-P` (coreutils before 9.5 refused it).
 375. **While a box is up, the desktop's stranded-lock recovery waits** (2026-10-20, #277). Omarchy
     4.0.5's `omarchy-hyprland-session-lock-stranded`, which the desktop's shell asks after a crash
     with the screen locked, answers "undetermined" (exit 2) while any `quickshell|qs|hyprlock` of
@@ -10232,6 +10233,30 @@ from them.
     t_unit_rust_handoff (the hand-off), t_unit_live_edit (finding 66 was bash reading its script as it
     ran; its successor is finding 522's rename), t_unit_cli's `$(save_dir)` grep (a bash `set -e`
     property, finding 163), and bash's NS_FDS and ON_BOX_KILLS scans (finding 521 has the crate's).
+
+524. **CI on the port never passed, and `down` left a read-only box HOME on coreutils before 9.5**
+    (2026-10-25, #324 wave 6-flip's fix round). Since CI ran on `port-rust`, its `cargo test` failed
+    on two tests. **(a)** rm_tree's `chmod -R -P u+rwX` (finding 374): chmod has `-P` only since
+    coreutils 9.5 (2024); 9.4 (Ubuntu 24.04, the CI runner's) refuses the whole command, `invalid
+    option -- 'P'`, unheard (its stderr goes nowhere), so nothing was made writable and `rm -rf`
+    could not empty a read-only folder an app made in a box HOME: finding 374 undone, and `down`
+    said rm's complaint, on any system with an older chmod (Arch has 9.12, so never seen here).
+    **Fix:** `chmod -R u+rwX` without `-P`. No chmod follows a link it meets inside the tree; one
+    named on its command line it does (`-H`, the default), so a path that is itself a link is left out
+    of the chmod, and `rm -rf` removes the link alone (sweep_homes already skipped links in the
+    cache). Tests: ready.rs's rm_tree_as_bash with a stand-in chmod that refuses `-P` (the old code
+    fails it with CI's very line) and a box whose HOME is a link (the link goes, what it points to
+    keeps its modes). **(b)** install.rs's audio_list_as_bash asserted the missing audio programs had
+    no space between them, where audio_packages joins them with ", " (finding 462): it failed on any
+    machine missing two or more of pipewire, wireplumber, pipewire-pulse and pactl. It now checks the
+    list's shape (known names, in order, each once, ", " between). **(c)** A package's `check()`
+    runs `cargo test --frozen` in a clean chroot: with only the recipe's depends on PATH, eight tests
+    that run a host tool omabox runs failed (tar, grep, awk: seed's copies and secret scan, record's
+    size cap, egl_render). Each now asks `exec::tools_or_skip` first and skips, naming the missing
+    tool on stderr (`-- --nocapture` shows it). With PATH cut to the binaries of the recipe's depends
+    plus cargo and gcc, `cargo test --frozen` passes. **(d)** ci.yml ran the release build after the
+    tests, so a failing test hid whether the release built: fmt, clippy, the release build and the
+    tests are now steps of their own, in that order.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
