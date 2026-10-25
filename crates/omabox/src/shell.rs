@@ -1025,4 +1025,30 @@ mod tests {
         // SAFETY: made by newlocale above, no longer in use by this thread.
         unsafe { libc::freelocale(us) };
     }
+
+    // A folder's names in byte order, whatever the locale (finding 446: bash's glob followed the
+    // locale's collation, en_US.UTF-8's a before B): what `ls`, `saves`, run logs and checkpoints
+    // are listed in.
+    #[test]
+    fn globs_in_byte_order() {
+        let d = std::env::temp_dir().join(format!("omabox-glob-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for n in ["a-x", "B-x", "_y", "Z", "é", ".hidden"] {
+            std::fs::create_dir_all(d.join(n)).unwrap();
+        }
+        std::fs::write(d.join("b.txt"), b"").unwrap();
+        std::fs::write(d.join("A.txt"), b"").unwrap();
+        let v = |l: &[&str]| l.iter().map(|s| s.as_bytes().to_vec()).collect::<Vec<_>>();
+        assert_eq!(
+            glob(&d, false),
+            v(&["A.txt", "B-x", "Z", "_y", "a-x", "b.txt", "é"])
+        );
+        assert_eq!(glob(&d, true), v(&["B-x", "Z", "_y", "a-x", "é"]));
+        let db = bytes(&d).to_vec();
+        assert_eq!(
+            glob_ext(&db, b".txt"),
+            vec![crate::cat!(db, "/A.txt"), crate::cat!(db, "/b.txt")]
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

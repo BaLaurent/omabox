@@ -262,8 +262,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   omabox measured them on the wall clock, and the built-in ones in whole seconds, so they could end
   up to a second early. Scripts: nothing to change.
 - **`check run SCENARIO` always runs the program found in PATH**: a scenario named like a shell
-  builtin or one of omabox's functions (`test`, `true`, `say`) is no longer run inside omabox.
-  Scripts: nothing to change (give a path, as before, for a scenario of your own).
+  builtin or one of omabox's functions (`test`, `true`, `say`) is no longer run inside omabox. One
+  that names a program in PATH (`test`, `true`) runs that program; one that names none (`say`,
+  `shopt`) fails as a scenario not there does: "omabox: check: cannot run scenario say: not found
+  in PATH" in its run's log, its status 127, `check run` exit 3. The bash omabox ran its own
+  builtin or function there. Scripts: nothing to change (give a path, as before, for a scenario of
+  your own).
 
 ## 1.0.1 — unreleased
 

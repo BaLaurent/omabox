@@ -2591,6 +2591,48 @@ print(p.pid, flush=True); time.sleep(60)' "$1" env OMABOX_OWN_SESSION="${2-1}" "
   kill -KILL "$parent" "$pid" 2>/dev/null || true
 }
 
+# CHANGELOG's "Changes from the bash omabox" (#324): what parity held as expected differences against
+# bash's omabox until the port ended (wave 6b-end, finding 531), each on the binary alone where no
+# #[test] or box test holds it: refusals made before any box is asked, in a runtime dir, HOME and
+# data dir of the test's own.
+t_unit_bash_changes() {
+  local r=$TMP/bc l out locs=C
+  rm -rf "$r"; mkdir -p "$r/rt" "$r/norepo" "$r/data/omabox/saves/a-s/home" "$r/data/omabox/saves/B-s/home"
+  # (a locale whose `[A-Za-z]` takes é and whose collation puts a before B, where the system has one)
+  ! locale -a 2>/dev/null | grep -qix 'en_US.utf-\{0,1\}8' || locs+=" en_US.UTF-8"
+  bc() { (cd "$r/norepo" && env -u OMABOX -u OMABOX_NAME XDG_RUNTIME_DIR="$r/rt" "$@" 2>&1); }
+  for l in $locs; do
+    # (box names ASCII, finding 445: glibc's ranges in en_US.UTF-8 took é for a letter)
+    check_match "a box name é refused under LC_ALL=$l (ASCII names, finding 445)" "^omabox: path: bad box name é: a box name starts with a letter" \
+      "$(bc env LC_ALL="$l" "$CLI" path -b é)"
+    # (byte order, finding 446: bash's glob followed the locale's collation)
+    check_eq "saves --json in byte order under LC_ALL=$l (finding 446)" '[{"name":"B-s"},{"name":"a-s"}]' \
+      "$(bc env LC_ALL="$l" XDG_DATA_HOME="$r/data" "$CLI" saves --json)"
+    check_eq "...and saves' table" "B-s a-s" "$(bc env LC_ALL="$l" XDG_DATA_HOME="$r/data" "$CLI" saves | awk 'NR > 1 { print $1 }' | paste -sd' ')"
+  done
+  # (a name such as -n named in its refusal: bash's echo took it for its own option, finding 438)
+  check_match "OMABOX=-n: named in its refusal (finding 438)" "^omabox: env: bad box name -n: " "$(bc env OMABOX=-n "$CLI" env)"
+  # (the word as written: bash's awk read u\160 as up, finding 500)
+  out=$(bc "$CLI" help 'u\160'; echo "rc $?")
+  check_eq "help 'u\\160': an unknown command, 2 (finding 500)" "omabox: unknown command: u\\160 (omabox help lists the commands and their options)|rc 2" "$(paste -sd'|' <<<"$out")"
+  # (in omabox's words, not bash's "bin/omabox: line 13: ...", finding 501)
+  out=$(cd "$r/norepo" && env -u XDG_RUNTIME_DIR "$CLI" help 2>&1 >/dev/null; echo "rc $?")
+  check_eq "no XDG_RUNTIME_DIR: said in omabox's words, 1 (finding 501)" "omabox: XDG_RUNTIME_DIR is not set|rc 1" "$(paste -sd'|' <<<"$out")"
+  # (taken as written, never globbed against the folder's files: a file `fonts` there, finding 457;
+  # --overlay of a folder not there refuses too, after it, so a regression starts no box)
+  mkdir -p "$r/glob"; : > "$r/glob/fonts"
+  check_match "up --no-seed 'font?' beside a file fonts: taken as written, refused (finding 457)" "^omabox: --no-seed: what a box starts without .*got 'font\?'$" \
+    "$(cd "$r/glob" && XDG_RUNTIME_DIR="$r/rt" "$CLI" up bc-x --no-seed 'font?' --overlay "$r/none" 2>&1)"
+  # (a settings link that cannot be followed: said, the link kept; bash's readlink -f ended it unsaid,
+  # finding 482)
+  local h=$r/home; mkdir -p "$h/.config/omabox"; ln -s "$h/dots/omabox/config" "$h/.config/omabox/config"
+  out=$(bc env HOME="$h" "$CLI" config workspace 5; echo "rc $?")
+  check_match "config through a link into a folder not there: refused, said (finding 482)" \
+    "^omabox: config: cannot follow the link $h/\.config/omabox/config \(to $h/dots/omabox/config\): a folder on its way is not there, or it loops; not touched"$'\n'"rc 1$" "$out"
+  check_eq "...the link kept, nothing made" "$h/dots/omabox/config|no" "$(readlink "$h/.config/omabox/config")|$([ -e "$h/dots" ] && echo yes || echo no)"
+  check_eq "...no box was started by any of them" "" "$(cd "$r/rt/omabox" 2>/dev/null && command find . -mindepth 1 -maxdepth 1 ! -name '.*' -printf '%P\n')"
+}
+
 # The test oracle (#324 wave 6-flip), for a parity test: a checkout has it (tracked), so one missing
 # fails, never skips (that would hide a thousand cases); an install has none (export-ignored).
 rust_built() {
@@ -19696,7 +19738,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)

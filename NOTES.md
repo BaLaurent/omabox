@@ -9351,7 +9351,8 @@ from them.
     (CHANGELOG). Tests: t_unit_rust_parity ("four: named in byte order"), t_unit_rust_parity5 ("ls
     --json: in byte order in every locale", "saves --json: ..."), expected differences under
     en_US.UTF-8; its fixture's box Zed is zed now, whose capital put the "up: ..." list of
-    some 30 refusals in an order that hung on the suite's locale.
+    some 30 refusals in an order that hung on the suite's locale. Since 6b, shell.rs's
+    globs_in_byte_order and t_unit_bash_changes (finding 530).
 
 447. **Text was read in the caller's locale** (2026-10-23, #324 wave 4c). Bash and coreutils count
     characters as LANG and LC_* say, so under C (agents often run with LANG unset) a repo's default
@@ -9443,7 +9444,8 @@ from them.
     program, one that is not is "cannot run scenario NAME: not found in PATH", 127. **Change**
     (Rust over bash): documented, no code (CHANGELOG; skill/reference.md says SCENARIO is a
     program). Tests: t_rust_parity ("check run: a scenario named like omabox's say", an expected
-    difference: bash ran its function, the Rust half finds no such program).
+    difference: bash ran its function, the Rust half finds no such program); since 6b, check.rs's
+    a_scenario_is_a_program_whatever_its_name (finding 530).
 
 452. **A signal's stop kept bash's timing: a code trap waited out a whole `$(...)`, a second signal
     picked the exit code or cut the undo short** (2026-10-24, #324 wave 4c). Bash runs a code trap
@@ -10312,6 +10314,31 @@ from them.
     from an install. (c) The `--installed` floor, 4255, was an estimate made before any such run:
     it is now 3810, about 90% of the 4238 checks of the first full run with the binary (with the
     fixes of findings 527-528; the checkout's floor is 90% of its own count too).
+
+530. **6b: the contract decisions are the binary's, each held on it alone** (2026-10-25, #324 wave
+    6b; LOG's "Contract decisions" of 2026-10-22, the design's Q4). The five decisions landed before
+    6b, in wave 4c and 5b: numbers with zeros in front decimal (finding 448), box names ASCII (445),
+    lists in byte order, `ls` and `saves` too (446, 470), JSON numbers in standard form (449), and
+    `check run SCENARIO` a program, never a builtin or one of omabox's functions (451: documented,
+    the Rust half never ran one). Each has its CHANGELOG line under "Changes from the bash omabox"
+    (what it was, what it is, what a script changes); check run's now also says what a name of no
+    program gets: "cannot run scenario NAME: not found in PATH" in the run's log, status 127,
+    `check run` 3. What held them in the suite were parity's expected differences, which go with
+    the oracle (finding 531), so each now rests on the binary alone: numbers on shell.rs's
+    numbers_are_decimal (and shot.rs's, settle.rs's), and the live box's `check point --ignore 08`;
+    names on shell.rs's own_patterns_ascii_in_any_locale and t_unit_bash_changes (`path -b é` under
+    C and en_US.UTF-8); lists on the new shell.rs globs_in_byte_order, ready.rs's
+    new_reports_in_byte_order and t_unit_bash_changes (`saves`, table and `--json`, in both
+    locales); JSON on json.rs's numbers_in_standard_form and the live box's `lua --json`; check run on
+    the new check.rs a_scenario_is_a_program_whatever_its_name (`say`, `shopt` and `true` with no
+    program in PATH: 127, said; `true` and `false` in /usr/bin run) and the live box's `say` case (the
+    live box's cases each stated, no longer compared, in 6b-end: finding 531). The
+    bash-shaped artefacts the design left to 6b were gone before it: `clip` names its process
+    omabox (finding 441), trap's int_as_bash and sig::subst went with the signal rework (findings
+    452-454), the nsenter lines with native entry (finding 490); `git grep -n
+    'int_as_bash\|sig::subst\|fn subst' crates/` finds nothing, and clip.rs says `bash` only in a
+    comment. A host child's `SHLVL` and `_` (Q4: not contract) have their CHANGELOG line (finding
+    504).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

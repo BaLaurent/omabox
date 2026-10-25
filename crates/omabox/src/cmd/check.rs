@@ -3139,6 +3139,35 @@ mod tests {
     use super::*;
     use crate::exit;
 
+    // A SCENARIO is a program: one named like a shell builtin or a function of bash's omabox
+    // (`say`, `shopt`) that names no program in PATH is not there, 127, said in the run's log;
+    // one that names a program there runs it (finding 451: bash ran its builtin or function).
+    #[test]
+    fn a_scenario_is_a_program_whatever_its_name() {
+        let d = std::env::temp_dir().join(format!("omabox-scen-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let empty = shell::bytes(&d).to_vec();
+        let log = cat!(empty, "/log");
+        for name in ["say", "shopt", "true"] {
+            let rc = scenario(&[name.as_bytes().to_vec()], &empty, b"b", &empty, &log);
+            assert_eq!(rc, 127, "{name}");
+            assert_eq!(
+                std::fs::read(shell::path(&log)).unwrap(),
+                cat!(
+                    "omabox: check: cannot run scenario ",
+                    name,
+                    ": not found in PATH\n"
+                )
+            );
+        }
+        for (name, want) in [("true", 0), ("false", 1)] {
+            let rc = scenario(&[name.as_bytes().to_vec()], b"/usr/bin", b"b", &empty, &log);
+            assert_eq!(rc, want, "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn ignore_regions_in_shot_pixels() {
         // (a 200x100 window shot at scale 2, its origin 10,20)
