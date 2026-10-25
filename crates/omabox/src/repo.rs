@@ -592,7 +592,7 @@ pub fn run_link_notes(ctx: &Ctx, how: &str, top_said: bool, words: &[Vec<u8>]) {
 
 /// cwd_path_word DIR BOXHOME WORD... (#251): the first word of a command, or of a script in one,
 /// that is a relative path there in DIR, and not one BOXHOME has too; 64 looked at at most.
-fn cwd_path_word(dir: &[u8], home: &[u8], words: &[Vec<u8>]) -> Option<Vec<u8>> {
+pub fn cwd_path_word(dir: &[u8], home: &[u8], words: &[Vec<u8>]) -> Option<Vec<u8>> {
     let mut n = 0;
     for w in words {
         for t in shell::words(w) {
@@ -634,13 +634,19 @@ pub fn run_cwd_note(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
         return;
     }
     let norepo = how == "run" && repo_top().is_none();
-    let (w, d) = (no_cntrl(&w), no_cntrl(&pwd));
+    say(cwd_note(&ctx.name, how, &w, &pwd, norepo));
+}
+
+/// The note run_cwd_note says (NAME's box; HOW the command; WORD the path word, DIR the caller's
+/// dir; NOREPO a throwaway outside any repo), its control characters as ?.
+pub fn cwd_note(name: &[u8], how: &str, word: &[u8], dir: &[u8], norepo: bool) -> Vec<u8> {
+    let (w, d) = (no_cntrl(word), no_cntrl(dir));
     let wher = if norepo {
         b"is in no repo, so not in this throwaway box".to_vec()
     } else {
-        cat!("box '", ctx.name, "' does not have")
+        cat!("box '", name, "' does not have")
     };
-    let fix = match refuse_src(&pwd) {
+    let fix = match refuse_src(dir) {
         Some(why) => cat!("a box may not mount it (", why, ")"),
         None => cat!(
             how,
@@ -649,7 +655,7 @@ pub fn run_cwd_note(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
             " (or --ro-bind, read-only) mounts it"
         ),
     };
-    say(cat!(
+    cat!(
         "note: ",
         w,
         " is relative to ",
@@ -658,7 +664,7 @@ pub fn run_cwd_note(ctx: &Ctx, how: &str, words: &[Vec<u8>]) {
         wher,
         ": the command runs in the box HOME (/home/sbx); ",
         fix
-    ));
+    )
 }
 
 #[cfg(test)]

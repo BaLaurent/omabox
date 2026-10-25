@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6727 MIN_UNIT=4022
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4674 MIN_UNIT=2166
+MIN_CHECKS=6711 MIN_UNIT=4005
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4658 MIN_UNIT=2150
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -1325,7 +1325,7 @@ t_unit_refusals() {
   # (finding 429) ...and on one with the fix but not omabox's +appid (a private build an older
   # `omabox setup --aquamarine` made): each window needs a class of its own. The box's aquamarine is
   # aq_pick's answer for such a build (its .omabox-commit without +appid), nothing else changed.
-  local aqo=$TMP/$P-aqold aqso; aqso=$(lib hypr_aq_soname 2>/dev/null) || aqso=""
+  local aqo=$TMP/$P-aqold aqso; aqso=$(probe hypr_aq_soname 2>/dev/null) || aqso=""
   if [ -n "$aqso" ]; then
     mkdir -p "$aqo/lib"; : > "$aqo/lib/libaquamarine.so.0.15.1"; ln -sf libaquamarine.so.0.15.1 "$aqo/lib/$aqso"
     echo 7bb8bdf4+keys+layout+cursor > "$aqo/.omabox-commit"
@@ -1362,16 +1362,9 @@ t_unit_refusals() {
   check_match "run --pass of the box session's own refused" "--pass cannot set PATH" "$(ob run -b "$P-x" --pass PATH -- true 2>&1)"
   printf 'A=1\nexport HOME=/x\n' > "$TMP/reserved.env"
   check_match "...--env-file's too, by line" "line 2 sets HOME: it is the box session's own" "$(ob run -b "$P-x" --env-file "$TMP/reserved.env" -- true 2>&1)"
-  check_eq "allow_ports: sorted, each once" "22,8081,8082" "$(lib allow_ports 8082,22,8081,08081)"
-  check_eq "...none for none" "" "$(lib allow_ports "")"
-  # --addr (#229): documentation ranges only, as the box has them.
-  check_eq "box_addr: leading zeros dropped" 203.0.113.10 "$(lib box_addr 203.0.113.010)"
-  check_eq "...each IPv4 documentation range" "192.0.2.1 198.51.100.255" "$(lib box_addr 192.0.2.1) $(lib box_addr 198.51.100.255)"
-  check_eq "...IPv6 in its short form" "2001:db8::1:0:0:1 2001:db8:0:1::a" \
-    "$(lib box_addr 2001:DB8:0:0:1:0:0:1) $(lib box_addr 2001:0db8:0:1:0:0:0:a)"
-  local a; for a in 10.0.0.1 127.0.0.2 203.0.114.1 203.0.113.256 203.0.113.10/32 2001:db9::1 ::1 2001:db8::1::2 2001:db8:1:2:3:4:5 2001:db8: ""; do
-    check_fails "...'$a' refused" lib box_addr "$a"
-  done
+  # (allow_ports: sorted, each once; none for none: upspec.rs refusals_as_bash)
+  # (--addr, #229: documentation ranges only, as the box has them; leading zeros dropped, IPv6 short,
+  # 11 refused: upspec.rs refusals_as_bash)
   check_match "--addr outside the documentation ranges refused" "documentation range.*got 10.1.2.3" "$(ob up "$P-r28" --net isolated --addr 10.1.2.3 2>&1)"
   check_match "--addr needs --net isolated" "--addr needs --net isolated" "$(ob up "$P-r29" --addr 203.0.113.10 2>&1)"
   check_match "a box name with characters it cannot have: refused, naming the one that fits (#107, #287)" "up: box name '$P-r27 x!': .*: write $P-r27-x-" \
@@ -2104,7 +2097,7 @@ t_unit_theme_dir() {
   r=$(tmp_repo td-main); mkdir -p "$r/themes/x" "$d/elsewhere/y" "$d/home/.config/omarchy/themes" "$d/victim"
   echo c > "$r/themes/x/colors.toml"
   # shellcheck disable=SC2329 # called below
-  vis() { (cd "$1" && bash -c 'source "$1"; robinds=("${@:3}"); own_path_visible "$2"' lib "$TMP/lib/bin/omabox" "$2" "${@:3}"); }
+  vis() { local rbs=() x; for x in "${@:3}"; do rbs+=(--robind "$x"); done; (cd "$1" && probe own_path_visible "$2" ${rbs[@]+"${rbs[@]}"}); }
   check "own_path_visible: under the repo up runs from" vis "$r" "$r/themes/x"
   check_fails "...not a dir outside it" vis "$r" "$d/elsewhere/y"
   check "...one under a same-path mount" vis "$r" "$d/elsewhere/y" "$d/elsewhere"$'\t'"$d/elsewhere"
@@ -2123,7 +2116,7 @@ t_unit_theme_dir() {
   # (snap_note, not note: that is the suite's own, and a unit test's helper redefines it for every test
   # after it; finding 252.)
   # shellcheck disable=SC2329 # called below
-  snap_note() { bash -c 'source "$1"; theme_snapshot_note "$2" "$3"' lib "$TMP/lib/bin/omabox" "$@" 2>&1; }
+  snap_note() { probe theme_snapshot_note "$@" 2>&1; }
   ln -s "$r/themes/x" "$h/.config/omarchy/themes/lx"
   check_match "note: a theme linked into this repo is a copy made now" \
     "note: theme lx is a copy of $r/themes/x made now: edits after this do not reach the box. up --theme-dir $r/themes/x gives a live one" \
@@ -2141,7 +2134,7 @@ t_unit_theme_dir() {
   local om=$d/om th=$d/th
   mkdir -p "$om/themes/tokyo-night" "$th/.config/omarchy/themes/mine" "$d/dev/wip"
   # shellcheck disable=SC2329 # called below
-  tn() { HOME=$th lib theme_named "$1" "$om" "${@:2}" 2>&1; }
+  tn() { HOME=$th probe theme_named "$1" "$om" "${@:2}" 2>&1; }
   check_eq "theme_named: Omarchy's, named as omarchy-theme-set does" tokyo-night "$(tn '<b>Tokyo Night</b>')"
   check_eq "...one of the user's" mine "$(tn Mine)"
   check_eq "...a --theme-dir's, by its dir's name" wip "$(tn wip "$d/dev/wip")"
@@ -2166,8 +2159,8 @@ t_unit_plugin_link() {
   git -C "$d/repo" init -q
   # opv CWD ROBINDS PATH: own_path_visible from CWD, with `up`'s robinds as lines of "src<TAB>dest".
   opv() {
-    (cd "$1" && bash -c 'source "$1"; robinds=(); [ -z "$2" ] || mapfile -t robinds <<<"$2"; own_path_visible "$3"' \
-      _ "$TMP/lib/bin/omabox" "$2" "$3")
+    local rbs=() x; if [ -n "$2" ]; then while IFS= read -r x; do rbs+=(--robind "$x"); done <<<"$2"; fi
+    (cd "$1" && probe own_path_visible "$3" ${rbs[@]+"${rbs[@]}"})
   }
   local T=$'\t'
   check "inside the repo up runs from: visible at its own path" opv "$d/repo" "" "$d/repo/sub/plug"
@@ -2177,7 +2170,7 @@ t_unit_plugin_link() {
   check_fails "in the repo, under another folder mounted over it: not" opv "$d/repo" "$d/other$T$d/repo/hid" "$d/repo/hid/plug"
   check_fails "a path that does not exist: not" opv "$d/repo" "" "$d/repo/none"
   # An --overlay is at its own path too (writable there): a plugin in one is linked to it.
-  opvo() { (cd / && bash -c 'source "$1"; robinds=(); overlays=("$2"); own_path_visible "$3"' _ "$TMP/lib/bin/omabox" "$1" "$2"); }
+  opvo() { (cd / && probe own_path_visible "$2" --overlay "$1"); }
   check "inside an --overlay" opvo "$d/other" "$d/other/plug"
   check_fails "...not one beside it" opvo "$d/other/plug/x" "$d/other/plug"
   # Under ai-jail the repo is the jail's project (its cwd), never git's from where the broker runs.
@@ -2199,7 +2192,7 @@ t_unit_plugin_link() {
   local pl=.config/omarchy/plugins/x.y th=.config/omarchy/themes/t sb=$d/sb
   mkdir -p "$sb/none/sub" "$sb/holds/plugins/x.y" "$sb/holdst/t"; echo f > "$sb/file"
   # shellcheck disable=SC2329 # called below
-  blk() { lib seed_blocked "$1" "$2" "$pl"$'\t'plugin$'\t'x.y "$th"$'\t'theme$'\t't; }
+  blk() { probe seed_blocked "$1" "$2" "$pl"$'\t'plugin$'\t'x.y "$th"$'\t'theme$'\t't; }
   check_eq "seed_blocked: a file inside the plugin's folder" "$pl plugin x.y in" "$(blk "$sb/file" "$pl/cfg.json" | tr '\t' ' ')"
   check_eq "...a folder at the plugin's own place" "$pl plugin x.y in" "$(blk "$sb/none" "$pl" | tr '\t' ' ')"
   check_eq "...inside a --theme-dir theme" "$th theme t in" "$(blk "$sb/file" "$th/colors.toml" | tr '\t' ' ')"
@@ -2220,13 +2213,13 @@ t_unit_shell_warnings() {
     '  INFO: Configuration Loaded' '  WARN qml: Plugin widget x.qml failed: W.qml:9:1: Syntax error' > "$f"
   check_eq "shell_warnings: a plugin's lines, not Quickshell's 'outside of the config folder' (any plugin's)" \
     $'Module path contains invalid characters for a module name:  "/plugins/image-picker"\nPlugin widget x.qml failed: W.qml:9:1: Syntax error' \
-    "$(lib shell_warnings "$f")"
+    "$(probe shell_warnings "$f")"
   # #276: the lines as --log-times writes them, the time before the level (in grey, coloured).
   printf '%s\n' $'\e[90m2026-10-20 02:26:30.852\e[33m  WARN\e[97m quickshell.qmlscanner\e[0m: Module path "/p/x.good" is outside of the config folder.' \
     $'\e[90m2026-10-20 02:26:30.853\e[33m  WARN\e[97m qml\e[0m: Plugin widget x.qml failed: boom' \
     '2026-10-20 02:26:30.854 ERROR quickshell.x: bad' '2026-10-20 02:26:30.855  INFO: Configuration Loaded' > "$f"
   check_eq "shell_warnings: timed lines (--log-times) lose their time too" \
-    $'Plugin widget x.qml failed: boom\nbad' "$(lib shell_warnings "$f")"
+    $'Plugin widget x.qml failed: boom\nbad' "$(probe shell_warnings "$f")"
 }
 
 # #303 (finding 408): the shell's crash reports are its own, not another Quickshell's in the box (a
@@ -2357,21 +2350,21 @@ sneaky.json|a link to api-keys.env: a secret's name"
     "$(cd "$h" && command find . ! -type d | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
   check_eq "...the content as the desk's" '{"widgets": ["a", "b"]}' "$(cat "$h/.config/omarchy/alias.json")"
   check_fails "...nothing planted in it" grep -rq planted "$h"
-  check_eq "without HOME: only said, nothing copied" "$out" "$(lib desk_files "$d/desk")"
+  check_eq "without HOME: only said, nothing copied" "$out" "$(probe desk_files "$d/desk")"
   # A file over the cap in all: 16 files of 1 MiB fill it.
   local c=$d/cap i; mkdir -p "$c/plugins"
   for i in $(seq 10 26); do head -c 1048576 /dev/zero > "$c/f$i.json"; done
   check_eq "16 MiB in all: the 17th is skipped" "16 f26.json|over the cap of 16 MiB and 1000 files in all" \
-    "$(lib desk_files "$c" | { grep -c '^copied ' | tr '\n' ' '; } ; lib desk_files "$c" | sed -n 's/^skipped //p' | tr '\t' '|')"
+    "$(probe desk_files "$c" | { grep -c '^copied ' | tr '\n' ' '; } ; probe desk_files "$c" | sed -n 's/^skipped //p' | tr '\t' '|')"
   # The names refused, and some that are not.
   local nm bad=""
   for nm in api-keys.env x.env .env.local GitHubToken.json client_secret.json passwords auth.json oauth cookies.txt \
       session.json private.json key.pem id_rsa.pub keyring x.gpg db.kdbx .netrc; do
-    lib desk_name_refused "$nm" >/dev/null || bad+="$nm "
+    probe desk_name_refused "$nm" >/dev/null || bad+="$nm "
   done
   check_eq "secret names refused" "" "$bad"
   for nm in console.json solari.json workspace-names.json profiles settings.json; do
-    ! lib desk_name_refused "$nm" >/dev/null || bad+="$nm "
+    ! probe desk_name_refused "$nm" >/dev/null || bad+="$nm "
   done
   check_eq "...plugin configs not" "" "$bad"
   # Content: a token-shaped string, a private key, a password line; not a plain config.
@@ -2381,17 +2374,17 @@ sneaky.json|a link to api-keys.env: a secret's name"
   printf '{"maxTokens": 4, "tokenizer": "chars", "password_hint_shown": false, "showAuthor": true, "secretsEnabled": true}\n' > "$d/t5"
   printf 'Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123\n' > "$d/t6"; printf '{"token": "", "secret": "x", "apiKey": null}\n' > "$d/t7"
   check_eq "content refused: a token, a private key, a password, a bearer token; not a plain config, settings named *Tokens or password_*, empty values" "0 0 0 1 1 0 1" \
-    "$(for i in 1 2 3 4 5 6 7; do lib desk_content_refused "$d/t$i" >/dev/null; printf '%s ' $?; done | sed 's/ $//')"
+    "$(for i in 1 2 3 4 5 6 7; do probe desk_content_refused "$d/t$i" >/dev/null; printf '%s ' $?; done | sed 's/ $//')"
   # desk_plugins: each with a manifest and a name for an id, once; a --plugin of the same id wins.
   mkdir -p "$d/desk/plugins/nomani" "$d/desk/plugins/badid" "$d/desk/plugins/dup"
   echo '{"id": "../x"}' > "$d/desk/plugins/badid/manifest.json"; echo "{\"id\": \"$P.da\"}" > "$d/desk/plugins/dup/manifest.json"
-  out=$(bash -c 'source "$1"; PLUGINS=("$2.db	/elsewhere"); desk_plugins "$3"' _ "$TMP/lib/bin/omabox" "$P" "$d/desk" 2>&1)
+  out=$(probe desk_plugins "$d/desk" "$P.db	/elsewhere" 2>&1)
   check_eq "desk_plugins: a dir and a link to one (resolved); off ones too; not the --plugin's id" \
     "$P.da	$d/desk/plugins/da|$P.doff	$d/desk/plugins/doff" "$(grep -v '^omabox:' <<<"$out" | tr '\n' '|' | sed 's/|$//')"
   check_match "...one with no manifest said" "not mounting plugins/nomani: no manifest.json" "$out"
   check_match "...omabox's own widget left out, said (#304)" "not mounting plugins/omabox: omabox's own widget, which lists your boxes \(none in a box\)" "$out"
   check_fails "...but not over a --plugin of its id" grep -q "plugins/omabox" \
-    <<<"$(bash -c 'source "$1"; PLUGINS=("chaves.omabox	/elsewhere"); desk_plugins "$2"' _ "$TMP/lib/bin/omabox" "$d/desk" 2>&1)"
+    <<<"$(probe desk_plugins "$d/desk" "chaves.omabox	/elsewhere" 2>&1)"
   check_match "...an id that is not a name said" "not mounting plugins/badid: its manifest id '../x'" "$out"
   check_fails "...a second dir with the same id: left out, unsaid" grep -q dup <<<"$out"
   # Refused before anything is made.
@@ -2442,12 +2435,12 @@ t_unit_no_seed() {
   check_eq "--no-seed extensions: nothing copied, nothing said" "" "$(se "$d/home3" "" extensions "$P.pa	$d/pa")"
   check_fails "...no extensions folder made" test -e "$d/home3/.config/omarchy/extensions"
   check_eq "the desk: OMABOX_DESK_CONFIG, but never a jailed caller's" "$d/desk $TMP/fh/.config/omarchy" \
-    "$(OMABOX_DESK_CONFIG=$d/desk lib desk_dir) $(OMABOX_DESK_CONFIG=$d/desk OMABOX_JAIL='{"roots":[]}' HOME=$TMP/fh lib desk_dir)"
+    "$(OMABOX_DESK_CONFIG=$d/desk probe desk_dir) $(OMABOX_DESK_CONFIG=$d/desk OMABOX_JAIL='{"roots":[]}' HOME=$TMP/fh probe desk_dir)"
   # --no-seed's list: comma-separated, repeatable, once each; only extensions so far.
   check_eq "no_seed_spec: a list, once each, with what earlier ones gave" "extensions extensions" \
-    "$(lib no_seed_spec extensions,extensions) $(lib no_seed_spec ,extensions extensions)"
+    "$(probe no_seed_spec extensions,extensions) $(probe no_seed_spec ,extensions extensions)"
   check_match "...anything else refused, naming what it takes" "--no-seed: .*comma-separated: extensions .*got 'themes'" \
-    "$(lib no_seed_spec extensions,themes 2>&1)"
+    "$(probe no_seed_spec extensions,themes 2>&1)"
   check_match "up --no-seed themes: refused before anything is made" "--no-seed: .*got 'themes'" "$(ob up "$P-ns0" --no-seed themes 2>&1)"
   check_fails "...no box dir" test -e "$XDG_RUNTIME_DIR/omabox/$P-ns0"
   check_match "...from run too (a throwaway box's option)" "--no-seed: .*got 'x'" "$(ob run --no-seed x -- true 2>&1)"
@@ -2498,8 +2491,8 @@ t_unit_desk_fonts() {
   check_eq "not a folder: said" "omabox: up: not mounting $d/desk3/.fonts: not a folder (or a link to none)" "$(sf "$d/desk3" "$d/h7")"
   check_eq "none on the desk: nothing said" "" "$(sf "$d/elsewhere" "$d/h8")"
   check_eq "the desk HOME: OMABOX_DESK_HOME, but never a jailed caller's" "$d/desk $TMP/fh" \
-    "$(OMABOX_DESK_HOME=$d/desk lib desk_home) $(OMABOX_DESK_HOME=$d/desk OMABOX_JAIL='{"roots":[]}' HOME=$TMP/fh lib desk_home)"
-  check_eq "no_seed_spec takes fonts" "extensions,fonts" "$(lib no_seed_spec fonts,extensions,fonts extensions | tr ' ' ',')"
+    "$(OMABOX_DESK_HOME=$d/desk probe desk_home) $(OMABOX_DESK_HOME=$d/desk OMABOX_JAIL='{"roots":[]}' HOME=$TMP/fh probe desk_home)"
+  check_eq "no_seed_spec takes fonts" "extensions,fonts" "$(probe no_seed_spec fonts,extensions,fonts extensions | tr ' ' ',')"
 }
 
 # #250: what `up` says when the box's bar is the desk's and not Omarchy's (bar_seed_note): its layout
@@ -2533,20 +2526,20 @@ t_unit_bar_seed_note() {
 }
 t_unit_bar_filter() {
   # shellcheck disable=SC2329 # called below
-  bar() { lib shell_json_filter "$1" true "$2" <<<"$3" | jq -c "${4:-.bar.layout}"; }
+  bar() { probe shell_json_filter "$1" true "$2" <<<"$3" | jq -c "${4:-.bar.layout}"; }
   # A mounted bar widget (finding 151): placed where its manifest says unless the bar, or a mounted
   # plugin's own layout, has it; its settings entry under plugins, or a place in a plugin the box
   # lacks, is not a place.
   local w='["bar-widget"]' side='{"bar":{"layout":{"right":[]}},"plugins":[{"id":"x.side","bottom":["x.w"]},{"id":"x.w","n":1}]}'
   check_eq "a widget the user keeps in a sidebar plugin the box lacks: in the bar" '[{"id":"x.w"}]' \
-    "$(lib place_plugin x.w right "$w" '["x.w"]' <<<"$side" | jq -c .bar.layout.right)"
-  check_eq "...its settings kept" '{"id":"x.w","n":1}' "$(lib place_plugin x.w right "$w" '["x.w"]' <<<"$side" | jq -c '.plugins[] | select(.id == "x.w")')"
+    "$(probe place_plugin x.w right "$w" '["x.w"]' <<<"$side" | jq -c .bar.layout.right)"
+  check_eq "...its settings kept" '{"id":"x.w","n":1}' "$(probe place_plugin x.w right "$w" '["x.w"]' <<<"$side" | jq -c '.plugins[] | select(.id == "x.w")')"
   check_eq "...not when that plugin is mounted too: it holds the widget" '[]' \
-    "$(lib place_plugin x.w right "$w" '["x.w","x.side"]' <<<"$side" | jq -c .bar.layout.right)"
+    "$(probe place_plugin x.w right "$w" '["x.w","x.side"]' <<<"$side" | jq -c .bar.layout.right)"
   check_eq "...nor when the bar has it" '[{"id":"x.w"}]' \
-    "$(lib place_plugin x.w right "$w" '["x.w"]' <<<'{"bar":{"layout":{"right":[{"id":"x.w"}]}}}' | jq -c .bar.layout.right)"
+    "$(probe place_plugin x.w right "$w" '["x.w"]' <<<'{"bar":{"layout":{"right":[{"id":"x.w"}]}}}' | jq -c .bar.layout.right)"
   check_eq "a panel plugin: an entry under plugins, once" '[{"id":"x.p"}]' \
-    "$(lib place_plugin x.p right '["panel"]' '["x.p"]' <<<'{"plugins":[{"id":"x.p"}]}' | jq -c .plugins)"
+    "$(probe place_plugin x.p right '["panel"]' '["x.p"]' <<<'{"plugins":[{"id":"x.p"}]}' | jq -c .plugins)"
   local user='{"bar":{"centerAnchor":"x.solari","layout":{"left":[{"id":"omarchy.menu"},{"id":"omarchy.system-update"},{"id":"x.gauge"}],
     "center":[{"id":"x.indicators"},{"id":"x.solari"},{"id":"njpatel.omapager"}],"right":[{"id":"omarchy.tray"},{"id":"x.clock"}]}}}'
   check_eq "no workspace widget at all: after the menu, the rest filtered" \
@@ -2556,7 +2549,7 @@ t_unit_bar_filter() {
   # Omarchy 4.5's split centre (#293, finding 418): with SPLIT, the anchor's flanks move to centerBegin
   # and centerEnd first, as migration 1791969355 does on a desk, then the filter.
   # shellcheck disable=SC2329 # called below
-  bars() { lib shell_json_filter "$1" true '[]' true <<<"$2" | jq -c "${3:-.bar}"; }
+  bars() { probe shell_json_filter "$1" true '[]' true <<<"$2" | jq -c "${3:-.bar}"; }
   local anc='{"bar":{"centerAnchor":"omarchy.clock","layout":{"center":["x.a",{"id":"omarchy.indicators"},{"id":"omarchy.clock"},{"id":"omarchy.weather"}],"centerEnd":[{"id":"omarchy.tray"}]}}}'
   check_eq "split: what flanked the anchor in centerBegin and centerEnd, the anchor alone in center, no centerAnchor" \
     '{"layout":{"center":[{"id":"omarchy.clock"}],"centerEnd":[{"id":"omarchy.weather"},{"id":"omarchy.tray"}],"centerBegin":["x.a",{"id":"omarchy.indicators"}],"left":[{"id":"omarchy.workspaces"}]}}' \
@@ -2564,15 +2557,15 @@ t_unit_bar_filter() {
   check_eq "...a plugin left out filtered after the split" '[{"id":"omarchy.indicators"}]' "$(bars '[]' "$anc" .bar.layout.centerBegin)"
   # omarchy<4.5: this check and "before the split" below
   check_eq "...without SPLIT (an older Omarchy) the anchor stays" '"omarchy.clock"' \
-    "$(lib shell_json_filter '[]' true '[]' <<<"$anc" | jq -c .bar.centerAnchor)"
+    "$(probe shell_json_filter '[]' true '[]' <<<"$anc" | jq -c .bar.centerAnchor)"
   check_eq "...a replacement bar's layout left as it was written" '"omarchy.clock"' \
     "$(bars '[]' "$(jq -c '.bar.id = "x.bar"' <<<"$anc")" .bar.centerAnchor)"
   check_eq "...an anchor not in the centre: only dropped" '[{"id":"omarchy.clock"}]' \
     "$(bars '[]' '{"bar":{"centerAnchor":"x.gone","layout":{"center":[{"id":"omarchy.clock"}]}}}' .bar.layout.center)"
   check_eq "widget_section on a split centre: centre, none and junk to centerEnd, a section kept" "centerEnd centerEnd centerEnd tray left" \
-    "$(for x in center '' bottom tray left; do lib widget_section "$x" true; done | paste -sd ' ')"
+    "$(for x in center '' bottom tray left; do probe widget_section "$x" true; done | paste -sd ' ')"
   check_eq "...before the split: the centre unless named" "center center bottom" \
-    "$(for x in '' center bottom; do lib widget_section "$x" false; done | paste -sd ' ')"
+    "$(for x in '' center bottom; do probe widget_section "$x" false; done | paste -sd ' ')"
   local pager='{"bar":{"layout":{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"x.pager","n":1},"y.pager",{"id":"x.other"}]}}}'
   check_eq "a left-out plugin's workspace widget: omarchy.workspaces in its place, once" \
     '{"left":[{"id":"omarchy.menu"}],"center":[{"id":"omarchy.clock"},{"id":"omarchy.workspaces"}]}' \
@@ -2600,23 +2593,23 @@ t_unit_bar_filter() {
   echo '{not json' > "$h/.config/omarchy/plugins/bad/manifest.json"
   echo '{"id":"b.mine","barWidget":{"displayName":"Mine","aliases":["workspaces"]}}' > "$h/mnt/manifest.json"
   check_eq "workspace widgets: by name, description or alias; not a notifications pager, a service or a broken manifest" \
-    '["a.ws","b.mine"]' "$(printf 'b.mine\t%s\n' "$h/mnt" | HOME=$h lib workspace_widgets | jq -c .)"
-  check_eq "...none: an empty list" '[]' "$(HOME=$TMP/nohome lib workspace_widgets < /dev/null | jq -c .)"
+    '["a.ws","b.mine"]' "$(printf 'b.mine\t%s\n' "$h/mnt" | HOME=$h probe workspace_widgets | jq -c .)"
+  check_eq "...none: an empty list" '[]' "$(HOME=$TMP/nohome probe workspace_widgets < /dev/null | jq -c .)"
 }
 
 # up --new (finding 73): a free box-N name, printed; two at once never get the same one. The names
 # are the user's namespace too (box-1 may be theirs): only the ones printed here are taken down.
 t_new() {
-  local a=$TMP/new-a b=$TMP/new-b   # fixed names: cleanup takes these boxes down if the suite stops here
-  "$CLI" up --new --no-shell --idle 0 > "$a" 2>/dev/null & local pa=$!
-  "$CLI" up --new --no-shell --idle 0 > "$b" 2>/dev/null & local pb=$!
+  local fa=$TMP/new-a fb=$TMP/new-b   # fixed names: cleanup takes these boxes down if the suite stops here
+  "$CLI" up --new --no-shell --idle 0 > "$fa" 2>/dev/null & local pa=$!
+  "$CLI" up --new --no-shell --idle 0 > "$fb" 2>/dev/null & local pb=$!
   wait "$pa" "$pb"
-  local na nb; na=$(cat "$a") nb=$(cat "$b")
+  local na nb; na=$(cat "$fa") nb=$(cat "$fb")
   check_match "up --new prints a box-N name" '^box-[0-9]+$' "$na"
   check "...two at once, two different names ($na, $nb)" test -n "$nb" -a "$na" != "$nb"
   check "...both up" bash -c "'$CLI' ls --json | jq -e '[.[] | select(.name == \"$na\" or .name == \"$nb\") | select(.state == \"up\")] | length == 2'"
   [ -n "$na" ] && ob down "$na" >/dev/null 2>&1; [ -n "$nb" ] && ob down "$nb" >/dev/null 2>&1
-  rm -f "$a" "$b"   # down: a later box-N of someone else's may get these names
+  rm -f "$fa" "$fb"   # down: a later box-N of someone else's may get these names
 }
 
 # One version for the CLI and the widget (CHANGELOG.md).
@@ -2966,10 +2959,8 @@ t_unit_omarchy_contract() {
 t_unit_omarchy45() {
   local d=$TMP/o45 out
   rm -rf "$d"; mkdir -p "$d/run/owe" "$d/om/bin"
-  check_eq "intro_cover: an Overlay omarchy-background layer, its geometry" "0,0 800x600" \
-    "$(lib intro_cover <<<'{"M":{"levels":{"0":[{"namespace":"omarchy-background","x":0,"y":0,"w":800,"h":600}],"3":[{"namespace":"omarchy-background","x":0,"y":0,"w":800,"h":600}]}}}')"
-  check_fails "...none: the wallpaper alone (Background level) is no cover" lib intro_cover \
-    <<<'{"M":{"levels":{"0":[{"namespace":"omarchy-background","x":0,"y":0,"w":800,"h":600}],"3":[{"namespace":"omarchy-notifications"}]}}}'
+  # (intro_cover: an Overlay omarchy-background layer, its geometry; none for the wallpaper alone:
+  # ready.rs intro_cover_as_bash)
   # A tree that uses all three, on a host without them (stubbed), then with them.
   mkdir -p "$d/t/bin" "$d/t/default/hypr"
   printf '#!/bin/bash
@@ -9568,7 +9559,7 @@ t_unit_keys_to_box() {
 # finding 88: an agent session's default box is its own.
 t_unit_agent_session() {
   local repo; repo=$(tmp_repo as)
-  dn() { (cd "$repo" && env -u OMABOX -u OMABOX_SESSION -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID "$@" bash -c 'source "$1"; default_name' _ "$TMP/lib/bin/omabox"); }
+  dn() { (cd "$repo" && env -u OMABOX -u OMABOX_SESSION -u CLAUDE_CODE_SESSION_ID -u CODEX_THREAD_ID "$@" "$PROBE" _rust probe default_name); }
   check_eq "no agent: the repo's name" "$P-as" "$(dn)"
   check_eq "Claude Code: the session id's tail" "$P-as-5cc72cdc" "$(dn CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
   check_eq "Codex: the random tail of its UUIDv7, not the timestamp" "$P-as-c8d64254" "$(dn CODEX_THREAD_ID=01a0314c-9a07-72f1-8183-d09fc8d64254)"
@@ -9586,19 +9577,19 @@ t_unit_agent_session() {
   # nearest ancestor without its session variable; always one this command descends from.
   # (`; true`: bash would otherwise exec its last command, and the "agent" would be gone)
   local out lib=$TMP/lib/bin/omabox
-  out=$(bash -c 'echo "me=$$"; CLAUDE_CODE_SESSION_ID=$0 CLAUDE_PID=$$ bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-session" "$lib")
+  out=$(bash -c 'echo "me=$$"; CLAUDE_CODE_SESSION_ID=$0 CLAUDE_PID=$$ "$1" _rust probe agent_proc; true' "t-$P-session" "$PROBE")
   check_eq "Claude Code: the agent is CLAUDE_PID" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   sleep 30 & local other=$!
-  check_fails "...only when this command descends from it" env CLAUDE_CODE_SESSION_ID="t-$P-session" CLAUDE_PID="$other" bash -c 'source "$1"; agent_proc' _ "$lib"
-  out=$(bash -c 'echo "me=$$"; CODEX_THREAD_ID=$0 bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib")
+  check_fails "...only when this command descends from it" env CLAUDE_CODE_SESSION_ID="t-$P-session" CLAUDE_PID="$other" "$PROBE" _rust probe agent_proc
+  out=$(bash -c 'echo "me=$$"; CODEX_THREAD_ID=$0 "$1" _rust probe agent_proc; true' "t-$P-thread-0001" "$PROBE")
   check_eq "Codex: the nearest process without its session variable" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   # ...with 1.5 MB of environment after its variable too (a `tr | grep -q` pipe lost the match there).
   local big=() pad i; printf -v pad '%01000d' 0
   for i in $(seq 1500); do big+=("V$i=$pad"); done
   out=$(bash -c 'echo "me=$$"; env -i PATH="$PATH" HOME="$HOME" XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" CODEX_THREAD_ID="$0" "${@:2}" \
-    bash -c '\''source "$1"; agent_proc'\'' _ "$1"; true' "t-$P-thread-0001" "$lib" "${big[@]}")
+    "$1" _rust probe agent_proc; true' "t-$P-thread-0001" "$PROBE" "${big[@]}")
   check_eq "...with a large environment too" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
-  out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; bash -c '\''source "$1"; agent_proc'\'' _ "$0"' "$lib")
+  out=$("$CLI" guard exec -- bash -c 'echo "me=$$"; "$0" _rust probe agent_proc; true' "$PROBE")
   check_eq "guard exec: the agent is what it ran" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   # A guard exec inside a guarded agent keeps its session, so its agent too (the box is the outer
   # one's), unless it does not run under that agent; a session of its own starts with its own agent.
@@ -9610,21 +9601,21 @@ t_unit_agent_session() {
   check_eq "...and not one from outside a session it starts" "${out%%$'\n'*}" "$(sed -n 2p <<<"$out")"
   kill "$other" 2>/dev/null
   check_fails "OMABOX_SESSION set for one command names no agent (it would go down a minute later)" \
-    env OMABOX_SESSION=abcd1234 bash -c 'source "$1"; agent_proc' _ "$lib"
+    env OMABOX_SESSION=abcd1234 "$PROBE" _rust probe agent_proc
   # An agent that exited is gone even while it is a zombie: its parent (an exec'd sleep) never waits.
   local zd=$TMP/zombie z; mkdir -p "$zd"
   bash -c 'sleep 300 & echo $! > "$0"; exec sleep 300' "$zd/pid" & local zparent=$!
   until_ok 5 test -s "$zd/pid"; z=$(cat "$zd/pid")
-  jq -n --argjson a "$z" --arg s "$(bash -c 'source "$1"; proc_start "$2"' _ "$lib" "$z")" '{agent: $a, agent_start: $s}' > "$zd/box.json"
-  check "an agent that runs is alive" env D="$zd" bash -c 'source "$1"; agent_alive' _ "$lib"
+  jq -n --argjson a "$z" --arg s "$(probe proc_start "$z")" '{agent: $a, agent_start: $s}' > "$zd/box.json"
+  check "an agent that runs is alive" probe agent_alive "$zd"
   kill "$z"; until_ok 5 grep -q '^[^)]*) Z' "/proc/$z/stat"
-  check_fails "...one that exited is not, though its parent has not reaped it" env D="$zd" bash -c 'source "$1"; agent_alive' _ "$lib"
+  check_fails "...one that exited is not, though its parent has not reaped it" probe agent_alive "$zd"
   kill "$zparent" 2>/dev/null
   # None recorded, or no start time, is none alive. An empty pid read /proc//stat (the system-wide
   # /proc/stat: no state Z) and an empty start matched the empty one read for it, or for a pid gone.
   # In a condition, as its callers call it (set -e would end it at a failed read otherwise).
   # shellcheck disable=SC2329 # called through check_fails
-  alive() { env D="$zd" bash -c 'source "$1"; agent_alive || exit 1' _ "$lib"; }
+  alive() { probe agent_alive "$zd"; }
   local nopid=$(($(cat /proc/sys/kernel/pid_max) + 1))
   echo '{"agent": null}' > "$zd/box.json"
   check_fails "a box that records no agent has none alive" alive
@@ -9632,15 +9623,15 @@ t_unit_agent_session() {
   check_fails "...nor one with no box.json" alive
   jq -n --argjson a "$nopid" '{agent: $a, agent_start: ""}' > "$zd/box.json"
   check_fails "...nor one that records a pid gone, with no start time" alive
-  check_fails "proc_stat takes no empty pid" bash -c 'source "$1"; proc_stat "" 0' _ "$lib"
+  check_fails "proc_stat takes no empty pid" probe proc_stat "" 0
   # finding 162: a throwaway's owner (`run`) by its pid and start time; a reused pid is not it, and a
   # box.json from before owner_start goes by the pid alone. Every reaper down may fail and is retried:
   # none is a bare command, which would end the reaper under set -e.
-  local ostart; ostart=$(lib proc_start $$)
-  check "the owner that runs is alive" lib owner_alive $$ "$ostart"
-  check_fails "...not a pid that runs with another start time (reused)" lib owner_alive $$ "1$ostart"
-  check "...a pid alone when no start was recorded" lib owner_alive $$ ""
-  check_fails "...and none for a pid gone" lib owner_alive "$nopid" ""
+  local ostart; ostart=$(probe proc_start $$)
+  check "the owner that runs is alive" probe owner_alive $$ "$ostart"
+  check_fails "...not a pid that runs with another start time (reused)" probe owner_alive $$ "1$ostart"
+  check "...a pid alone when no start was recorded" probe owner_alive $$ ""
+  check_fails "...and none for a pid gone" probe owner_alive "$nopid" ""
   check_fails "no bare cmd_down in the reaper (it would end it when the down fails)" \
     grep -nE '^\s*DOWN_IF_CREATED=.*cmd_down "\$NAME"\s*$' "$lib"
   check_fails "agent_proc fails when its agent's start time cannot be read (it exited meanwhile)" \
@@ -20670,24 +20661,24 @@ t_link_out() {
 t_unit_run_cwd_note() {
   local d=$TMP/ucw; mkdir -p "$d/dir/tests" "$d/dir/.config" "$d/home/.config" "$d/h"
   : > "$d/dir/tests/x.py"; : > "$d/dir/run.sh"
-  check_eq "cwd_path_word: a relative path there" tests/x.py "$(lib cwd_path_word "$d/dir" "$d/home" python3 tests/x.py)"
-  check_eq "...a ./ path, the command itself" ./run.sh "$(lib cwd_path_word "$d/dir" "$d/home" ./run.sh --fast)"
-  check_eq "...a word of a script (sh -c)" tests "$(lib cwd_path_word "$d/dir" "$d/home" sh -c 'cd tests && make')"
-  check_eq "...one with .. in it" ../run.sh "$(lib cwd_path_word "$d/dir/tests" "$d/home" cat ../run.sh)"
-  check_fails "...a plain app: none" lib cwd_path_word "$d/dir" "$d/home" foot --version
+  check_eq "cwd_path_word: a relative path there" tests/x.py "$(probe cwd_path_word "$d/dir" "$d/home" python3 tests/x.py)"
+  check_eq "...a ./ path, the command itself" ./run.sh "$(probe cwd_path_word "$d/dir" "$d/home" ./run.sh --fast)"
+  check_eq "...a word of a script (sh -c)" tests "$(probe cwd_path_word "$d/dir" "$d/home" sh -c 'cd tests && make')"
+  check_eq "...one with .. in it" ../run.sh "$(probe cwd_path_word "$d/dir/tests" "$d/home" cat ../run.sh)"
+  check_fails "...a plain app: none" probe cwd_path_word "$d/dir" "$d/home" foot --version
   # shellcheck disable=SC2088 # a literal ~/x, as a command's word has it
-  check_fails "...absolute, an option, ~: none" lib cwd_path_word "$d/dir" "$d/home" cat "$d/dir/run.sh" --file=tests '~/x'
-  check_fails "...one the box HOME has too: none" lib cwd_path_word "$d/dir" "$d/home" ls .config
-  check_fails "...a glob is not expanded" lib cwd_path_word "$d/dir" "$d/home" 'ls *'
+  check_fails "...absolute, an option, ~: none" probe cwd_path_word "$d/dir" "$d/home" cat "$d/dir/run.sh" --file=tests '~/x'
+  check_fails "...one the box HOME has too: none" probe cwd_path_word "$d/dir" "$d/home" ls .config
+  check_fails "...a glob is not expanded" probe cwd_path_word "$d/dir" "$d/home" 'ls *'
   check_eq "cwd_note: a throwaway outside any repo" \
     "omabox: note: tests/x.py is relative to $d/dir, which is in no repo, so not in this throwaway box: the command runs in the box HOME (/home/sbx); run --overlay $d/dir (or --ro-bind, read-only) mounts it" \
-    "$(NAME=bx lib cwd_note run tests/x.py "$d/dir" 1 2>&1)"
+    "$(probe cwd_note bx run tests/x.py "$d/dir" 1 2>&1)"
   check_eq "...a box up that does not have the dir" \
     "omabox: note: tests/x.py is relative to $d/dir, which box 'bx' does not have: the command runs in the box HOME (/home/sbx); down, then up --overlay $d/dir (or --ro-bind, read-only) mounts it" \
-    "$(NAME=bx lib cwd_note "down, then up" tests/x.py "$d/dir" 0 2>&1)"
+    "$(probe cwd_note bx "down, then up" tests/x.py "$d/dir" 0 2>&1)"
   check_match "...a dir a box may not mount (HOME): why, no mount offered" "the command runs in the box HOME \(/home/sbx\); a box may not mount it \(it contains $d/h/\)$" \
-    "$(HOME=$d/h NAME=bx lib cwd_note run x "$d/h" 1 2>&1)"
-  check_match "...a control character printed as ?" "note: e\?\[31m is relative to" "$(NAME=bx lib cwd_note run $'e\e[31m' "$d/dir" 1 2>&1)"
+    "$(HOME=$d/h probe cwd_note bx run x "$d/h" 1 2>&1)"
+  check_match "...a control character printed as ?" "note: e\?\[31m is relative to" "$(probe cwd_note bx run $'e\e[31m' "$d/dir" 1 2>&1)"
 }
 
 # #251: a command whose words name a path in the caller's dir, run where the box does not have that

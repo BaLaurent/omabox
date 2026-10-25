@@ -74,6 +74,33 @@ pub const NAMES: &[(&str, &str)] = &[
     ("refuse_dest", "PATH"),
     ("robind_spec", "DIR[:DEST]"),
     ("monitor_spec", "SPEC"),
+    // up's seeding and the desk, as read (nothing copied).
+    (
+        "own_path_visible",
+        "PATH [--robind SRC<TAB>DEST | --overlay DIR]...",
+    ),
+    ("theme_snapshot_note", "THEME_DIR TOP"),
+    ("theme_named", "NAME TREE [THEME_DIR...]"),
+    ("shell_warnings", "FILE"),
+    ("desk_name_refused", "NAME"),
+    ("desk_content_refused", "FILE"),
+    ("desk_files", "DESK"),
+    ("desk_plugins", "DESK [ID<TAB>DIR...]"),
+    ("desk_dir", ""),
+    ("desk_home", ""),
+    ("no_seed_spec", "LIST [HAVE]"),
+    ("shell_json_filter", "KEEP NOTIFY PAGERS [SPLIT]"),
+    ("place_plugin", "ID SECTION KINDS MOUNTED"),
+    ("widget_section", "SECTION SPLIT"),
+    ("workspace_widgets", ""),
+    ("cwd_path_word", "DIR HOME WORD..."),
+    ("cwd_note", "NAME HOW WORD DIR NOREPO"),
+    // Processes: an agent's, a run's owner, by pid and start time.
+    ("agent_proc", ""),
+    ("proc_start", "PID"),
+    ("proc_stat", "PID FIELD"),
+    ("agent_alive", "D"),
+    ("owner_alive", "PID START"),
 ];
 
 /// One line a word: the probe's own usage, for a name it does not have.
@@ -365,6 +392,118 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             let m = crate::mon::monitor_spec(spec).map_err(|()| Exit(1))?;
             line(&m.join(&b' '))
         }
+        (b"own_path_visible", [path, rest @ ..]) => {
+            let (mut rb, mut ov) = (Vec::new(), Vec::new());
+            for pair in rest.chunks(2) {
+                match pair {
+                    [o, v] if *o == b"--robind" => {
+                        let i = v.iter().position(|&c| c == b'\t').ok_or_else(usage)?;
+                        rb.push((v[..i].to_vec(), v[i + 1..].to_vec()));
+                    }
+                    [o, v] if *o == b"--overlay" => ov.push(v.to_vec()),
+                    _ => return Err(usage()),
+                }
+            }
+            yes(crate::upspec::own_path_visible(path, &rb, &ov))
+        }
+        (b"theme_snapshot_note", [dir, top]) => {
+            crate::seed::theme_snapshot_note(dir, top);
+            Ok(())
+        }
+        (b"theme_named", [name, tree, dirs @ ..]) => line(&crate::plugins::theme_named(
+            &ctx,
+            name,
+            tree,
+            &owned(dirs),
+            &crate::jailpath::jail_path,
+        )?),
+        (b"shell_warnings", [f]) => out(crate::plugins::shell_warnings(&crate::shell::path(f))),
+        (b"desk_name_refused", [n]) => {
+            refused(crate::seed::desk_name_refused(n).map(|m| m.as_bytes().to_vec()))
+        }
+        (b"desk_content_refused", [f]) => {
+            refused(crate::seed::desk_content_refused(f).map(|m| m.as_bytes().to_vec()))
+        }
+        (b"desk_files", [desk]) => line(&crate::seed::desk_files(&ctx, desk, None)?),
+        (b"desk_plugins", [desk, have @ ..]) => {
+            let mut hv = Vec::new();
+            for x in have {
+                let i = x.iter().position(|&c| c == b'\t').ok_or_else(usage)?;
+                hv.push(crate::plugins::Plugin {
+                    id: x[..i].to_vec(),
+                    dir: x[i + 1..].to_vec(),
+                });
+            }
+            for p in crate::plugins::desk_plugins(desk, &hv) {
+                line(&cat!(p.id, "\t", p.dir))?;
+            }
+            Ok(())
+        }
+        (b"desk_dir", []) => line(&crate::seed::desk_dir()),
+        (b"desk_home", []) => line(&crate::seed::desk_home()),
+        (b"no_seed_spec", [list, have @ ..]) if have.len() <= 1 => {
+            let have = have.first().copied().unwrap_or(b"");
+            line(&crate::upspec::no_seed_spec(list, have).map_err(|()| Exit(1))?)
+        }
+        (b"shell_json_filter", [keep, notify, pagers, split @ ..]) if split.len() <= 1 => {
+            let split = split.first().is_some_and(|s| *s == b"true");
+            ran(crate::shelljson::shell_json_filter(
+                keep,
+                *notify == b"true",
+                pagers,
+                split,
+                &stdin_all()?,
+            ))
+        }
+        (b"place_plugin", [id, sec, kinds, mounted]) => ran(crate::shelljson::place_plugin(
+            id,
+            sec,
+            kinds,
+            mounted,
+            &stdin_all()?,
+        )),
+        (b"widget_section", [sec, split]) => {
+            line(&crate::shelljson::widget_section(sec, *split == b"true"))
+        }
+        // The mounted plugins as bash's PLUGINS lines on stdin (ID<TAB>DIR), their dirs read.
+        (b"workspace_widgets", []) => {
+            let dirs: Vec<Vec<u8>> = stdin_all()?
+                .split(|&c| c == b'\n')
+                .filter(|l| !l.is_empty())
+                .map(|l| match l.iter().position(|&c| c == b'\t') {
+                    Some(i) => l[i + 1..].to_vec(),
+                    None => l.to_vec(),
+                })
+                .collect();
+            ran(crate::shelljson::workspace_widgets(&dirs))
+        }
+        (b"cwd_path_word", [dir, home, words @ ..]) => {
+            line(&crate::repo::cwd_path_word(dir, home, &owned(words)).ok_or(Exit(1))?)
+        }
+        (b"cwd_note", [name, how, w, dir, norepo]) => {
+            crate::exit::say(crate::repo::cwd_note(
+                name,
+                &String::from_utf8_lossy(how),
+                w,
+                dir,
+                *norepo == b"1",
+            ));
+            Ok(())
+        }
+        (b"agent_proc", []) => {
+            let (pid, start) = crate::select::agent_proc().ok_or(Exit(1))?;
+            line(&cat!(pid, " ", start))
+        }
+        (b"proc_start", [pid]) => line(&crate::procfs::proc_start(pid).ok_or(Exit(1))?),
+        (b"proc_stat", [pid, i]) => {
+            let i: usize = std::str::from_utf8(i)
+                .ok()
+                .and_then(|i| i.parse().ok())
+                .ok_or_else(usage)?;
+            line(&crate::procfs::proc_stat(pid, i).ok_or(Exit(1))?)
+        }
+        (b"agent_alive", [d]) => yes(crate::boxes::agent_alive(d)),
+        (b"owner_alive", [pid, start]) => yes(crate::ready::owner_alive(pid, start)),
         (b"covers_held", [n]) => {
             ctx.name = n.to_vec();
             ctx.d = cat!(ctx.boxes, "/", n);
@@ -376,11 +515,12 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
 
 /// awk ARGS over this process's stdin, as the command runs it on its own samples.
 fn awk_stdin(args: &[Vec<u8>]) -> Res<()> {
-    let mut input = Vec::new();
-    std::io::Read::read_to_end(&mut std::io::stdin(), &mut input).map_err(|_| Exit(1))?;
-    let r = crate::jq::tool("awk", args, Some(&input), crate::jq::Err::Inherit);
-    out(&r.out)?;
-    if r.rc == 0 { Ok(()) } else { Err(Exit(1)) }
+    ran(crate::jq::tool(
+        "awk",
+        args,
+        Some(&stdin_all()?),
+        crate::jq::Err::Inherit,
+    ))
 }
 
 fn owned(v: &[&[u8]]) -> Vec<Vec<u8>> {
@@ -393,6 +533,18 @@ fn refused(why: Option<Vec<u8>>) -> Res<()> {
         Some(m) => line(&m),
         None => Err(Exit(1)),
     }
+}
+
+fn stdin_all() -> Res<Vec<u8>> {
+    let mut v = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::stdin(), &mut v).map_err(|_| Exit(1))?;
+    Ok(v)
+}
+
+/// A jq or awk run's output, and its status (1 for any failure).
+fn ran(r: crate::jq::Ran) -> Res<()> {
+    out(&r.out)?;
+    if r.rc == 0 { Ok(()) } else { Err(Exit(1)) }
 }
 
 /// A test's answer as its status: 0 yes, 1 no.

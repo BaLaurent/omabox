@@ -1175,6 +1175,30 @@ pub fn box_json(ctx: &Ctx, hung: bool, shell_given: &str, gone: &str) -> Vec<u8>
 mod tests {
     use super::*;
 
+    /// t_unit_omarchy45's intro_cover cases: an Overlay omarchy-background layer's geometry; the
+    /// wallpaper alone (Background level) is no cover. jq is the recipe's dependency.
+    #[test]
+    fn intro_cover_as_bash() {
+        let cover = |layers: &str| {
+            let r = crate::jq::jq(
+                &["-er", INTRO_COVER_JQ],
+                Some(layers.as_bytes()),
+                crate::jq::Err::Null,
+            );
+            (r.rc, String::from_utf8(r.text()).unwrap())
+        };
+        assert_eq!(
+            cover(
+                r#"{"M":{"levels":{"0":[{"namespace":"omarchy-background","x":0,"y":0,"w":800,"h":600}],"3":[{"namespace":"omarchy-background","x":0,"y":0,"w":800,"h":600}]}}}"#
+            ),
+            (0, "0,0 800x600".to_string())
+        );
+        assert_ne!(
+            cover(r#"{"M":{"levels":{"0":[{"namespace":"omarchy-background","x":0,"y":0,"w":800,"h":600}],"3":[{"namespace":"omarchy-notifications"}]}}}"#).0,
+            0
+        );
+    }
+
     #[test]
     fn programs_are_bash_s() {
         let script =

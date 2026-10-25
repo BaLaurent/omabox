@@ -821,6 +821,41 @@ mod tests {
         assert!(refuse_dest(b"/usrx").is_none());
     }
 
+    /// t_unit_refusals's allow_ports and box_addr (--addr, #229) cases, as bash had them.
+    #[test]
+    fn refusals_as_bash() {
+        let csv = |l: &str| AllowedPorts::parse(l.as_bytes()).unwrap().csv();
+        assert_eq!(csv("8082,22,8081,08081"), b"22,8081,8082");
+        assert_eq!(csv(""), b"");
+        let a = |x: &str| box_addr(x.as_bytes()).map(|v| String::from_utf8(v).unwrap());
+        assert_eq!(a("203.0.113.010").as_deref(), Some("203.0.113.10"));
+        assert_eq!(a("192.0.2.1").as_deref(), Some("192.0.2.1"));
+        assert_eq!(a("198.51.100.255").as_deref(), Some("198.51.100.255"));
+        assert_eq!(
+            a("2001:DB8:0:0:1:0:0:1").as_deref(),
+            Some("2001:db8::1:0:0:1")
+        );
+        assert_eq!(
+            a("2001:0db8:0:1:0:0:0:a").as_deref(),
+            Some("2001:db8:0:1::a")
+        );
+        for bad in [
+            "10.0.0.1",
+            "127.0.0.2",
+            "203.0.114.1",
+            "203.0.113.256",
+            "203.0.113.10/32",
+            "2001:db9::1",
+            "::1",
+            "2001:db8::1::2",
+            "2001:db8:1:2:3:4:5",
+            "2001:db8:",
+            "",
+        ] {
+            assert_eq!(a(bad), None, "{bad}");
+        }
+    }
+
     #[test]
     fn ports() {
         assert_eq!(
