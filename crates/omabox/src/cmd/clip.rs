@@ -575,7 +575,10 @@ mod tests {
             clip_pick(b"text/html\nimage/webp"),
             Some(b"image/webp".to_vec())
         );
-        assert_eq!(clip_pick(b"text/html\ntext/uri-list"), None);
+        assert_eq!(
+            clip_pick(b"text/html\ntext/uri-list\nx-special/gnome-copied-files"),
+            None
+        );
         assert_eq!(clip_pick(b""), None);
         assert_eq!(clip_pick(b"image/png;x=\x1b[31m\nimage/../x"), None);
         assert_eq!(

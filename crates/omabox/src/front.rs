@@ -336,6 +336,51 @@ mod tests {
         assert_eq!(eq_split(&e, b"help", &w(&["--x=1"])), Ok(w(&["--x=1"])));
     }
 
+    /// t_unit_exit_codes's --opt=value cases (audit F9), as bash's eq_split had them.
+    #[test]
+    fn eq_splits_as_bash() {
+        let sp = |cmd: &str, a: &[&str]| {
+            let c = Ctx::new(cmd.as_bytes(), b"/x".to_vec());
+            let r = eq_split(&c, cmd.as_bytes(), &w(a)).unwrap();
+            r.iter()
+                .map(|x| format!("[{}]", String::from_utf8_lossy(x)))
+                .collect::<String>()
+        };
+        assert_eq!(
+            sp(
+                "shot",
+                &[
+                    "--fit=300",
+                    "--window=title:a=b",
+                    "-g",
+                    "--x=y",
+                    "--after",
+                    "--",
+                    "--fit=3"
+                ]
+            ),
+            "[--fit][300][--window][title:a=b][-g][--x=y][--after][--][--fit=3]"
+        );
+        assert_eq!(
+            sp("log", &["--grep", "--x=y", "-n", "5"]),
+            "[--grep][--x=y][-n][5]"
+        );
+        assert_eq!(
+            sp("run", &["--size=800x600", "echo", "--size=1"]),
+            "[--size][800x600][echo][--size=1]"
+        );
+        assert_eq!(
+            sp("keys", &["-t", "--pass=x", "--pass=V"]),
+            "[-t][--pass=x][--pass][V]"
+        );
+        assert_eq!(sp("events", &["--mark=m1"]), "[--mark][m1]");
+        assert_eq!(
+            sp("record", &["--cut-idle", "--fps=30"]),
+            "[--cut-idle][--fps][30]"
+        );
+        assert_eq!(sp("shot", &["--zz=1"]), "[--zz=1]");
+    }
+
     #[test]
     fn global_boxes() {
         let c = Ctx::new(b"", b"/nonexistent".to_vec());

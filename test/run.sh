@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6768 MIN_UNIT=4062
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4729 MIN_UNIT=2221
+MIN_CHECKS=6752 MIN_UNIT=4047
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4709 MIN_UNIT=2201
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -922,7 +922,7 @@ t_unit_exit_codes() {
   local c out rc bad="" a
   # (not: hyprctl and pointer, whose other words are the tools'; clip, which refuses agents first;
   # check, whose first word is its subcommand)
-  for c in $(lib eval 'printf "%s\n" "${!CMD_OPTS[@]}"' | sort); do
+  for c in $(probe cmd_opts_keys | sort); do
     case $c in hyprctl|pointer|clip|check) continue ;; esac
     out=$(ob "$c" --bogus-opt 2>&1); rc=$?
     if [ "$c" = run ]; then [ "$rc" = 125 ] || bad+=" $c($rc)"; continue; fi
@@ -949,9 +949,7 @@ t_unit_exit_codes() {
   check_match "...monitor's" "monitor: unknown subcommand ad \(did you mean add\?\)" "$(ob monitor ad 2>&1)"
   check_match "...config's keys" "config: unknown key gpuu \(did you mean gpu\?\)" "$(ob config gpuu 2>&1)"
   check_match "...log's names" "log: unknown log hyprlnad \(did you mean hyprland\?\)" "$(ob log hyprlnad 2>&1)"
-  check_eq "did_you_mean: a swap is one typo" " (did you mean --window?)" "$(lib did_you_mean --windwo --window --wait)"
-  check_eq "...far is nothing" "" "$(lib did_you_mean --zzzz --window --wait)"
-  check_eq "...a tie is nothing" "" "$(lib did_you_mean -x -b -g -o)"
+  # (did_you_mean: a swap is one typo, far is nothing, a tie is nothing: args.rs's nearest)
   # A value missing: the form help gives it.
   check_eq "a value missing: exit 2, with its form from help" \
     "omabox: shot: -g needs a value: -g \"X,Y WxH\" (omabox help shot) 2" "$(o=$(ob shot -g 2>&1); echo "$o $?")"
@@ -972,19 +970,9 @@ t_unit_exit_codes() {
   check_eq "a box that is not up: 1, not 2" "1 1 1" \
     "$(for c in windows shot "keys a"; do read -ra a <<<"$c"; ob "${a[@]}" -b "$P-nope" >/dev/null 2>&1; echo $?; done | paste -sd ' ')"
   bad=""
-  # --opt=value (audit F9): split where an option goes, never in a value nor after --.
-  check_eq "eq_split: --opt=value, a value with =, a value that looks like one, after --" \
-    "[--fit][300][--window][title:a=b][-g][--x=y][--after][--][--fit=3]" \
-    "$(lib eval 'eq_split shot --fit=300 --window=title:a=b -g --x=y --after -- --fit=3; printf "[%s]" "${ARGS[@]}"')"
-  check_eq "...a value starting with -- stays a value (log --grep --x=y)" "[--grep][--x=y][-n][5]" \
-    "$(lib eval 'eq_split log --grep --x=y -n 5; printf "[%s]" "${ARGS[@]}"')"
-  check_eq "...run: only up to the command (its words are its own)" "[--size][800x600][echo][--size=1]" \
-    "$(lib eval 'eq_split run --size=800x600 echo --size=1; printf "[%s]" "${ARGS[@]}"')"
-  check_eq "...keys: -t's text is the text" "[-t][--pass=x][--pass][V]" \
-    "$(lib eval 'eq_split keys -t --pass=x --pass=V; printf "[%s]" "${ARGS[@]}"')"
-  check_eq "...an optional value (events --mark=M, record --cut-idle then an option)" "[--mark][m1] [--cut-idle][--fps][30]" \
-    "$(lib eval 'eq_split events --mark=m1; printf "[%s]" "${ARGS[@]}"; echo -n " "; eq_split record --cut-idle --fps=30; printf "[%s]" "${ARGS[@]}"')"
-  check_eq "...an unknown --x=y left to the parser" "[--zz=1]" "$(lib eval 'eq_split shot --zz=1; printf "[%s]" "${ARGS[@]}"')"
+  # --opt=value (audit F9): split where an option goes, never in a value nor after --; a value starting
+  # with -- stays one; run's words its own; keys -t's text; an optional value; an unknown --x=y left to
+  # the parser (eq_split's cases: front.rs's eq_splits_as_bash).
   check_eq "an option that takes no value refuses one, exit 2" "omabox: windows: --json takes no value, got --json=1 (omabox help windows) 2" \
     "$(o=$(ob windows --json=1 2>&1); echo "$o $?")"
   check_match "--opt=value reaches the parser: shot --fit=abc" "shot: --fit takes the longest side.*got abc" "$(ob shot --fit=abc 2>&1)"
@@ -1009,7 +997,7 @@ t_unit_exit_codes() {
     "$(ob windows -b "a b" 2>&1; echo $?)"
   check_match "...one past 40 characters too" "write $(printf 'a%.0s' {1..40})" "$(ob windows -b "$(printf 'a%.0s' {1..41})" 2>&1)"
   check_match "a box's name where no word goes: -b named (E4)" "windows: unexpected e4box \(box 'e4box'\? a box goes with -b: -b e4box\)" \
-    "$(mkdir -p "$TMP/bx/e4box"; lib eval "BOXES=$TMP/bx; PARSING=1; MAIN_CMD=windows; unexpected windows e4box" 2>&1)"
+    "$(mkdir -p "$TMP/bx/omabox/e4box"; XDG_RUNTIME_DIR=$TMP/bx "$CLI" windows e4box 2>&1)"
   check_match "keys with nothing to send: by example (E8)" "keys: nothing to send: a combo \(keys super\+space\), text \(keys -t hello\)" "$(ob keys 2>&1)"
   check_match "--mod with no modifier: the command, and the list (E15, E17)" "^omabox: click: --mod: '' is not a modifier \(super, ctrl, shift, alt, altgr\)" "$(ob click --mod + 1 1 2>&1)"
   check_match "config with three words: what goes there (E6)" "config: one KEY and a VALUE at most, got 3 words \(keys: workspace" "$(ob config a b c 2>&1)"
@@ -1028,8 +1016,8 @@ t_unit_exit_codes() {
 # the nearest-option hint read: help and the parsers cannot drift apart unseen.
 t_unit_cli_contract() {
   local c tab syn miss bad=""
-  for c in $(lib eval 'printf "%s\n" "${!CMD_OPTS[@]}"' | sort); do
-    tab=$(lib cmd_opts "$c" | sed 's/[=?]$//'; printf '%s\n' -h --help)
+  for c in $(probe cmd_opts_keys | sort); do
+    tab=$(probe cmd_opts "$c" | sed 's/[=?]$//'; printf '%s\n' -h --help)
     syn=$(ob help "$c" | awk '$0 == "" { exit } { sub(/^ +/, ""); sub(/   .*/, ""); if ($0 != "") print }' |
       grep -oE '(^|[[ (|])-{1,2}[a-zA-Z][a-zA-Z0-9-]*' | sed 's/^[[ (|]//' | sort -u)
     # (run's help has up's lines: these are up's own, refused by run)
@@ -1043,11 +1031,11 @@ t_unit_cli_contract() {
   # paragraphs: an alias, -o or --output, said once there); check's UP OPTIONS are up's, documented there.
   # Both forms (#269): the short one, which agents read, and --long.
   local o h up f; bad=""
-  up=$(lib eval 'echo $UP_BOX_OPTS' | tr ' ' '\n' | sed 's/=$//')
-  for c in $(lib eval 'printf "%s\n" "${!CMD_OPTS[@]}"' | sort); do
+  up=$(probe up_box_opts | tr ' ' '\n' | sed 's/=$//')
+  for c in $(probe cmd_opts_keys | sort); do
     for f in "" --long; do
       h=$(ob help "$c" ${f:+"$f"})
-      for o in $(lib cmd_opts "$c" | sed 's/[=?]$//'); do
+      for o in $(probe cmd_opts "$c" | sed 's/[=?]$//'); do
         [[ $h != *"UP OPTIONS"* ]] || ! grep -qx -- "$o" <<<"$up" || continue
         grep -qE -- "(^|[^a-zA-Z0-9-])$o([^a-zA-Z0-9-]|\$)" <<<"$h" || bad+=" $c${f:+ $f} $o;"
       done
@@ -1058,7 +1046,7 @@ t_unit_cli_contract() {
   check_eq "...-o (or --output) where -o goes" "4" "$(for c in shot record calibrate check; do ob help "$c"; done | grep -c -- '-o (or --output)')"
   # #269: help CMD is short, its options one line each and a pointer to --long, which is every note.
   local s l n lines="" more="" sub="" sec="" bare shorts
-  shorts=$(lib usage_text | awk '/^@/ { on = $1 == "@short"; next } on')
+  shorts=$(probe usage_text | awk '/^@/ { on = $1 == "@short"; next } on')
   for c in $(ob help | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u) exit-codes; do
     s=$(ob help "$c"); l=$(ob help "$c" --long)
     n=$(wc -l <<<"$s"); [ "$n" -le 30 ] || lines+=" $c:$n"
@@ -1079,7 +1067,7 @@ t_unit_cli_contract() {
   check_eq "...--long has every line of it but its @short ones" "" "$sub"
   check_eq "...and none of those" "" "$sec"
   check_eq "...a paragraph's mark is @, @+ (both forms) or @short (the short one only)" "" \
-    "$(lib usage_text | awk '/^@/ && $1 !~ /^@(\+|short)?$/')"
+    "$(probe usage_text | awk '/^@/ && $1 !~ /^@(\+|short)?$/')"
   check_eq "...--long before CMD too, CMD --help is the short form" "yes yes" \
     "$([ "$(ob help --long up)" = "$(ob help up --long)" ] && echo yes) $([ "$(ob up --help)" = "$(ob help up)" ] && echo yes)"
   bare=$(ob help)
@@ -1090,7 +1078,7 @@ t_unit_cli_contract() {
   check_eq "...every command with options has a CMD_OPTS line" "" \
     "$(for c in $(ob help | awk 'NR > 2 && $0 == "" {exit} NR > 2 && $1 == "omabox" {print $2}' | sort -u); do
          case $c in help|--version|which|guard|host|broker|check) continue ;; esac
-         lib cmd_opts "$c" >/dev/null || echo -n " $c"
+         probe cmd_opts "$c" >/dev/null || echo -n " $c"
        done)"
 }
 
@@ -1928,7 +1916,7 @@ t_unit_shot_fit() {
   local h=$TMP/shotfithome; mkdir -p "$h"
   # SFE: $OMABOX_SHOT_FIT for the call (the suite's is off).
   shotfit_cfg() { OMABOX_SHOT_FIT=${SFE:-} HOME=$h "$CLI" config shot-fit "$@" 2>&1; }
-  shotfit_dflt() { OMABOX_SHOT_FIT=${SFE:-} HOME=$h lib shot_fit_default 2>&1; }
+  shotfit_dflt() { OMABOX_SHOT_FIT=${SFE:-} HOME=$h probe shot_fit_default 2>&1; }
   check_eq "shot-fit is off by default" off "$(shotfit_cfg)"
   check_eq "...and no shot is fitted" "" "$(shotfit_dflt)"
   check_eq "set it" shot-fit=1456 "$(shotfit_cfg 1456)"
@@ -1950,10 +1938,7 @@ t_unit_shot_fit() {
   # A jailed caller's (sent by its omabox as SHOT_FIT), not the broker's own environment.
   check_eq "in a jail: the caller's, sent along" 800 "$(OMABOX_JAIL='{}' OMABOX_RELAY_SHOT_FIT=800 SFE=1280 shotfit_dflt)"
   check_eq "...else the setting" 1456 "$(OMABOX_JAIL='{}' SFE=1280 shotfit_dflt)"
-  printf '#!/bin/sh\nprintf "%%s|" "$@"\n' > "$TMP/sf-relay"; chmod +x "$TMP/sf-relay"
-  check_match "a jailed caller's omabox sends its OMABOX_SHOT_FIT" "\|--env\|SHOT_FIT=1280\|.*\|shot\|" \
-    "$(OMABOX_SHOT_FIT=1280 lib relay_shot "$TMP/sf-relay" -- -b "$P-nobox" -o "$TMP/sf-relay.png" 2>&1)"
-  check_eq "...none when it has none" "" "$(OMABOX_SHOT_FIT='' lib relay_shot "$TMP/sf-relay" -- -b "$P-nobox" -o "$TMP/sf-relay.png" 2>&1 | grep -o SHOT_FIT)"
+  # (a jailed caller's omabox sends its OMABOX_SHOT_FIT, none when it has none: t_unit_rust_jailed's)
   check_eq "off clears it" shot-fit=off "$(shotfit_cfg off)"
   check_eq "...so no shot is fitted" "" "$(shotfit_dflt)"
   shotfit_cfg 1000 >/dev/null
@@ -6009,6 +5994,17 @@ EOF
   parity "jailed: keys --pass" keys --pass RJ_SECRET
   # shellcheck disable=SC2088 # (a ~ as the caller wrote it, for the broker to read)
   parity "jailed: up --plugin of a relative folder made absolute" up rjx --plugin . --ro-bind .:/x --seed dev.env:.config/d --seed '~/x:y'
+  mkdir -p "$r/proj/build"; : > "$r/proj/build/Hyprland"; : > "$r/proj/build/quickshell"
+  parity "jailed: up --hyprland and --quickshell of relative paths made absolute" up rjx --hyprland build/Hyprland --quickshell build/quickshell
+  # (relay_call's, from t_unit_hyprland and t_unit_quickshell: the broker is not in the caller's folder)
+  local rjo; rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" up rjx --hyprland build/Hyprland --quickshell build/quickshell 2>&1 | paste -sd '|')
+  check_match "jailed: --hyprland goes absolute" "broker: \[--hyprland\]\|broker: \[$r/proj/build/Hyprland\]" "$rjo"
+  check_match "...and --quickshell" "broker: \[--quickshell\]\|broker: \[$r/proj/build/quickshell\]" "$rjo"
+  # (relay_shot's, from t_unit_shot_fit: the caller's OMABOX_SHOT_FIT goes along, #188)
+  rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" OMABOX_SHOT_FIT=1280 "$CLI" shot -o "$r/out/sf.png" 2>&1 | paste -sd '|')
+  check_match "jailed: shot sends its OMABOX_SHOT_FIT" "env: OMABOX_RELAY_SHOT_FIT=1280(\||$)" "$rjo"
+  rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" OMABOX_SHOT_FIT= "$CLI" shot -o "$r/out/sf.png" 2>&1 | paste -sd '|')
+  check_fails "...none when it has none" grep -q SHOT_FIT <<<"$rjo"
   parity "jailed: shot -o FILE, filled by the broker, placed" shot -o "$r/out/s.png"
   parity "jailed: shot FILE as a word" shot "$r/out/s2.png" --fit 2
   parity "jailed: shot, two files" shot "$r/out/a.png" -o "$r/out/b.png"
@@ -9560,16 +9556,8 @@ t_unit_clip() {
   check_match "clip refused: inside ai-jail (the broker's command)" "clip is not for agents \(inside ai-jail\)" "$(cl OMABOX_JAIL='{}' "$CLI" clip -b "$P-x")"
   # (...and the broker never takes it: broker_side.rs's broker_check_allows_and_refuses)
   check_match "clip is in the usage" "omabox clip \[-b NAME\] \[--from-box\]" "$(ob help)"
-  # The type handed over: text first, then an image, PNG first; nothing else.
-  check_eq "clip_pick: text over an image" "text/plain;charset=utf-8" "$(lib clip_pick $'image/png\ntext/html\ntext/plain\ntext/plain;charset=utf-8')"
-  check_eq "clip_pick: UTF8_STRING over text/plain" UTF8_STRING "$(lib clip_pick $'STRING\ntext/plain\nUTF8_STRING')"
-  check_eq "clip_pick: PNG over another image" image/png "$(lib clip_pick $'image/jpeg\nimage/png\ntext/html')"
-  check_eq "clip_pick: an image by its own type" image/webp "$(lib clip_pick $'text/html\nimage/webp')"
-  check_fails "clip_pick: neither text nor an image" lib clip_pick $'text/html\ntext/uri-list\nx-special/gnome-copied-files'
-  check_fails "clip_pick: no types (an empty clipboard)" lib clip_pick ""
-  check_fails "clip_pick: an image type that is not a tame name" lib clip_pick $'image/png;x=\e[31m\nimage/../x'
-  check_eq "clip_types: a box's type list, tame and short" "image/png;x=31m text/html " "$(lib clip_types $'image/png;x=\e[31m\ntext/html')"
-  check_eq "clip_size" "1 byte|12 bytes|1.5 KiB|64.0 MiB" "$(lib clip_size 1)|$(lib clip_size 12)|$(lib clip_size 1536)|$(lib clip_size $((64 << 20)))"
+  # (The type handed over, text first, then an image, PNG first, nothing else; the type list and sizes
+  # said: clip.rs's picks_as_bash, #324 wave 6-suite.)
 }
 
 # keys-to-box (issue #22, finding 117): its arguments, its state in ls, and the host's Lua.
@@ -13000,9 +12988,8 @@ t_unit_hyprland() {
   check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-h2" --hyprland "$d/proj/build/Hyprland" --size huge 2>&1)"
   check_match "jail: one in a folder of its, whole, passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-h2" --hyprland "$d/proj/Hyprland" --size huge 2>&1)"
   # The jailed caller's omabox sends the path absolute (the broker is not in its directory).
-  printf '#!/bin/sh\nprintf "%%s|" "$@"\n' > "$d/relay"; chmod +x "$d/relay"
-  out=$(cd "$d/proj" && bash -c 'source "$1"; RELAY=$2; relay_call up --hyprland build/Hyprland' _ "$TMP/lib/bin/omabox" "$d/relay")
-  check_match "relay: --hyprland goes absolute" "\|up\|--hyprland\|$d/proj/build/Hyprland\|" "$out"
+  # (The jailed caller's omabox sends the path absolute, the broker not being in its directory:
+  # t_unit_rust_jailed's "--hyprland goes absolute".)
   # Another version than the installed hyprctl's: a warning (the box's answers stubbed).
   mkdir -p "$d/box"; echo '{"hyprland": "/b/Hyprland"}' > "$d/box/box.json"
   hv() { bash -c 'source "$1"; D=$2 NAME=x
@@ -13079,9 +13066,7 @@ t_unit_quickshell() {
   check_match "jail: a build outside the jail's folders is refused" "not in this jail's project nor in a folder it was given whole \(or is not a Quickshell" \
     "$(OMABOX_JAIL=$J "$CLI" up "$P-q2" --quickshell "$d/other/quickshell" --size huge 2>&1)"
   check_match "jail: one in its project passes" "a size is WxH" "$(OMABOX_JAIL=$J "$CLI" up "$P-q2" --quickshell "$d/proj/build/quickshell" --size huge 2>&1)"
-  printf '#!/bin/sh\nprintf "%%s|" "$@"\n' > "$d/relay"; chmod +x "$d/relay"
-  out=$(cd "$d/proj" && bash -c 'source "$1"; RELAY=$2; relay_call up --quickshell build/quickshell' _ "$TMP/lib/bin/omabox" "$d/relay")
-  check_match "relay: --quickshell goes absolute" "\|up\|--quickshell\|$d/proj/build/quickshell\|" "$out"
+  # (relay: --quickshell goes absolute: t_unit_rust_jailed's.)
   # The version line, from inside the box (on_box stubbed): every box's, the build's run by its path.
   mkdir -p "$d/box"; echo '{"quickshell": "/b/quickshell"}' > "$d/box/box.json"
   qv() { bash -c 'source "$1"; D=$2 NAME=x
@@ -13160,7 +13145,7 @@ t_no_git_identity() {
 t_unit_git_dirs() {
   local M=$TMP/$P-gd-main S=$TMP/$P-gd-sub W="$TMP/$P-gd wt" SW="$TMP/$P-gd subwt" X=$TMP/$P-gd-gone N=$TMP/$P-gd-none r
   gd() { git -c user.name=t -c user.email=t@t -c protocol.file.allow=always "$@" >/dev/null 2>&1; }
-  gdirs() { (cd "$1" && bash -c 'source "$1"; top=$(repo_top) && repo_git_dirs "$top"' lib "$TMP/lib/bin/omabox"); }
+  gdirs() { (cd "$1" && probe repo_git_dirs); }
   for r in "$M" "$S" "$X"; do mkdir -p "$r" && gd -C "$r" init -q && echo x > "$r/f" && gd -C "$r" add f && gd -C "$r" commit -qm one; done
   gd -C "$M" worktree add -q -b "$P-gd" "$W"
   gd -C "$M" submodule add -q "$S" sm
@@ -13174,7 +13159,7 @@ t_unit_git_dirs() {
   check_eq "a worktree whose main checkout is gone: nothing, quietly" "" "$(gdirs "$X-wt" 2>&1)"
   check_eq "no repo: nothing" "" "$(gdirs "$N" 2>&1)"
   check_eq "a jailed caller whose jail has no folders: nothing" "" \
-    "$(cd "$W" && OMABOX_JAIL='{"roots":[]}' lib repo_git_dirs "$W" 2>&1)"
+    "$(cd "$W" && OMABOX_JAIL='{"roots":[]}' probe repo_git_dirs "$W" 2>&1)"
   # A jailed caller (#193, finding 275): the files git reads, read inside the jail's folders, git never
   # run (a stub that records being run first on PATH). JAIL CWD ROOT...: the jail's policy as
   # jail_policy writes it (ai-jail --worktree maps the common dir and the gitdir inside it: masked).
@@ -13186,7 +13171,7 @@ t_unit_git_dirs() {
     j=$(jq -nc --arg c "$cwd" --arg m "${jmask:-}" '{net: false, cwd: $c, roots: ($ARGS.positional | map({path: ., masked: false})),
       masks: (if $m == "" then [] else [$m] end)}' --args "$@")
     j=$(jq -c --arg c "$C" '.roots |= map(if .path == $c then .masked = true else . end)' <<<"$j")
-    (cd "$cwd" && PATH=$B:$PATH OMABOX_JAIL=$j bash -c 'source "$1"; top=$(repo_top) && repo_git_dirs "$top"' lib "$TMP/lib/bin/omabox" 2>&1)
+    (cd "$cwd" && PATH=$B:$PATH OMABOX_JAIL=$j probe repo_git_dirs 2>&1)
   }
   G=$(sed -n '1s/^gitdir: //p' "$W/.git")
   check_eq "a jailed caller in a linked worktree, its jail sees the common dir (ai-jail --worktree): it" "$C" "$(jdirs "$W" "$W" "$C" "$G")"

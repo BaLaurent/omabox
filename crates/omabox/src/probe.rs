@@ -47,6 +47,13 @@ pub const NAMES: &[(&str, &str)] = &[
     ("jail_masked", "PATH"),
     ("default_name", ""),
     ("caller_env", "NAME"),
+    // The CLI's tables, for the suite's checks of help against them.
+    ("cmd_opts_keys", ""),
+    ("cmd_opts", "CMD"),
+    ("up_box_opts", ""),
+    ("usage_text", ""),
+    ("shot_fit_default", ""),
+    ("repo_git_dirs", "[TOP]"),
 ];
 
 /// One line a word: the probe's own usage, for a name it does not have.
@@ -229,6 +236,38 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         (b"default_name", []) => line(&crate::select::default_name()),
         // (printf '%s': no newline added)
         (b"caller_env", [n]) => out(crate::exec::caller_env(n).ok_or(Exit(1))?),
+        (b"cmd_opts_keys", []) => {
+            for k in crate::args::cmd_opts_keys() {
+                line(k.as_bytes())?;
+            }
+            Ok(())
+        }
+        // One option a line, as bash's cmd_opts (an alias's: its command's).
+        (b"cmd_opts", [c]) => {
+            for o in crate::args::cmd_opts(c).ok_or(Exit(1))?.split(' ') {
+                line(o.as_bytes())?;
+            }
+            Ok(())
+        }
+        (b"up_box_opts", []) => line(crate::args::UP_BOX_OPTS.as_bytes()),
+        (b"usage_text", []) => out(crate::help::TEXT),
+        // (nothing for off; a bad OMABOX_SHOT_FIT said, 1)
+        (b"shot_fit_default", []) => match crate::shots::shot_fit_default() {
+            Ok(v) if v.is_empty() => Ok(()),
+            Ok(v) => line(&v),
+            Err(()) => Err(Exit(1)),
+        },
+        // TOP, or repo_top's (none: 1), a jailed caller's read through its jail.
+        (b"repo_git_dirs", top @ ([] | [_])) => {
+            let top = match top.first() {
+                Some(t) => t.to_vec(),
+                None => crate::repo::repo_top().ok_or(Exit(1))?,
+            };
+            for d in crate::install::repo_git_dirs(&top, crate::jailpath::view()) {
+                line(&d)?;
+            }
+            Ok(())
+        }
         (b"covers_held", [n]) => {
             ctx.name = n.to_vec();
             ctx.d = cat!(ctx.boxes, "/", n);

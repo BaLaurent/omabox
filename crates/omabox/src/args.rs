@@ -84,6 +84,25 @@ pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// bash's UP_BOX_OPTS: what makes a box, the end of up's, run's and check's tables (check's help lists
+/// them as UP OPTIONS).
+pub const UP_BOX_OPTS: &str = concat!(
+    "--size= --plugin= --overlay= --ro-bind= --seed= --no-seed= --monitor= --theme-dir= ",
+    "--theme= --net= --allow= --addr= --env= --idle= --from= --hyprland= --quickshell= ",
+    "--omarchy= --keep= --stock-bar --clean --desk-shell --systemd --audio --xwayland ",
+    "--autoreload --no-shell --no-pointer"
+);
+
+/// The names cmd_opts has a table for, as bash's CMD_OPTS keys (no aliases: screenshot, logs, list).
+pub fn cmd_opts_keys() -> Vec<&'static str> {
+    crate::help::COMMANDS
+        .iter()
+        .copied()
+        .chain(["--version"])
+        .filter(|c| cmd_opts(c.as_bytes()).is_some())
+        .collect()
+}
+
 /// The form help gives OPT's value in, as ": OPT VALUE" (": -g \"X,Y WxH\""), from the command's
 /// lines in `omabox help CMD`; nothing when help shows none.
 pub fn opt_form(main_cmd: &[u8], opt: &str) -> String {
@@ -321,6 +340,31 @@ mod tests {
         assert_eq!(opt_form(b"which", "--json"), "");
     }
 
+    /// t_unit_cli_contract's UP OPTIONS: up's, run's and check's tables end with UP_BOX_OPTS.
+    #[test]
+    fn up_box_opts_end_the_box_makers() {
+        for c in [&b"up"[..], b"run", b"check"] {
+            let t = cmd_opts(c).unwrap();
+            assert!(t.ends_with(&format!(" {UP_BOX_OPTS}")), "{t}");
+        }
+        let k = cmd_opts_keys();
+        for c in ["up", "--version", "check", "shot", "clip", "setup"] {
+            assert!(k.contains(&c), "{c}");
+        }
+        for c in [
+            "help",
+            "guard",
+            "host",
+            "broker",
+            "version",
+            "screenshot",
+            "logs",
+            "list",
+        ] {
+            assert!(!k.contains(&c), "{c}");
+        }
+    }
+
     #[test]
     fn nearest() {
         let o = [
@@ -335,5 +379,12 @@ mod tests {
         assert_eq!(did_you_mean("--zzzzzz", &o), "");
         assert_eq!(did_you_mean("-x", &o), "");
         assert_eq!(did_you_mean("", &o), "");
+        // (t_unit_exit_codes's: a swap is one typo, far is nothing, a tie is nothing)
+        assert_eq!(
+            did_you_mean("--windwo", &["--window", "--wait"]),
+            " (did you mean --window?)"
+        );
+        assert_eq!(did_you_mean("--zzzz", &["--window", "--wait"]), "");
+        assert_eq!(did_you_mean("-x", &["-b", "-g", "-o"]), "");
     }
 }
