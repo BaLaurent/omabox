@@ -168,48 +168,28 @@ fn address(ctx: &Ctx, w: &[u8]) -> Res<Vec<u8>> {
 
 /// win_raise WINDOW: focused as a user would focus it (its workspace to the screen, a group's tab to
 /// the front, a floating one raised; a tiled one stays under the floats), until it is the active
-/// window, 3 s at most.
+/// window, 3 s at most. Focused again while another window has it: Hyprland warps the pointer to a
+/// window it focuses on another workspace, and its follow-the-mouse focus, a moment on, takes the
+/// window under that point by where windows are drawn, so one moved while its workspace was hidden,
+/// not yet drawn there, lost the focus to the window it had been over (t_window's click --in after a
+/// move, finding 516). The pointer is where the window is by then: the second focus stays.
 pub fn win_raise(ctx: &Ctx, w: &[u8]) -> Res<()> {
     let addr = address(ctx, w)?;
     // (audit E12: which window, and the way round: --no-raise acts on it where it is)
     let way = "--no-raise acts on it where it is, if uncovered; shot --window takes it covered";
-    let out = said(
-        ctx,
-        &[
-            b"hyprctl",
-            b"dispatch",
-            &cat!("hl.dsp.focus({ window = 'address:", addr, "' })"),
-        ],
-    );
-    if out != b"ok" {
-        return Err(ctx.die(cat!(
-            ctx.label(),
-            "could not focus window ",
-            win_desc(w),
-            ": ",
-            out,
-            " (",
-            way,
-            ")"
-        )));
-    }
-    if jq_r(".floating", w) == b"true" {
+    let focus = || -> Res<()> {
         let out = said(
             ctx,
             &[
                 b"hyprctl",
                 b"dispatch",
-                &cat!(
-                    "hl.dsp.window.alter_zorder({ mode = 'top', window = 'address:",
-                    addr,
-                    "' })"
-                ),
+                &cat!("hl.dsp.focus({ window = 'address:", addr, "' })"),
             ],
         );
         if out != b"ok" {
             return Err(ctx.die(cat!(
                 ctx.label(),
-                "could not raise window ",
+                "could not focus window ",
                 win_desc(w),
                 ": ",
                 out,
@@ -218,11 +198,41 @@ pub fn win_raise(ctx: &Ctx, w: &[u8]) -> Res<()> {
                 ")"
             )));
         }
-    }
+        if jq_r(".floating", w) == b"true" {
+            let out = said(
+                ctx,
+                &[
+                    b"hyprctl",
+                    b"dispatch",
+                    &cat!(
+                        "hl.dsp.window.alter_zorder({ mode = 'top', window = 'address:",
+                        addr,
+                        "' })"
+                    ),
+                ],
+            );
+            if out != b"ok" {
+                return Err(ctx.die(cat!(
+                    ctx.label(),
+                    "could not raise window ",
+                    win_desc(w),
+                    ": ",
+                    out,
+                    " (",
+                    way,
+                    ")"
+                )));
+            }
+        }
+        Ok(())
+    };
+    focus()?;
     let deadline = after(3);
+    let mut again = std::time::Instant::now() + std::time::Duration::from_millis(250);
     loop {
         let a = strip_nl(&hypr_json(ctx, &["activewindow"])?);
-        if jq_r(crate::jqprog::ACTIVE_ADDR_JQ, &a) == addr {
+        let active = jq_r(crate::jqprog::ACTIVE_ADDR_JQ, &a);
+        if active == addr {
             return Ok(());
         }
         if past(deadline) {
@@ -234,6 +244,11 @@ pub fn win_raise(ctx: &Ctx, w: &[u8]) -> Res<()> {
                 way,
                 ")"
             )));
+        }
+        // (another window took it, not a layer or nothing: focused again, a quarter second apart)
+        if !active.is_empty() && std::time::Instant::now() >= again {
+            focus()?;
+            again = std::time::Instant::now() + std::time::Duration::from_millis(250);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }

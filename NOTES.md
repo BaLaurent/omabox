@@ -10103,6 +10103,18 @@ from them.
     gets Qt's scroll begin (0 0 1) twice before its updates (6 in 6 on Qt 6.12; none 0.3 s later, none
     between two finger scrolls): Qt's own, a touchpad's phases still. The check takes leading begins.
 
+516. **A click on a window moved while its workspace was hidden could lose the focus to the window
+    under it** (2026-10-24, #324; t_window's "click --in a window shot after the window moved" in the
+    suite at 8d9069e and alone, then at 27d9613 too: 7 runs in 7 with another suite loading the
+    machine, where 27d9613's own suite had passed it). win_raise's focus on C (floating, moved to
+    700,300 on workspace 1 while 7 was shown) switched the workspace and warped the pointer to C's
+    centre, 900,450; 3 ms later A, the tiled window C had been over, was active (the box's events:
+    `activewindow>>foot,A`, `foot,C`, `foot,A`), and the click said C "did not take focus in 3 s".
+    Hyprland's follow-the-mouse focus took the window under the warped pointer by where the windows
+    were drawn, C not yet drawn at its new place. **Fix** (Rust): while another window is active,
+    win_raise focuses its window again, a quarter second apart, within its 3 s; by then the pointer is
+    over it and the focus stays. Bash's win_raise focuses once. Tests: t_window (2 in 2 after).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
