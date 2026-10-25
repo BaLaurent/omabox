@@ -1755,6 +1755,95 @@ pub fn audio_end(ctx: &mut Ctx, pid: &[u8]) -> Res<()> {
 mod tests {
     use super::*;
 
+    fn layout(mons: &str) -> String {
+        let (rc, l) = jq_r(
+            &format!("{}{}", crate::jqprog::JQ_MON, P::LAYOUT_JQ),
+            mons.as_bytes(),
+        );
+        assert_eq!(rc, 0);
+        String::from_utf8(l).unwrap()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mon(n: &str, w: i64, h: i64, x: i64, y: i64, s: &str, t: i64, off: bool) -> String {
+        format!(
+            r#"{{"name":"{n}","width":{w},"height":{h},"x":{x},"y":{y},"scale":{s},"transform":{t},"disabled":{off}}}"#
+        )
+    }
+
+    /// t_unit_record's record_layout (#225) and JQ_MON (finding 311) cases: the layout at its highest
+    /// scale, a turned monitor turned, one off or 0x0 left out, past H.264's largest frame scaled
+    /// down (16384 a side, 35651584 px). jq is the recipe's dependency.
+    #[test]
+    fn record_layouts() {
+        let m = [
+            mon("A", 1280, 720, 0, 0, "1", 0, false),
+            mon("B", 1280, 720, 1280, 0, "1", 1, false),
+            mon("C", 1280, 720, 0, 720, "2", 0, false),
+            mon("D", 800, 600, 5000, 0, "1", 0, true),
+            mon("Z", 0, 0, 0, 5000, "1", 0, false),
+        ];
+        assert_eq!(
+            layout(&format!("[{}]", m.join(","))).replace('\n', "|"),
+            "4000 2560 2 1|A 0 0 2560 1440|B 2560 0 1440 2560|C 0 1440 1280 720"
+        );
+        let two = [
+            mon("A", 1920, 1080, 0, 0, "1", 0, false),
+            mon("B", 2560, 1440, 1920, 0, "1.6", 0, false),
+        ];
+        assert_eq!(
+            layout(&format!("[{}]", two.join(","))).replace('\n', "|"),
+            "5632 1728 1.6 1|A 0 0 3072 1728|B 3072 0 2560 1440"
+        );
+        let five: Vec<String> = (0..5)
+            .map(|i| mon(&format!("M{i}"), 3840, 2160, i * 3840, 0, "1", 0, false))
+            .collect();
+        let l = layout(&format!("[{}]", five.join(",")));
+        assert_eq!(l.lines().next(), Some("16384 1843 1 0.853"));
+        let nine: Vec<String> = (0..3)
+            .flat_map(|i| (0..3).map(move |j| (i, j)))
+            .map(|(i, j)| {
+                mon(
+                    &format!("M{i}{j}"),
+                    3840,
+                    2160,
+                    i * 3840,
+                    j * 2160,
+                    "1",
+                    0,
+                    false,
+                )
+            })
+            .collect();
+        let l = layout(&format!("[{}]", nine.join(",")));
+        let f: Vec<f64> = l
+            .lines()
+            .next()
+            .unwrap()
+            .split(' ')
+            .map(|x| x.parse().unwrap())
+            .collect();
+        assert!(f[0] * f[1] <= 35_651_584.0 && f[0] * f[1] > 35_000_000.0 && f[3] < 1.0);
+        assert_eq!(layout("[]"), "");
+        // JQ_MON: transforms 1, 3, 5, 7 swap a monitor's sides, the others do not.
+        let all: Vec<String> = (0..8)
+            .map(|t| format!(r#"{{"width":2560,"height":1440,"scale":2,"transform":{t}}}"#))
+            .collect();
+        let (rc, sides) = jq_r(
+            &format!(
+                "{}{}",
+                crate::jqprog::JQ_MON,
+                r#"map("\(lw)x\(lh)") | join(" ")"#
+            ),
+            format!("[{}]", all.join(",")).as_bytes(),
+        );
+        assert_eq!(rc, 0);
+        assert_eq!(
+            String::from_utf8(sides).unwrap(),
+            "1280x720 720x1280 1280x720 720x1280 1280x720 720x1280 1280x720 720x1280"
+        );
+    }
+
     #[test]
     fn names_listed() {
         assert_eq!(record_names(b"A,B,C"), b"A, B, C");

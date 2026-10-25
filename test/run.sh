@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6735 MIN_UNIT=4030
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4689 MIN_UNIT=2180
+MIN_CHECKS=6727 MIN_UNIT=4022
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4674 MIN_UNIT=2166
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -661,7 +661,7 @@ t_unit_record() {
   check_match "...with --no-pointer" "record hold: --no-pointer goes with start, -- ACTION or --for" "$(rx hold 2s --no-pointer)"
   check_match "record start --hold: refused (it was ignored), exit 2" "^2 .*record start: --hold goes with -- ACTION or mark \(between steps: record hold DURATION\)" "$(rx start --hold 2s)"
   check_match "record mark --hold past 60s" "--hold takes a duration up to 60s" "$(rx mark x --hold 2m)"
-  check_eq "...a bare number of seconds read as such (ms_duration)" "1500 90000" "$(lib ms_duration 1.5) $(lib ms_duration 1.5m)"
+  # (...a bare number of seconds read as such, 1.5 and 1.5m: num.rs durations_as_bash)
   check_match "...stop --no-pointer (#228)" "record stop: --no-pointer goes with start, -- ACTION or --for" "$(ob record stop --no-pointer 2>&1)"
   check_match "...status --no-pointer" "record status: --no-pointer goes with start" "$(ob record status --no-pointer 2>&1)"
   check_match "...mark --audio (#226)" "record mark: --audio goes with start, -- ACTION or --for" "$(ob record mark --audio x 2>&1)"
@@ -712,20 +712,8 @@ t_unit_record() {
   check_match "...--for (the jail's omabox runs start, a hold, stop)" "record --for: a jailed agent's own omabox runs it" "$(jr --for 2s)"
   check_eq "...the host file named never touched" HOSTVIDEO "$(cat "$rj/host.mp4")"
   check_match "shot --to-fd: a read-only fd refused too (fd_file)" "shot: fd 3 is not open for writing" "$(OMABOX_JAIL='{}' "$CLI" shot --to-fd 3 --as "$rj/s.png" 3<"$rj/f" 2>&1)"
-  check_match "a jailed agent's omabox keeps the broker's own options to itself" "--to-fd is omabox's own" \
-    "$(lib relay_record /bin/false -- stop --to-fd 3 2>&1)"
-  # -b NAME reaches the broker for start, stop and sheet (a jail with two boxes; finding 324): a relay
-  # that prints what it is given (and names a file for stop's status --file).
-  printf '#!/bin/sh\ncase "$*" in *" status --file") echo %s/b.mp4 ;; *) printf "%%s|" "$@" ;; esac\n' "$rj" > "$rj/relay"; chmod +x "$rj/relay"
-  check_match "relay_record start -b NAME: the broker gets -b NAME" "|record|-b|other|start|--as|$rj/b.mp4|" \
-    "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other start -o $rj/b.mp4" 2>/dev/null)"
-  check_match "...stop" "|record|-b|other|stop|--to-fd|3|" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other stop" 2>/dev/null)"
-  check_match "...hold goes as it is" "|record|-b|other|hold|2s|$" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other hold 2s" 2>/dev/null)"
-  check_match "...--for with what it does not go with: the broker says why" "|record|start|--for|2s|$" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- start --for 2s" 2>/dev/null)"
-  local rfo rfr=0; rfo=$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- --for 2x" 2>&1) || rfr=$?
-  check_match "...--for unreadable: refused here, exit 2" "^2 .*--for takes a duration up to 60m" "$rfr $rfo"
-  : > "$rj/b.mp4"
-  check_match "...sheet" "|record|-b|other|sheet|--frames|2|--from-fd|3|" "$(lib eval "BROKER_SOCK=sock; relay_record $rj/relay -- -b other sheet $rj/b.mp4 --frames 2" 2>/dev/null)"
+  # (A jailed agent's omabox keeps the broker's own options to itself; -b NAME reaches the broker for
+  # start, stop, hold and sheet, finding 324; --for as it is, or refused here, exit 2: t_unit_rust_jailed's.)
   # record_marks: wall-clock µs to ms from the first frame (in order; one before it at 0), the
   # wall-clock time as events has it, WebVTT cues from each to the next (the last to the end), its
   # text escaped; none, and an earlier take's files go.
@@ -738,23 +726,7 @@ t_unit_record() {
     "$(paste -sd '|' "$rb.vtt")"
   lib record_marks "" "" 0 "$rb" 2>/dev/null
   check_fails "...no marks: an earlier take's files go" test -e "$rb.marks.tsv" -o -e "$rb.vtt"
-  # record_layout (#225): the layout at its highest scale, a turned monitor turned, the gaps left; one
-  # off or 0x0 left out; past H.264's largest frame scaled down (16384 a side, 35651584 px).
-  local mj='{"name":"A","width":1280,"height":720,"x":0,"y":0,"scale":1,"transform":0,"disabled":false}'
-  mj+=',{"name":"B","width":1280,"height":720,"x":1280,"y":0,"scale":1,"transform":1,"disabled":false}'
-  mj+=',{"name":"C","width":1280,"height":720,"x":0,"y":720,"scale":2,"transform":0,"disabled":false}'
-  mj+=',{"name":"D","width":800,"height":600,"x":5000,"y":0,"scale":1,"transform":0,"disabled":true}'
-  mj+=',{"name":"Z","width":0,"height":0,"x":0,"y":5000,"scale":1,"transform":0,"disabled":false}'
-  check_eq "record_layout: 2000x1280 at scale 2, B turned, C at its scale" "4000 2560 2 1|A 0 0 2560 1440|B 2560 0 1440 2560|C 0 1440 1280 720" \
-    "$(lib record_layout <<<"[$mj]" | paste -sd '|')"
-  check_eq "...2560x1440 at 1.6 beside a 1920x1080: 1600x900 at 1.6" "5632 1728 1.6 1|A 0 0 3072 1728|B 3072 0 2560 1440" \
-    "$(lib record_layout <<<'[{"name":"A","width":1920,"height":1080,"x":0,"y":0,"scale":1,"transform":0,"disabled":false},{"name":"B","width":2560,"height":1440,"x":1920,"y":0,"scale":1.6,"transform":0,"disabled":false}]' | paste -sd '|')"
-  mj=""; for i in 0 1 2 3 4; do mj+="${mj:+,}{\"name\":\"M$i\",\"width\":3840,\"height\":2160,\"x\":$((i * 3840)),\"y\":0,\"scale\":1,\"transform\":0,\"disabled\":false}"; done
-  check_eq "...five 4K in a row: 16384 wide at most" "16384 1843 1 0.853" "$(lib record_layout <<<"[$mj]" | head -n 1)"
-  mj=""; for i in 0 1 2; do for j in 0 1 2; do mj+="${mj:+,}{\"name\":\"M$i$j\",\"width\":3840,\"height\":2160,\"x\":$((i * 3840)),\"y\":$((j * 2160)),\"scale\":1,\"transform\":0,\"disabled\":false}"; done; done
-  check "...nine 4K: no more pixels than H.264's largest frame" awk -v l="$(lib record_layout <<<"[$mj]" | head -n 1)" \
-    'BEGIN { split(l, a, " "); exit !(a[1] * a[2] <= 35651584 && a[1] * a[2] > 35000000 && a[4] < 1) }'
-  check_eq "...no monitor: nothing" "" "$(lib record_layout <<<'[]')"
+  # (record_layout, #225: record.rs record_layouts)
   # The rest of #176 (finding 319): --show-input, --captions and --cut-idle with stop, --glide with
   # start; record_overlay draws rec_input's lines; record_marks shifts marks by the cuts; glide_to.
   check_match "record start --show-input refused" "record start: --show-input, --captions and --cut-idle go with stop, -- ACTION or --for" "$(ob record start --show-input 2>&1)"
@@ -766,16 +738,14 @@ t_unit_record() {
   check_match "...drag" "drag: --steps or --glide, not both" "$(ob drag --steps 5 --glide 1s 1 1 2 2 2>&1)"
   check_match "...pointer" "pointer: --steps or --glide, not both" "$(ob pointer --steps 5 --glide 1s -- move 1 1 2>&1)"
   check_match "...pointer hide --glide" "pointer hide: nothing else with it" "$(ob pointer --glide 1s hide 2>&1)"
-  check_eq "glide_to: 400 ms is 10 moves, eased (slow, fast, slow), ending there" \
-    "move 3 0 move 10 0 move 22 0 move 35 0 move 50 0 move 65 0 move 78 0 move 90 0 move 97 0 move 100 0" \
-    "$(lib eval 'SEQ=(); glide_to 0 0 100 0 400; echo "${SEQ[*]}"')"
-  check_eq "...nothing when it is there" "" "$(lib eval 'SEQ=(); glide_to 5 5 5 5 400; echo "${SEQ[*]}"')"
+  # (glide_to: 400 ms is 10 moves, eased, ending there; nothing when it is there: input.rs
+  # moves_as_bash_and_awk_make_them)
   local ri=$TMP/rmarks/input ass
   printf '%s\n' "1000000100000 1000000160000 ptr 1280x720 move 100 50 click right" \
     "1000001000000 1000001400000 text a{b}" "1000001000000 1000001400000 secret 21" "1000001000000 1000001400000 combo Return" \
     "x y ptr 1280x720 move 1 1" "1000002000000 1000002050000 ptr 1280x720 move 9999999 1 click" \
     "1000003000000 1000003100000 ptr 1280x720 move 200 100 scroll -5" "1000004000000 1000004100000 ptr 1280x720 move 300 100 pause" > "$ri"
-  ass=$(lib record_overlay "$ri" $'1000000500000\tscene {one}' 1000000000000 0 0 2 2560 1440 5000 1 1)
+  ass=$(probe record_overlay "$ri" $'1000000500000\tscene {one}' 1000000000000 0 0 2 2560 1440 5000 1 1)
   check_match "record_overlay: an ASS script at the video's size" $'^\\[Script Info\\].*PlayResX: 2560.PlayResY: 1440' "$(tr '\n' '.' <<<"$ass")"
   check_match "...the pointer ring at the click point, at scale 2 (the pixel's centre)" '\\pos\(201\.0,101\.0\)\\1c&HC83CFF&' "$ass"
   check "...a ripple from it as the click went (the click's share of the line)" grep -qE '^Dialogue: 0,0:00:00\.14,0:00:00\.74,D,.*\\t\(\\fscx317' <<<"$ass"
@@ -788,15 +758,11 @@ t_unit_record() {
     grep -qE '^Dialogue: 2,0:00:03\.06,0:00:04\.02,D,.*\\pos\(401\.0,201\.0\)' <<<"$ass"
   check "...the pause line's move too" grep -qE '^Dialogue: 2,0:00:04\.02,0:00:04\.06,D,.*\\move\(401\.0,201\.0,601\.0,201\.0\)' <<<"$ass"
   check "...--captions: the mark at the top, until the end" grep -qE '^Dialogue: 4,0:00:00\.50,0:00:05\.00,K,,0,0,0,,\{\\an8\\pos\(1280\.0,40\.0\)\}scene ｛one｝$' <<<"$ass"
-  check_eq "...with neither: no Dialogue" 0 "$(lib record_overlay "$ri" "" 1000000000000 0 0 2 2560 1440 5000 0 0 | grep -c '^Dialogue')"
+  check_eq "...with neither: no Dialogue" 0 "$(probe record_overlay "$ri" "" 1000000000000 0 0 2 2560 1440 5000 0 0 | grep -c '^Dialogue')"
   lib record_marks $'1000002500000\tafter\n1000000500000\tbefore\n1000001100000\tin' 1000000000000 4000 "$rb" $'30 60\n' 2>/dev/null
   check_eq "record_marks with a cut (frames 30 to 60, 1 s at 30 fps): one after it 1 s earlier, one in it at its start" \
     "ms text|500 before|1000 in|1500 after" "$(cut -f1,3 "$rb.marks.tsv" | tr '\t' ' ' | paste -sd '|')"
-  # JQ_MON (finding 311): a monitor's logical sides, swapped by a quarter turn (1, 3, 5, 7).
-  mj=""; for i in 0 1 2 3 4 5 6 7; do mj+="${mj:+,}{\"width\":2560,\"height\":1440,\"scale\":2,\"transform\":$i}"; done
-  check_eq "JQ_MON: transforms 1, 3, 5, 7 swap a monitor's sides, the others do not" \
-    "1280x720 720x1280 1280x720 720x1280 1280x720 720x1280 1280x720 720x1280" \
-    "$(lib eval 'jq -r "$JQ_MON"'\''map("\(lw)x\(lh)") | join(" ")'\''' <<<"[$mj]")"
+  # (JQ_MON, finding 311: transforms 1, 3, 5, 7 swap a monitor's sides: record.rs record_layouts)
 }
 
 # One duration grammar (#273, finding 385): ms, s, m, h, decimals, a bare number seconds; the bare
@@ -5948,6 +5914,8 @@ t_unit_rust_jailed() {
   # line, or what it writes there: fd 3 and up, as --to-fd and its kin name them).
   cat > "$r/broker.sh" <<'EOF'
 #!/bin/bash
+# (a caller whose PATH names rj-status-only gets status --file's answer alone, as a real broker's)
+if [[ ${OMABOX_RELAY_PATH:-} == *rj-status-only* && " $* " == *" status --file "* ]]; then echo "$RJ_VIDEO"; exit 0; fi
 printf 'broker: [%s]\n' "$@"
 env | grep '^OMABOX_RELAY_' | LC_ALL=C sort | sed 's/^/env: /'
 a=("$@")
@@ -5999,6 +5967,22 @@ EOF
   check_match "jailed: a relative --seed SRC goes absolute, DEST as given" "broker: \[--seed\]\|broker: \[$r/proj/fixtures:\.config/x\]" "$rjo"
   check_match "...one that is not there as given" "broker: \[--seed\]\|broker: \[nowhere:y\]" "$rjo"
   check_match "...a relative --theme-dir goes absolute" "broker: \[--theme-dir\]\|broker: \[$r/proj/th\]" "$rjo"
+  # (relay_record's, from t_unit_record: -b NAME reaches the broker for start, stop, hold and sheet, a
+  # jail with two boxes, finding 324; --for as it is; the broker's own options kept to itself)
+  rjr() { (cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" record "$@" 2>&1 | paste -sd '|'); }
+  local bw='broker: \['
+  check_match "jailed: record start -b NAME: the broker gets -b NAME" \
+    "${bw}record\]\|${bw}-b\]\|${bw}other\]\|${bw}start\]\|${bw}--as\]\|${bw}$r/out/rb\.mp4\]" "$(rjr -b other start -o "$r/out/rb.mp4")"
+  check_match "...stop" "${bw}record\]\|${bw}-b\]\|${bw}other\]\|${bw}stop\]\|${bw}--to-fd\]\|${bw}3\]" \
+    "$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$r/rj-status-only:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" record -b other stop 2>&1 | paste -sd '|')"
+  check_match "...hold goes as it is" "${bw}record\]\|${bw}-b\]\|${bw}other\]\|${bw}hold\]\|${bw}2s\]\|env:" "$(rjr -b other hold 2s)"
+  check_match "...--for with what it does not go with: the broker says why" "${bw}record\]\|${bw}start\]\|${bw}--for\]\|${bw}2s\]\|env:" "$(rjr start --for 2s)"
+  local rfr=0; rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" record --for 2x 2>&1) || rfr=$?
+  check_match "...--for unreadable: refused here, exit 2" "^2 .*--for takes a duration up to 60m" "$rfr $rjo"
+  : > "$r/out/rb.mp4"
+  check_match "...sheet" "${bw}record\]\|${bw}-b\]\|${bw}other\]\|${bw}sheet\]\|${bw}--frames\]\|${bw}2\]\|${bw}--from-fd\]\|${bw}3\]" \
+    "$(rjr -b other sheet "$r/out/rb.mp4" --frames 2)"
+  check_match "...the broker's own options kept to itself" "--to-fd is omabox's own" "$(rjr stop --to-fd 3)"
   # (relay_shot's, from t_unit_pixel: --since names a path of the jail's)
   rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" shot --since a.png 2>&1)
   check_match "jailed: shot --since refused" "not for a jailed agent" "$rjo"

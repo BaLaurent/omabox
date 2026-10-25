@@ -478,6 +478,26 @@ mod tests {
         let mut none = Vec::new();
         glide_to(&mut none, [b"5", b"5", b"5", b"5"], 400);
         assert!(none.is_empty());
+        // (t_unit_record's: 400 ms is 10 moves, eased, ending there)
+        let mut g = Vec::new();
+        glide_to(&mut g, [b"0", b"0", b"100", b"0"], 400);
+        let xs: Vec<&[u8]> = g.chunks(3).map(|m| m[1].as_slice()).collect();
+        assert_eq!(
+            xs,
+            [
+                &b"3"[..],
+                b"10",
+                b"22",
+                b"35",
+                b"50",
+                b"65",
+                b"78",
+                b"90",
+                b"97",
+                b"100"
+            ]
+        );
+        assert!(g.chunks(3).all(|m| m[0] == b"move" && m[2] == b"0"));
         assert_eq!(
             path_rects(10, 20, &w(&["move", "30", "40"])),
             Some(w(&["-6,4,64,64", "14,24,64,64"]))
