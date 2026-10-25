@@ -360,3 +360,33 @@ pub fn sleep(secs: &[u8]) {
         .unwrap_or(0.0);
     crate::sig::sleep(std::time::Duration::from_secs_f64(s.min(1e9)));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    // t_unit_monitors' (an interactive monitor that fails in `up`): the add's own undo, made inside
+    // up's, runs when the add ends, and leaves up's in place: up's runs when up ends (bash's
+    // monitor_add_window replaced up's EXIT trap with its own, and put it back).
+    #[test]
+    fn a_nested_undo_leaves_the_outer() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (l1, l2) = (log.clone(), log.clone());
+        let up = on_exit_code(move || l1.lock().unwrap().push("up's"));
+        {
+            let _add = on_exit(move || l2.lock().unwrap().push("the add's"));
+        }
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["the add's"],
+            "the add's undo, as it ends"
+        );
+        drop(up);
+        assert_eq!(
+            *log.lock().unwrap(),
+            ["the add's", "up's"],
+            "...and up's own after it, as up ends"
+        );
+    }
+}

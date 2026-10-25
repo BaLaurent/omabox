@@ -57,6 +57,11 @@ fn mtime_ms(p: &std::path::Path) -> Option<i64> {
 }
 
 pub fn job_note(ctx: &Ctx) {
+    job_note_with(ctx, |f| !job_live(ctx, &[f.to_path_buf()]).is_empty());
+}
+
+/// job_note, a record's job running as LIVE says (job_live).
+fn job_note_with(ctx: &Ctx, live: impl Fn(&std::path::Path) -> bool) {
     let run = ctx.at("run");
     let ends: Vec<Vec<u8>> = shell::glob(&run, false)
         .into_iter()
@@ -136,7 +141,7 @@ pub fn job_note(ctx: &Ctx) {
         if let Some(rec) = record_by_log(ctx, &cat!("/run-", ns, ".log")) {
             let (file, rest) = split_tab(&rec);
             let (p, w) = split_tab(rest);
-            if !job_live(ctx, &[shell::path(file)]).is_empty() {
+            if live(&shell::path(file)) {
                 continue;
             }
             pid = p.to_vec();
@@ -410,7 +415,15 @@ pub fn job_failed(ctx: &Ctx, pid: &[u8]) -> bool {
 /// The processes of the jobs recorded in FILES. A record whose job has ended is removed once its end
 /// has been dealt with (job_said): until then job_note needs it to name what ended (finding 405).
 pub fn job_live(ctx: &Ctx, files: &[std::path::PathBuf]) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let procs = box_procs(ctx);
+    job_live_with(ctx, files, &box_procs(ctx))
+}
+
+/// job_live, the box's processes PROCS (box_procs).
+fn job_live_with(
+    ctx: &Ctx,
+    files: &[std::path::PathBuf],
+    procs: &[[Vec<u8>; 4]],
+) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut out = Vec::new();
     for f in files {
         let fields = std::fs::read(f).ok().and_then(|t| record_fields(&t));
@@ -418,7 +431,7 @@ pub fn job_live(ctx: &Ctx, files: &[std::path::PathBuf]) -> Vec<(Vec<u8>, Vec<u8
             let _ = std::fs::remove_file(f);
             continue;
         };
-        let p = job_procs(&procs, &pid, &start);
+        let p = job_procs(procs, &pid, &start);
         if !p.is_empty() {
             out.extend(p);
         } else if job_said(ctx, &log) {
@@ -496,8 +509,13 @@ fn jstr(v: &[u8]) -> Value {
 /// job_record PID LOG ARGV...: after a launch, the record of job PID (in the box), with the start
 /// time of the process with that pid (- when it is gone already: finding 405).
 pub fn job_record(ctx: &Ctx, pid: &[u8], log: &[u8], argv: &[Vec<u8>]) {
+    job_record_with(ctx, pid, log, argv, box_procs(ctx));
+}
+
+/// job_record, the box's processes PROCS (box_procs).
+fn job_record_with(ctx: &Ctx, pid: &[u8], log: &[u8], argv: &[Vec<u8>], procs: Vec<[Vec<u8>; 4]>) {
     let mut start = Vec::new();
-    for [_, bp, _, st] in box_procs(ctx) {
+    for [_, bp, _, st] in procs {
         if awk_eq(&bp, pid) {
             start = st;
         }
@@ -562,7 +580,20 @@ fn job_files(ctx: &Ctx) -> Vec<std::path::PathBuf> {
 /// job_others ARGV...: the live `run -d` jobs of ARGV's program, as "ARGV0 (pid PID, ARGS)" by pid.
 fn job_others(ctx: &Ctx, argv: &[Vec<u8>]) -> Vec<String> {
     let a0 = argv.first().cloned().unwrap_or_default();
-    let exe = String::from_utf8_lossy(&job_exe(&a0)).into_owned();
+    job_others_with(ctx, argv, &job_exe(&a0), |f| {
+        !job_live(ctx, std::slice::from_ref(&f.to_path_buf())).is_empty()
+    })
+}
+
+/// job_others, ARGV's program EXE (job_exe), a record's job running as LIVE says (job_live).
+fn job_others_with(
+    ctx: &Ctx,
+    argv: &[Vec<u8>],
+    exe: &[u8],
+    live: impl Fn(&std::path::Path) -> bool,
+) -> Vec<String> {
+    let a0 = argv.first().cloned().unwrap_or_default();
+    let exe = String::from_utf8_lossy(exe).into_owned();
     let a0 = String::from_utf8_lossy(&a0).into_owned();
     let mut out: Vec<(Vec<u8>, String)> = Vec::new();
     for f in job_files(ctx) {
@@ -578,7 +609,7 @@ fn job_others(ctx: &Ctx, argv: &[Vec<u8>]) -> Vec<String> {
             }
             _ => first == Value::String(a0.clone()) || first == Value::String(exe.clone()),
         };
-        if !mine || job_live(ctx, std::slice::from_ref(&f)).is_empty() {
+        if !mine || !live(&f) {
             continue;
         }
         let args = match v.get("argv") {
@@ -1001,5 +1032,371 @@ mod tests {
             Some("a 1  true".into())
         );
         assert_eq!(join_argv(Some(&serde_json::json!(["a", []]))), None);
+    }
+
+    // t_unit_replace_others (#255): run -d --replace names the live jobs of the same program with
+    // other arguments; job_exe the program as resolved, job_live a record's "live" field.
+    #[test]
+    fn job_others_as_bash() {
+        let d = std::env::temp_dir().join(format!("omabox-ro-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("r/jobs")).unwrap();
+        let app = format!("{}/build/app", d.display());
+        let rec = |pid: &str, live: &str, exe: &str, argv: &[&str]| {
+            let mut v = serde_json::json!({"pid": pid, "start": "1", "log": "l", "live": live, "argv": argv});
+            if exe != "-" {
+                v["exe"] = serde_json::Value::String(exe.into());
+            }
+            std::fs::write(d.join("r/jobs").join(pid), v.to_string()).unwrap();
+        };
+        rec("115", "live", &app, &["./build/app", "--demo", "details"]);
+        rec("120", "dead", &app, &["./build/app", "--demo", "old"]);
+        rec("130", "live", "qml", &["qml", "other.qml"]);
+        rec("140", "live", "-", &["./build/app"]);
+        let mut ctx = Ctx::new(b"run", Vec::new());
+        ctx.d = shell::bytes(&d.join("r")).to_vec();
+        let live = |f: &std::path::Path| {
+            std::fs::read_to_string(f).is_ok_and(|t| t.contains(r#""live":"live""#))
+        };
+        let others = |exe: &str, argv: &[&str]| {
+            let a: Vec<Vec<u8>> = argv.iter().map(|w| w.as_bytes().to_vec()).collect();
+            job_others_with(&ctx, &a, exe.as_bytes(), live).join("\n")
+        };
+        assert_eq!(
+            others(&app, &["./build/app", "--demo", "table"]),
+            "./build/app (pid 115, --demo details)\n./build/app (pid 140, no arguments)",
+            "--replace with other arguments: the live job of the program named, the ended one not"
+        );
+        assert_eq!(
+            others(&app, &["./app", "--x"]),
+            "./build/app (pid 115, --demo details)",
+            "...the same program by another path to it (a record without its path: by the same words only)"
+        );
+        assert_eq!(
+            others("qml", &["qml", "main.qml"]),
+            "qml (pid 130, other.qml)",
+            "...a bare name by its name"
+        );
+        assert_eq!(
+            others(
+                &format!("{}/build/other", d.display()),
+                &["./build/other", "--demo", "details"]
+            ),
+            "",
+            "...another program: none"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A file's mtime set to MS since the epoch (`touch -d @S.mmm`).
+    fn set_mtime(p: &std::path::Path, ms: i64) {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        let t = libc::timespec {
+            tv_sec: ms.div_euclid(1000),
+            tv_nsec: ms.rem_euclid(1000) * 1_000_000,
+        };
+        // SAFETY: a NUL-ended path of ours and two timespecs.
+        let r = unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), [t, t].as_ptr(), 0) };
+        assert_eq!(r, 0);
+    }
+
+    // t_unit_job_note (#286, finding 399; #298, finding 405; #300, finding 406): a `run -d` job that
+    // ended within its first 30 s, said once by the box's next command; a box dir of its own, status
+    // files dated as the waiter's would be, records as run -d writes them, a job live while its
+    // record says "live". Then the run marks, job_live and job_record on the box's processes given.
+    #[test]
+    fn job_note_as_bash() {
+        let d = std::env::temp_dir().join(format!("omabox-jn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for x in ["run", "home", "jobs"] {
+            std::fs::create_dir_all(d.join(x)).unwrap();
+        }
+        std::fs::write(d.join("jobs-noted"), "").unwrap();
+        let ds = d.display().to_string();
+        let mut ctx = Ctx::new(b"shot", Vec::new());
+        ctx.name = b"u".to_vec();
+        ctx.d = ds.as_bytes().to_vec();
+        let now = now_us() / 1_000_000;
+        let n = std::cell::Cell::new(0u32);
+        // jn_job NS_OFFSET_S END_AFTER_MS STATUS [PID LIVE ARGV...]: a job started NS_OFFSET_S
+        // seconds ago that ended END_AFTER_MS after its start, with its log and, given a PID, its
+        // record.
+        let jn_job = |off: i64, ms: i64, st: &str, rec: Option<(&str, &str, &[&str])>| {
+            let t0 = now - off;
+            n.set(n.get() + 1);
+            let ns = format!("{t0}{:09}", n.get());
+            std::fs::write(d.join(format!("home/run-{ns}.log")), "").unwrap();
+            let f = d.join(format!("run/omabox.run-{ns}.exit"));
+            std::fs::write(&f, format!("{st}\n")).unwrap();
+            set_mtime(&f, t0 * 1000 + ms);
+            if let Some((pid, live, argv)) = rec {
+                let v = serde_json::json!({"pid": pid, "start": "1", "log": format!("{ds}/home/run-{ns}.log"),
+                    "live": live, "exe": "x", "argv": argv});
+                std::fs::write(d.join("jobs").join(pid), format!("{v}\n")).unwrap();
+            }
+            ns
+        };
+        let note = || {
+            let live = |f: &std::path::Path| {
+                std::fs::read_to_string(f).is_ok_and(|t| t.contains(r#""live":"live""#))
+            };
+            crate::exit::heard(|| job_note_with(&ctx, live)).1
+        };
+        let append = |f: &str, t: &str| {
+            let mut h = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(d.join(f))
+                .unwrap();
+            std::io::Write::write_all(&mut h, t.as_bytes()).unwrap();
+        };
+        assert_eq!(note(), "", "no job ended: nothing");
+        let ns = jn_job(60, 400, "1", Some(("100", "dead", &["false"])));
+        jn_job(
+            50,
+            30500,
+            "1",
+            Some(("101", "dead", &["./server", "--port", "1"])),
+        );
+        jn_job(40, 1500, "0", Some(("102", "dead", &["xdg-open", "URL"])));
+        assert_eq!(
+            note(),
+            format!(
+                "omabox: warning: run -d job false (pid 100) exited with status 1 after 0.4s, since the last command (log: {ds}/home/run-{ns}.log)\n"
+            ),
+            "one that ran past 30 s, one that exited 0 (a one-shot), and one a minute old that ran 0.4 s: only that one said"
+        );
+        assert_eq!(note(), "", "...once");
+        jn_job(
+            10,
+            2100,
+            "3",
+            Some(("115", "dead", &["sh", "-c", "sleep 1; exit 3"])),
+        );
+        assert_eq!(
+            note(),
+            "omabox: warning: run -d job sh -c sleep 1; exit 3 (pid 115) exited with status 3 after 2.1s, since the last command (omabox log -b u run)\n",
+            "a job that ended 2.1 s in, its log the newest: its words, pid, status, and log -b NAME run"
+        );
+        assert_eq!(note(), "", "...said once");
+        let ns = jn_job(5, 1000, "143", Some(("116", "dead", &["./app"])));
+        jn_job(5, 1200, "143", None);
+        std::fs::write(d.join(format!("home/run-9{ns}.log")), "").unwrap();
+        let out = note();
+        assert_eq!(
+            out.lines().count(),
+            2,
+            "killed, and one whose record went: both said: {out}"
+        );
+        assert!(
+            out.lines().any(|l| l == format!("omabox: warning: run -d job ./app (pid 116) was killed by SIGTERM (143) after 1.0s, since the last command (log: {ds}/home/run-{ns}.log)")),
+            "...by its signal, its log by path when not the newest: {out}"
+        );
+        assert!(
+            out.contains(
+                "run -d job (its words were not kept) was killed by SIGTERM (143) after 1.2s"
+            ),
+            "...one with no record: {out}"
+        );
+        let ns = jn_job(3, 500, "1", Some(("117", "dead", &["./x"])));
+        append("jobs-noted", &format!("omabox.run-{ns}.exit\n"));
+        assert_eq!(
+            note(),
+            "",
+            "one noted already (--replace stopped it, run -d said it): not said"
+        );
+        jn_job(
+            3,
+            100,
+            "1",
+            Some(("118", "live", &["sh", "-c", "server & exit 1"])),
+        );
+        assert_eq!(note(), "", "a launcher whose session still runs: no end");
+        let ns = jn_job(3, 100, "", Some(("122", "dead", &["./w"])));
+        let wf = d.join(format!("run/omabox.run-{ns}.exit"));
+        set_mtime(&wf, now_us() / 1000);
+        assert_eq!(
+            note(),
+            "",
+            "a status file not written yet: left for the next command"
+        );
+        std::fs::write(&wf, "4\n").unwrap();
+        assert!(
+            note().contains("job ./w (pid 122) exited with status 4"),
+            "...which says it"
+        );
+        let long = "a".repeat(80);
+        jn_job(3, 100, "2", Some(("119", "dead", &[long.as_str()])));
+        assert!(
+            note().contains(&format!("job {}… (pid 119)", "a".repeat(59))),
+            "long words cut to 60"
+        );
+        std::os::unix::fs::symlink(
+            "/etc/passwd",
+            d.join(format!("run/omabox.run-1{}.exit", "0".repeat(18))),
+        )
+        .unwrap();
+        assert_eq!(note(), "", "a link at a status file's name: not read");
+        std::fs::remove_file(d.join("jobs-noted")).unwrap();
+        jn_job(3, 100, "1", Some(("120", "dead", &["./y"])));
+        assert_eq!(
+            note(),
+            "",
+            "a box from an older omabox (no jobs-noted): what is there taken as dealt with"
+        );
+        assert!(
+            !std::fs::read(d.join("jobs-noted"))
+                .unwrap_or_default()
+                .is_empty(),
+            "...and noted"
+        );
+        jn_job(2, 100, "1", Some(("121", "dead", &["./z"])));
+        assert!(
+            note().contains("job ./z (pid 121) exited with status 1"),
+            "...a job ending after that is said"
+        );
+        // #298, finding 405: a record found by its log's name (another caller's D spelled
+        // otherwise), and one half written beside it (read each on its own).
+        jn_job(3, 100, "6", Some(("123", "dead", &["./v"])));
+        let r = std::fs::read_to_string(d.join("jobs/123")).unwrap();
+        std::fs::write(d.join("jobs/123"), r.replace("/home/", "//home/")).unwrap();
+        std::fs::write(d.join("jobs/0"), "{\"pid\":").unwrap();
+        assert!(
+            note().contains("job ./v (pid 123) exited with status 6"),
+            "a record by its log's name, a half-written one beside it: its words"
+        );
+        std::fs::remove_file(d.join("jobs/0")).unwrap();
+        // #300, finding 406: a job killed while an `omabox run` ran in the box ($D/runs:
+        // c.START.END, ms; o.PID.START while one runs), or up to 2 s after, was stopped by the agent:
+        // not said. An exit, a kill 3 s after, one during a run whose omabox is gone: said.
+        let t0 = (now - 20) * 1000;
+        std::fs::create_dir_all(d.join("runs")).unwrap();
+        std::fs::write(d.join(format!("runs/c.{}.{}", t0 - 500, t0 + 900)), "").unwrap();
+        jn_job(20, 800, "143", Some(("124", "dead", &["./k1"])));
+        jn_job(20, 2700, "137", Some(("125", "dead", &["./k2"])));
+        jn_job(20, 300, "130", Some(("126", "dead", &["./k3"])));
+        jn_job(20, 800, "1", Some(("127", "dead", &["./e1"])));
+        jn_job(20, 4000, "143", Some(("128", "dead", &["./k4"])));
+        let out = note();
+        let mut said: Vec<String> = out
+            .lines()
+            .filter_map(|l| {
+                let w = l.strip_prefix("omabox: warning: run -d job ")?;
+                let (job, rest) = w.split_once(" (pid ")?;
+                let how = rest.split_once(") ")?.1.split(" after ").next()?;
+                Some(format!("{job} {how}"))
+            })
+            .collect();
+        said.sort();
+        assert_eq!(
+            said.join("|"),
+            "./e1 exited with status 1|./k4 was killed by SIGTERM (143)",
+            "killed during an omabox run or 2 s after: not said; an exit then, and a kill 3 s after: said"
+        );
+        // (one still running: this test's own process)
+        let me = std::process::id();
+        std::fs::write(d.join(format!("runs/o.{me}.{}", t0 + 9000)), "").unwrap();
+        std::fs::write(d.join(format!("runs/o.999999999.{}", t0 + 9000)), "").unwrap();
+        jn_job(20, 9500, "143", Some(("129", "dead", &["./k5"])));
+        assert_eq!(note(), "", "...during one still running: not said");
+        std::fs::remove_file(d.join(format!("runs/o.{me}.{}", t0 + 9000))).unwrap();
+        jn_job(20, 9600, "143", Some(("130", "dead", &["./k6"])));
+        assert!(
+            note().contains("job ./k6 (pid 130) was killed by SIGTERM"),
+            "...one whose omabox is gone without its end: said"
+        );
+        // run_mark_begin/end: the run's mark open, then closed with its end; one ended long before
+        // and one whose omabox is gone dropped.
+        std::fs::remove_dir_all(d.join("runs")).unwrap();
+        std::fs::create_dir_all(d.join("runs")).unwrap();
+        std::fs::write(d.join("runs/c.1000.2000"), "").unwrap();
+        std::fs::write(d.join("runs/o.999999999.1000"), "").unwrap();
+        let ls = || -> Vec<String> {
+            let mut v: Vec<String> = std::fs::read_dir(d.join("runs"))
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        let mark = run_mark_begin(&ctx);
+        let open = ls()
+            .iter()
+            .filter(|f| shell::re_match(&format!("^o\\.{me}\\.[0-9]{{13}}$"), f.as_bytes()))
+            .count();
+        run_mark_end(&ctx, mark);
+        let after = ls();
+        assert_eq!(open, 1, "run marks: open while it runs");
+        assert!(
+            after.len() == 1 && shell::re_match(r"^c\.[0-9]{13}\.[0-9]{13}$", after[0].as_bytes()),
+            "...then closed; an old one and a dead one's dropped: {after:?}"
+        );
+        // The record kept until the end is dealt with: job_live (the box's processes as BOX_PID SID
+        // START, host pids from 901) lists a live job, keeps an ended one's record until job_note
+        // has noted its end, then drops it.
+        let ps = |rows: &[&str]| -> Vec<[Vec<u8>; 4]> {
+            rows.iter()
+                .enumerate()
+                .map(|(i, r)| line(&format!("{} {r}", 901 + i)))
+                .collect()
+        };
+        std::fs::write(d.join("jobs/50"), format!("{{\"pid\":\"50\",\"start\":\"777\",\"log\":\"{ds}/home/run-1000.log\",\"argv\":[\"a\"]}}\n")).unwrap();
+        std::fs::write(d.join("jobs/51"), format!("{{\"pid\":\"51\",\"start\":\"778\",\"log\":\"{ds}/home/run-1001.log\",\"argv\":[\"b\"]}}\n")).unwrap();
+        assert_eq!(
+            job_live_with(
+                &ctx,
+                &[d.join("jobs/50"), d.join("jobs/51")],
+                &ps(&["50 50 777"])
+            ),
+            vec![(b"901".to_vec(), b"50".to_vec())],
+            "job_live: a live job listed, an ended one not"
+        );
+        assert!(
+            d.join("jobs/51").is_file(),
+            "...the ended one's record kept: its end not noted yet"
+        );
+        append("jobs-noted", "omabox.run-1001.exit\n");
+        job_live_with(&ctx, &[d.join("jobs/51")], &ps(&["50 50 777"]));
+        assert!(!d.join("jobs/51").exists(), "...dropped once it is");
+        // job_record: a job gone before it is recorded still is (start -), and one caught before
+        // its setsid (its pid in run-job.sh's session) by its own start time.
+        job_record_with(
+            &ctx,
+            b"52",
+            format!("{ds}/home/run-1002.log").as_bytes(),
+            &[b"./gone".to_vec()],
+            Vec::new(),
+        );
+        let rec = |pid: &str| -> serde_json::Value {
+            serde_json::from_slice(&std::fs::read(d.join("jobs").join(pid)).unwrap()).unwrap()
+        };
+        let r = rec("52");
+        assert_eq!(
+            (
+                r["pid"].as_str(),
+                r["start"].as_str(),
+                r["argv"][0].as_str()
+            ),
+            (Some("52"), Some("-"), Some("./gone")),
+            "job_record: a job gone already is recorded, start -"
+        );
+        job_record_with(
+            &ctx,
+            b"53",
+            format!("{ds}/home/run-1003.log").as_bytes(),
+            &[b"./early".to_vec()],
+            ps(&["53 49 555"]),
+        );
+        assert_eq!(
+            rec("53")["start"].as_str(),
+            Some("555"),
+            "...one before its setsid: its start"
+        );
+        assert_eq!(
+            job_live_with(&ctx, &[d.join("jobs/53")], &ps(&["53 49 555"])),
+            vec![(b"901".to_vec(), b"53".to_vec())],
+            "...and live"
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

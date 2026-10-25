@@ -248,15 +248,13 @@ pub fn hypr_answers_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, secs: &str) -> 
 /// `hyprctl -j ARGS` in the box, its answer checked as JSON (#125, finding 182): one that does not
 /// answer is said in words and the command ends (at most 64 MiB read).
 pub fn hypr_json(ctx: &Ctx, args: &[&str]) -> Res<Vec<u8>> {
+    hypr_json_with(&RealBox, ctx, args)
+}
+
+fn hypr_json_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, args: &[&str]) -> Res<Vec<u8>> {
     let mut argv = words(&["timeout", "6", "hyprctl", "-j"]);
     argv.extend(words(args));
-    let r = crate::exec::on_box(
-        ctx,
-        &argv,
-        false,
-        Out::Capture(Some(67_108_864)),
-        ErrTo::Null,
-    );
+    let r = sys.on_box_io(ctx, &argv, Out::Capture(Some(67_108_864)), ErrTo::Null);
     let out = if r.rc == 0 {
         shell::subst(&r.out)
     } else {
@@ -266,10 +264,10 @@ pub fn hypr_json(ctx: &Ctx, args: &[&str]) -> Res<Vec<u8>> {
     if ok && !vals.is_empty() {
         return Ok(cat!(out, "\n"));
     }
-    if !crate::boxes::box_alive(ctx)? {
+    if !sys.box_alive(ctx)? {
         return Err(ctx.die(hypr_down_text(ctx)));
     }
-    let t = hung_text(ctx, "")?;
+    let t = hung_text_with(sys, ctx, "")?;
     Err(ctx.die(t))
 }
 
@@ -588,6 +586,33 @@ rc=1$",
             hen("fails"),
             "omabox: box 'u': could not read its config's errors (hyprctl configerrors: exit 3)\nrc=0",
             "...answers a ping, configerrors fails: said, 0"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // t_unit_shot_hidden's: a box whose Hyprland does not answer is said, not a silent exit (shot's
+    // first read, hyprctl -j monitors, through hypr_json).
+    #[test]
+    fn hypr_json_says_a_hung_box() {
+        let (ctx, d) = hctx("json", b"1");
+        let f = Fake {
+            alive: true,
+            pids: Vec::new(),
+            state: "",
+            mode: "hung",
+        };
+        let (r, said) = crate::exit::heard(|| hypr_json_with(&f, &ctx, &["monitors"]));
+        assert!(r.is_err());
+        assert!(
+            said.starts_with("omabox: box 'u': its Hyprland did not answer (hung?"),
+            "said, not a silent exit: {said}"
+        );
+        let gone = Fake { alive: false, ..f };
+        let (r, said) = crate::exit::heard(|| hypr_json_with(&gone, &ctx, &["monitors"]));
+        assert!(r.is_err());
+        assert!(
+            said.starts_with("omabox: box 'u' went down"),
+            "...one gone: said as gone: {said}"
         );
         let _ = std::fs::remove_dir_all(&d);
     }

@@ -1735,6 +1735,40 @@ mod tests {
         );
     }
 
+    // t_unit_guard_exec_host's: the caller's PATH without the guard's dir (a trailing slash too,
+    // finding 92), and for a box without an Omarchy checkout's bin (a dev link's, finding 149).
+    #[test]
+    fn caller_path_as_bash() {
+        let dl = std::env::temp_dir().join(format!("omabox-devlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dl);
+        std::fs::create_dir_all(dl.join("bin")).unwrap();
+        std::fs::create_dir_all(dl.join("default/hypr")).unwrap();
+        std::fs::write(dl.join("default/hypr/envs.lua"), "").unwrap();
+        let dl = dl.display().to_string();
+        let cp = |path: &str, for_box: bool| {
+            let v = shell::with_env(&[("PATH", Some(path)), ("OMABOX_JAIL", None)], || {
+                caller_path(for_box)
+            });
+            String::from_utf8_lossy(&v).into_owned()
+        };
+        assert_eq!(
+            cp("/x/share/guard/:/usr/bin:/y/share/guard:/bin", false),
+            "/usr/bin:/bin",
+            "...nor one written with a trailing slash (up and run leave it out too)"
+        );
+        assert_eq!(
+            cp(&format!("{dl}/bin:/usr/share/omarchy/bin:/usr/bin"), true),
+            "/usr/share/omarchy/bin:/usr/bin",
+            "a box's PATH leaves out an Omarchy checkout's bin (a dev link's)"
+        );
+        assert_eq!(
+            cp(&format!("{dl}/bin/:/usr/bin"), false),
+            format!("{dl}/bin/:/usr/bin"),
+            "...host keeps it"
+        );
+        let _ = std::fs::remove_dir_all(&dl);
+    }
+
     #[test]
     fn env_records() {
         assert_eq!(

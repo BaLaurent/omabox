@@ -715,4 +715,62 @@ mod tests {
         assert_eq!(replace_all(b"a/x/b/x/", b"/x/", b"/y/"), b"a/y/b/y/");
         assert_eq!(replace_all(b"abc", b"", b"z"), b"abc");
     }
+
+    // t_failed_up's: past 10 kept dirs the oldest go, and only dirs a box name can have.
+    #[test]
+    fn keep_run_logs_keeps_ten() {
+        let t = std::env::temp_dir().join(format!("omabox-fr-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let (d, st) = (t.join("fr-box"), t.join("state"));
+        let fr = st.join("omabox/failed-runs");
+        std::fs::create_dir_all(d.join("home")).unwrap();
+        std::fs::create_dir_all(fr.join(".x")).unwrap();
+        std::fs::write(d.join("box.json"), "{}").unwrap();
+        std::fs::write(d.join("box.log"), "log\n").unwrap();
+        let at = |p: &std::path::Path, secs: i64| {
+            let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+            let ts = libc::timespec {
+                tv_sec: secs,
+                tv_nsec: 0,
+            };
+            // SAFETY: a NUL-ended path of ours and two timespecs.
+            assert_eq!(
+                unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), [ts, ts].as_ptr(), 0) },
+                0
+            );
+        };
+        // (2026-01-01 on, a day apart; .x a year before)
+        for i in 1..=11 {
+            let o = fr.join(format!("old-{i:02}"));
+            std::fs::create_dir(&o).unwrap();
+            at(&o, 1_767_225_600 + (i - 1) * 86_400);
+        }
+        at(&fr.join(".x"), 1_735_689_600);
+        let mut ctx = Ctx::new(b"run", Vec::new());
+        ctx.name = b"new".to_vec();
+        ctx.d = shell::bytes(&d).to_vec();
+        let st_s = st.display().to_string();
+        let kept = shell::with_env(&[("XDG_STATE_HOME", Some(&st_s))], || keep_run_logs(&ctx));
+        let kept = kept.expect("kept");
+        assert!(
+            shell::path(&kept).join("box.log").is_file(),
+            "its box.log copied"
+        );
+        let mut old: Vec<String> = std::fs::read_dir(&fr)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("old-"))
+            .collect();
+        old.sort();
+        assert_eq!(
+            old.join(" "),
+            "old-03 old-04 old-05 old-06 old-07 old-08 old-09 old-10 old-11",
+            "...the 10 newest kept dirs stay"
+        );
+        assert!(
+            fr.join(".x").is_dir(),
+            "...and a name no box has is left alone"
+        );
+        let _ = std::fs::remove_dir_all(&t);
+    }
 }

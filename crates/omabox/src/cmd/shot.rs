@@ -845,6 +845,55 @@ fn clip(
 }
 
 /// The capture, its failures in words, then the record and what shot says.
+/// A capture of an interactive box that timed out (or gave nothing): no frame, in words. Never tell
+/// an agent to show the window: switching the user's workspace for a frame is what the box exists to
+/// avoid. Only such a capture is "no frame": grim refusing what it was asked says why (finding 176).
+fn no_frame_words(ctx: &Ctx, grc: i32) -> Option<Vec<u8>> {
+    let n_ = &ctx.name;
+    if meta(&ctx.d, "mode").0 != b"interactive" || !(grc == 124 || grc == 0) {
+        return None;
+    }
+    if meta(&ctx.d, "drawn_hidden").0 != b"true" {
+        return Some(cat!(
+            "shot: no frame from interactive box '",
+            n_,
+            "': it was started by an older omabox, which does not draw its window while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
+        ));
+    }
+    if ctx.at("run/omabox.reopened").is_file() {
+        return Some(cat!(
+            "shot: no frame from interactive box '",
+            n_,
+            "': the user closed its window and kept the box running (confirm-close), and the new window is not drawn while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
+        ));
+    }
+    Some(cat!(
+        "shot: no frame from interactive box '",
+        n_,
+        "' (",
+        crate::settle::ws_text(&meta(&ctx.d, "workspace").0),
+        ") in 10 s: ask the user; never switch the user's workspace or focus to get one"
+    ))
+}
+
+/// grim failing otherwise: what it said (WHY, or how it ended when it said nothing, #217), and a
+/// 0x0 output's note (ZN, #213).
+fn grim_failed_words(mut why: Vec<u8>, grc: i32, zn: &[u8]) -> Vec<u8> {
+    if why.is_empty() {
+        why = match grc {
+            0 => b"it gave an empty image".to_vec(),
+            124 => b"it gave nothing in 10 s".to_vec(),
+            r => format!("it ended with status {r} and said nothing").into_bytes(),
+        };
+    }
+    let zn = if zn.is_empty() {
+        Vec::new()
+    } else {
+        cat!("; ", zn)
+    };
+    cat!("shot: grim failed: ", why, zn)
+}
+
 fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bool) -> Res<()> {
     let (_, gerr) = shell::mktemp()?;
     let grab = Arc::new(Grab {
@@ -986,32 +1035,8 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
     }
     if grc != 0 || !nonempty(&s.file) {
         unput(s);
-        // Never tell an agent to show the window: switching the user's workspace for a frame is
-        // what the box exists to avoid. Only a capture that timed out (or gave nothing) is "no
-        // frame": grim refusing what it was asked says why (finding 176).
-        let n_ = &ctx.name;
-        if interactive && (grc == 124 || grc == 0) {
-            if meta(&ctx.d, "drawn_hidden").0 != b"true" {
-                return Err(ctx.die(cat!(
-                    "shot: no frame from interactive box '",
-                    n_,
-                    "': it was started by an older omabox, which does not draw its window while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
-                )));
-            }
-            if ctx.at("run/omabox.reopened").is_file() {
-                return Err(ctx.die(cat!(
-                    "shot: no frame from interactive box '",
-                    n_,
-                    "': the user closed its window and kept the box running (confirm-close), and the new window is not drawn while hidden. It needs a restart, which ends the user's session in it: ask the user. Never switch the user's workspace or focus to get a frame"
-                )));
-            }
-            return Err(ctx.die(cat!(
-                "shot: no frame from interactive box '",
-                n_,
-                "' (",
-                crate::settle::ws_text(&meta(&ctx.d, "workspace").0),
-                ") in 10 s: ask the user; never switch the user's workspace or focus to get one"
-            )));
+        if let Some(m) = no_frame_words(ctx, grc) {
+            return Err(ctx.die(m));
         }
         // A 0x0 output in an NVIDIA box (#213) fails a whole shot: said why.
         let mut zn = Vec::new();
@@ -1023,20 +1048,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
             let r = on_box(ctx, &a, false, Out::Capture(None), ErrTo::Null);
             zn = zero_note(&shell::subst(&r.out), b"true", None);
         }
-        // grim saying nothing (#217): how it ended, so a rare failure under load can be told apart.
-        if why.is_empty() {
-            why = match grc {
-                0 => b"it gave an empty image".to_vec(),
-                124 => b"it gave nothing in 10 s".to_vec(),
-                r => format!("it ended with status {r} and said nothing").into_bytes(),
-            };
-        }
-        let zn = if zn.is_empty() {
-            Vec::new()
-        } else {
-            cat!("; ", zn)
-        };
-        return Err(ctx.die(cat!("shot: grim failed: ", why, zn)));
+        return Err(ctx.die(grim_failed_words(why, grc, &zn)));
     }
     if s.changed {
         return changed(ctx, s, lw, lh);
@@ -1979,6 +1991,85 @@ mod tests {
 
     // What bash's geom_clip printed for each, but numbers written as numbers and read as decimal
     // (finding 448: it printed X and Y as given, 010, and clipped them as octal).
+    // t_unit_shot_hidden (finding 90): when an interactive box gives no frame, shot never says to
+    // show its window but to ask the user; for a box started before drawn_hidden, or whose window
+    // confirm-close replaced, that it needs a restart. grim failing otherwise: its reason.
+    #[test]
+    fn no_frame_as_bash() {
+        let d = std::env::temp_dir().join(format!("omabox-shoth-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let mut ctx = Ctx::new(b"shot", Vec::new());
+        ctx.name = b"oldbox".to_vec();
+        ctx.d = shell::bytes(&d).to_vec();
+        let words = |grc| {
+            String::from_utf8_lossy(&no_frame_words(&ctx, grc).unwrap_or_default()).into_owned()
+        };
+        std::fs::write(
+            d.join("box.json"),
+            r#"{"mode": "interactive", "workspace": "9"}"#,
+        )
+        .unwrap();
+        let out = words(124);
+        assert!(
+            shell::re_match("needs a restart.*ask the user", out.as_bytes()),
+            "an old interactive box: it needs a restart, ask the user: {out}"
+        );
+        assert!(!out.contains("omabox down"), "...not told to restart it");
+        std::fs::write(
+            d.join("box.json"),
+            r#"{"mode": "interactive", "workspace": "9", "drawn_hidden": true}"#,
+        )
+        .unwrap();
+        let out = words(124);
+        assert!(
+            out.contains("never switch the user's workspace or focus"),
+            "a new one: never switch the user's workspace for a frame: {out}"
+        );
+        assert!(out.contains("ask the user"), "...ask the user");
+        assert!(!out.contains("restart"), "...and no restart");
+        assert_eq!(
+            no_frame_words(&ctx, 1),
+            None,
+            "...grim failing otherwise: not no frame"
+        );
+        assert_eq!(
+            grim_failed_words(b"grim: bad geometry".to_vec(), 1, b""),
+            b"shot: grim failed: grim: bad geometry",
+            "...its reason, not ask the user"
+        );
+        std::fs::create_dir_all(d.join("run")).unwrap();
+        std::fs::write(d.join("run/omabox.reopened"), "1\n").unwrap();
+        let out = words(124);
+        assert!(
+            shell::re_match(
+                "confirm-close.*not drawn while hidden.*ask the user",
+                out.as_bytes()
+            ),
+            "a window confirm-close reopened: not drawn while hidden, ask the user: {out}"
+        );
+        assert!(
+            out.contains("Never switch the user's workspace or focus"),
+            "...never switch the user's workspace for a frame"
+        );
+        std::fs::write(
+            d.join("box.json"),
+            r#"{"mode": "headless", "workspace": "9", "drawn_hidden": true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            no_frame_words(&ctx, 124),
+            None,
+            "a headless box: grim's words"
+        );
+        assert_eq!(
+            grim_failed_words(Vec::new(), 124, b"MINE listed 0x0"),
+            b"shot: grim failed: it gave nothing in 10 s; MINE listed 0x0",
+            "...saying nothing (#217): how it ended, and a 0x0 output's note (#213)"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     #[test]
     fn clip_as_bash() {
         let c = |v: [&str; 6]| {

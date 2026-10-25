@@ -141,22 +141,40 @@ pub fn layer_read(
     err: &std::fs::File,
     args: &[Vec<u8>],
 ) -> Res<i32> {
+    let argv = match layer_argv(l, lys, args, || kb_layers(ctx)) {
+        Ok(a) => a,
+        Err(words) => {
+            let mut e = err;
+            let _ = e.write_all(&words);
+            return Ok(3);
+        }
+    };
+    box_sys_err(ctx, &argv, err.as_raw_fd())
+}
+
+/// What layer_read runs in the box for LAYER of LAYERS (omabox-tree with its pid, size, place and,
+/// for one of several alike, whether it holds the keyboard as KBL_OF says: kb_layers), ARGS after;
+/// Err: the words for a layer with no pid.
+fn layer_argv(
+    l: &[u8],
+    lys: &[u8],
+    args: &[Vec<u8>],
+    kbl_of: impl FnOnce() -> Vec<u8>,
+) -> Result<Vec<Vec<u8>>, Vec<u8>> {
     let f = shell::read_fields(&jq_r(crate::jqprog::LAYER_FIELDS_JQ, l), 5);
     let (pid, w, h, x, y) = (&f[0], &f[1], &f[2], &f[3], &f[4]);
     if !shell::re_match("^[1-9][0-9]*$", pid) {
-        let mut e = err;
-        let _ = e.write_all(&cat!(
+        return Err(cat!(
             "the layer has no pid to find its application by (",
             pid,
             ")\n"
         ));
-        return Ok(3);
     }
     let tied = layer_tied(l, lys);
     let mut hint: Vec<Vec<u8>> = Vec::new();
     let more = shell::test_int(&crate::win::jq_length(&tied)).is_some_and(|n| n > 1);
     if more {
-        let kb = kb_layers(ctx);
+        let kb = kbl_of();
         let ex = Args::new(&["-r"])
             .kv("--arg", "kb", &kb)
             .arg(crate::jqprog::LAYER_KB_JQ)
@@ -185,7 +203,7 @@ pub fn layer_read(
     ]);
     argv.extend(hint);
     argv.extend(args.iter().cloned());
-    box_sys_err(ctx, &argv, err.as_raw_fd())
+    Ok(argv)
 }
 
 /// layer_qs_note LAYER: after "no accessibility tree" for a layer of a Quickshell, which releases
@@ -211,4 +229,51 @@ pub fn layer_qs_note(ctx: &mut Ctx, l: &[u8]) {
         v,
         ": up --quickshell PATH runs a build of your own"
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // t_unit_tree_layer's layer_read (#254): what it asks the box's tools/tree, the layers holding
+    // the keyboard given.
+    #[test]
+    fn layer_argv_as_bash() {
+        let j = br#"{"DP-1": {"levels": {"0": [{"address": "0xa", "namespace": "omarchy-background", "pid": 7, "x": 0, "y": 0, "w": 1920, "h": 1080}],
+      "1": [], "2": [{"address": "0xb", "namespace": "omarchy-bar", "pid": 7, "x": 0, "y": 0, "w": 42, "h": 1080},
+                     {"address": "0xm", "namespace": "omarchy-menu", "pid": 7, "x": 0, "y": 0, "w": 1, "h": 1}],
+      "3": [{"address": "0xc", "namespace": "omarchy-launcher", "pid": 7, "x": 0, "y": 0, "w": 1920, "h": 1080}]}},
+    "DP-2": {"levels": {"2": [{"address": "0xd", "namespace": "omarchy-bar", "pid": 7, "x": 1920, "y": 0, "w": 42, "h": 1080},
+      {"address": "0xe", "namespace": "solo", "pid": 9, "x": 2100, "y": 300, "w": 200, "h": 60}]}}}"#;
+        let mut ctx = Ctx::new(b"tree", b"/nonexistent".to_vec());
+        ctx.parsed();
+        let read = |sel: &[u8], kb: &str| {
+            let l = layer_select(&ctx, j, sel).unwrap();
+            let a = layer_argv(&l, j, &[b"--json".to_vec()], || kb.as_bytes().to_vec()).unwrap();
+            String::from_utf8_lossy(&a.join(&b' ')).into_owned()
+        };
+        assert_eq!(
+            read(b"solo", ""),
+            "/usr/bin/timeout 30 /opt/omabox/bin/omabox-tree --pid 9 --layer --size 200x60 --offset 2100,300 --json",
+            "a layer alone at its size: its pid, size and place, no hint"
+        );
+        assert!(
+            read(b"omarchy-launcher", "omarchy-launcher")
+                .ends_with("--offset 0,0 --active yes --json"),
+            "two of its size, it with the keyboard: its frame is the active one"
+        );
+        assert!(
+            read(b"omarchy-background", "omarchy-launcher").ends_with("--active no --json"),
+            "...the other: not the active one"
+        );
+        assert!(
+            !read(b"omarchy-background", "").contains("--active"),
+            "...neither with the keyboard: no hint (tree says it cannot tell)"
+        );
+        assert_eq!(
+            layer_argv(br#"{"pid": null}"#, j, &[], Vec::new),
+            Err(b"the layer has no pid to find its application by (null)\n".to_vec()),
+            "a layer with no pid: said, nothing run"
+        );
+    }
 }

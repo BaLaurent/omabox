@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6436 MIN_UNIT=3731
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4354 MIN_UNIT=1845
+MIN_CHECKS=6385 MIN_UNIT=3681
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4302 MIN_UNIT=1796
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -8764,108 +8764,9 @@ t_unit_run_job() {
   check "...a signal's: 128+N" until_ok 5 grep -qx 143 "$TMP/rj2.exit"
 }
 
-# A `run -d` job that ended within its first 30 s, said once by the box's next command (#286,
-# finding 399): job_note on a box dir of its own, with status files dated as the waiter's would be,
-# records as run -d writes them, and job_live stubbed (a job is live while its record says "live").
-t_unit_job_note() {
-  local d=$TMP/jn now; mkdir -p "$d/run" "$d/home" "$d/jobs"; now=$(date +%s)
-  : > "$d/jobs-noted"
-  # job NS_OFFSET_S END_AFTER_MS STATUS [PID LIVE ARGV...]: a job started NS_OFFSET_S seconds ago that
-  # ended END_AFTER_MS after its start, with its log and, given a PID, its record.
-  jn_job() { local t0=$(( now - $1 )) ms=$2 st=$3 ns; shift 3; ns=$t0$(printf '%09d' $((RANDOM % 1000)))
-    : > "$d/home/run-$ns.log"; printf '%s\n' "$st" > "$d/run/omabox.run-$ns.exit"
-    touch -d "@$(( t0 + ms / 1000 )).$(printf '%03d' $(( ms % 1000 )))" "$d/run/omabox.run-$ns.exit"
-    if [ $# -gt 0 ]; then local pid=$1 live=$2; shift 2
-      jq -nc --arg pid "$pid" --arg live "$live" --arg log "$d/home/run-$ns.log" '{pid: $pid, start: "1", log: $log, live: $live, exe: "x", argv: $ARGS.positional}' \
-        --args -- "$@" > "$d/jobs/$pid"; fi
-    echo "$ns"; }
-  jn_note() { NAME=u D=$d bash -c 'source "$1"; job_live() { jq -e ".live == \"live\"" "$1" >/dev/null && echo "1 2"; true; }; job_note' _ "$TMP/lib/bin/omabox" 2>&1; }
-  check_eq "no job ended: nothing" "" "$(jn_note)"
-  local ns; ns=$(jn_job 60 400 1 100 dead false)
-  jn_job 50 30500 1 101 dead ./server --port 1 >/dev/null
-  jn_job 40 1500 0 102 dead xdg-open URL >/dev/null
-  check_eq "one that ran past 30 s, one that exited 0 (a one-shot), and one a minute old that ran 0.4 s: only that one said" \
-    "omabox: warning: run -d job false (pid 100) exited with status 1 after 0.4s, since the last command (log: $d/home/run-$ns.log)" "$(jn_note)"
-  check_eq "...once" "" "$(jn_note)"
-  jn_job 10 2100 3 115 dead sh -c 'sleep 1; exit 3' >/dev/null
-  check_eq "a job that ended 2.1 s in, its log the newest: its words, pid, status, and log -b NAME run" \
-    "omabox: warning: run -d job sh -c sleep 1; exit 3 (pid 115) exited with status 3 after 2.1s, since the last command (omabox log -b u run)" "$(jn_note)"
-  check_eq "...said once" "" "$(jn_note)"
-  ns=$(jn_job 5 1000 143 116 dead ./app)
-  jn_job 5 1200 143 >/dev/null
-  : > "$d/home/run-9$ns.log"   # (a later job's log the newest)
-  local out; out=$(jn_note)
-  check_eq "killed, and one whose record went: both said" 2 "$(grep -c . <<<"$out")"
-  check_match "...by its signal, its log by path when not the newest" \
-    "^omabox: warning: run -d job \./app \(pid 116\) was killed by SIGTERM \(143\) after 1\.0s, since the last command \(log: $d/home/run-$ns\.log\)$" "$(grep -F "(pid 116)" <<<"$out")"
-  check_match "...one with no record" "run -d job \(its words were not kept\) was killed by SIGTERM \(143\) after 1\.2s" "$out"
-  ns=$(jn_job 3 500 1 117 dead ./x)
-  printf 'omabox.run-%s.exit\n' "$ns" >> "$d/jobs-noted"
-  check_eq "one noted already (--replace stopped it, run -d said it): not said" "" "$(jn_note)"
-  jn_job 3 100 1 118 live sh -c 'server & exit 1' >/dev/null
-  check_eq "a launcher whose session still runs: no end" "" "$(jn_note)"
-  ns=$(jn_job 3 100 '' 122 dead ./w); touch "$d/run/omabox.run-$ns.exit"
-  check_eq "a status file not written yet: left for the next command" "" "$(jn_note)"
-  echo 4 > "$d/run/omabox.run-$ns.exit"
-  check_match "...which says it" "job ./w \(pid 122\) exited with status 4" "$(jn_note)"
-  jn_job 3 100 2 119 dead "$(printf 'a%.0s' {1..80})" >/dev/null
-  check_match "long words cut to 60" "job a{59}… \(pid 119\)" "$(jn_note)"
-  ln -s /etc/passwd "$d/run/omabox.run-1$(printf '%018d' 0).exit"
-  check_eq "a link at a status file's name: not read" "" "$(jn_note)"
-  rm "$d/jobs-noted"; jn_job 3 100 1 120 dead ./y >/dev/null
-  check_eq "a box from an older omabox (no jobs-noted): what is there taken as dealt with" "" "$(jn_note)"
-  check "...and noted" grep -q . "$d/jobs-noted"
-  jn_job 2 100 1 121 dead ./z >/dev/null
-  check_match "...a job ending after that is said" "job ./z \(pid 121\) exited with status 1" "$(jn_note)"
-  # #298, finding 405: a record found by its log's name (another caller's D spelled otherwise), and
-  # one half written beside it (read each on its own: it lost every record's words before)
-  ns=$(jn_job 3 100 6 123 dead ./v)
-  jq -c '.log |= sub("/home/"; "//home/")' "$d/jobs/123" > "$d/jobs/123.t" && mv "$d/jobs/123.t" "$d/jobs/123"
-  printf '{"pid":' > "$d/jobs/0"
-  check_match "a record by its log's name, a half-written one beside it: its words" "job \./v \(pid 123\) exited with status 6" "$(jn_note)"
-  rm -f "$d/jobs/0"
-  # #300, finding 406: a job killed while an `omabox run` ran in the box ($D/runs: c.START.END, ms;
-  # o.PID.START while one runs), or up to 2 s after, was stopped by the agent: not said. An exit, a
-  # kill 3 s after, one during a run whose omabox is gone: said.
-  local t0=$(( (now - 20) * 1000 )); mkdir -p "$d/runs"
-  : > "$d/runs/c.$(( t0 - 500 )).$(( t0 + 900 ))"
-  jn_job 20 800 143 124 dead ./k1 >/dev/null; jn_job 20 2700 137 125 dead ./k2 >/dev/null
-  jn_job 20 300 130 126 dead ./k3 >/dev/null; jn_job 20 800 1 127 dead ./e1 >/dev/null
-  jn_job 20 4000 143 128 dead ./k4 >/dev/null
-  out=$(jn_note)
-  check_eq "killed during an omabox run or 2 s after: not said; an exit then, and a kill 3 s after: said" \
-    "./e1 exited with status 1|./k4 was killed by SIGTERM (143)" "$(sed -n 's/.*run -d job \([^ ]*\) (pid [0-9]*) \(.*\) after .*/\1 \2/p' <<<"$out" | sort | paste -sd'|')"
-  sleep 600 & local alive=$!
-  : > "$d/runs/o.$alive.$(( t0 + 9000 ))"; : > "$d/runs/o.999999999.$(( t0 + 9000 ))"
-  jn_job 20 9500 143 129 dead ./k5 >/dev/null
-  check_eq "...during one still running: not said" "" "$(jn_note)"
-  rm "$d/runs/o.$alive."*; kill "$alive"; wait "$alive" 2>/dev/null
-  jn_job 20 9600 143 130 dead ./k6 >/dev/null
-  check_match "...one whose omabox is gone without its end: said" "job \./k6 \(pid 130\) was killed by SIGTERM" "$(jn_note)"
-  # run_mark_begin/end: the run's mark open, then closed with its end; one ended long before and one
-  # whose omabox is gone dropped
-  rm -f "$d/runs/"*; : > "$d/runs/c.1000.2000"; : > "$d/runs/o.999999999.1000"
-  local marks; marks=$(D=$d bash -c 'source "$1"; run_mark_begin; ls "$D/runs" | grep -c "^o\.$$\.[0-9]\{13\}$"; run_mark_end; ls "$D/runs"' _ "$TMP/lib/bin/omabox")
-  check_match "run marks: open while it runs, then closed; an old one and a dead one's dropped" \
-    "^1"$'\n'"c\.[0-9]{13}\.[0-9]{13}$" "$marks"
-  # The record kept until the end is dealt with: job_live (box_procs stubbed as BOX_PID SID START)
-  # lists a live job, keeps an ended one's record until job_note has noted its end, then drops it.
-  jl() { local ps=$1; shift; NAME=u D=$d PS=$ps bash -c 'source "$1"; shift; box_procs() { [ -z "$PS" ] || awk "{ print 900 + NR, \$0 }" <<<"$PS"; }; "$@"' _ "$TMP/lib/bin/omabox" "$@"; }
-  printf '{"pid":"50","start":"777","log":"%s/home/run-1000.log","argv":["a"]}\n' "$d" > "$d/jobs/50"
-  printf '{"pid":"51","start":"778","log":"%s/home/run-1001.log","argv":["b"]}\n' "$d" > "$d/jobs/51"
-  check_eq "job_live: a live job listed, an ended one not" "901 50" "$(jl '50 50 777' job_live "$d/jobs/50" "$d/jobs/51")"
-  check "...the ended one's record kept: its end not noted yet" test -f "$d/jobs/51"
-  echo omabox.run-1001.exit >> "$d/jobs-noted"
-  jl '50 50 777' job_live "$d/jobs/51" >/dev/null
-  check_fails "...dropped once it is" test -e "$d/jobs/51"
-  # job_record: a job gone before it is recorded still is (start -), and one caught before its setsid
-  # (its pid in run-job.sh's session) by its own start time
-  jl '' job_record 52 "$d/home/run-1002.log" ./gone
-  check_eq "job_record: a job gone already is recorded, start -" "52 - ./gone" "$(jq -r '"\(.pid) \(.start) \(.argv | join(" "))"' "$d/jobs/52" 2>&1)"
-  jl '53 49 555' job_record 53 "$d/home/run-1003.log" ./early
-  check_eq "...one before its setsid: its start" "555" "$(jq -r .start "$d/jobs/53" 2>&1)"
-  check_eq "...and live" "901 53" "$(jl '53 49 555' job_live "$d/jobs/53")"
-}
+# (job_note: a `run -d` job that ended within its first 30 s, said once by the box's next command,
+# #286, #298, #300, findings 399, 405, 406; the run marks, job_live and job_record: jobs.rs
+# job_note_as_bash, the box's processes and a job's life given; #324 wave 6-suite.)
 
 # run -d --replace with other arguments (#255): a job of the same program is named, by its resolved
 # path (a record from before it had one: by its argv[0]); one that ended or of another program is not.
@@ -8875,23 +8776,8 @@ t_unit_replace_others() {
   mkdir -p "$d/r/jobs" "$d/build"; d=$(cd "$d" && pwd -P)
   check_eq "job_exe: ./build/app and build/app are one program" "$d/build/app $d/build/app qml" \
     "$(cd "$d" && probe job_exe ./build/app | tr '\n' ' '; cd "$d" && probe job_exe build/app | tr '\n' ' '; probe job_exe qml)"
-  # rec PID LIVE EXE ARGV...: a job record (EXE - for none, as before #255)
-  rec() { local pid=$1 live=$2 exe=$3; shift 3
-    jq -nc --arg pid "$pid" --arg live "$live" --arg exe "$exe" '{pid: $pid, start: "1", log: "l", live: $live, argv: $ARGS.positional}
-      + (if $exe == "-" then {} else {exe: $exe} end)' --args -- "$@" > "$d/r/jobs/$pid"; }
-  rec 115 live "$d/build/app" ./build/app --demo details
-  rec 120 dead "$d/build/app" ./build/app --demo old
-  rec 130 live qml qml other.qml
-  rec 140 live - ./build/app
-  # others DIR ARGV...: job_others for ARGV run from DIR
-  others() { local wd=$1; shift
-    (cd "$wd" && D="$d/r" bash -c 'source "$1"; shift; job_live() { jq -e ".live == \"live\"" "$1" >/dev/null && echo "1 $(jq -r .pid "$1")"; }; job_others "$@"' _ "$TMP/lib/bin/omabox" "$@"); }
-  check_eq "--replace with other arguments: the live job of the program named, the ended one not" \
-    "./build/app (pid 115, --demo details)"$'\n'"./build/app (pid 140, no arguments)" "$(others "$d" ./build/app --demo table)"
-  check_eq "...the same program by another path to it (a record without its path: by the same words only)" \
-    "./build/app (pid 115, --demo details)" "$(others "$d/build" ./app --x)"
-  check_eq "...a bare name by its name" "qml (pid 130, other.qml)" "$(others "$d" qml main.qml)"
-  check_eq "...another program: none" "" "$(others "$d" ./build/other --demo details)"
+  # (job_others, the live jobs of the same program named, #255: jobs.rs job_others_as_bash, the
+  # program as job_exe resolves it given; #324 wave 6-suite.)
 }
 
 t_unit_cli() {
@@ -8999,18 +8885,8 @@ EOF
   for lb in a c; do echo '{"mode":"headless","size":"1x1@60","net":"none","idle":0}' > "$TMP/rt-ls/omabox/$P-ls$lb/box.json"; done
   check_eq "ls: a box going down meanwhile is left out, not the end of the list" "$P-lsa $P-lsc 0" \
     "$(XDG_RUNTIME_DIR=$TMP/rt-ls "$CLI" ls 2>&1 | awk 'NR > 1 {printf "%s ", $1}'; echo "${PIPESTATUS[0]}")"
-  # ports while a box goes down (#92, finding 164): box.json gone after the up check ($P-pb, from
-  # the start of its scan) or during its scan ($P-pa, while its processes are read). No live PID 1:
-  # the box's state and sockets are stubbed, one server on 0.0.0.0:40001 held by this shell.
-  local pr=$TMP/rt-ports/omabox; mkdir -p "$pr/$P-pa" "$pr/$P-pb"
-  echo '{"net":"connected"}' > "$pr/$P-pa/box.json"
-  check_eq "ports: a box going down meanwhile is listed as it was or left out, exit 0" "$P-pa 40001 nothing"$'\n'0 \
-    "$(env -u OMABOX_JAIL XDG_RUNTIME_DIR="$TMP/rt-ports" bash -c 'source "$1"; P=$2
-      list_names() { echo "$P-pa $P-pb"; }; box_state() { echo up; }; box_pid() { echo $$; }
-      box_pids() { [ "$NAME" != "$P-pa" ] || rm "$D/box.json"; echo $$; }
-      sock_owners() { echo "424242 $$"; }
-      tcp_listeners() { [ "$1" = /proc/self/net ] || echo "40001 0.0.0.0 0 424242"; }
-      cmd_ports --json' lib "$TMP/lib/bin/omabox" "$P" 2>&1 | jq -r '.[] | "\(.box) \(.port) \(.host.state)"'; echo "${PIPESTATUS[0]}")"
+  # (ports while a box goes down, #92, finding 164: listed as it was or left out, exit 0: ports.rs
+  # ports_while_a_box_goes_down; #324 wave 6-suite.)
   # A dir an up left with box.json and no info.json (finding 163): listed, dead, so down --all sees it.
   mkdir -p "$TMP/rt-ls2/omabox/$P-lsd"; echo '{"mode":"headless","size":"1x1@60","net":"none","idle":0}' > "$TMP/rt-ls2/omabox/$P-lsd/box.json"
   check_eq "ls: a dir with box.json and no info.json is listed, dead" "$P-lsd dead" \
@@ -9550,41 +9426,14 @@ t_mode_lock() {
 # the user, and for a box started before drawn_hidden, or whose window confirm-close replaced, that it
 # needs a restart (which ends their session in it).
 t_unit_shot_hidden() {
-  local d=$TMP/boxes/oldbox out
-  mkdir -p "$d"
-  # (The box's Hyprland answers for its screen size, finding 81; only grim gets no frame: it blocks
-  # until its timeout, 124. Any other failure is grim's to explain, finding 176.)
-  shot_msg() { bash -c 'source "$1"; BOXES=$2; need_box() { :; }
-    on_box() { [[ "$*" == *"hyprctl -j monitors" ]] || { echo "grim: ${GRIM_SAYS:-}" >&2; return "${GRIM_RC:-124}"; }; echo "[{\"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]"; }
-    cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1; }
-  echo '{"mode": "interactive", "workspace": "9"}' > "$d/box.json"
-  out=$(shot_msg)
-  check_match "an old interactive box: it needs a restart, ask the user" "needs a restart.*ask the user" "$out"
-  check_fails "...not told to restart it" grep -q "omabox down" <<<"$out"
-  echo '{"mode": "interactive", "workspace": "9", "drawn_hidden": true}' > "$d/box.json"
-  out=$(shot_msg)
-  check_match "a new one: never switch the user's workspace for a frame" "never switch the user's workspace or focus" "$out"
-  check_match "...ask the user" "ask the user" "$out"
-  check_fails "...and no restart" grep -q restart <<<"$out"
-  check_fails "...and no partial PNG left" test -e "$TMP/boxes/x.png.part"
-  out=$(GRIM_RC=1 GRIM_SAYS="bad geometry" shot_msg)
-  check_match "...grim failing otherwise: its reason, not ask the user" "shot: grim failed: grim: bad geometry$" "$out"
-  check_match "a box whose Hyprland does not answer: said, not a silent exit" "box 'oldbox': its Hyprland did not answer \(hung\?" \
-    "$(bash -c 'source "$1"; BOXES=$2; need_box() { :; }; box_alive() { :; }; on_box() { return 1; }; cmd_shot -b oldbox -o "$2/x.png"' _ "$TMP/lib/bin/omabox" "$TMP/boxes" 2>&1)"
-  mkdir -p "$d/run" && echo 1 > "$d/run/omabox.reopened"
-  out=$(shot_msg)
-  check_match "a window confirm-close reopened: not drawn while hidden, ask the user" "confirm-close.*not drawn while hidden.*ask the user" "$out"
-  check_match "...never switch the user's workspace for a frame" "Never switch the user's workspace or focus" "$out"
-  # Issue #63: an -o that cannot be written is said so before anything is captured, in either mode
-  # (an interactive box said "no frame ... ask the user", a headless one "grim failed").
-  local ro=$TMP/ro m; mkdir -p "$ro"; chmod 555 "$ro"
-  for m in interactive headless; do
-    echo "{\"mode\": \"$m\", \"workspace\": \"9\", \"drawn_hidden\": true}" > "$d/box.json"
-    out=$(bash -c 'source "$1"; BOXES=$2; need_box() { :; }; on_box() { echo "on_box $*"; return 1; }; cmd_shot -b oldbox -o "$3/x.png"' \
-      _ "$TMP/lib/bin/omabox" "$TMP/boxes" "$ro" 2>&1)
-    check_match "-o in a dir that cannot be written ($m box): said so" "^omabox: shot: cannot write $ro/x.png: Permission denied$" "$out"
-    check_fails "...before the box is asked for anything" grep -q on_box <<<"$out"
-  done
+  # (no frame from an interactive box, its words: shot.rs no_frame_as_bash; grim failing otherwise:
+  # the same; a box whose Hyprland does not answer: hypr.rs hypr_json_says_a_hung_box; #324.)
+  # Issue #63: an -o that cannot be written is said so before anything is captured, in either mode:
+  # before the box is even looked for.
+  local ro=$TMP/ro out; mkdir -p "$ro"; chmod 555 "$ro"
+  out=$("$CLI" shot -b "$P-nobox" -o "$ro/x.png" 2>&1)
+  check_match "-o in a dir that cannot be written: said so" "^omabox: shot: cannot write $ro/x.png: Permission denied$" "$out"
+  check_fails "...before the box is asked for anything" grep -q "$P-nobox" <<<"$out"
   check_fails "...and no partial PNG left" test -e "$ro/x.png.part"
   check_match "-o where no directory can be made" "cannot make the directory /proc/self/omabox-x" "$("$CLI" shot -o /proc/self/omabox-x/y.png 2>&1)"
   chmod 755 "$ro"
@@ -11420,16 +11269,8 @@ t_unit_tree_layer() {
   out=$(probe layer_select "$J" nope 2>&1); rc=$?
   check_eq "no such layer: exit 2" 2 "$rc"
   check_match "...the box's layers listed" '"solo"  pid 9  top 200x60 at 2100,300 on DP-2' "$out"
-  # layer_read: what it asks the box's tools/tree.
-  read_args() {
-    T254_L=$(probe layer_select "$J" "$1") T254_KB=$2 T254_J=$J lib eval \
-      'kb_layers() { echo "$T254_KB"; }; box_sys() { echo "$*"; }; layer_read "$T254_L" "$T254_J" /dev/null --json'
-  }
-  check_eq "a layer alone at its size: its pid, size and place, no hint" \
-    "/usr/bin/timeout 30 /opt/omabox/bin/omabox-tree --pid 9 --layer --size 200x60 --offset 2100,300 --json" "$(read_args solo "")"
-  check_match "two of its size, it with the keyboard: its frame is the active one" "--offset 0,0 --active yes --json$" "$(read_args omarchy-launcher omarchy-launcher)"
-  check_match "...the other: not the active one" "--active no --json$" "$(read_args omarchy-background omarchy-launcher)"
-  check_fails "...neither with the keyboard: no hint (tree says it cannot tell)" grep -q -- --active <<<"$(read_args omarchy-background "")"
+  # (layer_read: what it asks the box's tools/tree, the keyboard's layers given: layer.rs
+  # layer_argv_as_bash; #324 wave 6-suite.)
   # #282: AccessKit's requirement on at-spi2-core 2.61+ is named where an agent reads about tree.
   out=$(ob help tree --long | tr '\n' ' ')
   check_match "help tree --long names AccessKit's requirement (accesskit_unix 0.22+, eframe 0.37+, #282)" \
@@ -11682,15 +11523,8 @@ t_failed_up() {
   kept=${out##*logs are kept in }
   check "...a dir with its Hyprland log or box.log" bash -c '[ -f "$1/hyprland.log" ] || [ -f "$1/box.log" ]' _ "$kept"
   check_eq "...and no box of it is left" "" "$(ob ls --json | jq -r --arg p "$P-fr-run" '.[] | select(.name | startswith($p)) | .name')"
-  # Past 10 kept dirs the oldest go, and only dirs a box name can have.
-  rm -rf "$st"
-  local d=$TMP/fr-box i; mkdir -p "$d/home" "$st/omabox/failed-runs/.x"; echo '{}' > "$d/box.json"; echo log > "$d/box.log"
-  for i in 01 02 03 04 05 06 07 08 09 10 11; do mkdir "$st/omabox/failed-runs/old-$i"; touch -d "2026-01-$i" "$st/omabox/failed-runs/old-$i"; done
-  touch -d 2025-01-01 "$st/omabox/failed-runs/.x"
-  kept=$(D=$d NAME=new XDG_STATE_HOME=$st lib keep_run_logs) || true
-  check_eq "...the 10 newest kept dirs stay" "$kept old-03 old-04 old-05 old-06 old-07 old-08 old-09 old-10 old-11" \
-    "$kept $(cd "$st/omabox/failed-runs" && printf '%s\n' old-* | paste -sd ' ')"
-  check "...and a name no box has is left alone" test -d "$st/omabox/failed-runs/.x"
+  # (Past 10 kept dirs the oldest go, and only dirs a box name can have: run.rs
+  # keep_run_logs_keeps_ten; #324 wave 6-suite.)
   rm -rf "$st"
 }
 
@@ -16398,13 +16232,10 @@ t_unit_guard_exec_host() {
   check_fails "host: the real quickshell and qs, not the guard's (#141)" grep -q share/guard \
     <<<"$("${GUARDED[@]}" "$CLI" host -- sh -c 'command -v quickshell; command -v qs' 2>/dev/null)"
   check_fails "...nor another checkout's" grep -q elsewhere <<<"$("${GUARDED[@]}" PATH="/elsewhere/share/guard:$PATH" BROWSER=/elsewhere/share/guard/xdg-open "$CLI" host -- sh -c 'echo "$PATH ${BROWSER-}"' 2>/dev/null)"
-  check_eq "...nor one written with a trailing slash (up and run leave it out too)" "/usr/bin:/bin" \
-    "$(PATH=/x/share/guard/:/usr/bin:/y/share/guard:/bin lib caller_path)"
-  # A host's `omarchy dev link` puts its checkout's bin first (finding 149): kept for host, not in a box.
-  local dl=$TMP/devlink; mkdir -p "$dl/bin" "$dl/default/hypr"; : > "$dl/default/hypr/envs.lua"
-  check_eq "a box's PATH leaves out an Omarchy checkout's bin (a dev link's)" "/usr/share/omarchy/bin:/usr/bin" \
-    "$(PATH="$dl/bin:/usr/share/omarchy/bin:/usr/bin" lib caller_path box)"
-  check_eq "...host keeps it" "$dl/bin/:/usr/bin" "$(PATH="$dl/bin/:/usr/bin" lib caller_path)"
+  # (...nor one written with a trailing slash, up and run leaving it out too: exec.rs
+  # caller_path_as_bash; #324 wave 6-suite.)
+  # (A host's `omarchy dev link` puts its checkout's bin first, finding 149: kept for host, not in a
+  # box: exec.rs caller_path_as_bash.)
   check_eq "host: a BROWSER the guard did not set stays (Omarchy sets it in the shell)" firefox \
     "$("${GUARDED[@]}" BROWSER=firefox "$CLI" host -- sh -c 'echo "${BROWSER-unset}"' 2>/dev/null)"
   # The user manager's, through a stand-in systemctl: a plain value is taken, one it quotes is not.
@@ -16426,7 +16257,7 @@ EOF
   check_match "host: a long NAME=value is cut, env, PATH= and true still there" "on your real desktop: env PATH=/opt/long/install/dir/bin:/opt/long/inst…\(\+[0-9]+ chars\) true$" "$hl"
   check_match "...one line under 200 characters" "^1 ([0-9]|[0-9][0-9]|1[0-9][0-9])$" "$(wc -l <<<"$hl") ${#hl}"
   check_eq "...a short command exactly as it is" "omabox: on your real desktop: printf %s A=b x" "$("${GUARDED[@]}" "$CLI" host -- printf %s A=b x 2>&1 >/dev/null)"
-  check_eq "...a long word cut too" "true $(printf 'a%.0s' {1..40})…(+90 chars) x" "$(lib host_record true "$(printf 'a%.0s' {1..130})" x)"
+  # (...a long word cut too: host.rs the_record_cuts_long_words.)
   check_fails "host with nothing to run refused" "${GUARDED[@]}" "$CLI" host
 }
 
@@ -17790,20 +17621,9 @@ t_unit_monitors() {
   check_eq "picture: a lone monitor smaller than the area is not enlarged" "1 1|main 1308 408 800 600" "$(pic '3416 1416 12' 'main 0 0 800 600')"
   check_eq "picture: too big even at Hyprland's smallest scale (1/4): laid out at it, said" "0.25 0|main 0 15 480 270|WAYLAND-2 492 15 480 270|WAYLAND-3 984 15 480 270" \
     "$(pic '500 300 12' 'main 0 0 1920 1080' 'WAYLAND-2 1920 0 1920 1080' 'WAYLAND-3 3840 0 1920 1080')"
-  # An interactive monitor that fails in `up` (a second --monitor): up's EXIT trap, which takes the box
-  # down, still runs; monitor_add_window's own trap (the host rule off) took its place in up's shell.
-  mkdir -p "$d"; echo '{}' > "$d/box.json"
-  out=$(bash -c 'source "$1"; D=$2 NAME=t
-    meta() { echo 9; }; ws_check() { echo "$1"; }; box_pid() { echo $$; }; hypr_json() { echo "[]"; }
-    host_hyprctl() { case $* in "-j monitors") echo "[{\"id\": 0, \"focused\": true, \"x\": 0, \"y\": 0, \"width\": 1920, \"height\": 1080, \"scale\": 1}]" ;;
-      -j\ *) echo "[]" ;; *) echo ok ;; esac; }
-    host_eval() { die "host hyprctl eval failed: a stub"; }
-    on_box() { case $* in *omabox_monitor_layout*) echo "error: omabox-layout:main 0 0 1920 1080,WAYLAND-2 1920 0 800 600" ;; *) echo ok ;; esac; }
-    box_file() { :; }
-    trap "echo up-trap" EXIT
-    monitor_add_window 800x600; echo "went on"' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
-  check_match "a monitor add failing in up: up's own EXIT trap runs (it takes the box down)" "a stub.*up-trap" "$(tr '\n' ' ' <<<"$out")"
-  check_fails "...and up stops there" grep -q "went on" <<<"$out"
+  # (An interactive monitor that fails in `up`: the add's undo leaves up's, which takes the box down:
+  # trap.rs a_nested_undo_leaves_the_outer; up stops at the add's Err (up_box's `?`), its failure
+  # then t_failed_up's. #324 wave 6-suite.)
   # An output listed 0x0 in an NVIDIA box (#213): one a program made with `output create headless`.
   local zm='[{"name":"WAYLAND-1","width":1920,"height":1080,"disabled":false},{"name":"MINE","width":0,"height":0,"disabled":false},{"name":"OFF","width":0,"height":0,"disabled":true}]'
   out=$(probe zero_note "$zm" true "renderD128 amdgpu")
@@ -19941,7 +19761,7 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
-  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
+  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
 

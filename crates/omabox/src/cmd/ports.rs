@@ -102,7 +102,33 @@ fn up_pid(d: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// What ports reads of the system: each box's PID 1 and processes, a net dir's listeners, the sockets
+/// processes hold.
+trait PortsSys {
+    fn up_pid(&self, d: &[u8]) -> Option<Vec<u8>> {
+        up_pid(d)
+    }
+    fn box_pids(&self, ctx: &Ctx) -> Vec<Vec<u8>> {
+        box_pids(ctx)
+    }
+    fn tcp_listeners(&self, dir: &[u8]) -> Vec<[Vec<u8>; 4]> {
+        tcp_listeners(dir)
+    }
+    fn sock_owners(&self, pids: &[Vec<u8>], own: &mut HashMap<Vec<u8>, Vec<u8>>) {
+        sock_owners(pids, own);
+    }
+}
+
+/// The system itself.
+struct RealPorts;
+
+impl PortsSys for RealPorts {}
+
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    run_with(&RealPorts, ctx, args)
+}
+
+fn run_with<S: PortsSys>(sys: &S, ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut name, mut json) = (Vec::new(), false);
     let mut i = 0;
     while i < args.len() {
@@ -135,7 +161,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let mut serving: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
     for n in list_names(ctx, false) {
         select_box(ctx, &n)?;
-        let Some(pid) = up_pid(&ctx.d) else {
+        let Some(pid) = sys.up_pid(&ctx.d) else {
             continue;
         };
         // Read once, with a fallback (#92): a box going down meanwhile has its dir removed. A box
@@ -145,9 +171,9 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             continue;
         }
         let mut own = HashMap::new();
-        sock_owners(&box_pids(ctx), &mut own);
+        sys.sock_owners(&sys.box_pids(ctx), &mut own);
         // Sockets no box process holds are pasta's, in the box: its mirrors of the host's servers.
-        for [port, addr, _uid, ino] in tcp_listeners(&cat!("/proc/", pid, "/net")) {
+        for [port, addr, _uid, ino] in sys.tcp_listeners(&cat!("/proc/", pid, "/net")) {
             let Some(p) = own.get(&ino).filter(|p| !p.is_empty()) else {
                 continue;
             };
@@ -205,15 +231,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             // (not select_box: it refuses a box not the jail's)
             ctx.name = n.clone();
             ctx.d = cat!(ctx.boxes, "/", n);
-            let Some(pid) = up_pid(&ctx.d) else {
+            let Some(pid) = sys.up_pid(&ctx.d) else {
                 continue;
             };
             if meta(&ctx.d, "net").0 != b"connected" {
                 continue;
             }
             let mut own = HashMap::new();
-            sock_owners(&box_pids(ctx), &mut own);
-            for [port, _, _, ino] in tcp_listeners(&cat!("/proc/", pid, "/net")) {
+            sys.sock_owners(&sys.box_pids(ctx), &mut own);
+            for [port, _, _, ino] in sys.tcp_listeners(&cat!("/proc/", pid, "/net")) {
                 if own.get(&ino).is_some_and(|p| !p.is_empty()) {
                     outside.insert(port, true);
                 }
@@ -223,7 +249,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     // What holds each port on 127.0.0.1 here: a listener on 127.0.0.1, 0.0.0.0 or :: (or their
     // mapped forms) keeps pasta from binding it.
     let mut held: HashMap<Vec<u8>, (Vec<u8>, Vec<u8>)> = HashMap::new();
-    for [port, addr, uid, ino] in tcp_listeners(b"/proc/self/net") {
+    for [port, addr, uid, ino] in sys.tcp_listeners(b"/proc/self/net") {
         if matches!(
             addr.as_slice(),
             b"127.0.0.1" | b"0.0.0.0" | b"::" | b"::ffff:127.0.0.1" | b"::ffff:0.0.0.0"
@@ -238,7 +264,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             .into_iter()
             .filter(|p| p.first().is_some_and(u8::is_ascii_digit))
             .collect();
-        sock_owners(&pids, &mut hostpid);
+        sys.sock_owners(&pids, &mut hostpid);
     }
     let jailed = in_jail();
     let mut rows: Vec<Vec<u8>> = Vec::new();
@@ -446,4 +472,78 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         out("(no box has a TCP server)\n")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// t_unit_cli's stand-ins: every box up (PID 1 this process), one server on 0.0.0.0:40001 held by
+    /// this process in each box, none on this side; reading box PA's processes takes its box.json
+    /// away, as a down meanwhile does.
+    struct Going {
+        pa: Vec<u8>,
+    }
+
+    impl PortsSys for Going {
+        fn up_pid(&self, _: &[u8]) -> Option<Vec<u8>> {
+            Some(std::process::id().to_string().into_bytes())
+        }
+        fn box_pids(&self, ctx: &Ctx) -> Vec<Vec<u8>> {
+            if ctx.name == self.pa {
+                let _ = std::fs::remove_file(ctx.at("box.json"));
+            }
+            vec![std::process::id().to_string().into_bytes()]
+        }
+        fn tcp_listeners(&self, dir: &[u8]) -> Vec<[Vec<u8>; 4]> {
+            if dir == b"/proc/self/net" {
+                return Vec::new();
+            }
+            vec![[
+                b"40001".to_vec(),
+                b"0.0.0.0".to_vec(),
+                b"0".to_vec(),
+                b"424242".to_vec(),
+            ]]
+        }
+        fn sock_owners(&self, _: &[Vec<u8>], own: &mut HashMap<Vec<u8>, Vec<u8>>) {
+            own.insert(
+                b"424242".to_vec(),
+                std::process::id().to_string().into_bytes(),
+            );
+        }
+    }
+
+    // t_unit_cli (#92, finding 164): ports while a box goes down, its box.json gone after the up
+    // check (pb) or during its scan (pa): listed as it was or left out, exit 0.
+    #[test]
+    fn ports_while_a_box_goes_down() {
+        let rt = std::env::temp_dir().join(format!("omabox-ports-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&rt);
+        for b in ["pa", "pb"] {
+            std::fs::create_dir_all(rt.join(b)).unwrap();
+        }
+        std::fs::write(rt.join("pa/box.json"), r#"{"net":"connected"}"#).unwrap();
+        // (pb listed by its info.json: its box.json gone already)
+        std::fs::write(rt.join("pb/info.json"), "{}").unwrap();
+        let mut ctx = Ctx::new(b"ports", shell::bytes(&rt).to_vec());
+        let sys = Going { pa: b"pa".to_vec() };
+        let (r, said) = crate::exit::heard_all(|| {
+            shell::with_env(&[("OMABOX_JAIL", None)], || {
+                run_with(&sys, &mut ctx, &[b"--json".to_vec()])
+            })
+        });
+        assert!(r.is_ok(), "exit 0: {said}");
+        let rows = jq::jq(
+            &["-r", r#".[] | "\(.box) \(.port) \(.host.state)""#],
+            Some(said.as_bytes()),
+            jq::Err::Inherit,
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&rows.text()),
+            "pa 40001 nothing",
+            "ports: a box going down meanwhile is listed as it was or left out: {said}"
+        );
+        let _ = std::fs::remove_dir_all(&rt);
+    }
 }
