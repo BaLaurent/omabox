@@ -4555,6 +4555,9 @@ elif a[:1] == ["eval"]:
         arg = lua[len("omabox_monitor_layout("):-1].strip("'") or None
         rows = layout(mons(), arg)
         print("error: omabox-layout:" + ",".join(" ".join(str(v) for v in r) for r in rows))
+    elif lua == "omabox_monitor_scales()":
+        # (finding 519: each live monitor at the scale it has, so the remove's wait ends at once)
+        print("error: omabox-scales:" + ",".join("%s %s" % (mo["name"], mo["scale"]) for mo in mons()))
     else:
         print("stand-in hyprctl: eval", file=sys.stderr)
         sys.exit(1)
@@ -5055,6 +5058,9 @@ PYEOF
     echo "[{\"address\":\"0xm1\",\"pid\":$ufk,\"workspace\":{\"id\":9,\"name\":\"9\"},\"floating\":true,\"monitor\":0},{\"address\":\"0xw1\",\"pid\":$ufk,\"workspace\":{\"id\":9,\"name\":\"9\"},\"floating\":true,\"monitor\":0}]" > "$st/host/clients.json"
   }
   rp4_pre=(rp4_ihave)
+  # (#382, finding 519: the Rust half waits for the screens' new scales, asking the box for them; bash
+  # returns at once)
+  rp_why=519 rp_bash=('state!~^eval omabox_monitor_scales\(\)$') rp_rust=('state~^eval omabox_monitor_scales\(\)$')
   parity "monitor remove: interactive, the picture laid out again, the main window tiled back" monitor -b fki remove WAYLAND-2
   parity "monitor add: interactive, with one already" monitor -b fki add 800x600,below
   rp4_igone() { rp4_ihave; echo "[{\"address\":\"0xm1\",\"pid\":$ufk,\"workspace\":{\"id\":9,\"name\":\"9\"},\"floating\":true,\"monitor\":0}]" > "$st/host/clients.json"; rp4_mons WAYLAND-1:1920x1080; }

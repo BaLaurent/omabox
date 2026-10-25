@@ -10148,7 +10148,10 @@ from them.
     screen 1 with no views, else each view's from its window's size, as omabox_place_monitors sets
     them), saying so if the time runs out; a box started by an older omabox has no such function and
     is not waited for. Bash's remove does not wait. Tests: t_monitors_window ("the main screen at
-    scale 1 as the remove returns", read at once, the binary only), mon.rs's scale_rows_read.
+    scale 1 as the remove returns", read at once, the binary only), mon.rs's scale_rows_read,
+    t_unit_rust_parity4 ("monitor remove: interactive, the picture laid out again": the stand-in
+    answers omabox_monitor_scales() with its monitors' own scales; its log's one more eval is an
+    expected difference).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
