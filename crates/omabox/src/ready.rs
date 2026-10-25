@@ -1461,12 +1461,15 @@ mod tests {
             std::fs::remove_dir_all(format!("{r}/run/omabox/b4")).unwrap();
             mode(&format!("{r}/cache/omabox"), 0o555);
             let ((), said) = crate::exit::heard(|| shell::with_env(&env, || sweep_homes(&ctx)));
-            let want = format!(
-                "omabox: could not remove all of the HOME of box 'b4', which is gone: rm: cannot remove '{r}/cache/omabox/b4': Permission denied\n"
-            );
-            assert_eq!(
-                said, want,
-                "...a removal that still fails: said, with rm's first complaint"
+            // (omabox's words, then rm's first complaint, which names the HOME: rm's own words are
+            // in the machine's language, so only its name and the path are checked)
+            let head = "omabox: could not remove all of the HOME of box 'b4', which is gone: rm: ";
+            assert!(
+                said.starts_with(head)
+                    && said.contains(&format!("'{r}/cache/omabox/b4'"))
+                    && said.ends_with('\n')
+                    && said.lines().count() == 1,
+                "...a removal that still fails: said, with rm's first complaint: {said}"
             );
             mode(&format!("{r}/cache/omabox"), 0o755);
         }
