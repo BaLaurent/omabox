@@ -94,6 +94,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`check run` failed a checkpoint on holes its baseline already had**: every hole was read as
   new, so an approved see-through design failed each run. Only holes the baseline has none
   overlapping count as new, as before the Rust omabox.
+- **A call right after a box's Hyprland crashed could say it "did not answer (hung?)"**: the call
+  that hit the crash said the box went down while the box was still ending. It now says so once
+  the box is down (within a second), and the next call says the box is dead and why.
 
 ### Changes from the bash omabox
 

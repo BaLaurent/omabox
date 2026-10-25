@@ -10281,6 +10281,18 @@ from them.
     legs. It is now `readlink -f` of the checkout (through a link, t_unit_rust_front passes; the old
     copy failed three cases).
 
+527. **A crash's "went down" came before the box was down** (2026-10-25, #324 wave 6-flip; the first
+    `--installed` full suite with the binary). A call that found the box's Hyprland gone with labwc's
+    line saying how (`omabox lua` of a crash) said "went down: its Hyprland crashed (SIGSEGV)" at
+    once, while the box's PID 1 still lived for a few ms (session.sh's `kill -KILL -1`, then its
+    exit). A call made at once after it found the box alive and so half torn down: "went down" again
+    (from an install, every time: t_hyprland_crash's "a later call: dead, and why"), or, with its
+    processes already gone, "did not answer (hung?)" (seen from a checkout by hand). **Fix:**
+    hypr_lost, on labwc's line, gives the box's PID 1 up to 1 s to go before it says so; the next
+    call then says "is dead: its Hyprland crashed (SIGSEGV)", as ls does. Tests:
+    `hypr_lost_waits_for_the_box_to_end` (said once PID 1 has gone; still said, after 1 s, for one
+    that stays); t_hyprland_crash from an install (failed alone before, twice).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

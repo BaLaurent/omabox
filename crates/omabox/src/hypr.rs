@@ -182,6 +182,15 @@ fn hypr_lost_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<Option<Vec<u8>>
                 return Ok(None);
             }
         } else if hypr_end(&ctx.d).is_some() {
+            // labwc said how it ended, and the box ends with it (session.sh's kill -1, then its
+            // exit): up to 1 s for its PID 1 to go, so the box is down when this says it went down,
+            // and the next call finds it dead, not half torn down (finding 527).
+            for _ in 0..10 {
+                if !sys.box_alive(ctx)? {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
             return Ok(Some(hypr_down_text(ctx)));
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -533,6 +542,63 @@ mod tests {
         std::fs::remove_file(d.join("home/labwc.log")).unwrap();
         std::os::unix::fs::symlink("/etc/passwd", d.join("home/labwc.log")).unwrap();
         assert_eq!(hypr_end(&ctx.d), None, "hypr_end: a link is not read");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A box whose Hyprland is gone and whose PID 1 lives for its first ALIVE looks (finding 527).
+    struct Ending {
+        alive: std::cell::Cell<u32>,
+        looks: std::cell::Cell<u32>,
+    }
+
+    impl BoxSys for Ending {
+        fn box_alive(&self, _: &Ctx) -> Res<bool> {
+            self.looks.set(self.looks.get() + 1);
+            let a = self.alive.get();
+            self.alive.set(a.saturating_sub(1));
+            Ok(a > 0)
+        }
+        fn box_pids(&self, _: &Ctx) -> Vec<Vec<u8>> {
+            vec![b"4194305".to_vec()]
+        }
+    }
+
+    // finding 527: labwc said how its Hyprland ended, and the box's PID 1 goes just after: hypr_lost
+    // says it went down once it has (a later call finds it dead), and gives up waiting after 1 s.
+    #[test]
+    fn hypr_lost_waits_for_the_box_to_end() {
+        let (ctx, d) = hctx("ending", b"1");
+        std::fs::write(
+            d.join("home/labwc.log"),
+            "spawned child 4194305 terminated with signal 11 (Segmentation fault)\n",
+        )
+        .unwrap();
+        let sys = Ending {
+            alive: std::cell::Cell::new(4),
+            looks: std::cell::Cell::new(0),
+        };
+        let t = String::from_utf8_lossy(&hung_text_with(&sys, &ctx, "").unwrap()).into_owned();
+        assert!(
+            t.starts_with("box 'u' went down: its Hyprland crashed (SIGSEGV)"),
+            "went down, how: {t}"
+        );
+        assert_eq!(
+            (sys.alive.get(), sys.looks.get()),
+            (0, 5),
+            "...said once its PID 1 had gone, not before"
+        );
+        let sys = Ending {
+            alive: std::cell::Cell::new(u32::MAX),
+            looks: std::cell::Cell::new(0),
+        };
+        let t0 = Instant::now();
+        let t = String::from_utf8_lossy(&hung_text_with(&sys, &ctx, "").unwrap()).into_owned();
+        let ms = t0.elapsed().as_millis();
+        assert!(
+            t.starts_with("box 'u' went down: "),
+            "...one that stays: still said: {t}"
+        );
+        assert!((900..2000).contains(&ms), "...after 1 s ({ms} ms)");
         let _ = std::fs::remove_dir_all(&d);
     }
 
