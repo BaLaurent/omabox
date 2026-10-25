@@ -89,6 +89,7 @@ pub const NAMES: &[(&str, &str)] = &[
     ("desk_dir", ""),
     ("desk_home", ""),
     ("no_seed_spec", "LIST [HAVE]"),
+    ("bar_seed_note", "DESK OMARCHY KEEP NOTIFY PAGERS [SPLIT]"),
     ("shell_json_filter", "KEEP NOTIFY PAGERS [SPLIT]"),
     ("place_plugin", "ID SECTION KINDS MOUNTED"),
     ("widget_section", "SECTION SPLIT"),
@@ -444,6 +445,13 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         (b"no_seed_spec", [list, have @ ..]) if have.len() <= 1 => {
             let have = have.first().copied().unwrap_or(b"");
             line(&crate::upspec::no_seed_spec(list, have).map_err(|()| Exit(1))?)
+        }
+        (b"bar_seed_note", [desk, omarchy, keep, notify, pagers, split @ ..])
+            if split.len() <= 1 =>
+        {
+            let split = split.first().is_some_and(|s| *s == b"true");
+            crate::seed::bar_seed_note(desk, omarchy, keep, *notify == b"true", pagers, split);
+            Ok(())
         }
         (b"shell_json_filter", [keep, notify, pagers, split @ ..]) if split.len() <= 1 => {
             let split = split.first().is_some_and(|s| *s == b"true");

@@ -1085,7 +1085,7 @@ fn text_lines(t: &[u8]) -> Vec<&[u8]> {
 /// and not --stock-bar's: its layout, when the desk's shell.json made fit has another `bar` than
 /// Omarchy's made fit the same way, and its shell.toml, when that sets anything, by its tables.
 /// Names only, never a value.
-fn bar_seed_note(
+pub fn bar_seed_note(
     desk: &[u8],
     omarchy: &[u8],
     keep: &[u8],
@@ -2639,5 +2639,487 @@ mod tests {
         assert!(seed_copy_in(&ctx, &h, &f, &Dest::of("one/f")).is_ok());
         assert!(p(&cat!(h, "/one/f")).is_file());
         let _ = std::fs::remove_dir_all(p(&d));
+    }
+
+    /// `VAR=... helper` in the suite: env's view on this thread (HOME, the desk), no jail.
+    fn sc_env<T>(vars: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+        let mut v: Vec<(&str, Option<&str>)> = vars.iter().map(|(k, x)| (*k, Some(*x))).collect();
+        v.push(("OMABOX_JAIL", None));
+        shell::with_env(&v, f)
+    }
+
+    /// The files (not folders) under DIR, as `find DIR ! -type d`, sorted.
+    fn sc_files(dir: &str) -> Vec<String> {
+        sc_listing(dir)
+            .into_iter()
+            .filter(|f| {
+                !std::path::Path::new(&format!("{dir}/{f}")).is_dir()
+                    || sc_is_ln(&format!("{dir}/{f}"))
+            })
+            .collect()
+    }
+
+    /// t_unit_desk_backgrounds (#184): seed_backgrounds copies images only, none a link, none too
+    /// big, a linked folder not at all, a save's link there replaced; box_background leads the box's
+    /// link to the box's copy of the desk's background, a theme's or the user's, never a host path.
+    #[test]
+    fn backgrounds_as_bash() {
+        let s = sc_tmp("ub");
+        let (fh, h, o) = (format!("{s}/fh"), format!("{s}/h"), format!("{s}/victim"));
+        let cur = ".local/state/omarchy/current";
+        for d in [
+            &format!("{fh}/dot/omarchy/backgrounds/t"),
+            &format!("{fh}/.config"),
+            &format!("{h}/{cur}/theme/backgrounds"),
+            &o,
+        ] {
+            sc_mk(d);
+        }
+        sc_ln("../dot/omarchy", &format!("{fh}/.config/omarchy")); // dotfiles: ~/.config/omarchy a link
+        let u = format!("{fh}/.config/omarchy/backgrounds/t");
+        sc_put(&format!("{o}/key"), "secret");
+        for (f, t) in [
+            ("a.jpg", "a"),
+            ("c.PNG", "c"),
+            ("notes.txt", "n"),
+            (".hidden.png", "x"),
+        ] {
+            sc_put(&format!("{u}/{f}"), t);
+        }
+        sc_ln(&format!("{o}/key"), &format!("{u}/link.jpg"));
+        std::fs::File::create(format!("{u}/huge.webp"))
+            .unwrap()
+            .set_len(65 << 20)
+            .unwrap();
+        sc_put(&format!("{h}/{cur}/theme/backgrounds/1-theme.jpg"), "t");
+        let c = sc_cx();
+        let look = Look { omarchy: b"" };
+        let bb = |t: &str, bg: &str| -> String {
+            sc_env(&[("HOME", &fh)], || {
+                box_background(&c, &look, h.as_bytes(), t.as_bytes(), bg.as_bytes())
+            })
+            .unwrap();
+            std::fs::read_link(format!("{h}/{cur}/background"))
+                .map_or("none".to_string(), |l| l.to_str().unwrap().to_string())
+        };
+        let mine = |n: &str| format!("/home/sbx/.config/omarchy/backgrounds/t/{n}");
+        let theirs = format!("/home/sbx/{cur}/theme/backgrounds/1-theme.jpg");
+        let bt = format!("{h}/.config/omarchy/backgrounds/t");
+        assert_eq!(
+            bb("t", &format!("{u}/a.jpg")),
+            mine("a.jpg"),
+            "a background of the user's: the link leads to the box's copy"
+        );
+        assert_eq!(
+            sc_listing(&bt),
+            ["a.jpg", "c.PNG"],
+            "...images only, none a link, hidden or over 64 MiB"
+        );
+        assert!(
+            !sc_holds(&h, "secret"),
+            "...nothing of a link's target in the box HOME"
+        );
+        assert_eq!(
+            bb("t", &format!("{fh}/dot/omarchy/backgrounds/t/c.PNG")),
+            mine("c.PNG"),
+            "...named by the folder ~/.config/omarchy leads to"
+        );
+        assert_eq!(
+            bb("t", &format!("/home/x/{cur}/theme/backgrounds/1-theme.jpg")),
+            theirs,
+            "a background of the theme's: its copy in the box's theme"
+        );
+        assert_eq!(
+            bb("t", "/home/x/Pictures/p.png"),
+            mine("a.jpg"),
+            "one from anywhere else: the first the box has, as omarchy-theme-set picks"
+        );
+        assert_eq!(
+            bb("t", &format!("{u}/link.jpg")),
+            mine("a.jpg"),
+            "...one of the user's not copied (a link): the same"
+        );
+        assert_eq!(
+            bb("other", "/home/x/Pictures/p.png"),
+            theirs,
+            "...no user folder: the theme's first"
+        );
+        assert_eq!(bb("t", ""), "none", "no link on the desk: none in the box");
+        std::fs::remove_dir_all(&bt).unwrap();
+        sc_ln(&o, &bt);
+        assert_eq!(
+            bb("t", &format!("{u}/a.jpg")),
+            mine("a.jpg"),
+            "a save's link at the folder: replaced"
+        );
+        assert_eq!(sc_listing(&o), ["key"], "...its target untouched");
+        assert!(
+            std::path::Path::new(&bt).is_dir() && !sc_is_ln(&bt),
+            "...a real folder now"
+        );
+        std::fs::rename(
+            format!("{fh}/dot/omarchy/backgrounds/t"),
+            format!("{s}/real-t"),
+        )
+        .unwrap();
+        sc_ln(&format!("{s}/real-t"), &u);
+        assert_eq!(
+            bb("t", &format!("{u}/a.jpg")),
+            theirs,
+            "the user's folder a link: not followed"
+        );
+        assert!(!sc_there(&format!("{bt}/a.jpg")), "...nothing copied");
+        let names = sc_env(&[("HOME", &fh)], || {
+            seed_backgrounds(&c, &look, b"../t", h.as_bytes(), b"")
+        })
+        .unwrap();
+        assert!(names.is_empty(), "a theme name with a slash: nothing");
+        std::fs::remove_dir_all(&s).unwrap();
+    }
+
+    /// t_unit_desk_shell's copy (#206): desk_files with a HOME copies what it lists, and only that,
+    /// as files; the suite checks the list itself through the probe (desk_files DESK, the same lines).
+    #[test]
+    fn desk_files_copy_as_bash() {
+        let d = sc_tmp("desk");
+        let k = format!("{d}/desk");
+        for x in ["plugins", "profiles/deep", "my-secrets", "hooks", ".git"] {
+            sc_mk(&format!("{k}/{x}"));
+        }
+        for (f, t) in [
+            ("shell.json", "{\"version\": 1}"),
+            ("shell.json.bak-1", "{}"),
+            ("hostfix.json", "{\"widgets\": [\"a\", \"b\"]}"),
+            ("profiles/one.json", "{\"name\": \"one\"}"),
+            ("profiles/deep/two.json", "{\"name\": \"two\"}"),
+            ("api-keys.env", "OPENAI_API_KEY=planted"),
+            ("foo.token", "planted"),
+            (".env", "X=planted"),
+            ("id_ed25519", "planted"),
+            ("my-secrets/x.json", "{\"x\": 1}"),
+            (
+                "creds.json",
+                "{\n  \"user\": \"me\",\n  \"apiToken\": \"planted\"\n}",
+            ),
+            ("hooks/post.sh", "#!/bin/sh\necho planted"),
+            (".git/config", "[remote \"o\"] url = https://planted@x"),
+        ] {
+            sc_put(&format!("{k}/{f}"), t);
+        }
+        sc_put(&format!("{d}/outside.json"), "{\"outside\": \"planted\"}");
+        sc_ln(&format!("{d}/outside.json"), &format!("{k}/out.json"));
+        sc_ln("hostfix.json", &format!("{k}/alias.json"));
+        sc_ln("api-keys.env", &format!("{k}/sneaky.json"));
+        sc_ln("profiles", &format!("{k}/linkdir"));
+        sc_ln("nowhere.json", &format!("{k}/dangling.json"));
+        std::fs::write(format!("{k}/big.json"), vec![0u8; 2 << 20]).unwrap();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(format!("{k}/pipe"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        let h = format!("{d}/home");
+        sc_mk(&h);
+        let c = sc_cx();
+        let said = desk_files(&c, k.as_bytes(), None).unwrap();
+        let out = desk_files(&c, k.as_bytes(), Some(h.as_bytes())).unwrap();
+        assert_eq!(out, said, "with a HOME: the lines said without one");
+        let copied: Vec<&[u8]> = out
+            .split(|&b| b == b'\n')
+            .filter_map(|l| l.strip_prefix(b"copied ".as_slice()))
+            .collect();
+        assert_eq!(copied.len(), 4, "{}", String::from_utf8_lossy(&out));
+        assert_eq!(
+            sc_files(&h),
+            [
+                ".config/omarchy/alias.json",
+                ".config/omarchy/hostfix.json",
+                ".config/omarchy/profiles/deep/two.json",
+                ".config/omarchy/profiles/one.json"
+            ],
+            "the box HOME has only what was copied"
+        );
+        assert!(
+            sc_files(&h).iter().all(|f| !sc_is_ln(&format!("{h}/{f}"))),
+            "...as files (no link)"
+        );
+        assert_eq!(
+            sc_read(&format!("{h}/.config/omarchy/alias.json")),
+            "{\"widgets\": [\"a\", \"b\"]}",
+            "...the content as the desk's"
+        );
+        assert!(!sc_holds(&h, "planted"), "...nothing planted in it");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// t_unit_no_seed (#231): the desk's extensions/ in the box HOME, without its hidden files; each
+    /// file or folder a --plugin's code names there said once, with every plugin that reads it; a
+    /// --desk-shell plugin's copied unsaid; --no-seed extensions: nothing.
+    #[test]
+    fn extensions_as_bash() {
+        let d = sc_tmp("ext");
+        let e = format!("{d}/desk/extensions");
+        sc_mk(&format!("{e}/tx-scripts"));
+        for (f, t) in [
+            ("tx-wheel.json", "{\"enabled\": false}"),
+            ("other.json", "{\"other\": 1}"),
+            ("tx-wheel", "bare"),
+            (".hidden.json", "{\"hidden\": 1}"),
+            ("tx-scripts/x", "echo hi"),
+        ] {
+            sc_put(&format!("{e}/{f}"), t);
+        }
+        for n in ["pa", "pb", "pc"] {
+            sc_mk(&format!("{d}/{n}"));
+            sc_put(
+                &format!("{d}/{n}/manifest.json"),
+                &format!("{{\"id\": \"tx.{n}\"}}"),
+            );
+        }
+        sc_put(
+            &format!("{d}/pa/bindings.lua"),
+            "local f = config .. \"/omarchy/extensions/tx-wheel.json\"\nlocal s = \"/omarchy/extensions/tx-scripts/\"",
+        );
+        sc_put(
+            &format!("{d}/pb/Settings.qml"),
+            "path: Quickshell.env(\"HOME\") + \"/.config/omarchy/extensions/tx-wheel.json\"",
+        );
+        let c = sc_cx();
+        let look = Look { omarchy: b"" };
+        let se = |h: &str, desk_ids: &[&str], no_seed: &str, plugins: &[&str]| -> String {
+            let plan = SeedPlan {
+                desk_ids: desk_ids.iter().map(|i| i.as_bytes().to_vec()).collect(),
+                no_seed: no_seed.as_bytes().to_vec(),
+                plugins: plugins
+                    .iter()
+                    .map(|n| {
+                        (
+                            format!("tx.{n}").into_bytes(),
+                            format!("{d}/{n}").into_bytes(),
+                        )
+                    })
+                    .collect(),
+                ..SeedPlan::default()
+            };
+            sc_mk(h);
+            let (r, said) = crate::exit::heard(|| {
+                sc_env(
+                    &[
+                        ("OMABOX_DESK_CONFIG", &format!("{d}/desk")),
+                        ("HOME", &format!("{d}/fh")),
+                    ],
+                    || seed_extensions(&c, &look, &plan, h.as_bytes()),
+                )
+            });
+            r.unwrap();
+            said
+        };
+        let out = se(&format!("{d}/home"), &[], "", &["pa", "pb", "pc"]);
+        let seeded: Vec<&str> = out.lines().filter(|l| l.contains("seeded")).collect();
+        assert!(seeded.contains(&format!("omabox: up: seeded extensions/tx-wheel.json from {d}/desk: plugins tx.pa tx.pb read it (--no-seed extensions starts without it)").as_str()), "a file two --plugins name: said once, with both: {out}");
+        assert!(
+            out.contains(&format!(
+                "seeded extensions/tx-scripts from {d}/desk: plugin tx.pa reads it"
+            )),
+            "...a folder one names: {out}"
+        );
+        assert_eq!(
+            seeded.len(),
+            2,
+            "...nothing else: not a file no plugin names, nor one whose name only starts another's: {out}"
+        );
+        let x = format!("{d}/home/.config/omarchy/extensions");
+        assert_eq!(
+            sc_files(&x),
+            ["other.json", "tx-scripts/x", "tx-wheel", "tx-wheel.json"],
+            "the box HOME has the desk's extensions, without its hidden files"
+        );
+        assert_eq!(
+            sc_read(&format!("{x}/tx-wheel.json")),
+            "{\"enabled\": false}",
+            "...as the desk has them"
+        );
+        let out = se(
+            &format!("{d}/home2"),
+            &["tx.pa", "tx.pb"],
+            "",
+            &["pa", "pb"],
+        );
+        assert!(
+            !out.contains("seeded"),
+            "a --desk-shell plugin's: copied, unsaid (that box says the desk as a whole): {out}"
+        );
+        assert!(
+            sc_there(&format!(
+                "{d}/home2/.config/omarchy/extensions/tx-wheel.json"
+            )),
+            "...still copied"
+        );
+        assert_eq!(
+            se(&format!("{d}/home3"), &[], "extensions", &["pa"]),
+            "",
+            "--no-seed extensions: nothing copied, nothing said"
+        );
+        assert!(
+            !sc_there(&format!("{d}/home3/.config/omarchy/extensions")),
+            "...no extensions folder made"
+        );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// t_unit_desk_fonts (#261): the desk's font folders (OMABOX_DESK_HOME, a fake desk HOME) for a
+    /// read-only mount at their place in the box HOME, said; a link out of them said; the box HOME's
+    /// own folder kept; a refused or missing folder said; --no-seed fonts and --clean leave them out.
+    #[test]
+    fn fonts_as_bash() {
+        let d = sc_tmp("fonts");
+        for x in [
+            "desk/.local/share/fonts/fam",
+            "desk/.fonts",
+            "elsewhere",
+            "fh/.ssh",
+            "desk2",
+            "desk3",
+        ] {
+            sc_mk(&format!("{d}/{x}"));
+        }
+        sc_put(&format!("{d}/desk/.local/share/fonts/fam/a.ttf"), "x");
+        sc_put(&format!("{d}/elsewhere/b.ttf"), "y");
+        sc_put(&format!("{d}/desk/.fonts/c.otf"), "z");
+        let f = format!("{d}/desk/.local/share/fonts");
+        sc_ln(&format!("{d}/elsewhere/b.ttf"), &format!("{f}/out.ttf"));
+        sc_ln("fam/a.ttf", &format!("{f}/in.ttf"));
+        sc_ln("/usr/share/fonts", &format!("{f}/sys"));
+        sc_ln(&format!("{d}/gone.ttf"), &format!("{f}/broken.ttf"));
+        sc_ln(&format!("{d}/fh/.ssh"), &format!("{d}/desk2/.fonts"));
+        sc_put(&format!("{d}/desk3/.fonts"), "no");
+        let c = sc_cx();
+        // sf DESK HOME NO_SEED CLEAN CLEAN_KEEP: what seed_fonts says, and its mounts (SRC<TAB>REL)
+        let sf = |desk: &str,
+                  h: &str,
+                  no_seed: &str,
+                  clean: bool,
+                  keep: &str|
+         -> (String, Vec<String>) {
+            let plan = SeedPlan {
+                no_seed: no_seed.as_bytes().to_vec(),
+                clean,
+                clean_keep: keep.as_bytes().to_vec(),
+                ..SeedPlan::default()
+            };
+            let (r, said) = crate::exit::heard(|| {
+                sc_env(
+                    &[
+                        ("OMABOX_DESK_HOME", &format!("{d}/{desk}")),
+                        ("HOME", &format!("{d}/fh")),
+                    ],
+                    || seed_fonts(&c, &plan, format!("{d}/{h}").as_bytes()),
+                )
+            });
+            let m = r
+                .unwrap()
+                .iter()
+                .map(|(s, r)| {
+                    format!(
+                        "{}\t{}",
+                        String::from_utf8_lossy(s),
+                        String::from_utf8_lossy(r)
+                    )
+                })
+                .collect();
+            (said, m)
+        };
+        let r = d.clone(); // (sc_tmp's path is physical: readlink -f's)
+        let (said, m) = sf("desk", "h1", "", false, "");
+        assert!(said.contains(&format!("omabox: up: your desk's fonts are in the box, read-only: {f} {d}/desk/.fonts (--no-seed fonts starts without them)")), "both folders, read-only, said, with the way out: {said}");
+        assert_eq!(
+            m,
+            [
+                format!("{r}/desk/.local/share/fonts\t.local/share/fonts"),
+                format!("{r}/desk/.fonts\t.fonts")
+            ],
+            "...each mounted from where it is, at its place in the box HOME"
+        );
+        assert!(
+            std::path::Path::new(&format!("{d}/h1/.local/share/fonts")).is_dir()
+                && std::path::Path::new(&format!("{d}/h1/.fonts")).is_dir(),
+            "...their mount points made"
+        );
+        assert_eq!(
+            said.lines()
+                .filter(|l| l.contains("link(s)"))
+                .collect::<Vec<_>>(),
+            [format!(
+                "omabox: up: 1 link(s) in {f} lead out of it, so they lead nowhere in the box (out.ttf -> {d}/elsewhere/b.ttf)"
+            )],
+            "a link out of them said (one inside, one into /usr and a broken one are not)"
+        );
+        assert_eq!(
+            sf("desk", "h2", "fonts", false, ""),
+            (String::new(), vec![]),
+            "--no-seed fonts: nothing, nothing said"
+        );
+        assert_eq!(
+            sf("desk", "h2", "extensions,fonts", false, ""),
+            (String::new(), vec![]),
+            "...nor with extensions beside it"
+        );
+        assert_eq!(
+            sf("desk", "h2", "", true, ""),
+            (String::new(), vec![]),
+            "--clean: nothing, nothing said"
+        );
+        assert!(
+            sf("desk", "h3", "", true, "clock,fonts")
+                .0
+                .contains(&format!("read-only: {f} {d}/desk/.fonts")),
+            "--clean --keep fonts: both"
+        );
+        sc_mk(&format!("{d}/h4/.local/share/fonts/mine"));
+        let (said, m) = sf("desk", "h4", "", false, "");
+        assert!(said.contains(&format!("not mounting {f}: the box HOME has a .local/share/fonts of its own (the save's or a --seed's), which it keeps")), "the box HOME's own folder (a save's, a --seed's): kept, said: {said}");
+        assert_eq!(
+            m,
+            [format!("{r}/desk/.fonts\t.fonts")],
+            "...the other still mounted"
+        );
+        assert!(
+            std::path::Path::new(&format!("{d}/h4/.local/share/fonts/mine")).is_dir(),
+            "...its own left as it was"
+        );
+        sc_mk(&format!("{d}/h5/.local/share"));
+        sc_mk(&format!("{d}/h5x"));
+        sc_ln(&format!("{d}/h5x"), &format!("{d}/h5/.local/share/fonts"));
+        let (_, m) = sf("desk", "h5", "", false, "");
+        let h5 = format!("{d}/h5/.local/share/fonts");
+        assert!(
+            std::path::Path::new(&h5).is_dir() && !sc_is_ln(&h5),
+            "a link there (a save's): replaced by a folder, not mounted through"
+        );
+        assert!(
+            m.contains(&format!("{r}/desk/.local/share/fonts\t.local/share/fonts")),
+            "...and the desk's mounted there"
+        );
+        let (said, m) = sf("desk2", "h6", "", false, "");
+        assert!(
+            said.contains(&format!("omabox: up: not mounting {d}/desk2/.fonts: ")),
+            "a folder refuse_src refuses (a link to a secret store): said, not mounted: {said}"
+        );
+        assert!(m.is_empty(), "...nothing to mount");
+        assert_eq!(
+            sf("desk3", "h7", "", false, "").0,
+            format!(
+                "omabox: up: not mounting {d}/desk3/.fonts: not a folder (or a link to none)\n"
+            ),
+            "not a folder: said"
+        );
+        assert_eq!(
+            sf("elsewhere", "h8", "", false, ""),
+            (String::new(), vec![]),
+            "none on the desk: nothing said"
+        );
+        std::fs::remove_dir_all(&d).unwrap();
     }
 }

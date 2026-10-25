@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6676 MIN_UNIT=3970
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4623 MIN_UNIT=2115
+MIN_CHECKS=6633 MIN_UNIT=3927
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4580 MIN_UNIT=2071
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -1324,18 +1324,18 @@ t_unit_refusals() {
   fi
   # (finding 429) ...and on one with the fix but not omabox's +appid (a private build an older
   # `omabox setup --aquamarine` made): each window needs a class of its own. The box's aquamarine is
-  # aq_pick's answer for such a build (its .omabox-commit without +appid), nothing else changed.
-  local aqo=$TMP/$P-aqold aqso; aqso=$(probe hypr_aq_soname 2>/dev/null) || aqso=""
+  # aq_pick's answer for such a build (its .omabox-commit without +appid), nothing else changed: the
+  # binary run from a stand-in checkout, the real one's but for its build/prefix.
+  local fr=$TMP/$P-aqroot aqo aqso e; aqso=$(probe hypr_aq_soname 2>/dev/null) || aqso=""
   if [ -n "$aqso" ]; then
-    mkdir -p "$aqo/lib"; : > "$aqo/lib/libaquamarine.so.0.15.1"; ln -sf libaquamarine.so.0.15.1 "$aqo/lib/$aqso"
+    aqo=$fr/build/prefix; mkdir -p "$aqo/lib"
+    for e in "$ROOT"/*; do [ "${e##*/}" = build ] || ln -s "$e" "$fr/${e##*/}"; done
+    cp "$PROBE" "$fr/build/omabox"
+    : > "$aqo/lib/libaquamarine.so.0.15.1"; ln -sf libaquamarine.so.0.15.1 "$aqo/lib/$aqso"
     echo 7bb8bdf4+keys+layout+cursor > "$aqo/.omabox-commit"
-    # shellcheck disable=SC2016 # the script's own expansions
     check_match "--monitor on an interactive box, an omabox build without +appid: refused, naming setup" \
       "up: --monitor on an interactive box needs omabox's aquamarine build.*\(boxes use a private build, 0\.15\.1@7bb8bdf4\+keys\+layout\+cursor .*omabox setup --aquamarine" \
-      "$(OMABOX_BASH=1 bash -c 'source "$1"; ROOT=$2 POINTER=$2/tools/pointer/omabox-pointer KEYBOARD=$2/tools/keyboard/omabox-keyboard
-        STILL=$2/tools/still/omabox-still EVENTS=$2/tools/events/omabox-events AQD=$3
-        aq_resolve() { local r; r=$(aq_pick "$1" "$AQ_SYSDIR" "$AQD") || return 1; IFS="|" read -r AQ_KIND AQ_LIB AQ_VER AQ_FIXED <<<"$r"; AQ_MAIN=""; }
-        shift 3; main "$@"' lib "$TMP/lib/bin/omabox" "$ROOT" "$aqo/lib" up "$P-r31" --interactive --monitor 800x600 2>&1)"
+      "$("$fr/build/omabox" up "$P-r31" --interactive --monitor 800x600 2>&1)"
     check_fails "...nothing made" test -e "$XDG_RUNTIME_DIR/omabox/$P-r31"
   fi
   check_match "--monitor with a bad SPEC refused" "a size is WxH" "$(ob up "$P-r29" --monitor big 2>&1)"
@@ -1982,36 +1982,8 @@ t_unit_calibrate() {
 # (seed_home's copies of the user's config dirs, finding 74, and their kin, findings 168, 171, 228,
 # 229, 257: seed.rs seed_copies_as_bash, #324 wave 6-suite.)
 
-# The desk's own wallpapers (#184): seed_backgrounds copies images only, none a link, none too big, a
-# linked folder not at all, a save's link there replaced; box_background leads the box's link to the
-# box's copy of the desk's background, a theme's or the user's, never to a host path.
-t_unit_desk_backgrounds() {
-  local s=$TMP/$P-ub fh h o cur=.local/state/omarchy/current
-  rm -rf "$s"; fh=$s/fh h=$s/h o=$s/victim; mkdir -p "$fh/dot/omarchy/backgrounds/t" "$fh/.config" "$h/$cur/theme/backgrounds" "$o"
-  ln -s ../dot/omarchy "$fh/.config/omarchy"   # dotfiles: ~/.config/omarchy a link
-  local u=$fh/.config/omarchy/backgrounds/t
-  echo secret > "$o/key"; echo a > "$u/a.jpg"; echo c > "$u/c.PNG"; echo n > "$u/notes.txt"; echo x > "$u/.hidden.png"
-  ln -s "$o/key" "$u/link.jpg"; truncate -s 65M "$u/huge.webp"; echo t > "$h/$cur/theme/backgrounds/1-theme.jpg"
-  # shellcheck disable=SC2329 # called below
-  bb() { HOME=$fh lib box_background "$h" "$@"; readlink "$h/$cur/background" || echo none; }
-  check_eq "a background of the user's: the link leads to the box's copy" /home/sbx/.config/omarchy/backgrounds/t/a.jpg "$(bb t "$u/a.jpg")"
-  check_eq "...images only, none a link, hidden or over 64 MiB" "a.jpg c.PNG" "$(find "$h/.config/omarchy/backgrounds/t" -mindepth 1 -printf "%P\n" | sort | xargs)"
-  check_fails "...nothing of a link's target in the box HOME" grep -rqs secret "$h"
-  check_eq "...named by the folder ~/.config/omarchy leads to" /home/sbx/.config/omarchy/backgrounds/t/c.PNG "$(bb t "$fh/dot/omarchy/backgrounds/t/c.PNG")"
-  check_eq "a background of the theme's: its copy in the box's theme" "/home/sbx/$cur/theme/backgrounds/1-theme.jpg" "$(bb t "/home/x/$cur/theme/backgrounds/1-theme.jpg")"
-  check_eq "one from anywhere else: the first the box has, as omarchy-theme-set picks" /home/sbx/.config/omarchy/backgrounds/t/a.jpg "$(bb t /home/x/Pictures/p.png)"
-  check_eq "...one of the user's not copied (a link): the same" /home/sbx/.config/omarchy/backgrounds/t/a.jpg "$(bb t "$u/link.jpg")"
-  check_eq "...no user folder: the theme's first" "/home/sbx/$cur/theme/backgrounds/1-theme.jpg" "$(bb other /home/x/Pictures/p.png)"
-  check_eq "no link on the desk: none in the box" none "$(bb t "")"
-  rm -rf "$h/.config/omarchy/backgrounds/t"; ln -s "$o" "$h/.config/omarchy/backgrounds/t"
-  check_eq "a save's link at the folder: replaced" /home/sbx/.config/omarchy/backgrounds/t/a.jpg "$(bb t "$u/a.jpg")"
-  check_eq "...its target untouched" key "$(find "$o" -mindepth 1 -printf "%P\n" | xargs)"
-  check "...a real folder now" test -d "$h/.config/omarchy/backgrounds/t" -a ! -L "$h/.config/omarchy/backgrounds/t"
-  mv "$fh/dot/omarchy/backgrounds/t" "$s/real-t"; ln -s "$s/real-t" "$u"
-  check_eq "the user's folder a link: not followed" "/home/sbx/$cur/theme/backgrounds/1-theme.jpg" "$(bb t "$u/a.jpg")"
-  check_fails "...nothing copied" test -e "$h/.config/omarchy/backgrounds/t/a.jpg"
-  check_eq "a theme name with a slash: nothing" "" "$(HOME=$fh lib seed_backgrounds ../t "$h")"
-}
+# (The desk's own wallpapers, #184: seed_backgrounds and box_background, seed.rs backgrounds_as_bash,
+# #324 wave 6-suite.)
 
 # up --theme-dir's pieces (#170, finding 240): where a dir is in the box at its own path, the link in
 # the box HOME, and the note for a theme seed_home copies from a link into this repo or another
@@ -2236,9 +2208,10 @@ desk_fixture() {
 # #206: what `up --desk-shell` copies of a desk's Omarchy config, what it leaves out and why, which
 # plugins it mounts; and where it is refused.
 t_unit_desk_shell() {
-  local d=$TMP/$P-desk h out
-  desk_fixture "$d" "$P"; h=$d/home; mkdir -p "$h"
-  out=$(lib desk_files "$d/desk" "$h")
+  local d=$TMP/$P-desk out
+  desk_fixture "$d" "$P"
+  # (with a HOME it copies what it lists, and only that: seed.rs desk_files_copy_as_bash)
+  out=$(probe desk_files "$d/desk")
   check_eq "copied: the plugin's JSON, the folder beside shell.json, a link to a file inside" \
     "alias.json hostfix.json profiles/deep/two.json profiles/one.json" \
     "$(sed -n 's/^copied //p' <<<"$out" | sort | tr '\n' ' ' | sed 's/ $//')"
@@ -2258,12 +2231,6 @@ pipe|not a regular file
 shell.json.bak-1|a backup
 sneaky.json|a link to api-keys.env: a secret's name"
   check_eq "skipped, each with why" "$want" "$(sed -n 's/^skipped //p' <<<"$out" | tr '\t' '|' | LC_ALL=C sort)"
-  check_eq "...the box HOME has only what was copied, as files (no link)" \
-    ".config/omarchy/alias.json .config/omarchy/hostfix.json .config/omarchy/profiles/deep/two.json .config/omarchy/profiles/one.json" \
-    "$(cd "$h" && command find . ! -type d | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
-  check_eq "...the content as the desk's" '{"widgets": ["a", "b"]}' "$(cat "$h/.config/omarchy/alias.json")"
-  check_fails "...nothing planted in it" grep -rq planted "$h"
-  check_eq "without HOME: only said, nothing copied" "$out" "$(probe desk_files "$d/desk")"
   # A file over the cap in all: 16 files of 1 MiB fill it.
   local c=$d/cap i; mkdir -p "$c/plugins"
   for i in $(seq 10 26); do head -c 1048576 /dev/zero > "$c/f$i.json"; done
@@ -2328,25 +2295,8 @@ ext_fixture() {   # DIR PREFIX: a desk with extensions/ and two plugins naming f
   printf 'path: Quickshell.env("HOME") + "/.config/omarchy/extensions/%s-wheel.json"\n' "$p" > "$d/pb/Settings.qml"
 }
 t_unit_no_seed() {
-  local d=$TMP/$P-ext h out ln
-  ext_fixture "$d" "$P"; h=$d/home; mkdir -p "$h"
-  # seed_extensions HOME DESK_IDS NO_SEED PLUGIN...
-  se() { OMABOX_DESK_CONFIG=$d/desk DESK_IDS=$2 NO_SEED=$3 bash -c 'source "$1"; h=$2; shift 2; PLUGINS=("$@"); seed_extensions "$h"' _ \
-    "$TMP/lib/bin/omabox" "$1" "${@:4}" 2>&1; }
-  out=$(se "$h" "" "" "$P.pa	$d/pa" "$P.pb	$d/pb" "$P.pc	$d/pc")
-  ln="omabox: up: seeded extensions/$P-wheel.json from $d/desk: plugins $P.pa $P.pb read it (--no-seed extensions starts without it)"
-  check_eq "a file two --plugins name: said once, with both" "$ln" "$(grep -F -- "-wheel.json" <<<"$out")"
-  check_match "...a folder one names" "seeded extensions/$P-scripts from $d/desk: plugin $P.pa reads it" "$out"
-  check_eq "...nothing else: not a file no plugin names, nor one whose name only starts another's" 2 "$(grep -c seeded <<<"$out")"
-  check_eq "the box HOME has the desk's extensions, without its hidden files" \
-    "other.json $P-scripts/x $P-wheel $P-wheel.json" \
-    "$(cd "$h/.config/omarchy/extensions" && command find . -type f | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
-  check_eq "...as the desk has them" '{"enabled": false}' "$(cat "$h/.config/omarchy/extensions/$P-wheel.json")"
-  check_eq "a --desk-shell plugin's: copied, unsaid (that box says the desk as a whole)" "" \
-    "$(se "$d/home2" "$P.pa $P.pb" "" "$P.pa	$d/pa" "$P.pb	$d/pb" | grep seeded)"
-  check "...still copied" test -f "$d/home2/.config/omarchy/extensions/$P-wheel.json"
-  check_eq "--no-seed extensions: nothing copied, nothing said" "" "$(se "$d/home3" "" extensions "$P.pa	$d/pa")"
-  check_fails "...no extensions folder made" test -e "$d/home3/.config/omarchy/extensions"
+  local d=$TMP/$P-ext
+  # (what seed_extensions copies and says: seed.rs extensions_as_bash)
   check_eq "the desk: OMABOX_DESK_CONFIG, but never a jailed caller's" "$d/desk $TMP/fh/.config/omarchy" \
     "$(OMABOX_DESK_CONFIG=$d/desk probe desk_dir) $(OMABOX_DESK_CONFIG=$d/desk OMABOX_JAIL='{"roots":[]}' HOME=$TMP/fh probe desk_dir)"
   # --no-seed's list: comma-separated, repeatable, once each; only extensions so far.
@@ -2363,46 +2313,8 @@ t_unit_no_seed() {
 # each folder for a read-only mount at its place in the box HOME, said; a link out of them said; the box
 # HOME's own folder kept; a refused or missing folder said; --no-seed fonts and --clean leave them out.
 t_unit_desk_fonts() {
-  local d=$TMP/$P-fonts out r
-  mkdir -p "$d/desk/.local/share/fonts/fam" "$d/desk/.fonts" "$d/elsewhere" "$d/fh/.ssh" "$d/desk2" "$d/desk3"
-  echo x > "$d/desk/.local/share/fonts/fam/a.ttf"; echo y > "$d/elsewhere/b.ttf"; echo z > "$d/desk/.fonts/c.otf"
-  ln -s "$d/elsewhere/b.ttf" "$d/desk/.local/share/fonts/out.ttf"
-  ln -s fam/a.ttf "$d/desk/.local/share/fonts/in.ttf"
-  ln -s /usr/share/fonts "$d/desk/.local/share/fonts/sys"
-  ln -s "$d/gone.ttf" "$d/desk/.local/share/fonts/broken.ttf"
-  ln -s "$d/fh/.ssh" "$d/desk2/.fonts"; echo no > "$d/desk3/.fonts"
-  r=$(readlink -f "$d/desk")
-  # sf DESK HOME [NO_SEED [CLEAN [CLEAN_KEEP]]]: what seed_fonts says, then DESK_FONTS (SRC<TAB>REL)
-  sf() { OMABOX_DESK_HOME=$1 NO_SEED=${3:-} HOME=$d/fh bash -c 'source "$1"; CLEAN=$3 CLEAN_KEEP=$4; seed_fonts "$2"; printf "%s\n" ${DESK_FONTS[@]+"${DESK_FONTS[@]}"}' _ \
-    "$TMP/lib/bin/omabox" "$2" "${4:-0}" "${5:-}" 2>&1; }
-  out=$(sf "$d/desk" "$d/h1")
-  check_match "both folders, read-only, said, with the way out" \
-    "omabox: up: your desk's fonts are in the box, read-only: $d/desk/.local/share/fonts $d/desk/.fonts \(--no-seed fonts starts without them\)" "$out"
-  check_eq "...each mounted from where it is, at its place in the box HOME" "$r/.local/share/fonts	.local/share/fonts|$r/.fonts	.fonts" \
-    "$(grep -v '^omabox:' <<<"$out" | paste -sd '|')"
-  check "...their mount points made" test -d "$d/h1/.local/share/fonts" -a -d "$d/h1/.fonts"
-  check_eq "a link out of them said (one inside, one into /usr and a broken one are not)" \
-    "omabox: up: 1 link(s) in $d/desk/.local/share/fonts lead out of it, so they lead nowhere in the box (out.ttf -> $(readlink -f "$d/elsewhere/b.ttf"))" \
-    "$(grep 'link(s)' <<<"$out")"
-  check_eq "--no-seed fonts: nothing, nothing said" "" "$(sf "$d/desk" "$d/h2" fonts)"
-  check_eq "...nor with extensions beside it" "" "$(sf "$d/desk" "$d/h2" extensions,fonts)"
-  check_eq "--clean: nothing, nothing said" "" "$(sf "$d/desk" "$d/h2" "" 1)"
-  check_match "--clean --keep fonts: both" "read-only: $d/desk/.local/share/fonts $d/desk/.fonts" "$(sf "$d/desk" "$d/h3" "" 1 clock,fonts)"
-  mkdir -p "$d/h4/.local/share/fonts/mine"; mkdir -p "$d/h4/.local/share"
-  out=$(sf "$d/desk" "$d/h4")
-  check_match "the box HOME's own folder (a save's, a --seed's): kept, said" \
-    "not mounting $d/desk/.local/share/fonts: the box HOME has a .local/share/fonts of its own \(the save's or a --seed's\), which it keeps" "$out"
-  check_eq "...the other still mounted" "$r/.fonts	.fonts" "$(grep -v '^omabox:' <<<"$out")"
-  check "...its own left as it was" test -d "$d/h4/.local/share/fonts/mine"
-  mkdir -p "$d/h5/.local/share" "$d/h5x"; ln -s "$d/h5x" "$d/h5/.local/share/fonts"
-  out=$(sf "$d/desk" "$d/h5")
-  check "a link there (a save's): replaced by a folder, not mounted through" test -d "$d/h5/.local/share/fonts" -a ! -L "$d/h5/.local/share/fonts"
-  check_match "...and the desk's mounted there" "$r/.local/share/fonts	.local/share/fonts" "$out"
-  check_match "a folder refuse_src refuses (a link to a secret store): said, not mounted" \
-    "omabox: up: not mounting $d/desk2/.fonts: " "$(sf "$d/desk2" "$d/h6")"
-  check_eq "...nothing to mount" "" "$(sf "$d/desk2" "$d/h6" | grep -v '^omabox:')"
-  check_eq "not a folder: said" "omabox: up: not mounting $d/desk3/.fonts: not a folder (or a link to none)" "$(sf "$d/desk3" "$d/h7")"
-  check_eq "none on the desk: nothing said" "" "$(sf "$d/elsewhere" "$d/h8")"
+  local d=$TMP/$P-fonts
+  # (what seed_fonts mounts and says: seed.rs fonts_as_bash)
   check_eq "the desk HOME: OMABOX_DESK_HOME, but never a jailed caller's" "$d/desk $TMP/fh" \
     "$(OMABOX_DESK_HOME=$d/desk probe desk_home) $(OMABOX_DESK_HOME=$d/desk OMABOX_JAIL='{"roots":[]}' HOME=$TMP/fh probe desk_home)"
   check_eq "no_seed_spec takes fonts" "extensions,fonts" "$(probe no_seed_spec fonts,extensions,fonts extensions | tr ' ' ',')"
@@ -2416,7 +2328,7 @@ t_unit_bar_seed_note() {
   printf '{"version":1,"idle":{"lock":300},"bar":{"position":"top","layout":{"left":[{"id":"omarchy.menu"},{"id":"omarchy.workspaces"}],"right":[{"id":"omarchy.tray"}]}}}\n' \
     > "$d/om/config/omarchy/shell.json"
   # bsn DESK: the line for that desk, against the fixture's Omarchy, nothing mounted
-  bsn() { omarchy=$d/om lib bar_seed_note "$1" '[]' true '[]' 2>&1; }
+  bsn() { probe bar_seed_note "$1" "$d/om" '[]' true '[]' 2>&1; }
   # The desk's: Omarchy's in another key order, other idle times, a left-out plugin's widget.
   jq -S '.idle.lock = 9 | .bar.layout.right += [{id: "x.gone"}]' "$d/om/config/omarchy/shell.json" > "$d/desk/shell.json"
   check_eq "a desk with Omarchy's bar (as the box has it): nothing said" "" "$(bsn "$d/desk")"
@@ -2434,8 +2346,9 @@ t_unit_bar_seed_note() {
   printf 'top = 1\n' > "$d/desk/shell.toml"
   check_match "...a shell.toml without tables: named alone" "its shell.json layout and shell.toml \(--stock-bar" "$(bsn "$d/desk")"
   check_eq "no shell.json nor shell.toml on the desk: nothing (the shell's own default)" "" "$(bsn "$d/bare")"
+  mkdir -p "$d/h/.config/omarchy"; printf '[bar]\na = 1\n' > "$d/h/.config/omarchy/shell.toml"
   check_match "the real desk is \"your desk\"" "seeded the bar from your desk:" \
-    "$(HOME=$d/h omarchy=$d/om bash -c 'source "$1"; mkdir -p "$HOME/.config/omarchy"; echo "[bar]" > "$HOME/.config/omarchy/shell.toml"; echo "a = 1" >> "$HOME/.config/omarchy/shell.toml"; bar_seed_note "$HOME/.config/omarchy" "[]" true "[]"' _ "$TMP/lib/bin/omabox" 2>&1)"
+    "$(HOME=$d/h probe bar_seed_note "$d/h/.config/omarchy" "$d/om" '[]' true '[]' 2>&1)"
 }
 t_unit_bar_filter() {
   # shellcheck disable=SC2329 # called below
@@ -2874,23 +2787,7 @@ t_unit_omarchy45() {
   rm -rf "$d"; mkdir -p "$d/run/owe" "$d/om/bin"
   # (intro_cover: an Overlay omarchy-background layer, its geometry; none for the wallpaper alone:
   # ready.rs intro_cover_as_bash)
-  # A tree that uses all three, on a host without them (stubbed), then with them.
-  mkdir -p "$d/t/bin" "$d/t/default/hypr"
-  printf '#!/bin/bash
-owe status
-' > "$d/t/bin/omarchy-theme-bg-boot-intro"
-  printf '#!/bin/bash
-omasnap --region
-' > "$d/t/bin/omarchy-capture-screenshot"
-  printf 'local TITLEBARS = "%s"\n' /usr/lib/omarchy-hyprland-titlebars/titlebars.so > "$d/t/default/hypr/workspace-modes.lua"
-  out=$(bash -c 'source "$1"; have_cmd() { return 1; }; TITLEBARS_SO=$2/none.so
-    sed -i "s|/usr/lib/omarchy-hyprland-titlebars/titlebars.so|$TITLEBARS_SO|" "$2/t/default/hypr/workspace-modes.lua"; omarchy_host_gaps "$2/t"' _ "$TMP/lib/bin/omabox" "$d" | paste -sd '|')
-  check_eq "omarchy_host_gaps: each the tree uses and the host lacks, saying what goes" \
-    "owe: no video wallpapers and no theme intros|omasnap: no Omasnap screenshots|omarchy-hyprland-titlebars: no titlebars on floating workspaces" "$out"
-  check_eq "...none with them installed" "" \
-    "$(bash -c 'source "$1"; have_cmd() { return 0; }; TITLEBARS_SO=$2/t/bin/omarchy-capture-screenshot; omarchy_host_gaps "$2/t"' _ "$TMP/lib/bin/omabox" "$d")"
-  check_eq "...none for a tree that uses none (an older Omarchy)" "" \
-    "$(bash -c 'source "$1"; have_cmd() { return 1; }; TITLEBARS_SO=/nonexistent; omarchy_host_gaps "$2/om"' _ "$TMP/lib/bin/omabox" "$d")"
+  # (omarchy_host_gaps, on a host with and without what a tree uses: install.rs host_gaps_as_bash)
   # The stand-in: Omarchy's script stubbed to say what it was asked.
   printf '#!/bin/sh
 echo "real $*"
@@ -20626,7 +20523,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)

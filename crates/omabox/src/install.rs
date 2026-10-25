@@ -912,18 +912,22 @@ fn tree_has_word(dir: &[u8], w: &[u8]) -> bool {
 /// omarchy_host_gaps TREE: what the Omarchy tree TREE runs that this host has not installed (#293,
 /// finding 420), a line each, "PACKAGE: what goes without it". Each only when the tree uses it.
 pub fn omarchy_host_gaps(t: &[u8]) -> Vec<Vec<u8>> {
+    omarchy_host_gaps_with(t, |c| command_v(c).is_some(), TITLEBARS_SO.as_bytes())
+}
+
+/// omarchy_host_gaps with HAVE for whether the host has a command and SO the titlebars plugin's
+/// path (the suite's #[test] gives a host with or without them).
+fn omarchy_host_gaps_with(t: &[u8], have: impl Fn(&[u8]) -> bool, so: &[u8]) -> Vec<Vec<u8>> {
     let mut v = Vec::new();
-    if file_has_word(&cat!(t, "/bin/omarchy-theme-bg-boot-intro"), b"owe")
-        && command_v(b"owe").is_none()
-    {
+    if file_has_word(&cat!(t, "/bin/omarchy-theme-bg-boot-intro"), b"owe") && !have(b"owe") {
         v.push(b"owe: no video wallpapers and no theme intros".to_vec());
     }
-    if tree_has_word(&cat!(t, "/bin"), b"omasnap") && command_v(b"omasnap").is_none() {
+    if tree_has_word(&cat!(t, "/bin"), b"omasnap") && !have(b"omasnap") {
         v.push(b"omasnap: no Omasnap screenshots".to_vec());
     }
     let has_so = std::fs::read(shell::path(&cat!(t, "/default/hypr/workspace-modes.lua")))
-        .is_ok_and(|b| crate::exit::contains(&b, TITLEBARS_SO.as_bytes()));
-    if has_so && !shell::path(TITLEBARS_SO.as_bytes()).exists() {
+        .is_ok_and(|b| crate::exit::contains(&b, so));
+    if has_so && !shell::path(so).exists() {
         v.push(b"omarchy-hyprland-titlebars: no titlebars on floating workspaces".to_vec());
     }
     v
@@ -1194,6 +1198,66 @@ fn box_output(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// t_unit_omarchy45's omarchy_host_gaps (#291, #293): each piece an --omarchy tree uses and the
+    /// host lacks, saying what goes; none on a host with them, none for a tree that uses none.
+    #[test]
+    fn host_gaps_as_bash() {
+        let d = std::env::temp_dir().join(format!("omabox-o45-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let d = shell::bytes(&d).to_vec();
+        let put = |rel: &str, text: String| {
+            let f = shell::path(&cat!(d, "/", rel));
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, text).unwrap();
+        };
+        put(
+            "t/bin/omarchy-theme-bg-boot-intro",
+            "#!/bin/bash\nowe status\n".into(),
+        );
+        put(
+            "t/bin/omarchy-capture-screenshot",
+            "#!/bin/bash\nomasnap --region\n".into(),
+        );
+        let none_so = cat!(d, "/none.so");
+        put(
+            "t/default/hypr/workspace-modes.lua",
+            format!(
+                "local TITLEBARS = \"{}\"\n",
+                String::from_utf8_lossy(&none_so)
+            ),
+        );
+        std::fs::create_dir_all(shell::path(&cat!(d, "/om/bin"))).unwrap();
+        let t = cat!(d, "/t");
+        let gaps: Vec<String> = omarchy_host_gaps_with(&t, |_| false, &none_so)
+            .iter()
+            .map(|g| String::from_utf8_lossy(g).into_owned())
+            .collect();
+        assert_eq!(
+            gaps,
+            [
+                "owe: no video wallpapers and no theme intros",
+                "omasnap: no Omasnap screenshots",
+                "omarchy-hyprland-titlebars: no titlebars on floating workspaces"
+            ],
+            "each the tree uses and the host lacks, saying what goes"
+        );
+        // (the plugin there: a file the tree names, here the screenshot script)
+        let so = cat!(t, "/bin/omarchy-capture-screenshot");
+        put(
+            "t/default/hypr/workspace-modes.lua",
+            format!("local TITLEBARS = \"{}\"\n", String::from_utf8_lossy(&so)),
+        );
+        assert!(
+            omarchy_host_gaps_with(&t, |_| true, &so).is_empty(),
+            "...none with them installed"
+        );
+        assert!(
+            omarchy_host_gaps_with(&cat!(d, "/om"), |_| false, b"/nonexistent").is_empty(),
+            "...none for a tree that uses none (an older Omarchy)"
+        );
+        std::fs::remove_dir_all(shell::path(&d)).unwrap();
+    }
     use std::cmp::Ordering;
 
     /// git_rev for a jailed caller (t_unit_jail_policy's, #198 security): nothing, and git never run
