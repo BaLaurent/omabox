@@ -252,6 +252,8 @@ mod tests {
     fn durations() {
         assert_eq!(ms_duration(b"500ms"), Some(500));
         assert_eq!(ms_duration(b"1.5s"), Some(1500));
+        assert_eq!(ms_duration(b"1.5"), Some(1500));
+        assert_eq!(ms_duration(b"1.5m"), Some(90_000));
         assert_eq!(ms_duration(b"2m"), Some(120_000));
         assert_eq!(ms_duration(b"3"), Some(3000));
         assert_eq!(ms_duration(b"0.0004"), None);
