@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6606 MIN_UNIT=3901
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4552 MIN_UNIT=2043
+MIN_CHECKS=6618 MIN_UNIT=3913
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4545 MIN_UNIT=2037
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -5163,7 +5163,7 @@ PYEOF
     rp4_box "$n4"2 "{\"mode\":\"headless\",\"pidns\":\"$(readlink "/proc/$pb/ns/pid")\"}" "$pb"
   }
   rp4_pre=(rp4_rel)
-  parity "gpu release KIND: the boxes on it taken down, one by the node it holds" gpu release "$(lib gpu_kind "$dv4" | tr '[:lower:]' '[:upper:]')"
+  parity "gpu release KIND: the boxes on it taken down, one by the node it holds" gpu release "$(case $dv4 in nvidia|nouveau) echo NVIDIA ;; amdgpu|radeon) echo AMD ;; i915|xe) echo INTEL ;; esac)"
   parity "gpu release SLOT, written short" gpu release "${sl4#0000:}"
   # (the box whose up holds its lock dead by then: nothing of a side's own left to compare)
   rp4_busy() { rm -rf "$r/rt/omabox"/{fk,fkn,fki,fka,plain}; rp4_box "$n4"3 "{\"mode\":\"headless\"}"
@@ -9894,7 +9894,7 @@ t_main() {
     check_fails "...never nvidia-modeset (the GPU's displays)" ob run -b "$B" -- test -e /dev/nvidia-modeset
     # Finding 294 (#204): the GPU's card path is an empty read-only file, never the device, so NVIDIA's
     # Wayland EGL finds the GPU and apps draw on it, not llvmpipe.
-    local card; card=$(lib nvidia_card "$(jq -r .render.node "$D/box.json")")
+    local card; card=$(probe nvidia_card "$(jq -r .render.node "$D/box.json")")
     if [ -z "$card" ]; then skip "the NVIDIA card placeholder" "sysfs names no card for the box's render node"
     else
       check_eq "...its card path an empty regular file, read-only (finding 294)" "regular empty file 0 1" \
@@ -9932,13 +9932,13 @@ print(*r)' 2>&1)"
     fi
     check_eq "parent output matches the box" "1920 1080" \
       "$(ob run -b "$B" -- env WAYLAND_DISPLAY=wayland-0 wlr-randr --json | jq -r '.[0].modes[] | select(.current) | "\(.width) \(.height)"')"
-  elif [ "$(lib render_driver "$(lib render_node)")" = nvidia ]; then
+  elif [ "$(probe render_driver "$(probe render_node)")" = nvidia ]; then
     # (Before, this said "the render node's driver is nvidia, not nvidia": up had failed on NVIDIA.)
-    no "NVIDIA uses the private Wayland screen" "the render node ($(lib render_node)) is NVIDIA's, but the box did not get the private Wayland screen (box.json wayland_screen: $(jq -r .wayland_screen "$D/box.json" 2>&1)); did up fail?"
+    no "NVIDIA uses the private Wayland screen" "the render node ($(probe render_node)) is NVIDIA's, but the box did not get the private Wayland screen (box.json wayland_screen: $(jq -r .wayland_screen "$D/box.json" 2>&1)); did up fail?"
   else
     check_eq "headless screen" HEADLESS-2 "$screen_name"
     skip "NVIDIA's private Wayland screen, nodes and parent output" \
-      "the render node's driver is $(lib render_driver "$(lib render_node)"), not nvidia"
+      "the render node's driver is $(probe render_driver "$(probe render_node)"), not nvidia"
   fi
   # shot
   local png=$TMP/main.png
@@ -9969,7 +9969,7 @@ print(*r)' 2>&1)"
   if [ "$(jq -r .wayland_screen "$D/box.json")" != true ]; then
     # gpu reads DRM fdinfo, which some drivers do not keep at all (virtio_gpu, a VM's): there a
     # client of the render node has no drm-driver line, and nothing is there to list.
-    local rn fd fdinfo=0; rn=$(lib render_node)
+    local rn fd fdinfo=0; rn=$(probe render_node)
     exec {fd}<"$rn" && { ! grep -q '^drm-driver:' "/proc/$BASHPID/fdinfo/$fd" || fdinfo=1; exec {fd}<&-; }
     if [ "$fdinfo" = 1 ]; then
       check "gpu --json lists Hyprland" jq -e '.percent | has("Hyprland")' <<<"$gpu"
@@ -9982,7 +9982,7 @@ print(*r)' 2>&1)"
     if command -v nvidia-smi >/dev/null; then
       check_eq "gpu --json on NVIDIA: from nvidia-smi pmon, the box's Hyprland listed" "nvidia-smi pmon true" \
         "$(jq -r '"\(.source) \(.percent | has("Hyprland"))"' <<<"$gpu")"
-      local bcomms; bcomms=$(for p in $(lib eval "NAME='$B'; D='$D'; box_pids"); do cat "/proc/$p/comm" 2>/dev/null; done | tr -s ' \t' _ | sort -u)
+      local bcomms; bcomms=$(for p in $(probe box_pids "$B"); do cat "/proc/$p/comm" 2>/dev/null; done | tr -s ' \t' _ | sort -u)
       check_eq "...only names of the box's own processes" "" "$(jq -r '.percent | keys[]' <<<"$gpu" | grep -vxF -f <(echo "$bcomms"))"
     else
       check "gpu --json handles missing driver counters" jq -e '.percent | type == "object"' <<<"$gpu"
@@ -12270,51 +12270,9 @@ t_no_shell() {
   check "down" ob down "$B"
 }
 
-# finding 122: an NVIDIA GPU whose /dev/nvidiaN is missing (switched to the driver at runtime) gets it
-# from nvidia-modprobe -c MINOR, and /dev/nvidiactl from -c 255 (finding 254); still missing, the error
-# says what to run. A fake /proc/driver/nvidia
-# and /dev (a link to /dev/null is a character device to `test -c`), and a stub nvidia-modprobe.
-t_unit_nvidia() {
-  local d=$TMP/$P-nv slot=0000:01:00.0 out
-  mkdir -p "$d/proc/gpus/$slot" "$d/dev" "$d/stub" "$d/none"
-  printf 'Model: \t\t NVIDIA GeForce RTX 5070 Ti\nIRQ:   \t\t 180\nDevice Minor: \t 3\n' > "$d/proc/gpus/$slot/information"
-  ln -s /dev/null "$d/dev/nvidiactl"
-  printf '#!/bin/sh\necho "$*" >> "%s/calls"\nn=nvidia$2; [ "$2" != 255 ] || n=nvidiactl\n[ "$NV_STUB" = fail ] || ln -sf /dev/null "%s/dev/$n"\n' "$d" "$d" > "$d/stub/nvidia-modprobe"
-  chmod +x "$d/stub/nvidia-modprobe"
-  # (Always with the stub first in PATH: the real nvidia-modprobe is setuid root and makes /dev nodes.)
-  nv() { PATH=$1:$PATH lib nvidia_node "$slot" "$2" "$d/proc" "$d/dev" 2>&1; }
-  export NV_STUB=fail
-  out=$(nv "$d/stub" 1)
-  check_match "a missing node the helper does not create: what to run" "no usable $d/dev/nvidia3 \(run \`nvidia-modprobe -c 3\`," "$out"
-  check_eq "...after asking it once, for that minor" "-c 3" "$(cat "$d/calls" 2>&1)"
-  rm -f "$d/calls"
-  check_match "CREATE 0 (an interactive box's other GPUs): not asked" "no usable" "$(nv "$d/stub" 0)"
-  check_fails "...no call" test -e "$d/calls"
-  NV_STUB=ok
-  check_eq "a missing node: nvidia-modprobe -c MINOR creates it" "$d/dev/nvidia3" "$(nv "$d/stub" 1)"
-  check_eq "...one call" "-c 3" "$(cat "$d/calls" 2>&1)"
-  check_eq "a node there: used, the helper not asked" "$d/dev/nvidia3|-c 3" "$(nv "$d/stub" 1)|$(cat "$d/calls")"
-  rm "$d/dev/nvidiactl" "$d/calls"
-  check_match "a missing control node asks too, and says what makes it" "no usable $d/dev/nvidiactl \(run \`nvidia-modprobe -c 255\`," "$(NV_STUB=fail nv "$d/stub" 1)"
-  check_eq "...for minor 255, the control node's, not the GPU's" "-c 255" "$(cat "$d/calls" 2>&1)"
-  rm -f "$d/calls"
-  check_eq "...which makes it" "$d/dev/nvidia3|-c 255" "$(NV_STUB=ok nv "$d/stub" 1)|$(cat "$d/calls" 2>&1)"
-  rm -f "$d/dev/nvidiactl" "$d/dev/nvidia3" "$d/calls"
-  check_match "both missing: both named, both asked for" "no usable $d/dev/nvidia3 $d/dev/nvidiactl \(run \`nvidia-modprobe -c 3\` \`nvidia-modprobe -c 255\`," "$(NV_STUB=fail nv "$d/stub" 1)"
-  check_eq "...one call each" "-c 3 -c 255" "$(tr '\n' ' ' < "$d/calls" | sed 's/ $//')"
-  unset NV_STUB
-  check_match "no device minor in the driver's file" "no device minor" \
-    "$(printf 'Model: x\n' > "$d/proc/gpus/$slot/information"; nv "$d/none" 1)"
-  check_match "a GPU the driver does not list" "has no $d/proc/gpus/0000:02:00.0/information" \
-    "$(PATH=$d/none:$PATH lib nvidia_node 0000:02:00.0 1 "$d/proc" "$d/dev" 2>&1)"
-  # nvidia_card (finding 294): the render node's card from sysfs, its placeholder's path in a box.
-  mkdir -p "$d/drm/renderD129/device/drm/card0" "$d/drm/renderD129/device/drm/renderD129" "$d/drm/renderD130/device/drm/renderD130"
-  ln -s card0 "$d/drm/renderD129/device/drm/controlD64"
-  check_eq "nvidia_card: the render node's card, not its control or render entries" card0 "$(lib nvidia_card /dev/dri/renderD129 "$d/drm")"
-  check_eq "...none named: nothing (no placeholder)" "" "$(lib nvidia_card /dev/dri/renderD130 "$d/drm")"
-  check_eq "...a node sysfs does not have: nothing" "" "$(lib nvidia_card /dev/dri/renderD131 "$d/drm")"
-}
-
+# finding 122 (nvidia-modprobe -c MINOR for a missing /dev/nvidiaN, -c 255 for /dev/nvidiactl, finding
+# 254; what to run when still missing) and nvidia_card (finding 294): render.rs
+# nvidia_node_asks_the_helper_as_bash, on a stand-in helper.
 # finding 126 (issue #49): omabox setup makes a user's links, settings dir and guard; --remove undoes
 # them, only links that still point here. In a temp HOME and XDG dirs: never the user's.
 t_unit_setup() {
@@ -18720,6 +18678,69 @@ output_on() {
   ob down "$B" >/dev/null 2>&1
 }
 
+# gpu release (t_unit_gpu's) on boxes of a runtime dir of the test's own (never the real ones: it
+# takes boxes down), up while their info.json names a stand-in for a box's PID 1 (a process in a pid
+# namespace of its own), taken down for real: headless boxes on that GPU only, by kind or slot; a box
+# with no record by the render node its process holds open (this machine's first usable one; none
+# here: that case skipped).
+gpu_release_cases() {
+  local rt=$TMP/gpu-rel bx k other none dv="" sl="" node b
+  mkdir -p "$rt/omabox"; chmod 700 "$rt"; bx=$rt/omabox
+  node=$(probe render_node 2>/dev/null) || node=""
+  if [ -n "$node" ]; then dv=$(probe render_driver "$node"); sl=$(readlink -f "/sys/class/drm/${node##*/}/device"); sl=${sl##*/}; fi
+  case $dv in nvidia|nouveau) k=nvidia ;; amdgpu|radeon) k=amd ;; i915|xe) k=intel ;; *) k=nvidia node="" ;; esac
+  [ -n "$dv" ] && [ -n "$node" ] || dv=nvidia
+  case $k in nvidia) other=amd none=intel ;; amd) other=nvidia none=intel ;; *) other=nvidia none=amd ;; esac
+  local -A odv=([nvidia]=nvidia [amd]=amdgpu [intel]=i915)
+  # live NAME JSON [HOLD]: box NAME up on a stand-in (holding HOLD open), box.json JSON plus its pidns
+  live() {
+    local u p="" i
+    if [ -n "${3:-}" ]; then u=$(unshare -Urpf --mount-proc sh -c 'exec 3<"$0"; exec sleep 600' "$3" >/dev/null 2>&1 & echo $!)
+    else u=$(unshare -Urpf --mount-proc sleep 600 >/dev/null 2>&1 & echo $!); fi
+    echo "$u" >> "$rt/pids"
+    for i in $(seq 100); do p=$(pgrep -P "$u") && [ -n "$p" ] && { [ -z "${3:-}" ] || readlink "/proc/$p/fd/3" >/dev/null 2>&1; } && break; sleep 0.05; done
+    mkdir -p "$bx/$1/home" "$bx/$1/run"
+    jq --arg ns "$(readlink "/proc/$p/ns/pid")" '. + {pidns: $ns}' <<<"$2" > "$bx/$1/box.json"
+    echo "{\"child-pid\": $p}" > "$bx/$1/info.json"
+  }
+  live a "{\"mode\": \"headless\", \"render\": {\"node\": \"/dev/dri/renderD200\", \"pci\": \"0000:01:00.0\", \"driver\": \"$dv\", \"fallback\": false}}"
+  live b "{\"mode\": \"headless\", \"render\": {\"node\": \"/dev/dri/renderD201\", \"pci\": \"0000:0a:00.0\", \"driver\": \"${odv[$other]}\", \"fallback\": false}}"
+  live c '{"mode": "interactive"}'
+  [ -z "$node" ] || live d '{"mode": "headless"}' "$node"
+  mkdir -p "$bx/e"; echo "{\"mode\": \"headless\", \"render\": {\"node\": \"/dev/dri/renderD200\", \"pci\": \"0000:01:00.0\", \"driver\": \"$dv\", \"fallback\": false}}" > "$bx/e/box.json"
+  rel() { XDG_RUNTIME_DIR=$rt ob gpu release "$@" 2>&1; }
+  local out; out=$(rel "$k")
+  check_match "gpu release $k: the live headless boxes on it taken down, each said" "taking box 'a' down \(it renders on $dv 0000:01:00\.0\)" "$out"
+  if [ -n "$node" ]; then
+    check_match "...one with no record by what it holds" "taking box 'd' down \(it renders on $dv $sl\)" "$out"
+  else
+    skip "gpu release: a box with no record, by the node it holds" "no usable render node here"
+  fi
+  check_eq "...those gone; the other GPU's, the interactive and the dead one kept" "b c e" "$(command find "$bx" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort | xargs)"
+  check_eq "...by slot, written short" "1" "$(rel 0a:00.0 | grep -c "taking box 'b' down")"
+  check "...and gone" test ! -e "$bx/b"
+  check_match "...none on it: said, exit 0" "no headless box renders on $none" "$(rel "$none"; echo "rc=$?")"
+  check_match "...junk refused" "not a GPU: geforce" "$(rel geforce)"
+  check_match "...refused to a jailed agent" "not a jailed agent's" "$(OMABOX_JAIL='{"id":"x"}' XDG_RUNTIME_DIR=$rt ob gpu release "$k" 2>&1)"
+  # An `up` in progress (its lock held, no box.json yet) is waited for (finding 237): here box f's up
+  # writes its box.json, on that GPU, and lets go of the lock a second on.
+  local fu fp
+  fu=$(unshare -Urpf --mount-proc sleep 600 >/dev/null 2>&1 & echo $!); echo "$fu" >> "$rt/pids"
+  for b in $(seq 100); do fp=$(pgrep -P "$fu") && [ -n "$fp" ] && break; sleep 0.05; done
+  : > "$bx/.lock-f"
+  flock "$bx/.lock-f" bash -c "sleep 1; mkdir -p '$bx/f/home' '$bx/f/run'
+    jq -n --arg ns '$(readlink "/proc/$fp/ns/pid")' '{mode: \"headless\", pidns: \$ns, render: {node: \"/dev/dri/renderD200\", pci: \"0000:01:00.0\", driver: \"$dv\", fallback: false}}' > '$bx/f/box.json'
+    echo '{\"child-pid\": $fp}' > '$bx/f/info.json'" &
+  local holder=$!
+  until_ok 5 bash -c "! flock -n '$bx/.lock-f' true"
+  out=$(rel "$k"); wait "$holder"
+  check_match "gpu release waits for an up in progress, said" "waiting for box 'f' \(an up or down in progress\)" "$out"
+  check_match "...and takes its box down too" "taking box 'f' down" "$out"
+  check "...gone" test ! -e "$bx/f"
+  local u; while read -r u; do pkill -KILL -P "$u" 2>/dev/null; done < "$rt/pids"
+  true
+}
+
 # omabox cpu (#205, finding 277) in a box: a busy loop is ~one core, by --pid (the box's number or the
 # host's) and --app; an idle box is near 0; --json has gpu's shape plus processes and a total.
 t_cpu() {
@@ -18969,152 +18990,136 @@ t_unit_gdb_crashes() {
     "$(lib gdb_crashes <<<"$one$one")"
 }
 
-# The gpu setting (#156, finding 214) on a fake /dev/dri and /sys/class/drm: an AMD and an NVIDIA GPU.
+# The gpu setting (#156, finding 214) on a stand-in tree the probe reads under (its ROOT word): an AMD
+# and an NVIDIA GPU in ROOT/dev/dri, ROOT/sys/class/drm and ROOT/sys/bus/pci/devices. A render node
+# keeps the system's path (/dev/dri/renderD*); only the reads are the tree's.
 t_unit_gpu() {
   local f=$TMP/gpu
-  mkdir -p "$f/dri" "$f/drm/renderD128" "$f/drm/renderD129" "$f/pci/0000:0a:00.0" "$f/pci/0000:01:00.0" "$f/drivers/amdgpu" "$f/drivers/nvidia" "$f/home"
-  : > "$f/dri/renderD128"; : > "$f/dri/renderD129"
-  ln -sfn "$f/pci/0000:0a:00.0" "$f/drm/renderD128/device"; ln -sfn "$f/pci/0000:01:00.0" "$f/drm/renderD129/device"
-  ln -sfn "$f/drivers/amdgpu" "$f/pci/0000:0a:00.0/driver"; ln -sfn "$f/drivers/nvidia" "$f/pci/0000:01:00.0/driver"
-  echo 0x030000 > "$f/pci/0000:0a:00.0/class"; echo 0x030200 > "$f/pci/0000:01:00.0/class"
-  echo 0x1002 > "$f/pci/0000:0a:00.0/vendor"; echo 0x10de > "$f/pci/0000:01:00.0/vendor"
-  # gpu VALUE: render_node with that setting in a config of its own (and no OMABOX_RENDER_NODE).
-  pick() { HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' SYSPCI='$f/pci' CONFIG='$f/config'; unset OMABOX_RENDER_NODE; printf 'gpu=%s\n' '$1' > \$CONFIG; render_node" 2>&1; }
-  check_eq "gpu auto: the first GPU" "$f/dri/renderD128" "$(pick auto)"
-  check_eq "gpu nvidia: its render node" "$f/dri/renderD129" "$(pick nvidia)"
-  check_eq "gpu amd" "$f/dri/renderD128" "$(pick amd)"
-  check_eq "gpu by PCI slot" "$f/dri/renderD129" "$(pick 0000:01:00.0)"
+  local dri=$f/dev/dri drm=$f/sys/class/drm pci=$f/sys/bus/pci/devices cf=$f/home/.config/omabox/config
+  mkdir -p "$dri" "$drm/renderD128" "$drm/renderD129" "$pci/0000:0a:00.0" "$pci/0000:01:00.0" "$f/drivers/amdgpu" "$f/drivers/nvidia" "${cf%/*}" "$f/bin"
+  : > "$dri/renderD128"; : > "$dri/renderD129"
+  ln -sfn "$pci/0000:0a:00.0" "$drm/renderD128/device"; ln -sfn "$pci/0000:01:00.0" "$drm/renderD129/device"
+  ln -sfn "$f/drivers/amdgpu" "$pci/0000:0a:00.0/driver"; ln -sfn "$f/drivers/nvidia" "$pci/0000:01:00.0/driver"
+  echo 0x030000 > "$pci/0000:0a:00.0/class"; echo 0x030200 > "$pci/0000:01:00.0/class"
+  echo 0x1002 > "$pci/0000:0a:00.0/vendor"; echo 0x10de > "$pci/0000:01:00.0/vendor"
+  # gv NAME VALUE ARGS...: the probe's NAME with the gpu setting VALUE in a HOME of its own (and no
+  # OMABOX_RENDER_NODE), the tree its root.
+  gv() { local n=$1; printf 'gpu=%s\n' "$2" > "$cf"; shift 2; HOME=$f/home OMABOX_RENDER_NODE='' probe "$n" "$@" 2>&1; }
+  pick() { gv render_node "$1" "$f"; }
+  check_eq "gpu auto: the first GPU" /dev/dri/renderD128 "$(pick auto)"
+  check_eq "gpu nvidia: its render node" /dev/dri/renderD129 "$(pick nvidia)"
+  check_eq "gpu amd" /dev/dri/renderD128 "$(pick amd)"
+  check_eq "gpu by PCI slot" /dev/dri/renderD129 "$(pick 0000:01:00.0)"
   check_eq "gpu intel, none here: the first GPU, said, with why and which (finding 237)" \
-    "omabox: gpu intel (omabox config gpu): none usable here (no intel GPU on this machine), so the first GPU: amdgpu 0000:0a:00.0 (renderD128)"$'\n'"$f/dri/renderD128" "$(pick intel)"
-  rm "$f/dri/renderD129"; mkdir -p "$f/drivers/vfio-pci"; ln -sfn "$f/drivers/vfio-pci" "$f/pci/0000:01:00.0/driver"
+    "omabox: gpu intel (omabox config gpu): none usable here (no intel GPU on this machine), so the first GPU: amdgpu 0000:0a:00.0 (renderD128)"$'\n'/dev/dri/renderD128 "$(pick intel)"
+  rm "$dri/renderD129"; mkdir -p "$f/drivers/vfio-pci"; ln -sfn "$f/drivers/vfio-pci" "$pci/0000:01:00.0/driver"
   check_eq "gpu nvidia, the card on vfio-pci (no node): the first GPU, said, the card's reason given (finding 237)" \
-    "omabox: gpu nvidia (omabox config gpu): none usable here (0000:01:00.0: bound to vfio-pci), so the first GPU: amdgpu 0000:0a:00.0 (renderD128)"$'\n'"$f/dri/renderD128" "$(pick nvidia)"
+    "omabox: gpu nvidia (omabox config gpu): none usable here (0000:01:00.0: bound to vfio-pci), so the first GPU: amdgpu 0000:0a:00.0 (renderD128)"$'\n'/dev/dri/renderD128 "$(pick nvidia)"
   check_match "...a slot that is no GPU: said" "none usable here \(no GPU at 0000:05:00.0\)" "$(pick 0000:05:00.0)"
-  # The record a fallback leaves (box.json's render, as up writes it) and `ls`'s line for it on a
-  # machine with one usable GPU, where the GPU line was shown only with two (finding 237).
-  local lb=$TMP/gpu-ls; mkdir -p "$lb/fb" "$lb/plain"
-  jq -n '{mode: "headless", size: "1x1@60", net: "none", idle: 0, render: {node: "/dev/dri/renderD128", pci: "0000:0a:00.0", driver: "amdgpu", fallback: true, wanted: "nvidia", why: "0000:01:00.0: bound to vfio-pci"}}' > "$lb/fb/box.json"
-  jq -n '{mode: "headless", size: "1x1@60", net: "none", idle: 0, render: {node: "/dev/dri/renderD128", pci: "0000:0a:00.0", driver: "amdgpu", fallback: false}}' > "$lb/plain/box.json"
-  local lsout; lsout=$(lib eval "BOXES='$lb' DRI='$f/dri' SYSDRM='$f/drm'; cmd_ls" 2>&1)
-  check_match "ls with one usable GPU: a fallback box's GPU line, with why" \
+  # The record a fallback leaves (box.json's render, as up writes it) and `ls`'s line for it, in a
+  # runtime dir of the test's own; the GPU line shows for every box only with two usable GPUs here
+  # (finding 237).
+  local lb=$TMP/gpu-ls; mkdir -p "$lb/omabox/fb" "$lb/omabox/plain"; chmod 700 "$lb"
+  jq -n '{mode: "headless", size: "1x1@60", net: "none", idle: 0, render: {node: "/dev/dri/renderD128", pci: "0000:0a:00.0", driver: "amdgpu", fallback: true, wanted: "nvidia", why: "0000:01:00.0: bound to vfio-pci"}}' > "$lb/omabox/fb/box.json"
+  jq -n '{mode: "headless", size: "1x1@60", net: "none", idle: 0, render: {node: "/dev/dri/renderD128", pci: "0000:0a:00.0", driver: "amdgpu", fallback: false}}' > "$lb/omabox/plain/box.json"
+  local lsout many=0; [ "$(probe render_nodes | wc -l)" -lt 2 ] || many=1
+  lsout=$(XDG_RUNTIME_DIR=$lb ob ls 2>&1)
+  check_match "ls: a fallback box's GPU line, with why" \
     $'\nfb [^\n]*\n  GPU: amdgpu 0000:0a:00.0 \\(renderD128\\), a fallback: gpu nvidia was not usable \\(0000:01:00.0: bound to vfio-pci\\)' "$lsout"
-  check_eq "...none for a box that is not one" "" "$(grep -A1 '^plain ' <<<"$lsout" | sed -n 2p | grep GPU)"
+  if [ "$many" = 0 ]; then
+    check_eq "...none for a box that is not one, with one usable GPU here" "" "$(grep -A1 '^plain ' <<<"$lsout" | sed -n 2p | grep GPU)"
+  else
+    check_match "...with two usable GPUs here, every box's" $'\nplain [^\n]*\n  GPU: amdgpu 0000:0a:00.0 \\(renderD128\\)($|\n)' "$lsout"
+  fi
   # Apps on a software renderer (#204, finding 290): eglinfo's verdict as up keeps it, and what up,
   # ls and gpu say of it. Its output as seen in an NVIDIA box (warnings and all) and in an AMD one.
   local eg_nv eg_amd
   eg_nv=$'MESA-EGL: warning: egl: failed to create dri2 screen\nWayland platform:\nEGL vendor string: Mesa Project\nOpenGL core profile renderer: llvmpipe (LLVM 22.1.8, 256 bits)\nOpenGL ES profile vendor: Mesa\nOpenGL ES profile renderer: llvmpipe (LLVM 22.1.8, 256 bits)\nOpenGL ES profile version: OpenGL ES 3.2 Mesa 26.2.2'
   eg_amd=$'Wayland platform:\nOpenGL core profile renderer: AMD Radeon (radeonsi, raphael_mendocino, ACO)\nOpenGL ES profile renderer: AMD Radeon (radeonsi, raphael_mendocino, ACO)'
-  check_eq "egl_render: llvmpipe is software" '{"renderer":"llvmpipe (LLVM 22.1.8, 256 bits)","software":true}' "$(lib egl_render <<<"$eg_nv")"
-  check_eq "...radeonsi is not" '{"renderer":"AMD Radeon (radeonsi, raphael_mendocino, ACO)","software":false}' "$(lib egl_render <<<"$eg_amd")"
+  check_eq "egl_render: llvmpipe is software" '{"renderer":"llvmpipe (LLVM 22.1.8, 256 bits)","software":true}' "$(probe egl_render <<<"$eg_nv")"
+  check_eq "...radeonsi is not" '{"renderer":"AMD Radeon (radeonsi, raphael_mendocino, ACO)","software":false}' "$(probe egl_render <<<"$eg_amd")"
   check_eq "...the ES profile's first, else the first renderer named" "softpipe true" \
-    "$(lib egl_render <<<$'OpenGL core profile renderer: softpipe' | jq -r '"\(.renderer) \(.software)"')"
-  check_eq "...nothing when EGL did not initialise" "" "$(lib egl_render <<<'eglinfo: eglInitialize failed')"
-  check_eq "...nor from no output (no eglinfo)" "" "$(lib egl_render </dev/null)"
+    "$(probe egl_render <<<$'OpenGL core profile renderer: softpipe' | jq -r '"\(.renderer) \(.software)"')"
+  check_eq "...nothing when EGL did not initialise" "" "$(probe egl_render <<<'eglinfo: eglInitialize failed')"
+  check_eq "...nor from no output (no eglinfo)" "" "$(probe egl_render </dev/null)"
   local soft='{"renderer":"llvmpipe (LLVM 22.1.8, 256 bits)","software":true}'
   check_match "soft_note: llvmpipe in an NVIDIA box, why, and a box on the other GPU" \
     "^its apps render on llvmpipe, in software \(NVIDIA's EGL did not initialise in it.*omabox gpu counts none of their drawing; for GPU rendering, a box on another GPU: OMABOX_RENDER_NODE=/dev/dri/renderD128 omabox up --new \(renderD128 is amdgpu\)$" \
-    "$(lib soft_note "$soft" nvidia "renderD128 amdgpu")"
-  check_match "...no other GPU: a baseline in the same box" "this machine has no other GPU: compare against a baseline measured in this same box$" "$(lib soft_note "$soft" nvidia "")"
-  check_match "...an interactive box (no GPU of its own): a baseline" "omabox gpu counts none of their drawing; compare against a baseline" "$(lib soft_note "$soft" "")"
-  check_eq "...nothing for a GPU renderer" "" "$(lib soft_note '{"renderer":"AMD Radeon (radeonsi)","software":false}' amdgpu "")"
-  check_eq "...nor for no record" "" "$(lib soft_note "" nvidia "")"
-  # up's probe, box_exec stubbed: the record kept and said; without eglinfo neither.
-  local pb=$TMP/probe; mkdir -p "$pb"
-  upprobe() { jq -n '{render: {driver: "nvidia"}}' > "$pb/box.json"
-    lib eval "D='$pb' NAME=pb; other_gpu() { echo 'renderD128 amdgpu'; }; box_exec() { $1; }; client_render_check" 2>&1; }
-  local pout; pout=$(upprobe "printf '%s\n' '$eg_nv'")
-  check_match "client_render_check on llvmpipe: said once" "^omabox: box 'pb': its apps render on llvmpipe, in software" "$pout"
-  check_eq "...kept in box.json" "$soft" "$(jq -c .client_render "$pb/box.json")"
-  pout=$(upprobe "return 127")
-  check_eq "...no eglinfo (127): nothing said" "" "$pout"
-  check_eq "...nothing kept" null "$(jq -c .client_render "$pb/box.json")"
+    "$(probe soft_note "$soft" nvidia "renderD128 amdgpu")"
+  check_match "...no other GPU: a baseline in the same box" "this machine has no other GPU: compare against a baseline measured in this same box$" "$(probe soft_note "$soft" nvidia "")"
+  check_match "...an interactive box (no GPU of its own): a baseline" "omabox gpu counts none of their drawing; compare against a baseline" "$(probe soft_note "$soft" "")"
+  check_eq "...nothing for a GPU renderer" "" "$(probe soft_note '{"renderer":"AMD Radeon (radeonsi)","software":false}' amdgpu "")"
+  check_eq "...nor for no record" "" "$(probe soft_note "" nvidia "")"
+  # (up's probe, box_exec's output and other_gpu given: ready.rs client_render_as_bash, #[ignore])
   # ls: an apps line for a box on software only.
-  jq '.client_render = {renderer: "llvmpipe (LLVM 22.1.8, 256 bits)", software: true}' "$lb/fb/box.json" > "$lb/fb/b" && mv "$lb/fb/b" "$lb/fb/box.json"
-  jq '.client_render = {renderer: "AMD Radeon (radeonsi)", software: false}' "$lb/plain/box.json" > "$lb/plain/b" && mv "$lb/plain/b" "$lb/plain/box.json"
-  lsout=$(lib eval "BOXES='$lb' DRI='$f/dri' SYSDRM='$f/drm'; cmd_ls" 2>&1)
+  jq '.client_render = {renderer: "llvmpipe (LLVM 22.1.8, 256 bits)", software: true}' "$lb/omabox/fb/box.json" > "$lb/b" && mv "$lb/b" "$lb/omabox/fb/box.json"
+  jq '.client_render = {renderer: "AMD Radeon (radeonsi)", software: false}' "$lb/omabox/plain/box.json" > "$lb/b" && mv "$lb/b" "$lb/omabox/plain/box.json"
+  lsout=$(XDG_RUNTIME_DIR=$lb ob ls 2>&1)
   check_match "ls: apps on llvmpipe said under the box" $'\n  apps: llvmpipe, in software \\(cost measured here is software rendering\'s\\)' "$lsout"
   check_eq "...not for a box on a GPU renderer" "" "$(grep -A2 '^plain ' <<<"$lsout" | grep 'apps:')"
-  check_eq "ls --json: the record" "true false" "$(lib eval "BOXES='$lb' DRI='$f/dri' SYSDRM='$f/drm'; cmd_ls --json" 2>/dev/null | jq -r 'map(.client_render.software | tostring) | join(" ")')"
-  local rec; rec=$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' SYSPCI='$f/pci' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
-    printf 'gpu=nvidia\n' > \$CONFIG; render_fallback '$f/dri/renderD128' && gpu_why_not nvidia" 2>&1)
-  check_eq "gpu_why_not: the reason up records" "0000:01:00.0: bound to vfio-pci" "$rec"
-  ln -sfn "$f/drivers/nvidia" "$f/pci/0000:01:00.0/driver"
-  check_eq "OMABOX_RENDER_NODE still first" "$f/dri/renderD128" \
-    "$(HOME=$f/home OMABOX_RENDER_NODE=$f/dri/renderD128 lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; printf 'gpu=nvidia\n' > \$CONFIG; render_node" 2>&1)"
-  check_eq "config gpu: a slot written short is stored whole" "0000:03:00.0" "$(lib conf_check gpu 03:00.0)"
-  check_eq "...a kind in any case" "nvidia" "$(lib conf_check gpu NVIDIA)"
-  check_fails "...junk refused" lib conf_check gpu geforce
-  check_eq "...a driver's name, as the list prints it, is its kind (finding 237)" "nvidia amd amd intel intel" \
-    "$(for d in nouveau amdgpu Radeon i915 xe; do lib conf_check gpu "$d"; done | xargs)"
-  check_eq "config gpu amdgpu: stored as amd" "gpu=amd" "$(HOME=$f/home ob config gpu amdgpu 2>/dev/null; rm -f "$f/home/.config/omabox/config")"
+  check_eq "ls --json: the record" "true false" "$(XDG_RUNTIME_DIR=$lb ob ls --json 2>/dev/null | jq -r 'map(.client_render.software | tostring) | join(" ")')"
+  check "render_fallback: gpu nvidia, the box on the AMD one" gv render_fallback nvidia /dev/dri/renderD128 "$f"
+  check_eq "gpu_why_not: the reason up records" "0000:01:00.0: bound to vfio-pci" "$(gv gpu_why_not nvidia nvidia "$f")"
+  ln -sfn "$f/drivers/nvidia" "$pci/0000:01:00.0/driver"
+  printf 'gpu=nvidia\n' > "$cf"
+  check_eq "OMABOX_RENDER_NODE still first" /dev/dri/renderD128 "$(HOME=$f/home OMABOX_RENDER_NODE=/dev/dri/renderD128 probe render_node "$f" 2>&1)"
+  # config gpu VALUE: stdout the value as stored (a slot written short whole, a kind in any case);
+  # a driver's name as its kind, junk refused: gpu.rs gpus_as_the_setting_takes_them.
+  local h2=$TMP/gpu-home2; mkdir -p "$h2"
+  check_eq "config gpu: a slot written short is stored whole" "gpu=0000:03:00.0" "$(HOME=$h2 ob config gpu 03:00.0 2>/dev/null)"
+  check_eq "...a kind in any case" "gpu=nvidia" "$(HOME=$h2 ob config gpu NVIDIA 2>/dev/null)"
+  check_eq "config gpu amdgpu: stored as amd" "gpu=amd" "$(HOME=$f/home ob config gpu amdgpu 2>/dev/null; rm -f "$cf")"
   check_match "config gpu junk: refused, saying what it takes" "bad gpu: geforce \(auto .*PCI slot" "$(HOME=$f/home ob config gpu geforce 2>&1)"
-  check "...and nothing written" test ! -e "$f/home/.config/omabox/config"
+  check "...and nothing written" test ! -e "$cf"
   HOME=$f/home ob config gpu amd >/dev/null
   check_eq "config gpu amd: set" "amd" "$(HOME=$f/home ob config gpu)"
   check_eq "...in config --json" "amd" "$(HOME=$f/home ob config --json | jq -r .gpu)"
   # The list (config gpu, on stderr): every node, its driver and slot, what names it, * where boxes go.
-  : > "$f/dri/renderD129"
-  local list; list=$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
-    printf 'gpu=nvidia\n' > \$CONFIG; cmd_config gpu 2>&1 >/dev/null")
-  check_match "config gpu lists the GPUs, on stderr" "^GPUs \(\* = where a headless box renders now" "$list"
+  : > "$dri/renderD129"
+  local list; list=$(gv gpu_list nvidia "$f")
+  check_match "config gpu lists the GPUs" "^GPUs \(\* = where a headless box renders now" "$list"
   check_match "...the AMD one, with what names it" $'\n  renderD128 +amdgpu +0000:0a:00.0 +gpu amd or gpu 0000:0a:00.0' "$list"
   check_match "...the NVIDIA one marked: gpu nvidia is set" $'\n\\* renderD129 +nvidia +0000:01:00.0 +gpu nvidia or gpu 0000:01:00.0' "$list"
-  check_eq "...stdout stays the value" nvidia "$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; cmd_config gpu 2>/dev/null")"
-  check_match "config gpu intel with no Intel GPU: a note" "note: no usable GPU here is intel now" \
-    "$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; cmd_config gpu intel 2>&1 >/dev/null")"
-  check_eq "...none for one that is there" "" "$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; cmd_config gpu amd 2>&1 >/dev/null")"
+  check_match "...on stderr, through the CLI" "^GPUs \(\* = where a headless box renders now" "$(HOME=$f/home ob config gpu 2>&1 >/dev/null)"
+  check_eq "...stdout stays the value" nvidia "$(HOME=$f/home ob config gpu 2>/dev/null)"
+  check "config gpu intel with no Intel GPU: noted (the test)" bash -c '! "$0" _rust probe gpu_usable intel "$1"' "$PROBE" "$f"
+  check "...none for one that is there" probe gpu_usable amd "$f"
+  # (and its words through the CLI, where this machine has no usable Intel GPU)
+  if ! probe gpu_usable intel; then
+    check_match "config gpu intel with no Intel GPU here: a note" "note: no usable GPU here is intel now" "$(HOME=$h2 ob config gpu intel 2>&1 >/dev/null)"
+  else
+    skip "config gpu intel's note, through the CLI" "this machine has a usable Intel GPU"
+  fi
+  local rk; rk=$(probe render_driver "$(probe render_node 2>/dev/null)" 2>/dev/null) || rk=""
+  case $rk in nvidia|nouveau) rk=nvidia ;; amdgpu|radeon) rk=amd ;; i915|xe) rk=intel ;; *) rk="" ;; esac
+  if [ -n "$rk" ]; then
+    check_eq "...none for one that is there ($rk), through the CLI" "" "$(HOME=$h2 ob config gpu "$rk" 2>&1 >/dev/null)"
+  else
+    skip "config gpu: no note for a GPU that is there, through the CLI" "no usable GPU of a known kind here"
+  fi
   # #118: the GPUs on the bus for the widget's picker (config --json), a vfio-bound one (no render
   # node) too; lspci's name when there is one.
-  mkdir -p "$f/pci/0000:02:00.0" "$f/pci/0000:00:1f.0" "$f/drivers/vfio-pci"
-  echo 0x030000 > "$f/pci/0000:0a:00.0/class"; echo 0x030200 > "$f/pci/0000:01:00.0/class"
-  echo 0x030000 > "$f/pci/0000:02:00.0/class"; echo 0x060100 > "$f/pci/0000:00:1f.0/class"
-  ln -sfn "$f/drivers/vfio-pci" "$f/pci/0000:02:00.0/driver"; echo 0x8086 > "$f/pci/0000:02:00.0/vendor"
-  printf '#!/bin/sh\ncase "$3" in\n  0000:01:00.0) echo "01:00.0 \\"3D controller\\" \\"NVIDIA Corporation\\" \\"GB203 [GeForce RTX 5070 Ti]\\" -ra1" ;;\n  0000:02:00.0) echo "02:00.0 \\"VGA compatible controller\\" \\"Vendor\\" \\"Plain Model\\"" ;;\nesac\n' > "$f/lspci"
-  chmod +x "$f/lspci"
-  local gj; gj=$(HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' SYSPCI='$f/pci' LSPCI='$f/lspci' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
-    printf 'gpu=0000:02:00.0\n' > \$CONFIG; cmd_config --json" 2>/dev/null)
+  mkdir -p "$pci/0000:02:00.0" "$pci/0000:00:1f.0" "$f/drivers/vfio-pci"
+  echo 0x030000 > "$pci/0000:02:00.0/class"; echo 0x060100 > "$pci/0000:00:1f.0/class"
+  ln -sfn "$f/drivers/vfio-pci" "$pci/0000:02:00.0/driver"; echo 0x8086 > "$pci/0000:02:00.0/vendor"
+  printf '#!/bin/sh\ncase "$3" in\n  0000:01:00.0) echo "01:00.0 \\"3D controller\\" \\"NVIDIA Corporation\\" \\"GB203 [GeForce RTX 5070 Ti]\\" -ra1" ;;\n  0000:02:00.0) echo "02:00.0 \\"VGA compatible controller\\" \\"Vendor\\" \\"Plain Model\\"" ;;\nesac\n' > "$f/bin/lspci"
+  chmod +x "$f/bin/lspci"
+  local gj; gj=$(PATH=$f/bin:$PATH gv gpu_json 0000:02:00.0 "$f")
   check_eq "config --json lists the display GPUs on the bus, not other devices (#118)" "0000:01:00.0 0000:02:00.0 0000:0a:00.0" "$(jq -r '[.gpus[].pci] | join(" ")' <<<"$gj")"
   check_eq "...with lspci's bracketed name, or the whole model" "GeForce RTX 5070 Ti|Plain Model|" "$(jq -r '[.gpus[].name] | join("|")' <<<"$gj")"
   check_eq "...one bound to vfio-pci: no node, unavailable, why" 'null false "bound to vfio-pci"' \
     "$(jq -r '.gpus[] | select(.pci == "0000:02:00.0") | "\(.node) \(.available) \(.why | tojson)"' <<<"$gj")"
   check_eq "...each one's kind: by its driver, or its vendor when bound to vfio-pci (finding 237)" "nvidia intel amd" "$(jq -r '[.gpus[].kind] | join(" ")' <<<"$gj")"
-  check_eq "...a usable one: its node" "$f/dri/renderD129 true" "$(jq -r '.gpus[] | select(.pci == "0000:01:00.0") | "\(.node) \(.available)"' <<<"$gj")"
+  check_eq "...a usable one: its node" "/dev/dri/renderD129 true" "$(jq -r '.gpus[] | select(.pci == "0000:01:00.0") | "\(.node) \(.available)"' <<<"$gj")"
   check_eq "...gpu_auto, and gpu_now (the vfio one asked for: the fallback)" "0000:0a:00.0 0000:0a:00.0" "$(jq -r '"\(.gpu_auto) \(.gpu_now)"' <<<"$gj")"
-  fb() { HOME=$f/home lib eval "DRI='$f/dri' SYSDRM='$f/drm' CONFIG='$f/config'; unset OMABOX_RENDER_NODE
-    printf 'gpu=%s\n' '$1' > \$CONFIG; render_fallback '$f/dri/$2' && echo yes || echo no"; }
+  check_eq "...and through the CLI, the same keys" "gpu_auto gpu_now gpus" "$(HOME=$h2 ob config --json | jq -r '[keys[] | select(startswith("gpu_") or . == "gpus")] | join(" ")')"
+  fb() { if gv render_fallback "$1" "/dev/dri/$2" "$f" >/dev/null; then echo yes; else echo no; fi; }
   check_eq "render_fallback: auto never, the GPU asked for no, another yes" "no no yes" "$(fb auto renderD128) $(fb nvidia renderD129) $(fb 0000:02:00.0 renderD128)"
-  # gpu release on boxes of a fake runtime dir (never the real ones: it takes boxes down): headless
-  # boxes on that GPU only, by slot or kind; a box with no record by the node it holds.
-  local bx=$TMP/gpu-boxes; mkdir -p "$bx"/{a,b,c,d,e}
-  jq -n '{mode: "headless", render: {node: "/dev/dri/renderD129", pci: "0000:01:00.0", driver: "nvidia", fallback: false}}' > "$bx/a/box.json"
-  jq -n '{mode: "headless", render: {node: "/dev/dri/renderD128", pci: "0000:0a:00.0", driver: "amdgpu", fallback: false}}' > "$bx/b/box.json"
-  jq -n '{mode: "interactive"}' > "$bx/c/box.json"
-  jq -n '{mode: "headless"}' > "$bx/d/box.json"
-  jq -n '{mode: "headless", render: {node: "/dev/dri/renderD129", pci: "0000:01:00.0", driver: "nvidia", fallback: false}}' > "$bx/e/box.json"
-  rel() { lib eval "BOXES='$bx' DRI='$f/dri' SYSDRM='$f/drm'; unset OMABOX_JAIL
-    box_alive() { [ \"\$NAME\" != e ]; }   # e is dead
-    box_render_held() { [ \"\$NAME\" = d ] && [ \"\$1\" = nvidia ] && echo 'nvidia 0000:01:00.0'; }
-    cmd_down() { echo \"down \$*\"; }
-    gpu_release $1" 2>&1; }
-  check_eq "gpu release nvidia: the live headless boxes on it, one with no record by what it holds" \
-    "omabox: gpu release: taking box 'a' down (it renders on nvidia 0000:01:00.0)|omabox: gpu release: taking box 'd' down (it renders on nvidia 0000:01:00.0)|down a d" "$(rel nvidia | paste -sd '|')"
-  check_eq "...by slot, written short" "down b" "$(rel 0a:00.0 | tail -1)"
-  check_match "...none on it: said, exit 0" "no headless box renders on intel" "$(rel intel)"
-  check_match "...junk refused" "not a GPU: geforce" "$(rel geforce)"
-  check_match "...refused to a jailed agent" "not a jailed agent's" "$(OMABOX_JAIL='{"id":"x"}' lib eval "gpu_release nvidia" 2>&1)"
-  # An `up` in progress (its lock held, no box.json yet) is waited for (finding 237): here box f's up
-  # writes its box.json, on nvidia, and lets go of the lock a second on.
-  : > "$bx/.lock-f"
-  flock "$bx/.lock-f" bash -c "sleep 1; mkdir -p '$bx/f'; jq -n '{mode: \"headless\", render: {node: \"/dev/dri/renderD129\", pci: \"0000:01:00.0\", driver: \"nvidia\", fallback: false}}' > '$bx/f/box.json'" &
-  local holder=$!
-  until_ok 5 bash -c "! flock -n '$bx/.lock-f' true"
-  local out; out=$(rel nvidia | paste -sd '|'); wait "$holder"
-  check_match "gpu release waits for an up in progress, said" "waiting for box 'f' \(an up or down in progress\)" "$out"
-  check_match "...and takes its box down too" "\|down a d f$" "$out"
+  gpu_release_cases
   # gpu_rows (finding 298): no figures at all is a line saying so, exit 0 (it was 1, under pipefail).
   : > "$TMP/$P-gpu-none"; printf 'proc a 1.0\nproc b 5.5\nengine b sm 5.5\n' > "$TMP/$P-gpu-two"
-  check_eq "gpu_rows: none, said, exit 0" "  (no GPU time) 0" "$(lib gpu_rows "$TMP/$P-gpu-none" | tr -d '\n'; echo " ${PIPESTATUS[0]}")"
-  check_eq "...rows most first, engines left out" "b 5.5%|a 1.0%" "$(lib gpu_rows "$TMP/$P-gpu-two" | awk '{ print $1, $2 }' | paste -sd '|')"
+  check_eq "gpu_rows: none, said, exit 0" "  (no GPU time) 0" "$(probe gpu_rows "$TMP/$P-gpu-none" | tr -d '\n'; echo " ${PIPESTATUS[0]}")"
+  check_eq "...rows most first, engines left out" "b 5.5%|a 1.0%" "$(probe gpu_rows "$TMP/$P-gpu-two" | awk '{ print $1, $2 }' | paste -sd '|')"
   # pmon_figures (finding 295): NVIDIA's own per-process sampling, the box's processes only.
   local pc=$TMP/$P-pmon-pids; printf '100 Hyprland\n101 quickshell\n102 heavy\n' > "$pc"
   local pm='# gpu         pid   type     sm    mem    enc    dec    jpg    ofa    command
@@ -19129,11 +19134,11 @@ t_unit_gpu() {
     0       101     G      -      -      -      -      -      -    quickshell
     0       555     G     60      3      -      -      -      -    Hyprland
     1       102     G      -      -      -      -      -      -    heavy'
-  local pf; pf=$(lib pmon_figures "$pc" <<<"$pm" | LC_ALL=C sort)
+  local pf; pf=$(probe pmon_figures "$pc" <<<"$pm" | LC_ALL=C sort)
   check_eq "pmon_figures: the window's samples averaged, the second before left out, mem not counted" \
     "engine Hyprland sm 3.0|engine heavy enc 5.0|engine heavy sm 49.0|proc Hyprland 3.0|proc heavy 54.0|proc quickshell 0.0" "$(paste -sd '|' <<<"$pf")"
   check_eq "...a process not in the box (555, the host's Hyprland) is not counted" "" "$(grep -E '(proc|engine) Hyprland (sm )?(6|3[5-9]|4)' <<<"$pf")"
-  check_eq "...no samples (only the header): nothing" "" "$(lib pmon_figures "$pc" <<<"$(head -2 <<<"$pm")")"
+  check_eq "...no samples (only the header): nothing" "" "$(probe pmon_figures "$pc" <<<"$(head -2 <<<"$pm")")"
 }
 
 # omabox cpu (#205, finding 277): /proc read on a fake tree (cpu_sample), the arithmetic on injected
@@ -20451,7 +20456,7 @@ t_run_cwd() {
 # --- runner --------------------------------------------------------------------------------------
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
-  t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
+  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
 

@@ -1644,4 +1644,56 @@ mod tests {
             b"{\"name\":\"b\",\"state\":\"dead\",\"hung\":false,\"plugins\":[],\"peeking\":false,\"keys_to_box\":false,\"orphan\":false}\n"
         );
     }
+
+    /// t_unit_gpu's client_render_check (#204, finding 290), box_exec's output and other_gpu given:
+    /// llvmpipe in an NVIDIA box said once, kept in box.json; no eglinfo (no output) neither.
+    /// (#[ignore]: its eglinfo verdict is awk's, which differs on CI; test/run.sh's unit tier runs it.)
+    #[test]
+    #[ignore = "runs awk: run by test/run.sh (cargo test -- --ignored)"]
+    fn client_render_as_bash() {
+        let ctx = uctx("crc");
+        let _ = std::fs::remove_dir_all(shell::path(&ctx.boxes));
+        std::fs::create_dir_all(shell::path(&ctx.d)).unwrap();
+        let bj = cat!(ctx.d, "/box.json");
+        std::fs::write(shell::path(&bj), r#"{"render":{"driver":"nvidia"}}"#).unwrap();
+        let eg_nv = b"MESA-EGL: warning: egl: failed to create dri2 screen\nWayland platform:\nEGL vendor string: Mesa Project\nOpenGL core profile renderer: llvmpipe (LLVM 22.1.8, 256 bits)\nOpenGL ES profile vendor: Mesa\nOpenGL ES profile renderer: llvmpipe (LLVM 22.1.8, 256 bits)\nOpenGL ES profile version: OpenGL ES 3.2 Mesa 26.2.2\n";
+        let mut c = ctx.clone();
+        c.name = b"pb".to_vec();
+        let (r, said) =
+            crate::exit::heard(|| client_render_from(&c, eg_nv, Some(b"renderD128 amdgpu")));
+        assert!(r.is_ok());
+        assert!(
+            said.starts_with("omabox: box 'pb': its apps render on llvmpipe, in software"),
+            "{said}"
+        );
+        assert_eq!(
+            said.matches("its apps render").count(),
+            1,
+            "said once: {said}"
+        );
+        let kept = jq::jq(
+            &["-c", ".client_render"],
+            Some(&std::fs::read(shell::path(&bj)).unwrap()),
+            jq::Err::Null,
+        )
+        .text();
+        assert_eq!(
+            kept,
+            br#"{"renderer":"llvmpipe (LLVM 22.1.8, 256 bits)","software":true}"#
+        );
+        // no eglinfo (127: no output): nothing said, nothing kept
+        std::fs::write(shell::path(&bj), r#"{"render":{"driver":"nvidia"}}"#).unwrap();
+        let (r, said) =
+            crate::exit::heard(|| client_render_from(&c, b"", Some(b"renderD128 amdgpu")));
+        assert!(r.is_ok());
+        assert_eq!(said, "");
+        let kept = jq::jq(
+            &["-c", ".client_render"],
+            Some(&std::fs::read(shell::path(&bj)).unwrap()),
+            jq::Err::Null,
+        )
+        .text();
+        assert_eq!(kept, b"null");
+        let _ = std::fs::remove_dir_all(shell::path(&ctx.boxes));
+    }
 }

@@ -177,6 +177,17 @@ mod tests {
         assert_eq!(conf_gpu(b"0000:03:00.0"), Some(b"0000:03:00.0".to_vec()));
         assert_eq!(conf_gpu(b"03:00.8"), None);
         assert_eq!(conf_gpu(b"x"), None);
+        // (t_unit_gpu: junk refused; a driver's name, as the list prints it, is its kind: finding 237)
+        assert_eq!(conf_gpu(b"geforce"), None);
+        for (d, k) in [
+            (&b"nouveau"[..], &b"nvidia"[..]),
+            (b"amdgpu", b"amd"),
+            (b"Radeon", b"amd"),
+            (b"i915", b"intel"),
+            (b"xe", b"intel"),
+        ] {
+            assert_eq!(conf_gpu(d).as_deref(), Some(k), "{d:?}");
+        }
         assert_eq!(at(b"/", b"/dev/dri"), b"/dev/dri");
         assert_eq!(at(b"/t/r/", b"/dev/dri"), b"/t/r/dev/dri");
         assert_eq!(at(b"/t/r", b"/sys"), b"/t/r/sys");

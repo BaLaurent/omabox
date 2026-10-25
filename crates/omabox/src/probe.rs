@@ -15,9 +15,20 @@ use crate::install::{AQ_BUILD, AQ_FIX_SYMBOL, AQ_FIXED_AFTER};
 /// The helpers the probe answers for, and the words each takes.
 pub const NAMES: &[(&str, &str)] = &[
     ("host_session", ""),
-    ("render_node", ""),
-    ("render_nodes", ""),
-    ("render_driver", "NODE"),
+    // The GPUs, their devices under ROOT ("/" by default; a stand-in tree's for the unit tests).
+    ("render_node", "[ROOT]"),
+    ("render_nodes", "[ROOT]"),
+    ("render_driver", "NODE [ROOT]"),
+    ("render_fallback", "NODE [ROOT]"),
+    ("gpu_why_not", "WANT [ROOT]"),
+    ("gpu_usable", "WANT [ROOT]"),
+    ("gpu_list", "[ROOT]"),
+    ("gpu_json", "[ROOT]"),
+    ("nvidia_card", "NODE [ROOT]"),
+    ("egl_render", ""),
+    ("soft_note", "RECORD DRIVER [OTHER]"),
+    ("gpu_rows", "FILE"),
+    ("pmon_figures", "PIDS"),
     ("hypr_aq_soname", ""),
     ("aq_pick", "SONAME SYSDIR"),
     ("aq_has_fix", "FILE"),
@@ -142,14 +153,65 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             let (sig, wl) = crate::host::host_session_die(&ctx)?;
             line(&cat!(sig, " ", wl))
         }
-        (b"render_node", []) => line(crate::render::render_node(&ctx)?.as_bytes()),
-        (b"render_nodes", []) => {
-            for n in crate::render::render_nodes() {
+        (b"render_node", r) if r.len() <= 1 => line(
+            crate::render::render_node_in(
+                &ctx,
+                crate::shell::env_or_empty("OMABOX_RENDER_NODE"),
+                root(r),
+            )?
+            .as_bytes(),
+        ),
+        (b"render_nodes", r) if r.len() <= 1 => {
+            for n in crate::render::render_nodes_in(root(r)) {
                 line(n.as_bytes())?;
             }
             Ok(())
         }
-        (b"render_driver", [n]) => line(&crate::gpu::render_driver(n)),
+        (b"render_driver", [n, r @ ..]) if r.len() <= 1 => {
+            line(&crate::gpu::render_driver_in(n, root(r)))
+        }
+        (b"render_fallback", [n, r @ ..]) if r.len() <= 1 => {
+            let n = crate::render::RenderNode::new(n).ok_or(Exit(2))?;
+            yes(crate::render::render_fallback_in(&n, root(r)))
+        }
+        (b"gpu_why_not", [w, r @ ..]) if r.len() <= 1 => {
+            line(&crate::render::gpu_why_not_in(w, root(r)))
+        }
+        (b"gpu_usable", [w, r @ ..]) if r.len() <= 1 => {
+            yes(crate::render::gpu_usable_in(w, root(r)))
+        }
+        (b"gpu_list", r) if r.len() <= 1 => out(crate::render::gpu_list_in(&ctx, root(r))),
+        (b"gpu_json", r) if r.len() <= 1 => {
+            let (auto, now) = crate::render::gpu_auto_now_in(&ctx, root(r));
+            let s = |v: Vec<u8>| {
+                if v.is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::Value::String(String::from_utf8_lossy(&v).into_owned())
+                }
+            };
+            let j = serde_json::json!({
+                "gpus": crate::render::gpu_json_in(root(r)),
+                "gpu_auto": s(auto),
+                "gpu_now": s(now),
+            });
+            line(j.to_string().as_bytes())
+        }
+        (b"nvidia_card", [n, r @ ..]) if r.len() <= 1 => {
+            let sys = crate::gpu::at(root(r), crate::render::SYSDRM.as_bytes());
+            line(&crate::render::nvidia_card_in(n, &sys).unwrap_or_default())
+        }
+        (b"egl_render", []) => line(&crate::ready::egl_render(&crate::shell::subst(
+            &stdin_all()?
+        ))),
+        (b"soft_note", [rec, drv, other @ ..]) if other.len() <= 1 => {
+            line(&crate::ready::soft_note(rec, drv, other.first().copied()))
+        }
+        (b"gpu_rows", [f]) => {
+            let r = std::fs::read(crate::shell::path(f)).unwrap_or_default();
+            crate::cmd::gpu::gpu_rows(&r)
+        }
+        (b"pmon_figures", [pids]) => out(crate::cmd::gpu::pmon_figures(pids, &stdin_all()?)),
         (b"hypr_aq_soname", []) => line(&crate::install::hypr_aq_soname(&ctx)?),
         // As OMABOX_AQUAMARINE=system with SYSDIR the system's lib dir: KIND|VER|FIXED|DESC.
         (b"aq_pick", [so, sys]) => {
@@ -545,6 +607,11 @@ fn awk_stdin(args: &[Vec<u8>]) -> Res<()> {
         Some(&stdin_all()?),
         crate::jq::Err::Inherit,
     ))
+}
+
+/// The ROOT word, "/" when not given.
+fn root<'a>(r: &[&'a [u8]]) -> &'a [u8] {
+    r.first().copied().unwrap_or(b"/")
 }
 
 fn owned(v: &[&[u8]]) -> Vec<Vec<u8>> {

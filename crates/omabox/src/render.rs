@@ -768,4 +768,131 @@ mod tests {
         assert_eq!(nvidia_card_in(b"/dev/dri/renderD129", &s), None);
         std::fs::remove_dir_all(&t).unwrap();
     }
+
+    /// t_unit_nvidia: nvidia_node with a stand-in nvidia-modprobe (never the real one: it is setuid
+    /// root and makes /dev nodes) that logs its words and makes the node it is asked for, or fails;
+    /// the nodes it makes links to /dev/null, a character device.
+    #[test]
+    fn nvidia_node_asks_the_helper_as_bash() {
+        use std::cell::RefCell;
+        let t = std::env::temp_dir().join(format!("omabox-nvh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&t);
+        let tb = shell::bytes(&t).to_vec();
+        let slot = b"0000:01:00.0";
+        std::fs::create_dir_all(t.join("proc/gpus/0000:01:00.0")).unwrap();
+        std::fs::create_dir_all(t.join("dev")).unwrap();
+        let info = t.join("proc/gpus/0000:01:00.0/information");
+        std::fs::write(
+            &info,
+            "Model: \t\t NVIDIA GeForce RTX 5070 Ti\nIRQ:   \t\t 180\nDevice Minor: \t 3\n",
+        )
+        .unwrap();
+        let ctl = t.join("dev/nvidiactl");
+        let gpu = t.join("dev/nvidia3");
+        std::os::unix::fs::symlink("/dev/null", &ctl).unwrap();
+        let (p, d) = (cat!(tb, "/proc"), cat!(tb, "/dev"));
+        let mut ctx = Ctx::new(b"up", b"/x".to_vec());
+        ctx.parsed();
+        let calls: RefCell<Vec<String>> = RefCell::default();
+        let make = RefCell::new(false);
+        let helper = |m: &[u8]| {
+            calls
+                .borrow_mut()
+                .push(format!("-c {}", String::from_utf8_lossy(m)));
+            if *make.borrow() {
+                let n = if m == b"255" {
+                    "nvidiactl".to_string()
+                } else {
+                    format!("nvidia{}", String::from_utf8_lossy(m))
+                };
+                let _ = std::os::unix::fs::symlink("/dev/null", t.join("dev").join(n));
+            }
+        };
+        let nv = |create: bool| {
+            crate::exit::heard(|| nvidia_node_with(&ctx, slot, create, &p, &d, Some(&helper)))
+        };
+        let take = || std::mem::take(&mut *calls.borrow_mut()).join(" ");
+        // a missing node the helper does not create: what to run, after asking it once
+        let (r, said) = nv(true);
+        assert!(r.is_err());
+        assert!(
+            said.contains(&format!(
+                "no usable {tb}/dev/nvidia3 (run `nvidia-modprobe -c 3`,",
+                tb = t.display()
+            )),
+            "{said}"
+        );
+        assert_eq!(take(), "-c 3");
+        // CREATE false (an interactive box's other GPUs): not asked
+        let (r, said) = nv(false);
+        assert!(r.is_err() && said.contains("no usable"), "{said}");
+        assert_eq!(take(), "");
+        // a missing node the helper creates; then one there: used, not asked
+        *make.borrow_mut() = true;
+        assert_eq!(nv(true).0.unwrap(), cat!(tb, "/dev/nvidia3"));
+        assert_eq!(take(), "-c 3");
+        assert_eq!(nv(true).0.unwrap(), cat!(tb, "/dev/nvidia3"));
+        assert_eq!(take(), "");
+        // a missing control node asks too, for minor 255, and says what makes it
+        std::fs::remove_file(&ctl).unwrap();
+        *make.borrow_mut() = false;
+        let (r, said) = nv(true);
+        assert!(r.is_err());
+        assert!(
+            said.contains(&format!(
+                "no usable {}/dev/nvidiactl (run `nvidia-modprobe -c 255`,",
+                t.display()
+            )),
+            "{said}"
+        );
+        assert_eq!(take(), "-c 255");
+        *make.borrow_mut() = true;
+        assert_eq!(nv(true).0.unwrap(), cat!(tb, "/dev/nvidia3"));
+        assert_eq!(take(), "-c 255");
+        // both missing: both named, both asked for, one call each
+        std::fs::remove_file(&ctl).unwrap();
+        std::fs::remove_file(&gpu).unwrap();
+        *make.borrow_mut() = false;
+        let (r, said) = nv(true);
+        assert!(r.is_err());
+        let want = format!(
+            "no usable {d}/dev/nvidia3 {d}/dev/nvidiactl (run `nvidia-modprobe -c 3` `nvidia-modprobe -c 255`,",
+            d = t.display()
+        );
+        assert!(said.contains(&want), "{said}");
+        assert_eq!(take(), "-c 3 -c 255");
+        // no helper on PATH: not asked, the same words
+        let (r, said) = crate::exit::heard(|| nvidia_node_with(&ctx, slot, true, &p, &d, None));
+        assert!(r.is_err() && said.contains("no usable"), "{said}");
+        assert_eq!(take(), "");
+        // no device minor in the driver's file; a GPU the driver does not list
+        std::fs::write(&info, "Model: x\n").unwrap();
+        let (r, said) = nv(true);
+        assert!(r.is_err() && said.contains("no device minor"), "{said}");
+        let (r, said) = crate::exit::heard(|| {
+            nvidia_node_with(&ctx, b"0000:02:00.0", true, &p, &d, Some(&helper))
+        });
+        assert!(r.is_err());
+        assert!(
+            said.contains(&format!(
+                "has no {}/proc/gpus/0000:02:00.0/information",
+                t.display()
+            )),
+            "{said}"
+        );
+        // nvidia_card (finding 294): the card, not its control or render entries; none; a node sysfs lacks
+        std::fs::create_dir_all(t.join("drm/renderD129/device/drm/card0")).unwrap();
+        std::fs::create_dir_all(t.join("drm/renderD129/device/drm/renderD129")).unwrap();
+        std::fs::create_dir_all(t.join("drm/renderD130/device/drm/renderD130")).unwrap();
+        std::os::unix::fs::symlink("card0", t.join("drm/renderD129/device/drm/controlD64"))
+            .unwrap();
+        let s = cat!(tb, "/drm");
+        assert_eq!(
+            nvidia_card_in(b"/dev/dri/renderD129", &s),
+            Some(b"card0".to_vec())
+        );
+        assert_eq!(nvidia_card_in(b"/dev/dri/renderD130", &s), None);
+        assert_eq!(nvidia_card_in(b"/dev/dri/renderD131", &s), None);
+        std::fs::remove_dir_all(&t).unwrap();
+    }
 }
