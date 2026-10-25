@@ -35,7 +35,7 @@ pub const TITLEBARS_SO: &str = "/usr/lib/omarchy-hyprland-titlebars/titlebars.so
 pub const AUDIO_SINK: &str = "omabox-speaker";
 pub const AUDIO_MIC: &str = "omabox-mic";
 
-/// The jq programs here, as bin/omabox has them (t_unit_rust_parity checks each is there verbatim).
+/// The jq programs here, as bash's omabox had them (byte for byte until the port ended, #324).
 pub const JQ_INLINE: &[&str] = &[
     ".hyprland_version = $v",
     ".version // empty",

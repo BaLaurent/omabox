@@ -1,8 +1,8 @@
 //! omabox's help (#324 wave 6-front, A1): bash's usage_text compiled in, cut as bash's usage and
 //! usage_form cut it: bare `help` is every command's lines, `help --long` all of it, `help CMD` (and
 //! `CMD --help`) one command's lines and the paragraphs whose `@` line names it. `@` lines never show;
-//! `@short` paragraphs only in the short form, which is the default. help.txt is bin/omabox's text
-//! with `$PASS_KEY` expanded (t_unit_rust_front checks the two are the same bytes).
+//! `@short` paragraphs only in the short form, which is the default. help.txt was bash's text with
+//! `$PASS_KEY` expanded, the same bytes until the port ended (#324 wave 6b-end); it is the help now.
 
 use crate::exit::{Exit, Res, out, say};
 

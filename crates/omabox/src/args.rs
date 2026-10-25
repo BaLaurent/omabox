@@ -5,8 +5,8 @@ use crate::cat;
 use crate::exit::{Ctx, Exit, Res};
 use crate::shell::strip_nl;
 
-/// Each command's options, as bin/omabox's CMD_OPTS has them (t_unit_rust_front compares the two):
-/// `=` takes a value, `?` may take one. One table for eq_split, unknown_opt and its nearest. None
+/// Each command's options, as bash's CMD_OPTS had them (t_unit_cli_opts checks each against the
+/// command's help, `_rust-opts CMD`): `=` takes a value, `?` may take one. One table for eq_split, unknown_opt and its nearest. None
 /// for a command that takes none (help, guard, host, broker, version as such).
 pub fn cmd_opts(cmd: &[u8]) -> Option<&'static str> {
     match cmd {

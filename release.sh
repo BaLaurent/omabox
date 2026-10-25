@@ -7,7 +7,7 @@
 #   ./release.sh --upload   the same, then attach both to that tag's GitHub release
 #
 # The tarball is `git archive` of the tag, so it holds exactly what the tag does, minus what
-# .gitattributes marks export-ignore (demo media, spike/, .github/, the test oracle). git gzips with
+# .gitattributes marks export-ignore (demo media, spike/, .github/). git gzips with
 # no timestamp: the same tag gives the same bytes, and the checksum can be checked against a rebuild.
 # A tarball with crates/ in it is built first as a package builds it (#324 wave 6-flip, proposal D3):
 # fresh, its crates fetched (--locked) into a CARGO_HOME of its own, then built with no network

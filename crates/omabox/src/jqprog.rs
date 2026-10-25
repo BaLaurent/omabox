@@ -1,5 +1,5 @@
-//! The jq programs bin/omabox keeps in variables, byte for byte (t_unit_rust_parity compares each
-//! with bash's): the desktop's windows, layers and changes are jq's answers, so jq runs them.
+//! The jq programs bash's omabox kept in variables, byte for byte as it had them until the port
+//! ended (#324): the desktop's windows, layers and changes are jq's answers, so jq runs them.
 
 macro_rules! layer_span_jq { () => { r#"
   def spans($m; $mon): (first($m[]? | select(.name == $mon)) // null) as $o

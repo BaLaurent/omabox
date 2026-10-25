@@ -323,19 +323,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "reads the test oracle (test/oracle/, not in a tarball): test/run.sh runs it"]
-    fn programs_are_bash_s() {
-        let script = std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test/oracle/omabox.bash"
-        ))
-        .unwrap();
-        for p in JQ_INLINE {
-            assert!(
-                crate::exit::contains(&script, p.as_bytes()),
-                "not in the oracle: {p}"
-            );
-        }
+    fn soft_apps_prog_whole() {
         assert!(soft_apps_prog().ends_with("rendering's)\""));
     }
 

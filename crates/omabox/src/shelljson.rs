@@ -214,20 +214,6 @@ pub fn workspace_widgets(dirs: &[Vec<u8>]) -> Ran {
 mod tests {
     use super::*;
 
-    // Each program as bin/omabox has it, byte for byte (the suite checks it too, `_rust-jq --inline`).
-    #[test]
-    #[ignore = "reads the test oracle (test/oracle/, not in a tarball): test/run.sh runs it"]
-    fn programs_are_bash_s() {
-        let script = std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test/oracle/omabox.bash"
-        ))
-        .unwrap();
-        for p in JQ_INLINE {
-            assert!(crate::exit::contains(&script, p.as_bytes()), "{p}");
-        }
-    }
-
     #[test]
     fn sections() {
         assert_eq!(widget_section(b"", true), b"centerEnd");

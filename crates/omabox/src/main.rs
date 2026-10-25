@@ -181,7 +181,8 @@ fn main() -> ExitCode {
                 Err(exit::Exit(rc)) => ExitCode::from(rc),
             }
         }
-        // The suite's check that the options table here is bash's CMD_OPTS (t_unit_rust_front).
+        // The options table (args.rs), for the suite's check of it against each command's help
+        // (t_unit_cli_opts).
         Some("_rust-opts") => match rest
             .first()
             .and_then(|c| args::cmd_opts(c.as_encoded_bytes()))
@@ -202,8 +203,8 @@ fn main() -> ExitCode {
             let words: Vec<Vec<u8>> = rest.into_iter().map(OsString::into_vec).collect();
             ExitCode::from(ptr::release_main(&words))
         }
-        // The suite's check that the jq programs here are bash's, byte for byte.
-        // record's programs (recprog.rs), each as it stands quoted in bin/omabox.
+        // The programs omabox runs (jq's, awk's, record's shell), each as it was quoted in bash's
+        // omabox: what the suite compared with it until the oracle went (#324 wave 6b-end).
         Some("_rust-jq") if rest.first().is_some_and(|a| a == "--recprog") => {
             for p in recprog::ALL {
                 print!("{p}\0");

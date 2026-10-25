@@ -642,20 +642,4 @@ mod tests {
         assert!(!user_marker(b"123\nj1\n"));
         assert!(!user_marker(b""));
     }
-
-    #[test]
-    #[ignore = "reads the test oracle (test/oracle/, not in a tarball): test/run.sh runs it"]
-    fn programs_are_bash_s() {
-        let script = std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test/oracle/omabox.bash"
-        ))
-        .unwrap();
-        for p in JQ_INLINE {
-            assert!(
-                crate::exit::contains(&script, p.as_bytes()),
-                "not in the oracle: {p}"
-            );
-        }
-    }
 }

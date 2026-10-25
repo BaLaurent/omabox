@@ -704,22 +704,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "reads the test oracle (test/oracle/, not in a tarball): test/run.sh runs it"]
-    fn programs_are_bash_s() {
-        let script = std::fs::read(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../test/oracle/omabox.bash"
-        ))
-        .unwrap();
-        for p in JQ_INLINE {
-            assert!(
-                crate::exit::contains(&script, p.as_bytes()),
-                "not in the oracle: {p}"
-            );
-        }
-    }
-
-    #[test]
     fn ids() {
         assert!(id_ok(b"chaves.omabox"));
         assert!(id_ok(b"_x-1"));

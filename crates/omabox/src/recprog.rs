@@ -1,6 +1,7 @@
-//! record's programs that run as bin/omabox has them inline (#324 wave 4b): the shell its box runs,
-//! awk's and jq's, byte for byte (t_unit_rust_parity's check of `_rust-jq --inline` holds them
-//! to bin/omabox). Made from bin/omabox, not by hand.
+//! record's programs that run as bash's omabox had them inline (#324 wave 4b): the shell its box
+//! runs, awk's and jq's. Taken out of bash's omabox byte for byte while it lived (gen_recprog.py,
+//! which went with the test oracle in wave 6b-end, finding 531); since then they are omabox's own,
+//! edited here.
 
 pub const RUNNING_SH: &str =
     r###"for p; do [ "$(cat "/proc/$p/comm" 2>/dev/null)" = wf-recorder ] || exit 1; done"###;

@@ -1,6 +1,4 @@
-# What a release tarball (release.sh, git archive) leaves out: demo media, the original spike, CI, and
-# the test oracle (bash's omabox, for the suite's parity until wave 6b ends: #324).
+# What a release tarball (release.sh, git archive) leaves out: demo media, the original spike, CI.
 docs/media/ export-ignore
 spike/ export-ignore
 .github/ export-ignore
-test/oracle/ export-ignore
