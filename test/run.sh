@@ -5696,6 +5696,12 @@ EOF
   parity "jailed: up --plugin of a relative folder made absolute" up rjx --plugin . --ro-bind .:/x --seed dev.env:.config/d --seed '~/x:y'
   mkdir -p "$r/proj/build"; : > "$r/proj/build/Hyprland"; : > "$r/proj/build/quickshell"
   parity "jailed: up --hyprland and --quickshell of relative paths made absolute" up rjx --hyprland build/Hyprland --quickshell build/quickshell
+  mkdir -p "$r/proj/fixtures" "$r/proj/th"
+  parity "jailed: up --seed (relative, and one not there) and --theme-dir" up rjx --seed fixtures:.config/x --seed nowhere:y --theme-dir th
+  rp_env+=(OMABOX_SHOT_FIT=1280); parity "jailed: shot with OMABOX_SHOT_FIT set, both ways" shot -o "$r/out/sf.png"; rp_env=("${rp_env[@]:0:${#rp_env[@]}-1}")
+  parity "jailed: record start -b NAME" record -b other start -o "$r/out/rb.mp4"
+  parity "jailed: record hold -b NAME" record -b other hold 2s
+  parity "jailed: record --for unreadable: refused here" record --for 2x
   # (relay_call's, from t_unit_hyprland and t_unit_quickshell: the broker is not in the caller's folder)
   local rjo; rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" up rjx --hyprland build/Hyprland --quickshell build/quickshell 2>&1 | paste -sd '|')
   check_match "jailed: --hyprland goes absolute" "broker: \[--hyprland\]\|broker: \[$r/proj/build/Hyprland\]" "$rjo"
@@ -5707,7 +5713,6 @@ EOF
   check_fails "...none when it has none" grep -q SHOT_FIT <<<"$rjo"
   # (relay_call's, from t_unit_mount_rules: a relative --seed SRC goes absolute, DEST as given; one not
   # there as given, for the broker to say so; a relative --theme-dir absolute, #170)
-  mkdir -p "$r/proj/fixtures" "$r/proj/th"
   rjo=$(cd "$r/proj" && env -u OMABOX_JAIL PATH="$r/bin:$PATH" XDG_RUNTIME_DIR="$r/rt" "$CLI" up rjx --seed fixtures:.config/x --seed nowhere:y --theme-dir th 2>&1 | paste -sd '|')
   check_match "jailed: a relative --seed SRC goes absolute, DEST as given" "broker: \[--seed\]\|broker: \[$r/proj/fixtures:\.config/x\]" "$rjo"
   check_match "...one that is not there as given" "broker: \[--seed\]\|broker: \[nowhere:y\]" "$rjo"
@@ -5936,6 +5941,12 @@ t_unit_rust_front() {
     for c in clip host peek guard broker setup save saves which calibrate nosuch; do parity "broker: $c refused" "$c"; done
     parity "broker: -b N ls: the front's refusal first" -b rpf ls
     parity "broker: shot --help: the front's help first" shot --help
+    # (what broker_check refuses and lets through, bash's broker beside the binary's until the flip;
+    # those let through find no box here)
+    parity "broker: keys-to-box refused" keys-to-box
+    parity "broker: saves rm refused" saves rm s
+    parity "broker: config workspace 3 refused" config workspace 3
+    for c in pixel tree cpu gpu gdb output reload lua log events scroll; do parity "broker: $c let through" "$c"; done
     # (every internal word refused through the broker, whatever the half has)
     for c in _reap _rust _rust-jq _rust-opts _rust-jail _ptr-release _enter; do parity "broker: $c refused" "$c" x; done
     # (the suite's probe: read-only, but internal all the same: never a jailed agent's)
