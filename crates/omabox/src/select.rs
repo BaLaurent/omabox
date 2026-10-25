@@ -211,6 +211,11 @@ fn session_fallback(ctx: &mut Ctx) {
 /// by hand names no agent; neither does one in a pid namespace of its own, nor a pid this command
 /// does not descend from.
 pub fn agent_proc() -> Option<(Vec<u8>, Vec<u8>)> {
+    agent_proc_with(procfs::proc_start)
+}
+
+/// agent_proc with START for proc_start (a #[test]'s agent that exits as it is read).
+fn agent_proc_with(start: impl Fn(&[u8]) -> Option<Vec<u8>>) -> Option<(Vec<u8>, Vec<u8>)> {
     let v = agent_var()?;
     let pid = match v {
         "CLAUDE_CODE_SESSION_ID" => env_or_empty("CLAUDE_PID"),
@@ -232,7 +237,7 @@ pub fn agent_proc() -> Option<(Vec<u8>, Vec<u8>)> {
         return None;
     }
     // Gone meanwhile: no start time to record (with none, agent_alive would never find it gone).
-    let start = procfs::proc_start(&pid).filter(|s| !s.is_empty())?;
+    let start = start(&pid).filter(|s| !s.is_empty())?;
     Some((pid, start))
 }
 
