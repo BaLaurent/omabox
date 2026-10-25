@@ -4,9 +4,7 @@
 //! kill_box, kill_reapers, rm_box), sweep_homes, box_held, more_screens, client_render_check and
 //! box_json.
 
-use crate::boxes::{
-    BoxPid, box_alive, box_home_file, box_pasta, box_pid, box_state, meta, run_read,
-};
+use crate::boxes::{BoxPid, BoxSys, RealBox, box_home_file, box_state, meta, run_read};
 use crate::cat;
 use crate::exec::{ErrTo, ExecOpts, Out, Redir, box_exec, on_box, pipe, read_all};
 use crate::exit::{Ctx, Exit, Res, muted, say};
@@ -121,10 +119,14 @@ fn os(v: &[u8]) -> &OsStr {
 /// starting_ok: where up waits on its box, one that died, or a throwaway's whose `omabox run` is
 /// gone, ends it now.
 pub fn starting_ok(ctx: &Ctx, r: &Ready) -> Res<()> {
-    if !box_alive(ctx)? {
+    starting_ok_with(&RealBox, ctx, r)
+}
+
+fn starting_ok_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, r: &Ready) -> Res<()> {
+    if !sys.box_alive(ctx)? {
         return Err(died_starting(ctx, r.covers));
     }
-    up_owner_check(ctx, r.owner.as_ref(), r.before_end)
+    up_owner_check_with(sys, ctx, r.owner.as_ref(), r.before_end)
 }
 
 /// up_owner_check (#222): a throwaway box's up whose `omabox run` is gone (killed outright while up
@@ -133,6 +135,15 @@ pub fn starting_ok(ctx: &Ctx, r: &Ready) -> Res<()> {
 /// SIGPIPE ignored (`trap '' PIPE`): the run read this up's stderr, and a write to it could end this
 /// process. Said last. Err(1) when it ended the up.
 pub fn up_owner_check(ctx: &Ctx, owner: Option<&Owner>, before_end: &dyn Fn()) -> Res<()> {
+    up_owner_check_with(&RealBox, ctx, owner, before_end)
+}
+
+fn up_owner_check_with<S: BoxSys + ?Sized>(
+    sys: &S,
+    ctx: &Ctx,
+    owner: Option<&Owner>,
+    before_end: &dyn Fn(),
+) -> Res<()> {
     let Some(o) = owner else { return Ok(()) };
     if owner_alive(&o.pid, &o.start) {
         return Ok(());
@@ -143,9 +154,9 @@ pub fn up_owner_check(ctx: &Ctx, owner: Option<&Owner>, before_end: &dyn Fn()) -
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
     let mut left = "";
-    if muted(|| kill_box(ctx)) {
+    if muted(|| sys.kill_box(ctx)) {
         kill_reapers(ctx);
-        rm_box(ctx);
+        sys.rm_box(ctx);
         let _ = std::fs::remove_file(ctx.in_boxes(cat!(".lock-", ctx.name)));
     } else {
         left = " (left, dead, to its reaper)";
@@ -196,7 +207,11 @@ fn signal_ok(pid: &[u8], sig: libc::c_int) -> bool {
 /// SIGTERM is ignored, finding 6) and pasta's; wait for them, at most 10 s. The dir stays. Whether
 /// PID 1 is gone (bash's status).
 pub fn kill_box(ctx: &Ctx) -> bool {
-    let pid = match box_pid(&ctx.d) {
+    kill_box_with(&RealBox, ctx)
+}
+
+pub fn kill_box_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> bool {
+    let pid = match sys.box_pid(&ctx.d) {
         BoxPid::Pid(p) => p,
         BoxPid::None | BoxPid::Unknown => Vec::new(),
     };
@@ -211,7 +226,7 @@ pub fn kill_box(ctx: &Ctx) -> bool {
         }
     }
     // A box whose pid was never found: pasta's own pid namespace holds it, end that instead.
-    if let Some(pasta) = box_pasta(&ctx.d) {
+    if let Some(pasta) = sys.box_pasta(&ctx.d) {
         signal_ok(&pasta, libc::SIGKILL);
         if let Some(c) = crate::procfs::children(&pasta).first() {
             signal_ok(c, libc::SIGKILL);
@@ -439,6 +454,10 @@ fn last_line(t: &[u8]) -> Vec<u8> {
 
 /// wait_hyprland: until the box's Hyprland is up (share/hyprland.lua writes omabox.env once it is).
 pub fn wait_hyprland(ctx: &Ctx, r: &Ready) -> Res<()> {
+    wait_hyprland_with(&RealBox, ctx, r)
+}
+
+fn wait_hyprland_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, r: &Ready) -> Res<()> {
     let t = ready_timeout(ctx)?;
     let deadline = after(t);
     while !ctx
@@ -446,7 +465,7 @@ pub fn wait_hyprland(ctx: &Ctx, r: &Ready) -> Res<()> {
         .metadata()
         .is_ok_and(|m| m.len() > 0)
     {
-        starting_ok(ctx, r)?;
+        starting_ok_with(sys, ctx, r)?;
         if past(deadline) {
             return Err(ctx.die(cat!(
                 "Hyprland not up after ",
@@ -697,16 +716,20 @@ fn after_space(s: &[u8]) -> &[u8] {
 /// DEADLINE. A box gone meanwhile is said at once (#157, finding 216). A missed frame starts the
 /// count again. (The frames themselves are compared, where bash compared their md5sums.)
 pub fn bar_settle(ctx: &Ctx, r: &Ready, geom: &[u8], deadline: Instant) -> Res<()> {
+    bar_settle_with(&RealBox, ctx, r, geom, deadline)
+}
+
+fn bar_settle_with<S: BoxSys + ?Sized>(
+    sys: &S,
+    ctx: &Ctx,
+    r: &Ready,
+    geom: &[u8],
+    deadline: Instant,
+) -> Res<()> {
     let (mut last, mut same): (Option<Vec<u8>>, u32) = (None, 0);
     while same < 3 && !past(deadline) {
-        starting_ok(ctx, r)?;
-        let g = on_box(
-            ctx,
-            &w(&[b"timeout", b"2", b"grim", b"-g", geom, b"-"]),
-            false,
-            Out::Capture(None),
-            ErrTo::Null,
-        );
+        starting_ok_with(sys, ctx, r)?;
+        let g = sys.on_box(ctx, &w(&[b"timeout", b"2", b"grim", b"-g", geom, b"-"]));
         if g.rc != 0 {
             same = 0;
             last = None;

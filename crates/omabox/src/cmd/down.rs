@@ -5,7 +5,7 @@
 //! which box it decided on (DownIf).
 
 use crate::args::{optarg, unknown_opt};
-use crate::boxes::{box_alive, box_state, list_names, lock_file, meta};
+use crate::boxes::{BoxSys, RealBox, box_alive, list_names, lock_file, meta};
 use crate::cat;
 use crate::exit::{Ctx, Res, muted, say};
 use crate::jail::{in_jail, jail_id};
@@ -33,6 +33,10 @@ pub struct DownIf {
 }
 
 pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
+    run_with(&RealBox, ctx, args)
+}
+
+fn run_with<S: BoxSys + ?Sized>(sys: &S, ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     let (mut names, mut all, mut orphans) = (Vec::<Vec<u8>>::new(), false, false);
     let mut i = 0;
     while i < args.len() {
@@ -55,7 +59,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             return Err(ctx.die("down: --orphans takes no names, nor --all"));
         }
         ctx.parsed();
-        return down_orphans(ctx);
+        return down_orphans_with(sys, ctx);
     }
     if all && !names.is_empty() {
         return Err(ctx.die("down: --all or names, not both"));
@@ -70,7 +74,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     }
     let mut ok = true;
     for n in &names {
-        ok &= down_one(ctx, n, &DownIf::default())?;
+        ok &= down_one_with(sys, ctx, n, &DownIf::default())?;
     }
     if ok {
         Ok(())
@@ -82,6 +86,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
 /// down of one name (`""`: the default box): whether it went (or there was none to take down);
 /// Err for a refusal that ends the command (a bad name, another jail's box).
 pub fn down_one(ctx: &mut Ctx, given: &[u8], cond: &DownIf) -> Res<bool> {
+    down_one_with(&RealBox, ctx, given, cond)
+}
+
+fn down_one_with<S: BoxSys + ?Sized>(
+    sys: &S,
+    ctx: &mut Ctx,
+    given: &[u8],
+    cond: &DownIf,
+) -> Res<bool> {
     select_box(ctx, given)?;
     let _ = std::fs::remove_file(ctx.in_boxes(cat!(".expired-", ctx.name)));
     let lk = ctx.in_boxes(cat!(".lock-", ctx.name));
@@ -91,7 +104,7 @@ pub fn down_one(ctx: &mut Ctx, given: &[u8], cond: &DownIf) -> Res<bool> {
     // The time it found none, for an `up` of the name that started before but has no lock yet:
     // written before the lock is looked at again (finding 237).
     if !there(ctx) {
-        down_mark(ctx, cond);
+        down_mark(sys, ctx, cond);
         if !there(ctx) {
             return Ok(down_none(ctx));
         }
@@ -118,7 +131,7 @@ pub fn down_one(ctx: &mut Ctx, given: &[u8], cond: &DownIf) -> Res<bool> {
     // A box gone takes its lock file with it, removed while held (#158). Its marker before the lock
     // goes (finding 237): an `up` waiting on it then reads it.
     if !shell::path(&ctx.d).is_dir() {
-        down_mark(ctx, cond);
+        down_mark(sys, ctx, cond);
         let _ = std::fs::remove_file(&lk);
         drop(lock);
         return Ok(down_none(ctx));
@@ -147,7 +160,7 @@ pub fn down_one(ctx: &mut Ctx, given: &[u8], cond: &DownIf) -> Res<bool> {
     // A box whose PID 1 this user namespace cannot read (a sandbox's call) is left as it is, said as
     // up says it: bash's kill_box took it for no box, removed its dir and said it down while its
     // PID 1 ran on (finding 473).
-    if matches!(crate::boxes::box_pid(&ctx.d), crate::boxes::BoxPid::Unknown) {
+    if matches!(sys.box_pid(&ctx.d), crate::boxes::BoxPid::Unknown) {
         say(cat!(
             "cannot tell whether box '",
             ctx.name,
@@ -156,15 +169,15 @@ pub fn down_one(ctx: &mut Ctx, given: &[u8], cond: &DownIf) -> Res<bool> {
         return Ok(false);
     }
     // Its peek windows, one per monitor shown (#164).
-    for p in crate::marks::peek_pids(ctx) {
+    for p in sys.peek_pids(ctx) {
         signal(&p, libc::SIGTERM);
     }
     let was_interactive = meta(&ctx.d, "mode").0 == b"interactive";
-    if !crate::ready::kill_box(ctx) {
+    if !sys.kill_box(ctx) {
         return Ok(false);
     }
     crate::ready::kill_reapers(ctx);
-    crate::ready::rm_box(ctx);
+    sys.rm_box(ctx);
     let _ = std::fs::remove_file(&lk);
     drop(lock);
     // (a host that does not answer must not fail the down)
@@ -198,13 +211,13 @@ fn signal(pid: &[u8], sig: libc::c_int) {
 /// 513): the pid its pid namespace made last as the marker is written, that namespace, and this
 /// call's time (CALL_US), each `-` when it cannot be told. Bash's up reads a marker of one number
 /// only, so it takes these for none (a bash up is a fallback's, with a bash down).
-fn down_mark(ctx: &Ctx, cond: &DownIf) {
+fn down_mark<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, cond: &DownIf) {
     if cond.created.is_none() {
         let me = std::process::id().to_string().into_bytes();
         let mark = ctx.in_boxes(cat!(".down-", ctx.name));
         // (a jail's never takes the place of the user's own, which cancels any up)
         let users = in_jail() && std::fs::read(&mark).is_ok_and(|m| user_marker(&m));
-        if let (Some(start), false) = (crate::procfs::proc_start(&me), users) {
+        if let (Some(start), false) = (sys.proc_start(&me), users) {
             let last = crate::procfs::last_pid().map(|n| n.to_string().into_bytes());
             let ns = crate::procfs::pidns(b"self").filter(|n| !n.is_empty() && !n.contains(&b' '));
             let mut v = cat!(
@@ -296,11 +309,11 @@ fn down_none(ctx: &Ctx) -> bool {
 
 /// down --orphans (#220): every box `ls` calls an orphan, each named with what started it, then
 /// taken down as that box (not a new one that took its name meanwhile).
-fn down_orphans(ctx: &mut Ctx) -> Res<()> {
+fn down_orphans_with<S: BoxSys + ?Sized>(sys: &S, ctx: &mut Ctx) -> Res<()> {
     let mut found: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for n in list_names(ctx, false) {
         select_box(ctx, &n)?;
-        if box_state(&ctx.d) != "up" || !crate::ready::box_orphan(ctx) {
+        if sys.box_state(&ctx.d) != "up" || !crate::ready::box_orphan(ctx) {
             continue;
         }
         found.push((ctx.name.clone(), meta(&ctx.d, "created").0));
@@ -327,7 +340,7 @@ fn down_orphans(ctx: &mut Ctx) -> Res<()> {
             created: Some(created),
             agent_gone: false,
         };
-        ok &= down_one(ctx, &n, &cond)?;
+        ok &= down_one_with(sys, ctx, &n, &cond)?;
     }
     if ok {
         Ok(())

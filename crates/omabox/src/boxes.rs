@@ -141,6 +141,52 @@ pub fn box_alive(ctx: &Ctx) -> Res<bool> {
     }
 }
 
+/// What down, the reapers and up's waits ask of the system about a box: the faults the suite made
+/// by redefining bash's functions (`box_pid() {...}; kill_box`, `rm_box() {...}; cmd_down`) are a
+/// #[test]'s fake of this (#324 wave 6-suite, D5). Each method is the real one unless a fake says
+/// otherwise; RealBox is the real one throughout.
+pub trait BoxSys {
+    fn box_pid(&self, d: &[u8]) -> BoxPid {
+        box_pid(d)
+    }
+    fn box_pasta(&self, d: &[u8]) -> Option<Vec<u8>> {
+        box_pasta(d)
+    }
+    fn peek_pids(&self, ctx: &Ctx) -> Vec<Vec<u8>> {
+        crate::marks::peek_pids(ctx)
+    }
+    fn proc_start(&self, pid: &[u8]) -> Option<Vec<u8>> {
+        procfs::proc_start(pid)
+    }
+    fn box_state(&self, d: &[u8]) -> &'static str {
+        box_state(d)
+    }
+    fn box_alive(&self, ctx: &Ctx) -> Res<bool> {
+        box_alive(ctx)
+    }
+    /// `on_box ARGS 2>/dev/null`, its output captured.
+    fn on_box(&self, ctx: &Ctx, args: &[Vec<u8>]) -> crate::exec::Ran {
+        crate::exec::on_box(
+            ctx,
+            args,
+            false,
+            crate::exec::Out::Capture(None),
+            crate::exec::ErrTo::Null,
+        )
+    }
+    fn rm_box(&self, ctx: &Ctx) {
+        crate::ready::rm_box(ctx);
+    }
+    fn kill_box(&self, ctx: &Ctx) -> bool {
+        crate::ready::kill_box_with(self, ctx)
+    }
+}
+
+/// The system itself.
+pub struct RealBox;
+
+impl BoxSys for RealBox {}
+
 /// up, dead, or unknown: a box whose state this user namespace cannot read (box_pid's 3), for a
 /// list, which shows it as that instead of refusing them all (#87).
 pub fn box_state(d: &[u8]) -> &'static str {
