@@ -8396,6 +8396,13 @@ t_run_stdio() {
   local t0=$SECONDS
   ob run -b "$B" -- true < "$d/rnd"
   check "...a command that takes none of a 3 MB stdin returns at once ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -lt 10
+  # The leader of the command's session in the box (finding 494) is a fork of omabox: it showed the
+  # caller's whole call, so `run -- pgrep -f WORD` found it by the command's own words (finding 511).
+  check_fails "run -- pgrep -f WORD: nothing in the box has the words of run's own call (finding 511)" ob run -b "$B" -- pgrep -f t511-word
+  # (the keeper is the binary's: bash's nsenter waits outside the box, an install's every command)
+  # shellcheck disable=SC2016 # the box's sh expands it
+  [ "$CLI" = "$BASH_CLI" ] ||
+    check_eq "...the session's leader shows its name alone" omabox-session "$(ob run -b "$B" -- sh -c 'tr -d "\0" < /proc/$PPID/cmdline' 2>&1)"
   # From another box process: a `run` writing a host file is seen holding pipes, never the file.
   ob run -b "$B" -- sh -c 'sleep 4' < "$d/in" > "$d/target" 2>&1 & local bp=$!
   sleep 1.5

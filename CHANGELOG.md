@@ -108,8 +108,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   that waits for a box command (`pkill -f 'omabox run'` reaches it), ends the command and what it
   started, where nsenter (or omabox) died and left them running; that process is named
   `omabox-enter`, and `pgrep -f 'omabox run ...'` finds it besides omabox; in the box, `ps` shows the
-  command's session led by `omabox-session`. Scripts that matched `nsenter` lines or processes: match
-  these.
+  command's session led by `omabox-session`, its command line that name alone (nothing in the box has
+  the words of your call, so `run -- pgrep -f WORD` finds only what is in the box). Scripts that
+  matched `nsenter` lines or processes: match these.
 - **A command in a box has no controlling terminal** unless it runs at yours (then it has a
   pseudo-terminal of its own, as before): `/dev/tty` there is "No such device or address", and it
   runs in a session of its own, in a process group of its own. A command that needs a terminal while its output is piped: run it as

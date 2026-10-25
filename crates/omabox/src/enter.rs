@@ -97,7 +97,27 @@ impl Entry {
             shield: false,
             // (read here: SIGRTMIN is glibc's, kept apart from what the command may use)
             pdeath: libc::SIGRTMIN(),
+            argv: if session { argv_span() } else { (0, 0) },
         }
+    }
+}
+
+/// Where this process's command line lies in its memory: /proc/self/stat's arg_start and arg_end
+/// (fields 48 and 49), (0, 0) when it cannot tell. The keeper, a fork of this process, blanks it
+/// there (finding 511).
+fn argv_span() -> (usize, usize) {
+    let s = std::fs::read("/proc/self/stat").unwrap_or_default();
+    let w = crate::shell::words(crate::procfs::after_comm(&s));
+    let n = |i: usize| -> usize {
+        w.get(i)
+            .and_then(|v| std::str::from_utf8(v).ok()?.parse().ok())
+            .unwrap_or(0)
+    };
+    let (start, end) = (n(45), n(46));
+    if start > 0 && end > start {
+        (start, end)
+    } else {
+        (0, 0)
     }
 }
 
@@ -113,6 +133,8 @@ pub struct Plan {
     /// The keeper's PR_SET_PDEATHSIG: a signal nothing else sends it, caught even where the others
     /// came ignored.
     pdeath: libc::c_int,
+    /// The caller's command line in memory (argv_span), for the keeper to blank.
+    argv: (usize, usize),
 }
 
 impl Plan {
@@ -426,6 +448,7 @@ fn keep(cmd: libc::pid_t, p: &Plan) -> ! {
     unsafe {
         libc::syscall(libc::SYS_close_range, 0u32, u32::MAX, 0u32);
         libc::prctl(libc::PR_SET_NAME, c"omabox-session".as_ptr());
+        blank_argv(p.argv);
     }
     handle(p.shield, true);
     // (a waiter gone before this, its signal's default action ended this process, and the command
@@ -437,6 +460,32 @@ fn keep(cmd: libc::pid_t, p: &Plan) -> ! {
         true,
     );
     reap_and_end(cmd)
+}
+
+/// The keeper's command line made its name alone: as a fork of omabox's it was the caller's whole
+/// call, the command's words in it, so in the box `run -- pgrep -f WORD` found the keeper by them, and
+/// `run -- pkill -f WORD` killed it, and the command with it (finding 511). The kernel reads
+/// /proc/PID/cmdline from this memory: the name, then NULs to the end of the span.
+///
+/// # Safety
+/// SPAN is this process's argv strings (argv_span, read before the fork), nothing of them read
+/// after this; the keeper only waits and ends.
+unsafe fn blank_argv(span: (usize, usize)) {
+    let (start, end) = span;
+    if end <= start {
+        return;
+    }
+    let name = b"omabox-session";
+    for (i, at) in (start..end).enumerate() {
+        // (the last byte stays a NUL: the kernel reads the span as it is, no setproctitle guess)
+        let b = if at + 1 < end {
+            name.get(i).copied().unwrap_or(0)
+        } else {
+            0
+        };
+        // SAFETY: inside this process's argv strings (the caller's word).
+        unsafe { std::ptr::write_volatile(at as *mut u8, b) };
+    }
 }
 
 /// Waits for CHILD's end, a stop it was asked for stopping this one too (and continuing it after);
@@ -529,6 +578,7 @@ pub fn main(args: &[OsString]) -> ExitCode {
         efd,
         shield: false,
         pdeath: libc::SIGRTMIN(),
+        argv: (0, 0),
     }
     .apply(&mut c);
     let e = c.exec();
@@ -554,6 +604,16 @@ mod tests {
         assert_eq!(errno_text(libc::EPERM), "Operation not permitted");
         assert_eq!(errno_text(libc::ESRCH), "No such process");
         assert_eq!(errno_text(9999), "an error");
+    }
+
+    /// Finding 511: the span the keeper blanks is this process's command line, as the kernel reads it.
+    #[test]
+    fn the_span_is_the_command_line() {
+        let (start, end) = argv_span();
+        assert!(end > start, "no span read");
+        // SAFETY: the kernel's own span of this process's argv strings, only read.
+        let mem = unsafe { std::slice::from_raw_parts(start as *const u8, end - start) };
+        assert_eq!(mem, std::fs::read("/proc/self/cmdline").unwrap().as_slice());
     }
 
     #[test]

@@ -10030,6 +10030,20 @@ from them.
     t_rust_parity_up (down then up at once from the binary, three times, none cancelled; three in three
     were before), up.rs's a_down_over_before_the_up_is_not_one_that_came.
 
+511. **The keeper showed the caller's whole call in the box** (2026-10-24, #324, found by the suite at
+    27d9613: t_keys_down_up's "the holder is gone with the last held key", failing alone too since the
+    native entry, 74b5754). The session's leader in the box (`omabox-session`, finding 494) is a fork
+    of omabox, so its command line was omabox's own, the box command's words in it: `omabox run -b B
+    -- pgrep -f WORD` always found it by WORD, and `run -- pkill -f WORD` signalled it (its TERM passed
+    on to the command's group). The check found the keeper of its own `run` (pid 153 of the two it
+    printed; the other, 146, was finding 512's holder). Under nsenter the process that waited stayed
+    outside the box's pid namespace. **Fix** (Rust): the keeper blanks its command line in its own
+    memory (/proc/self/stat's arg_start..arg_end, read before the fork) to its name: `ps` in the box
+    shows `omabox-session` alone, and nothing in the box has the call's words. The waiter outside
+    keeps omabox's (`pgrep -f 'omabox run ...'` on the host, as finding 490 says). Tests: t_run_stdio
+    ("run -- pgrep -f WORD: nothing in the box has the words of run's own call", fails at 27d9613;
+    "the session's leader shows its name alone"), t_keys_down_up.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
