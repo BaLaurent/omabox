@@ -10115,6 +10115,14 @@ from them.
     win_raise focuses its window again, a quarter second apart, within its 3 s; by then the pointer is
     over it and the focus stays. Bash's win_raise focuses once. Tests: t_window (2 in 2 after).
 
+517. **t_monitors_turned_nvidia compared a burst with a shot while the screen still changed**
+    (2026-10-24, #324; "shot --burst --no-pointer: a frame is the shot's image", alone 2 in 2 at
+    8d9069e and after, AE 85-116 where 50 passes, though every suite before had passed it). The
+    images differed by one level in 41136 pixels, all on the turned monitors, and the burst's first
+    frame by more (AE 1432): the tail of a fade, the clicks just before having moved the focus between
+    terminals there. The comparison wants a still screen and did not wait for one; the bash front's
+    pace had let the fade end. The test waits for the screen to be still before its bursts.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

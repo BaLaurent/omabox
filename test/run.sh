@@ -16389,7 +16389,10 @@ monitors_turned_on() {
   check_eq "click --in $m2's shot at 360,640: its middle, 2180,320, its terminal focused" "2180, 320 L4" \
     "$(ob hyprctl -b "$B" cursorpos) $(ob hyprctl -b "$B" -j activewindow | jq -r .title)"
   # shot --burst through one client (#196, finding 314): the turned layout as grim takes it, whole and
-  # a monitor at a time, a -g across them, and a window on the turned scale-2 monitor.
+  # a monitor at a time, a -g across them, and a window on the turned scale-2 monitor. (The screen
+  # still first: the clicks above moved the focus, and the fade of the windows it left was still
+  # ending, a level a pixel, when the binary's burst came: finding 517.)
+  ob wait -b "$B" still --timeout 10s >/dev/null 2>&1 || true
   local a args r; for a in "--no-pointer" "--no-pointer|--monitor|$m1" "--no-pointer|--monitor|$m2" "--no-pointer|-g|1000,100 1200x300" "--window|L4" "--window|L4|--fit|300"; do
     IFS='|' read -r -a args <<<"$a"
     r=$(burst_vs_shot "$B" "${args[@]}")
