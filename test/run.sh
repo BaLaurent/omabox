@@ -19648,7 +19648,10 @@ no_pointer_on() {
   ob pointer -b "$B" move 1100 360 >/dev/null 2>&1
   check "...and over the right one, that" until_ok 5 bash -c "'$CLI' hyprctl -b '$B' -j activewindow | jq -e '.class == \"np-right\"'"
   check_eq "...where it was told" "1100, 360" "$(ob hyprctl -b "$B" cursorpos)"
-  ob run -b "$B" -- pkill -x foot >/dev/null 2>&1 || true
+  # (KILL: foot takes a TERM and exits 230, which the next box command says as a run -d job's early
+  # end; whichever command that is depends on when foot is done, and the binary's `run` and `pointer
+  # show` came before it, so np_live's 2>&1 got it. A KILL from `run` is not said: 137, finding 406.)
+  ob run -b "$B" -- pkill -KILL -x foot >/dev/null 2>&1 || true
   ob pointer -b "$B" show >/dev/null 2>&1
   check_eq "pointer show: cursor:invisible false" false "$(np_live "$B")"
   check "...nothing left that keeps it hidden" np_gone "$D"
@@ -19881,8 +19884,11 @@ t_pointer() {
       '^120 (0|15) 0 touchpad,120 (0|15) 0 touchpad$' "$(qw)"
     q0=$(grep -ac '^qml: t214' "$qlog"); ob scroll -b "$B" --window qtwheel "$qx" 100 30 --source finger >/dev/null
     until_ok 5 grep -aq ' 3 touchpad$' "$qlog" >/dev/null
+    # (A scroll that comes within some 0.3 s of a wheel's notches, as the binary's does here, Qt opens
+    # with its begin, 0 0 1, twice: 6 times in 6 on Qt 6.12; none 0.3 s on, nor between two finger
+    # scrolls. A touchpad's phases all the same: finding 515.)
     check_match "Qt: --source finger is a touchpad's: pixel deltas in a scroll's updates (phase 2), then its end (3); it came as a wheel's notches before #214" \
-      '^(-[0-9]+ -[0-9]+ 2 touchpad,)+0 0 3 touchpad$' "$(qw)"
+      '^(0 0 1 touchpad,)*(-[0-9]+ -[0-9]+ 2 touchpad,)+0 0 3 touchpad$' "$(qw)"
     # The left half, then the right (its line says both have been delivered: they come in order).
     q0=$(grep -ac '^qml: t214' "$qlog"); ob scroll -b "$B" --window qtwheel 100 100 -30 --source wheel >/dev/null
     ob scroll -b "$B" --window qtwheel "$qx" 100 -15 --source wheel >/dev/null

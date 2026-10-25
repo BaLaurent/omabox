@@ -10086,6 +10086,17 @@ from them.
     as the call came, as bash's reads /proc/$$/environ (finding 74). Tests: t_clip, t_run_stdio ("run
     --pass OMABOX_BASH: the caller's value", fails at 27d9613).
 
+515. **Two box tests leaned on the bash front's pace** (2026-10-24, #324 wave 6-front; the suite at
+    27d9613, each alone 2 in 2). With the suite calling the binary straight (finding 505), commands
+    follow each other some 20-50 ms sooner. t_no_pointer and t_no_pointer_nvidia: `run -- pkill -x
+    foot` returns as foot gets its TERM; foot exits 230 (not 143) a moment later, and the next box
+    command says that early end of a `run -d` job (finding 406 leaves out only 130, 137 and 143). It was
+    the discarded `pointer show`; now it is the `lua` whose 2>&1 the check reads, which got the warning
+    above its "false". Both halves exit 230 and warn alike. The test now ends its terminals with a
+    KILL (137, not said). t_pointer: a finger scroll that comes within some 0.3 s of a wheel's notches
+    gets Qt's scroll begin (0 0 1) twice before its updates (6 in 6 on Qt 6.12; none 0.3 s later, none
+    between two finger scrolls): Qt's own, a touchpad's phases still. The check takes leading begins.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
