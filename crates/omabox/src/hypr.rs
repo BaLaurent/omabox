@@ -3,11 +3,10 @@
 //! (#246). As bin/omabox's hung_text, hypr_lost, hypr_down_text, hypr_answers, hypr_json and
 //! hypr_errors_note.
 
-use crate::boxes::{box_alive, box_env, box_home_file, hypr_end, run_read, tail};
+use crate::boxes::{BoxSys, RealBox, box_env, box_home_file, hypr_end, run_read, tail};
 use crate::cat;
-use crate::exec::{ErrTo, Out, on_box};
+use crate::exec::{ErrTo, Out};
 use crate::exit::{Ctx, Res, say};
-use crate::jobs::box_pids;
 use crate::json;
 use crate::procfs;
 use crate::shell;
@@ -23,8 +22,8 @@ fn words(v: &[&str]) -> Vec<Vec<u8>> {
 /// The host pid of the box's Hyprland: Some(None) when none runs, None when it cannot tell. Its pid
 /// as the box numbers it, from its instance lock (a box-written file: only a number taken), matched
 /// to the host's through NSpid.
-fn hypr_host_pid(ctx: &Ctx) -> Option<Option<Vec<u8>>> {
-    let pids = box_pids(ctx);
+fn hypr_host_pid<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Option<Vec<u8>>> {
+    let pids = sys.box_pids(ctx);
     if pids.is_empty() {
         return None;
     }
@@ -54,7 +53,11 @@ fn hypr_host_pid(ctx: &Ctx) -> Option<Option<Vec<u8>>> {
 /// exited) when labwc (or an interactive box's session.sh) said how, else going. None for one that
 /// runs, or a box it cannot tell of.
 pub fn hypr_gone(ctx: &Ctx) -> Option<String> {
-    if hypr_host_pid(ctx)?.is_some() {
+    hypr_gone_with(&RealBox, ctx)
+}
+
+fn hypr_gone_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<String> {
+    if hypr_host_pid(sys, ctx)?.is_some() {
         return None;
     }
     Some(match hypr_end(&ctx.d) {
@@ -64,7 +67,7 @@ pub fn hypr_gone(ctx: &Ctx) -> Option<String> {
 }
 
 /// A process's state as /proc/PID/status says it ("S (sleeping)", "t (tracing stop)").
-fn pid_state(pid: &[u8]) -> Vec<u8> {
+pub fn pid_state(pid: &[u8]) -> Vec<u8> {
     let s = std::fs::read(shell::path(&cat!("/proc/", pid, "/status"))).unwrap_or_default();
     let mut out = Vec::new();
     for l in s.split(|&c| c == b'\n') {
@@ -143,17 +146,21 @@ pub fn hypr_down_text(ctx: &Ctx) -> Vec<u8> {
 /// got no answer (#232): up to 2 s for the box or labwc's line to say how it ended; one that runs
 /// (twice, 0.2 s apart) is not lost. Some(what happened), None for one that runs or cannot be told.
 pub fn hypr_lost(ctx: &Ctx) -> Res<Option<Vec<u8>>> {
+    hypr_lost_with(&RealBox, ctx)
+}
+
+fn hypr_lost_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<Option<Vec<u8>>> {
     let (mut run, mut hp) = (0, None);
     for _ in 0..10 {
-        if !box_alive(ctx)? {
+        if !sys.box_alive(ctx)? {
             return Ok(Some(hypr_down_text(ctx)));
         }
-        let Some(h) = hypr_host_pid(ctx) else {
+        let Some(h) = hypr_host_pid(sys, ctx) else {
             return Ok(None);
         };
         hp = h;
         if let Some(p) = &hp {
-            let st = pid_state(p);
+            let st = sys.pid_state(p);
             // gdb --watch stops it at the signal (tracing stop, t) while it writes the backtraces.
             if st.starts_with(b"t") {
                 if let Some(sig) = hypr_gdb_sig(ctx) {
@@ -188,7 +195,11 @@ pub fn hypr_lost(ctx: &Ctx) -> Res<Option<Vec<u8>>> {
 /// A box whose PID 1 lives but whose Hyprland does not answer, in words (IN: how long it was given);
 /// one gone meanwhile said so instead.
 pub fn hung_text(ctx: &Ctx, within: &str) -> Res<Vec<u8>> {
-    if let Some(t) = hypr_lost(ctx)? {
+    hung_text_with(&RealBox, ctx, within)
+}
+
+pub fn hung_text_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, within: &str) -> Res<Vec<u8>> {
+    if let Some(t) = hypr_lost_with(sys, ctx)? {
         return Ok(t);
     }
     let n = &ctx.name;
@@ -218,13 +229,16 @@ pub fn hypr_answers(ctx: &Ctx) -> Res<bool> {
 
 /// hypr_answers SECS: the same, given SECS.
 pub fn hypr_answers_in(ctx: &Ctx, secs: &str) -> Res<bool> {
-    if !box_alive(ctx)? {
+    hypr_answers_with(&RealBox, ctx, secs)
+}
+
+pub fn hypr_answers_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, secs: &str) -> Res<bool> {
+    if !sys.box_alive(ctx)? {
         return Ok(false);
     }
-    let r = on_box(
+    let r = sys.on_box_io(
         ctx,
         &words(&["timeout", secs, "hyprctl", "version"]),
-        false,
         Out::Null,
         ErrTo::Null,
     );
@@ -236,7 +250,7 @@ pub fn hypr_answers_in(ctx: &Ctx, secs: &str) -> Res<bool> {
 pub fn hypr_json(ctx: &Ctx, args: &[&str]) -> Res<Vec<u8>> {
     let mut argv = words(&["timeout", "6", "hyprctl", "-j"]);
     argv.extend(words(args));
-    let r = on_box(
+    let r = crate::exec::on_box(
         ctx,
         &argv,
         false,
@@ -252,7 +266,7 @@ pub fn hypr_json(ctx: &Ctx, args: &[&str]) -> Res<Vec<u8>> {
     if ok && !vals.is_empty() {
         return Ok(cat!(out, "\n"));
     }
-    if !box_alive(ctx)? {
+    if !crate::boxes::box_alive(ctx)? {
         return Err(ctx.die(hypr_down_text(ctx)));
     }
     let t = hung_text(ctx, "")?;
@@ -263,10 +277,13 @@ pub fn hypr_json(ctx: &Ctx, args: &[&str]) -> Res<Vec<u8>> {
 /// whatever they are: control characters dropped, 20 lines and 300 characters a line at most. A
 /// Hyprland that does not answer is said: false (finding 353).
 pub fn hypr_errors_note(ctx: &Ctx) -> Res<bool> {
-    let r = on_box(
+    hypr_errors_note_with(&RealBox, ctx)
+}
+
+fn hypr_errors_note_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<bool> {
+    let r = sys.on_box_io(
         ctx,
         &words(&["timeout", HYPR_LIMIT, "hyprctl", "configerrors"]),
-        false,
         Out::Capture(Some(65536)),
         ErrTo::Null,
     );
@@ -280,11 +297,11 @@ pub fn hypr_errors_note(ctx: &Ctx) -> Res<bool> {
     let t = shell::strip_nl(&t);
     let n = &ctx.name;
     if rc != 0 && rc != 141 {
-        if let Some(t) = hypr_lost(ctx)? {
+        if let Some(t) = hypr_lost_with(sys, ctx)? {
             say(t);
             return Ok(false);
         }
-        if hypr_answers(ctx)? {
+        if hypr_answers_with(sys, ctx, "2")? {
             say(cat!(
                 "box '",
                 n,
@@ -325,4 +342,253 @@ pub fn hypr_errors_note(ctx: &Ctx) -> Res<bool> {
         say(cat!("  ", shell::head_chars(l, 300)));
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cat;
+    use crate::exec::Ran;
+    use std::time::Instant;
+
+    /// bash's stubs: box_alive's answer, box_pids, pid_state, and what hyprctl answers in the box
+    /// (MODE: errors, none, hung, gone, fails; t_unit_hypr_errors_note's).
+    struct Fake {
+        alive: bool,
+        pids: Vec<Vec<u8>>,
+        state: &'static str,
+        mode: &'static str,
+    }
+
+    impl BoxSys for Fake {
+        fn box_alive(&self, _: &Ctx) -> Res<bool> {
+            Ok(self.alive)
+        }
+        fn box_pids(&self, _: &Ctx) -> Vec<Vec<u8>> {
+            self.pids.clone()
+        }
+        fn pid_state(&self, _: &[u8]) -> Vec<u8> {
+            self.state.as_bytes().to_vec()
+        }
+        fn on_box_io(&self, _: &Ctx, args: &[Vec<u8>], _: Out, _: ErrTo) -> Ran {
+            let ran = |rc: i32, out: &[u8]| Ran {
+                rc,
+                out: out.to_vec(),
+                refused: false,
+                gone_said: false,
+            };
+            if args.iter().any(|a| a == b"version") {
+                return ran(if self.mode == "fails" { 0 } else { 6 }, b"");
+            }
+            match self.mode {
+                "errors" => ran(0, b"a\x1b[31mb\n\n  c\n"),
+                "none" => ran(0, b"\n"),
+                "hung" | "gone" => ran(6, b"Hyprland IPC didn't respond in time\n"),
+                _ => ran(3, b""),
+            }
+        }
+    }
+
+    /// A box dir of this test's own: its Hyprland's signature, its lock naming LOCK.
+    fn hctx(tag: &str, lock: &[u8]) -> (Ctx, std::path::PathBuf) {
+        let d = std::env::temp_dir().join(format!("omabox-hypr-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("run/hypr/sig")).unwrap();
+        std::fs::create_dir_all(d.join("home")).unwrap();
+        std::fs::write(
+            d.join("run/omabox.env"),
+            "HYPRLAND_INSTANCE_SIGNATURE=sig\0",
+        )
+        .unwrap();
+        std::fs::write(d.join("run/hypr/sig/hyprland.lock"), cat!(lock, "\n")).unwrap();
+        let mut c = Ctx::new(b"hyprctl", shell::bytes(&std::env::temp_dir()).to_vec());
+        c.parsed();
+        c.name = b"u".to_vec();
+        c.d = shell::bytes(&d).to_vec();
+        (c, d)
+    }
+
+    // t_unit_hypr_lost: its Hyprland, our own process (its lock our pid), stopped, traced, gone.
+    #[test]
+    fn hypr_lost_as_bash() {
+        let me = std::process::id().to_string().into_bytes();
+        // (a pid no process has: past pid_max)
+        let dead = b"4194305".to_vec();
+        let (ctx, d) = hctx("lost", &me);
+        let up = |state| Fake {
+            alive: true,
+            pids: vec![me.clone()],
+            state,
+            mode: "",
+        };
+        let gone = Fake {
+            alive: true,
+            pids: vec![dead.clone()],
+            state: "",
+            mode: "",
+        };
+        let hl = |sys: &Fake| {
+            let t0 = Instant::now();
+            let t = String::from_utf8_lossy(&hung_text_with(sys, &ctx, "").unwrap()).into_owned();
+            (t, t0.elapsed().as_millis())
+        };
+        let (t, ms) = hl(&up("T (stopped)"));
+        assert_eq!(
+            t, "box 'u': its Hyprland did not answer (hung? omabox log -b u; omabox down u)",
+            "hypr_lost: a stopped Hyprland is hung"
+        );
+        assert!(ms < 2000, "...said at once ({ms} ms)");
+        std::fs::write(
+            d.join("home/gdb.log"),
+            "\n== omabox gdb --watch Hyprland (pid 55 in the box), T\nThread 1 \"Hyprland\" received signal SIGSEGV, Segmentation fault.\n",
+        )
+        .unwrap();
+        let (t, _) = hl(&up("t (tracing stop)"));
+        assert!(
+            shell::re_match(
+                r"^box 'u': its Hyprland crashed \(SIGSEGV\), held by gdb --watch .*omabox log -b u gdb --crash",
+                t.as_bytes()
+            ),
+            "...held by gdb --watch at a signal: crashed, held, and where the backtrace goes: {t}"
+        );
+        let (t, _) = hl(&up("S (sleeping)"));
+        assert!(
+            t.contains("did not answer (hung"),
+            "...traced but not stopped at a signal: hung: {t}"
+        );
+        // hypr_gone: ls's one look (finding 350).
+        assert_eq!(
+            hypr_gone_with(&up("S (sleeping)"), &ctx),
+            None,
+            "hypr_gone: a Hyprland that runs is not gone (hung, for ls)"
+        );
+        assert_eq!(
+            hypr_gone_with(&gone, &ctx).as_deref(),
+            Some("going"),
+            "...gone, no line yet: going"
+        );
+        std::fs::write(
+            d.join("home/labwc.log"),
+            "[ERROR] [../labwc/src/server.c:207] spawned child 4194305 terminated with signal 11 (Segmentation fault)\n",
+        )
+        .unwrap();
+        assert_eq!(
+            hypr_gone_with(&gone, &ctx).as_deref(),
+            Some("crashed"),
+            "...labwc's line: crashed"
+        );
+        let (t, _) = hl(&gone);
+        assert!(
+            t.starts_with("box 'u' went down: its Hyprland crashed (SIGSEGV) (its backtrace: omabox log -b u gdb --crash; clear it with: omabox down u)"),
+            "...gone, labwc's line: went down, crashed (SIGSEGV), the gdb log's backtrace named: {t}"
+        );
+        std::fs::remove_file(d.join("home/gdb.log")).unwrap();
+        let (t, _) = hl(&gone);
+        assert!(
+            t.starts_with("box 'u' went down: its Hyprland crashed (SIGSEGV) (a backtrace: ")
+                && t.contains("omabox gdb --watch; boxes keep no core dumps;"),
+            "...with no watch: how to get a backtrace: {t}"
+        );
+        std::fs::write(
+            d.join("home/labwc.log"),
+            "x spawned child 9 exited with 1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            hypr_end(&ctx.d).as_deref(),
+            Some("exited (status 1)"),
+            "hypr_end: an exit's status"
+        );
+        assert_eq!(
+            hypr_gone_with(&gone, &ctx).as_deref(),
+            Some("exited"),
+            "hypr_gone: an exit: exited"
+        );
+        std::fs::write(d.join("home/labwc.log"), "").unwrap();
+        let (t, ms) = hl(&gone);
+        assert_eq!(
+            t, "box 'u' went down (why: omabox log -b u all; clear it with: omabox down u)",
+            "...no line, gone for 2 s: went down, in the usual words"
+        );
+        assert!((1900..4000).contains(&ms), "...after 2 s ({ms} ms)");
+        std::fs::write(
+            d.join("home/hyprland.log"),
+            "Hyprland says\nomabox: Hyprland terminated with signal 6\n",
+        )
+        .unwrap();
+        assert_eq!(
+            hypr_end(&ctx.d).as_deref(),
+            Some("crashed (SIGABRT)"),
+            "hypr_end: an interactive box's (session.sh's line in hyprland.log)"
+        );
+        std::fs::write(
+            d.join("home/hyprland.log"),
+            "omabox: Hyprland exited with 0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            hypr_end(&ctx.d).as_deref(),
+            Some("exited (status 0)"),
+            "...an exit"
+        );
+        std::fs::remove_file(d.join("home/hyprland.log")).unwrap();
+        std::fs::remove_file(d.join("home/labwc.log")).unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", d.join("home/labwc.log")).unwrap();
+        assert_eq!(hypr_end(&ctx.d), None, "hypr_end: a link is not read");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // t_unit_hypr_errors_note (finding 353): hyprctl configerrors as MODE says; hypr_lost and
+    // hypr_answers from the same stand-ins (a Hyprland that runs, or a box gone with labwc's line).
+    #[test]
+    fn hypr_errors_note_as_bash() {
+        let me = std::process::id().to_string().into_bytes();
+        let (ctx, d) = hctx("errnote", &me);
+        std::fs::write(
+            d.join("home/labwc.log"),
+            "spawned child 4194305 terminated with signal 11 (Segmentation fault)\n",
+        )
+        .unwrap();
+        let hen = |mode: &'static str| {
+            let f = Fake {
+                alive: mode != "gone",
+                pids: vec![me.clone()],
+                state: "S (sleeping)",
+                mode,
+            };
+            let (r, said) = crate::exit::heard(|| hypr_errors_note_with(&f, &ctx));
+            format!("{said}rc={}", if r.unwrap() { 0 } else { 1 })
+        };
+        assert_eq!(
+            hen("errors"),
+            "omabox: box 'u': its config has errors (the rest of the config loaded):\nomabox:   a[31mb\nomabox:     c\nrc=0",
+            "hypr_errors_note: the errors, control characters dropped, blank lines out"
+        );
+        assert_eq!(hen("none"), "rc=0", "...none: nothing");
+        let out = hen("hung");
+        assert!(
+            shell::re_match(
+                r"^omabox: box 'u': its Hyprland did not answer hyprctl configerrors, so the config's errors are unknown \(hung\? its threads: omabox gdb -b u; .*omabox down u\)
+rc=1$",
+                out.as_bytes()
+            ),
+            "...no answer: said, with what to do, 1: {out}"
+        );
+        assert!(
+            !out.contains("respond in time"),
+            "...hyprctl's own words not taken for an error of the config"
+        );
+        let out = hen("gone");
+        assert!(
+            out.starts_with("omabox: box 'u' went down: its Hyprland crashed (SIGSEGV)")
+                && out.ends_with(")\nrc=1"),
+            "...gone: said as gone, 1: {out}"
+        );
+        assert_eq!(
+            hen("fails"),
+            "omabox: box 'u': could not read its config's errors (hyprctl configerrors: exit 3)\nrc=0",
+            "...answers a ping, configerrors fails: said, 0"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }

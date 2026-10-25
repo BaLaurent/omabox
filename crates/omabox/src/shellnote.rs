@@ -3,9 +3,9 @@
 //! and started again by its launcher (#303, finding 408). As bin/omabox's shell_note, shell_state,
 //! shell_crashes, shell_relaunches and what they call.
 
-use crate::boxes::{box_home_file, meta, run_read};
+use crate::boxes::{BoxSys, RealBox, box_home_file, meta, run_read};
 use crate::cat;
-use crate::exec::{ErrTo, Out, on_box};
+use crate::exec::{ErrTo, Out};
 use crate::exit::{Ctx, Res, say};
 use crate::jobs::job_how;
 use crate::repo::readlink_e;
@@ -35,23 +35,24 @@ pub fn shell_pid(ctx: &Ctx) -> Option<Vec<u8>> {
 
 /// shell_running PID: a process in the box, and not one that exited and was not reaped yet.
 pub fn shell_running(ctx: &Ctx, pid: &[u8]) -> bool {
-    let r = on_box(
-        ctx,
-        &words(&[b"cat", &cat!("/proc/", pid, "/stat")]),
-        false,
-        Out::Capture(None),
-        ErrTo::Null,
-    );
+    shell_running_with(&RealBox, ctx, pid)
+}
+
+pub fn shell_running_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, pid: &[u8]) -> bool {
+    let r = sys.on_box(ctx, &words(&[b"cat", &cat!("/proc/", pid, "/stat")]));
     r.rc == 0 && !crate::exit::contains(&shell::subst(&r.out), b") Z ")
 }
 
 /// shell_hung PID: no answer over its IPC in 2 s, from a shell up for 10 s or more.
 pub fn shell_hung(ctx: &Ctx, pid: &[u8]) -> bool {
+    shell_hung_with(&RealBox, ctx, pid)
+}
+
+fn shell_hung_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, pid: &[u8]) -> bool {
     let qs = box_qs(ctx);
-    let r = on_box(
+    let r = sys.on_box_io(
         ctx,
         &words(&[b"timeout", b"2", &qs, b"ipc", b"--pid", pid, b"show"]),
-        false,
         Out::Null,
         ErrTo::Null,
     );
@@ -59,7 +60,7 @@ pub fn shell_hung(ctx: &Ctx, pid: &[u8]) -> bool {
         return false;
     }
     // Its age in s: /proc/uptime less its start (stat's field 22, in clock ticks).
-    let age = on_box(
+    let age = sys.on_box(
         ctx,
         &words(&[
             b"sh",
@@ -69,9 +70,6 @@ pub fn shell_hung(ctx: &Ctx, pid: &[u8]) -> bool {
             b"sh",
             pid,
         ]),
-        false,
-        Out::Capture(None),
-        ErrTo::Null,
     );
     if age.rc != 0 {
         return false;
@@ -89,23 +87,21 @@ pub fn shell_state(ctx: &Ctx) -> &'static str {
 /// shell_state GIVEN: with GIVEN `hung` or `ok`, what shell_hung said already (`ls` asks every box's
 /// at once), not asked again; "" asks.
 pub fn shell_state_given(ctx: &Ctx, given: &str) -> &'static str {
+    shell_state_with(&RealBox, ctx, given)
+}
+
+fn shell_state_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, given: &str) -> &'static str {
     if meta(&ctx.d, "shell").0 != b"true" {
         return "none";
     }
-    if let Some(p) = shell_pid(ctx).filter(|p| shell_running(ctx, p)) {
-        return if given == "hung" || (given.is_empty() && shell_hung(ctx, &p)) {
+    if let Some(p) = shell_pid(ctx).filter(|p| shell_running_with(sys, ctx, p)) {
+        return if given == "hung" || (given.is_empty() && shell_hung_with(sys, ctx, &p)) {
             "hung"
         } else {
             "running"
         };
     }
-    let r = on_box(
-        ctx,
-        &words(&[b"pgrep", b"-cf", b"[o]marchy-launch-shell"]),
-        false,
-        Out::Capture(None),
-        ErrTo::Null,
-    );
+    let r = sys.on_box(ctx, &words(&[b"pgrep", b"-cf", b"[o]marchy-launch-shell"]));
     // (`[ "$(...)" -gt 0 ] 2>/dev/null`: what is no number is not more than 0)
     if shell::test_int(&shell::subst(&r.out)).is_some_and(|n| n > 0) {
         "restarting"
@@ -226,6 +222,10 @@ fn relaunch_lines(text: &[u8]) -> (usize, Vec<u8>) {
 /// hung, crashed since the last command said so, or killed and started again by its launcher; then
 /// what the next one compares with.
 pub fn shell_note(ctx: &Ctx) -> Res<()> {
+    shell_note_with(&RealBox, ctx)
+}
+
+fn shell_note_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Res<()> {
     if meta(&ctx.d, "shell").0 != b"true" {
         return Ok(());
     }
@@ -258,7 +258,7 @@ pub fn shell_note(ctx: &Ctx) -> Res<()> {
             shell::test_int(&c).unwrap_or(0)
         };
     }
-    let state = shell_state(ctx);
+    let state = shell_state_with(sys, ctx, "");
     let name = &ctx.name;
     let seen_n = shell::test_int(&seen);
     let starting: &[u8] = if state == "running" {
@@ -341,5 +341,142 @@ mod tests {
             a omarchy-shell: Omarchy shell exited with status 143; relaunching b omarchy-shell: Omarchy shell exited with status 2; relaunching\n";
         assert_eq!(relaunch_lines(t), (3, b"2".to_vec()));
         assert_eq!(relaunch_lines(b"nothing\n"), (0, b"-".to_vec()));
+    }
+
+    /// A box whose shell runs: pid 42's stat in the box, and its IPC answers.
+    struct Running;
+
+    impl BoxSys for Running {
+        fn on_box_io(&self, _: &Ctx, args: &[Vec<u8>], _: Out, _: ErrTo) -> crate::exec::Ran {
+            let out = if args.first().is_some_and(|a| a == b"cat") {
+                b"42 (quickshell) S 1\n".to_vec()
+            } else {
+                Vec::new()
+            };
+            crate::exec::Ran {
+                rc: 0,
+                out,
+                refused: false,
+                gone_said: false,
+            }
+        }
+    }
+
+    // t_unit_shell_reports (#303, finding 408): the shell's crash reports are its own, not another
+    // Quickshell's in the box, told by the report's config; a shell its launcher started again
+    // (killed: no report) is said by the next command, once.
+    #[test]
+    #[ignore = "runs awk: run by test/run.sh (cargo test -- --ignored)"]
+    fn shell_reports_as_bash() {
+        let d = std::env::temp_dir().join(format!("omabox-shrep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let c = d.join("home/.cache/quickshell/crashes");
+        for x in ["ours", "other", "unwritten", "linked", "odd"] {
+            std::fs::create_dir_all(c.join(x)).unwrap();
+        }
+        std::fs::create_dir_all(d.join("run")).unwrap();
+        std::fs::create_dir_all(d.join("elsewhere")).unwrap();
+        let w = |p: &std::path::Path, t: &str| std::fs::write(p, t).unwrap();
+        w(
+            &c.join("ours/report.txt"),
+            "Signal: x\nCrashed process ID: 77\nConfig Path: /usr/share/omarchy/shell/shell.qml\n",
+        );
+        w(
+            &c.join("other/report.txt"),
+            "Crashed process ID: 78\nConfig Path: /tmp/qt/shell.qml\n",
+        );
+        w(
+            &d.join("elsewhere/report.txt"),
+            "Config Path: /usr/share/omarchy/shell/shell.qml\n",
+        );
+        std::os::unix::fs::symlink(d.join("elsewhere/report.txt"), c.join("linked/report.txt"))
+            .unwrap();
+        w(
+            &c.join("odd/report.txt"),
+            "Config Path: /usr/share/omarchy//shell/shell.qml\nConfig Path: /tmp/x/shell.qml\n",
+        );
+        w(&d.join("box.json"), "{\"shell\": true}");
+        let mut ctx = Ctx::new(b"windows", shell::bytes(&std::env::temp_dir()).to_vec());
+        ctx.parsed();
+        ctx.name = b"sr".to_vec();
+        ctx.d = shell::bytes(&d).to_vec();
+        let mut dirs: Vec<Vec<u8>> = shell_crash_dirs(&ctx)
+            .split(|&c| c == b'\n')
+            .filter(|l| !l.is_empty())
+            .map(<[u8]>::to_vec)
+            .collect();
+        dirs.sort();
+        assert_eq!(
+            (dirs, shell_crashes(&ctx)),
+            (vec![b"odd".to_vec(), b"ours".to_vec()], 2),
+            "the shell's reports only: not another instance's, one not written yet, nor a link (its first Config Path, slashes squeezed)"
+        );
+        w(
+            &d.join("box.json"),
+            "{\"shell\": true, \"omarchy\": \"/x/om\"}",
+        );
+        w(
+            &c.join("unwritten/report.txt"),
+            "Config Path: /x/om/shell/shell.qml\n",
+        );
+        assert_eq!(
+            shell_crash_dirs(&ctx),
+            b"unwritten\n",
+            "...an --omarchy tree's shell"
+        );
+        std::fs::remove_dir_all(&c).unwrap();
+        std::fs::create_dir_all(c.join("other")).unwrap();
+        w(
+            &c.join("other/report.txt"),
+            "Config Path: /tmp/qt/shell.qml\n",
+        );
+        w(&d.join("box.json"), "{\"shell\": true}");
+        w(&d.join("run/omabox-shell.mark"), "100\n");
+        w(&d.join("run/omabox-shell.pid"), "42\n");
+        w(&d.join("home/shell.log"), "");
+        let note = || {
+            let (r, said) = crate::exit::heard(|| shell_note_with(&Running, &ctx));
+            r.unwrap();
+            said
+        };
+        assert_eq!(note(), "", "shell_note: a first look says nothing");
+        assert_eq!(note(), "", "...nor another instance's crash");
+        let log = d.join("home/shell.log");
+        let add = |t: &str| {
+            let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+            std::io::Write::write_all(&mut f, t.as_bytes()).unwrap();
+        };
+        add(
+            "2026-10-20 16:00:00.000 omarchy-shell: Omarchy shell exited with status 137; relaunching.\n",
+        );
+        assert_eq!(
+            note(),
+            "omabox: warning: the shell was killed by SIGKILL (137) since the last command and was started again (omabox log -b sr shell)\n",
+            "...the launcher starting a killed shell again: said"
+        );
+        assert_eq!(note(), "", "...once");
+        // A new start of shell.sh (its mark): a fresh log, every line in it new.
+        w(&d.join("run/omabox-shell.mark"), "200\n");
+        w(
+            &log,
+            "omarchy-shell: Omarchy shell exited with status 1; relaunching.\n",
+        );
+        assert!(
+            note().contains("the shell exited with status 1 since the last command"),
+            "...after a new start, one that exited: its status"
+        );
+        std::fs::create_dir_all(c.join("mine")).unwrap();
+        w(
+            &c.join("mine/report.txt"),
+            "Config Path: /usr/share/omarchy/shell/shell.qml\n",
+        );
+        add("omarchy-shell: Omarchy shell exited with status 134; relaunching.\n");
+        assert_eq!(
+            note(),
+            "omabox: warning: the shell crashed since the last command and was started again (omabox log -b sr shell)\n",
+            "...a crash and its relaunch: the crash said, once"
+        );
+        assert_eq!(note(), "", "...and not again");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

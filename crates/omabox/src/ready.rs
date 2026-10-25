@@ -12,7 +12,7 @@ use crate::jq::{self, Args};
 use crate::mon::w;
 use crate::settle::{after, mono_ms, past};
 use crate::shell::{self, strip_nl};
-use crate::shellnote::{shell_crash_dirs, shell_crashes, shell_pid, shell_running};
+use crate::shellnote::{shell_crash_dirs, shell_crashes, shell_pid, shell_running_with};
 use std::ffi::{OsStr, OsString};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
@@ -751,15 +751,24 @@ fn bar_settle_with<S: BoxSys + ?Sized>(
 /// "crashed -" or "exited"; None while it has not. A duplicate of a shell another start brought up
 /// meanwhile (finding 248) is adopted, said, and is no failed start.
 pub fn shell_crash(ctx: &Ctx, r: &Ready, pid: Option<&[u8]>) -> Option<Vec<u8>> {
+    shell_crash_with(&RealBox, ctx, r, pid)
+}
+
+fn shell_crash_with<S: BoxSys + ?Sized>(
+    sys: &S,
+    ctx: &Ctx,
+    r: &Ready,
+    pid: Option<&[u8]>,
+) -> Option<Vec<u8>> {
     if let Some(c) = shell_crash_report(ctx, &r.shell_before) {
         return Some(c);
     }
-    let gone = || pid.is_some_and(|p| !p.is_empty() && !shell_running(ctx, p));
+    let gone = || pid.is_some_and(|p| !p.is_empty() && !shell_running_with(sys, ctx, p));
     if !shell_crash_logged(ctx) && !gone() {
         return None;
     }
     if !shell_crash_logged(ctx)
-        && let Some(p) = shell_adopt(ctx)
+        && let Some(p) = shell_adopt_with(sys, ctx)
     {
         say(cat!(
             "box '",
@@ -877,7 +886,7 @@ pub fn shell_crash_logged(ctx: &Ctx) -> bool {
 /// shell_adopt (finding 248): this start's shell exited at once as a duplicate of one that something
 /// else started after shell.sh stopped the old one, and that one is up: its pid goes where shell.sh
 /// keeps the shell's, written in the box, and is returned.
-pub fn shell_adopt(ctx: &Ctx) -> Option<Vec<u8>> {
+fn shell_adopt_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx) -> Option<Vec<u8>> {
     let t = std::fs::read(box_home_file(&ctx.d, "shell.log")?).ok()?;
     if !crate::exit::contains(&t, b"An instance of this configuration is already running") {
         return None;
@@ -892,12 +901,9 @@ pub fn shell_adopt(ctx: &Ctx) -> Option<Vec<u8>> {
         "/shell"
     );
     let qs = crate::shellnote::box_qs(ctx);
-    let l = on_box(
+    let l = sys.on_box(
         ctx,
         &w(&[&qs, b"list", b"-j", b"-p", &cfg, b"--any-display"]),
-        false,
-        Out::Capture(None),
-        ErrTo::Null,
     );
     let p = if l.rc == 0 {
         let j = jq::jq(&["-r", ADOPT_JQ], Some(&l.out), jq::Err::Null);
@@ -905,13 +911,12 @@ pub fn shell_adopt(ctx: &Ctx) -> Option<Vec<u8>> {
     } else {
         Vec::new()
     };
-    if !shell::is_num(&p) || !shell_running(ctx, &p) {
+    if !shell::is_num(&p) || !shell_running_with(sys, ctx, &p) {
         return None;
     }
-    let wr = on_box(
+    let wr = sys.on_box_io(
         ctx,
         &w(&[b"sh", b"-c", ADOPT_SH.as_bytes(), b"sh", &p]),
-        false,
         Out::Inherit,
         ErrTo::Inherit,
     );
@@ -1555,6 +1560,251 @@ mod tests {
             crash_text(b"b", b"", "while", b"exited"),
             b"warning: the shell exited while starting (omabox log -b b shell)"
         );
+        // (t_unit_shell_crash's three)
+        assert_eq!(
+            crash_text(b"u", b"", "after", b"crashed /r/report.txt"),
+            b"warning: the shell crashed after starting (report: /r/report.txt; omabox log -b u shell)"
+        );
+        assert_eq!(
+            crash_text(b"u", b"", "while", b"crashed -"),
+            b"warning: the shell crashed while starting (omabox log -b u shell)"
+        );
+        assert_eq!(
+            crash_text(b"u", b"", "after", b"exited"),
+            b"warning: the shell exited after starting (omabox log -b u shell)"
+        );
+    }
+
+    /// t_unit_shell_crash's stand-in box: what /proc/PID/stat says in it (STAT, "" for no such
+    /// process); with LIST, `quickshell list` answers it, pid 77 is up, and the adopt's write puts
+    /// its pid where shell.sh keeps it (finding 248).
+    struct ShellBox {
+        stat: &'static str,
+        list: Option<&'static str>,
+    }
+
+    impl BoxSys for ShellBox {
+        fn on_box_io(
+            &self,
+            ctx: &Ctx,
+            args: &[Vec<u8>],
+            _: crate::exec::Out,
+            _: crate::exec::ErrTo,
+        ) -> crate::exec::Ran {
+            let ran = |rc: i32, out: &[u8]| crate::exec::Ran {
+                rc,
+                out: out.to_vec(),
+                refused: false,
+                gone_said: false,
+            };
+            let a = |i: usize| args.get(i).map_or(&b""[..], |v| v.as_slice());
+            let Some(list) = self.list else {
+                return if self.stat.is_empty() {
+                    ran(1, b"")
+                } else {
+                    ran(0, &cat!(self.stat, "\n"))
+                };
+            };
+            match (a(0), a(1)) {
+                (b"/usr/bin/quickshell", b"list") => ran(0, &cat!(list, "\n")),
+                (b"cat", b"/proc/77/stat") => ran(0, b"77 (quickshell) S 1\n"),
+                (b"sh", b"-c") => {
+                    std::fs::write(
+                        shell::path(&cat!(ctx.d, "/run/omabox-shell.pid")),
+                        cat!(a(4), "\n"),
+                    )
+                    .unwrap();
+                    ran(0, b"")
+                }
+                _ => ran(1, b""),
+            }
+        }
+    }
+
+    // t_unit_shell_crash (#126, findings 183, 248, 255, 258; #303): shell_pid's file, and how up
+    // tells a shell that crashed as it started.
+    #[test]
+    #[ignore = "runs awk: run by test/run.sh (cargo test -- --ignored)"]
+    fn shell_crash_as_bash() {
+        let mut ctx = uctx("shcrash");
+        let d = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(&ctx.d)).to_path_buf();
+        let _ = std::fs::remove_dir_all(&d);
+        let cr = d.join("home/.cache/quickshell/crashes");
+        std::fs::create_dir_all(cr.join("old")).unwrap();
+        std::fs::create_dir_all(d.join("run")).unwrap();
+        std::fs::write(d.join("home/shell.log"), "").unwrap();
+        std::fs::write(d.join("run/omabox-shell.pid"), "42\n").unwrap();
+        ctx.name = b"u".to_vec();
+        let pidf = d.join("run/omabox-shell.pid");
+        assert_eq!(
+            shell_pid(&ctx),
+            Some(b"42".to_vec()),
+            "shell_pid: the file's number"
+        );
+        std::fs::rename(&pidf, d.join("run/pid.real")).unwrap();
+        std::os::unix::fs::symlink(d.join("run/pid.real"), &pidf).unwrap();
+        assert_eq!(shell_pid(&ctx), None, "...a link to it: nothing");
+        std::fs::remove_file(&pidf).unwrap();
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&pidf)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            shell_pid(&ctx),
+            None,
+            "...a FIFO: nothing, at once (not hung)"
+        );
+        std::fs::remove_file(&pidf).unwrap();
+        std::fs::rename(d.join("run/pid.real"), &pidf).unwrap();
+        let r = Ready {
+            owner: None,
+            covers: false,
+            shell_before: b"old".to_vec(),
+            bar_at: 0,
+            before_end: &|| {},
+        };
+        let sc = |stat: &'static str| {
+            let sys = ShellBox { stat, list: None };
+            let (c, said) =
+                crate::exit::heard(|| shell_crash_with(&sys, &ctx, &r, shell_pid(&ctx).as_deref()));
+            (c.map(|c| String::from_utf8_lossy(&c).into_owned()), said)
+        };
+        let s1 = "42 (quickshell) S 1";
+        assert_eq!(
+            sc(s1).0,
+            None,
+            "no new report, no crash line, the shell running: no crash"
+        );
+        // (#303: a folder counts once its report names the box shell's config; another Quickshell's
+        // does not.)
+        let cp = "Config Path: /usr/share/omarchy/shell/shell.qml\n";
+        let q = cr.join("q1k4dmt");
+        std::fs::create_dir(&q).unwrap();
+        assert_eq!(
+            sc(s1).0,
+            None,
+            "a report folder not written yet: no crash yet"
+        );
+        std::fs::write(q.join("report.txt"), "Config Path: /tmp/qt/shell.qml\n").unwrap();
+        assert_eq!(sc(s1).0, None, "...another Quickshell's: no crash (#303)");
+        std::fs::write(q.join("report.txt"), cp).unwrap();
+        assert_eq!(
+            sc(s1).0,
+            Some(format!("crashed {}/report.txt", q.display())),
+            "a new report folder: crashed, its report named"
+        );
+        std::fs::remove_dir_all(&q).unwrap();
+        let ab = cr.join("a b");
+        std::fs::create_dir(&ab).unwrap();
+        std::fs::write(ab.join("report.txt"), cp).unwrap();
+        assert_eq!(
+            sc(s1).0.as_deref(),
+            Some("crashed -"),
+            "a folder named oddly (the box names it): crashed, no path"
+        );
+        std::fs::remove_dir_all(&ab).unwrap();
+        std::fs::write(
+            d.join("home/shell.log"),
+            " ERROR: Quickshell has crashed under pid 43\n",
+        )
+        .unwrap();
+        assert_eq!(
+            sc(s1).0.as_deref(),
+            Some("crashed -"),
+            "only the log's crash line: crashed"
+        );
+        std::fs::write(d.join("home/shell.log"), "").unwrap();
+        assert_eq!(sc("").0.as_deref(), Some("exited"), "its pid gone: exited");
+        assert_eq!(
+            sc("42 (quickshell) Z 1").0.as_deref(),
+            Some("exited"),
+            "...or a zombie"
+        );
+        assert_eq!(
+            sc(s1).0,
+            None,
+            "the report folders before a restart are not a crash"
+        );
+        // finding 255: a report of a process older than this start (its pid below shell.sh's mark)
+        // is an old shell's, stopped as it loaded, not this start's crash.
+        let m = cr.join("m1");
+        std::fs::create_dir(&m).unwrap();
+        std::fs::write(
+            m.join("report.txt"),
+            format!("Signal: Segmentation fault (11)\nCrashed process ID: 30\n{cp}"),
+        )
+        .unwrap();
+        std::fs::write(d.join("run/omabox-shell.mark"), "40\n").unwrap();
+        assert_eq!(
+            sc(s1).0,
+            None,
+            "a report of a process older than this start (below shell.sh's mark): no crash (finding 255)"
+        );
+        std::fs::write(
+            m.join("report.txt"),
+            format!("Crashed process ID: 41\n{cp}"),
+        )
+        .unwrap();
+        let mrep = Some(format!("crashed {}/report.txt", m.display()));
+        assert_eq!(sc(s1).0, mrep, "...one of this start's (above it): crashed");
+        std::fs::remove_file(d.join("run/omabox-shell.mark")).unwrap();
+        std::fs::write(
+            m.join("report.txt"),
+            format!("Crashed process ID: 30\n{cp}"),
+        )
+        .unwrap();
+        assert_eq!(
+            sc(s1).0,
+            mrep,
+            "...no mark (a box an older omabox started): every report counts, as before"
+        );
+        std::fs::remove_dir_all(&m).unwrap();
+        // finding 248: its pid gone as a duplicate of a shell another start brought up meanwhile.
+        let dup = |list: &'static str| {
+            let sys = ShellBox {
+                stat: "",
+                list: Some(list),
+            };
+            let (c, said) =
+                crate::exit::heard(|| shell_crash_with(&sys, &ctx, &r, shell_pid(&ctx).as_deref()));
+            (c.map(|c| String::from_utf8_lossy(&c).into_owned()), said)
+        };
+        std::fs::write(
+            d.join("home/shell.log"),
+            "An instance of this configuration is already running.\n",
+        )
+        .unwrap();
+        assert_eq!(
+            dup("[]").0.as_deref(),
+            Some("exited"),
+            "a duplicate, no shell of its config up: exited"
+        );
+        assert_eq!(
+            dup(r#"[{"pid": 77}]"#),
+            (None, "omabox: box 'u': another start of the shell came first; that one (pid 77) is up, started after the old one was stopped: the box's shell now\n".to_string()),
+            "...one up (#192): no failure, it is the box's shell now"
+        );
+        assert_eq!(
+            std::fs::read(&pidf).unwrap(),
+            b"77\n",
+            "...its pid recorded where shell.sh keeps it"
+        );
+        std::fs::write(&pidf, "42\n").unwrap();
+        assert_eq!(
+            dup(r#"[{"pid": 78}]"#).0.as_deref(),
+            Some("exited"),
+            "...not one whose pid is gone too"
+        );
+        std::fs::write(d.join("home/shell.log"), "").unwrap();
+        assert_eq!(
+            dup(r#"[{"pid": 77}]"#).0.as_deref(),
+            Some("exited"),
+            "no duplicate line: exited, whatever runs"
+        );
+        let _ = std::fs::remove_dir_all(shell::path(&ctx.boxes));
     }
 
     #[test]

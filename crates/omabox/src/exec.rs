@@ -452,6 +452,30 @@ fn ns_said(
     err: ErrTo,
     buf: &mut Vec<u8>,
 ) -> Result<bool, u8> {
+    ns_said_with(
+        &|| alive_quiet(ctx),
+        held,
+        sig,
+        rc,
+        words,
+        kill_say,
+        err,
+        buf,
+    )
+}
+
+/// ns_said, whether the box is up asked of ALIVE (alive_quiet).
+#[allow(clippy::too_many_arguments)]
+fn ns_said_with(
+    alive: &dyn Fn() -> Result<bool, (Vec<u8>, u8)>,
+    held: &[u8],
+    sig: Option<i32>,
+    rc: i32,
+    words: Option<&[u8]>,
+    kill_say: bool,
+    err: ErrTo,
+    buf: &mut Vec<u8>,
+) -> Result<bool, u8> {
     let killed = kill_say && sig.is_some_and(|s| s != libc::SIGINT && s != libc::SIGPIPE);
     let box_end = sig == Some(libc::SIGKILL);
     if held.is_empty() && !killed && !box_end {
@@ -459,7 +483,7 @@ fn ns_said(
     }
     if rc != 0 && (!held.is_empty() || box_end) {
         for _ in 0..10 {
-            match alive_quiet(ctx) {
+            match alive() {
                 Ok(true) => {}
                 Ok(false) => {
                     if let Some(w) = words {
@@ -560,6 +584,19 @@ pub fn on_box_bg(
     pid_to: Option<Arc<AtomicI32>>,
 ) -> Ran {
     on_box_with(ctx, args, stdin, out, err, pid_to, true)
+}
+
+/// What on_box says of a box that went down as it entered.
+fn gone_words(name: &[u8]) -> Vec<u8> {
+    cat!(
+        "box '",
+        name,
+        "' went down (why: omabox log -b ",
+        name,
+        " all; clear it with: omabox down ",
+        name,
+        ")"
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -674,15 +711,7 @@ fn on_box_with(
         }
     };
     buf = r.out;
-    let words = cat!(
-        "box '",
-        ctx.name,
-        "' went down (why: omabox log -b ",
-        ctx.name,
-        " all; clear it with: omabox down ",
-        ctx.name,
-        ")"
-    );
+    let words = gone_words(&ctx.name);
     match ns_said(
         ctx,
         &r.held,
@@ -1603,6 +1632,106 @@ mod tests {
         assert_eq!(
             said_text(b"omabox: cannot enter the box: ", 1, false),
             b"omabox: dropped 30 bytes of other output on the box entry's stderr\n"
+        );
+    }
+
+    // t_unit_box_gone (#166): an entry that failed on a box gone as it entered is said in words,
+    // without the entry's line; on a box that is up, the line as it came (after 2 s of asking); a
+    // command the box's end killed (box_exec's, no words) is left to run's words.
+    #[test]
+    fn box_gone_as_bash() {
+        let said = |alive: bool, held: &[u8], sig, rc, words: Option<&[u8]>| {
+            let mut buf = Vec::new();
+            let r = ns_said_with(
+                &|| Ok(alive),
+                held,
+                sig,
+                rc,
+                words,
+                false,
+                ErrTo::Out,
+                &mut buf,
+            );
+            (r, String::from_utf8_lossy(&buf).into_owned())
+        };
+        let w = gone_words(b"bg");
+        assert_eq!(
+            said(false, b"omabox: cannot enter the box: No such process\n", None, 1, Some(&w)),
+            (
+                Ok(true),
+                "omabox: box 'bg' went down (why: omabox log -b bg all; clear it with: omabox down bg)\n".to_string()
+            ),
+            "on_box on a box gone as it entered: said in words, without the entry's line"
+        );
+        let t0 = std::time::Instant::now();
+        assert_eq!(
+            said(
+                true,
+                b"omabox: cannot enter the box: Operation not permitted\n",
+                None,
+                1,
+                Some(&w)
+            ),
+            (
+                Ok(false),
+                "omabox: cannot enter the box: Operation not permitted\n".to_string()
+            ),
+            "...on a box that is up, the entry's line as it came"
+        );
+        assert!(
+            t0.elapsed() >= Duration::from_millis(1800),
+            "...after asking for 2 s"
+        );
+        assert_eq!(
+            said(false, b"", Some(libc::SIGKILL), 137, None),
+            (Ok(false), String::new()),
+            "box_exec on a box gone: nothing said, left to run's words"
+        );
+        let mut buf = Vec::new();
+        assert_eq!(
+            ns_said_with(
+                &|| Err((b"omabox: cannot tell\n".to_vec(), 3)),
+                b"omabox: cannot enter the box: x\n",
+                None,
+                1,
+                Some(&w),
+                false,
+                ErrTo::Out,
+                &mut buf
+            ),
+            Err(3),
+            "...a box this namespace cannot read: its refusal, its code"
+        );
+        assert_eq!(buf, b"omabox: cannot tell\n");
+    }
+
+    // t_unit_box_gone: what the entry's stderr holds is read 4 KiB at most, and one a process keeps
+    // open does not hold the call (NS_HELD_WAIT after the command).
+    #[test]
+    fn held_reads_4k_and_returns_while_held() {
+        let (r, w) = pipe().unwrap();
+        let keep = w.try_clone().unwrap();
+        std::thread::spawn(move || {
+            let mut f = std::fs::File::from(w);
+            let _ = std::io::Write::write_all(
+                &mut f,
+                b"omabox: note: forged\n\x1b[31momabox: cannot enter the box: red\x1b[0m\nomabox: cannot enter the box: real \x1b]0;t\x07\nhalf",
+            );
+            let _ = std::io::Write::write_all(&mut f, &vec![b'A'; 3_000_000]);
+        });
+        let t0 = std::time::Instant::now();
+        let held = hold(r).take();
+        let ms = t0.elapsed().as_millis();
+        drop(keep);
+        assert_eq!(held.len(), NS_HELD_MAX, "4 KiB read at most");
+        assert_eq!(
+            String::from_utf8_lossy(&said_text(&held, 1, false)),
+            "omabox: cannot enter the box: real ]0;t\nomabox: dropped 4056 bytes of other output on the box entry's stderr\n",
+            "...anything else on it dropped and counted, escapes stripped"
+        );
+        assert!(
+            ms < 2500,
+            "...one a process keeps open: the call returns ({ms} ms)"
         );
     }
 

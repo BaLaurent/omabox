@@ -5,12 +5,12 @@
 //! desktop did meanwhile (#274: desk_snap before the input, desk_facts and desk_target after). As
 //! bin/omabox's SETTLE_* globals and functions, one struct here.
 
-use crate::boxes::{box_alive, meta, touch};
+use crate::boxes::{BoxSys, RealBox, meta, touch};
 use crate::cat;
-use crate::desk::{Target, desk_facts, desk_snap, desk_target};
+use crate::desk::{Target, desk_facts, desk_snap, desk_target_with};
 use crate::exec::{ErrTo, In, Out, on_box, pipe};
 use crate::exit::{Ctx, Exit, Res, out, say};
-use crate::hypr::{hung_text, hypr_answers, hypr_json};
+use crate::hypr::{hung_text_with, hypr_answers_with, hypr_json};
 use crate::jobs::job_failed;
 use crate::jq::{self, Args};
 use crate::num::{ms_duration, ms_s, read, xywh_less, xywh_words};
@@ -504,7 +504,13 @@ impl Settle {
             pid,
         });
         self.err.clear();
-        let end = after(12);
+        self.first_line(after(12));
+        Ok(())
+    }
+
+    /// settle_begin's read of the tool's first line: `ready`, or its answer, by END; what else it
+    /// says is SETTLE_ERR.
+    fn first_line(&mut self, end: Instant) {
         let (mut line, mut part) = (Vec::new(), Vec::new());
         let answer = shell::Re::new(r"^(satisfied|unsatisfied|unknown)\ ");
         let is_answer = |l: &[u8]| answer.as_ref().is_some_and(|r| r.is_match(l));
@@ -540,7 +546,6 @@ impl Settle {
         }
         self.line = line;
         self.t0 = mono_ms();
-        Ok(())
     }
 
     /// settle_ready JSON: before keys, click or run -d act; no `ready` means nothing is sent, and
@@ -585,6 +590,18 @@ impl Settle {
     /// settle_end COND JSON SENT: the tool's answer as a line (or JSON) on stdout; 0, 124 or 1. COND
     /// names it in messages; SENT is what an action already did, said when the answer is not yes.
     pub fn end(&mut self, ctx: &Ctx, cond: &str, json: bool, sent: &[u8]) -> Res<i32> {
+        self.end_with(&RealBox, ctx, cond, json, sent)
+    }
+
+    /// settle_end, the box (its life, its Hyprland's answers, its desktop after) read through SYS.
+    fn end_with<S: BoxSys + ?Sized>(
+        &mut self,
+        sys: &S,
+        ctx: &Ctx,
+        cond: &str,
+        json: bool,
+        sent: &[u8],
+    ) -> Res<i32> {
         let mut line = self.line.clone();
         let scr = line.strip_prefix(b"ready ").unwrap_or(&line).to_vec();
         let answer = shell::Re::new(r"^(satisfied|unsatisfied|unknown)\ ");
@@ -671,10 +688,10 @@ impl Settle {
                     // or confirm-close replaced its window; a headless box always draws: no frame
                     // is a Hyprland that stopped answering (#124).
                     if meta(&ctx.d, "mode").0 != b"interactive" {
-                        if hypr_answers(ctx)? {
+                        if hypr_answers_with(sys, ctx, "2")? {
                             cat!("box '", n, "' sent no frame")
                         } else {
-                            hung_text(ctx, "")?
+                            hung_text_with(sys, ctx, "")?
                         }
                     } else if meta(&ctx.d, "drawn_hidden").0 != b"true" {
                         cat!(
@@ -698,20 +715,20 @@ impl Settle {
                         )
                     }
                 }
-                b"hung" => hung_text(ctx, "10 s")?,
+                b"hung" => hung_text_with(sys, ctx, "10 s")?,
                 b"refused" => cat!("box '", n, "' refused a screen capture", err_part),
                 b"off-screen" => cat!("the region watched is not on the screen of box '", n, "'"),
                 _ => {
                     // Its compositor gone: the box is (being) taken down.
                     let gone = mono_ms() - self.t0;
                     let end = after(2);
-                    while box_alive(ctx)? && !past(end) {
+                    while sys.box_alive(ctx)? && !past(end) {
                         std::thread::sleep(Duration::from_millis(200));
                     }
-                    if !box_alive(ctx)? {
+                    if !sys.box_alive(ctx)? {
                         cat!("box '", n, "' went down after ", ms_s(gone.to_string()))
-                    } else if !hypr_answers(ctx)? {
-                        hung_text(ctx, "")?
+                    } else if !hypr_answers_with(sys, ctx, "2")? {
+                        hung_text_with(sys, ctx, "")?
                     } else {
                         cat!("lost the box's screen", err_part)
                     }
@@ -871,7 +888,7 @@ impl Settle {
             self.snap_take();
             if res != b"unknown" && !self.before.is_empty() {
                 let (mut tg, mut tt, mut lw) = (Vec::new(), Vec::new(), Vec::new());
-                let after = desk_snap(ctx, false);
+                let after = sys.desk_snap(ctx);
                 let fx = desk_facts(&self.before, &after);
                 let e = jq::jq(&["-c", ".events"], Some(&self.before), jq::Err::Null);
                 evs = if e.ok() { e.text() } else { b"null".to_vec() };
@@ -881,11 +898,17 @@ impl Settle {
                             if self.fpid.is_empty() || after.is_empty() {
                                 Vec::new()
                             } else {
-                                desk_target(ctx, Target::Run(&self.fpid), &after)
+                                desk_target_with(Target::Run(&self.fpid), &after, || {
+                                    sys.kb_layers(ctx)
+                                })
                             }
                         }
-                        "keys" => desk_target(ctx, Target::Keys, &self.before),
-                        a => desk_target(ctx, Target::At(a, &self.fxy), &self.before),
+                        "keys" => {
+                            desk_target_with(Target::Keys, &self.before, || sys.kb_layers(ctx))
+                        }
+                        a => desk_target_with(Target::At(a, &self.fxy), &self.before, || {
+                            sys.kb_layers(ctx)
+                        }),
                     };
                     if !tg.is_empty() {
                         target = jq::jq(&["-c", "del(.text)"], Some(&tg), jq::Err::Inherit).text();
@@ -995,6 +1018,25 @@ fn block_sigpipe() {
         libc::sigemptyset(&mut set);
         libc::sigaddset(&mut set, libc::SIGPIPE);
         libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+    }
+}
+
+/// A watch as settle_begin leaves it, for a test: its first line LINE read already, the tool's
+/// output OUT, the thread that runs it and the pid it records.
+#[cfg(test)]
+impl Settle {
+    fn given(line: &[u8], out: OwnedFd, thread: JoinHandle<()>, pid: Arc<AtomicI32>) -> Settle {
+        Settle {
+            line: line.to_vec(),
+            t0: mono_ms(),
+            tool: Some(Tool {
+                input: None,
+                lines: Lines::new(out),
+                thread,
+                pid,
+            }),
+            ..Settle::default()
+        }
     }
 }
 
@@ -1176,5 +1218,301 @@ mod tests {
         s.window = false;
         assert!(s.opts_check(&c, 0).is_ok());
         assert_eq!((a, s.window), (true, false));
+    }
+
+    /// The box as bash's stubs had it: up (box_alive), its Hyprland not answering (hyprctl's 6) with
+    /// no process to name, the desktop after AFTER, no layer holding the keyboard (kb_layers).
+    struct Stub {
+        after: Vec<u8>,
+    }
+
+    impl BoxSys for Stub {
+        fn box_alive(&self, _: &Ctx) -> Res<bool> {
+            Ok(true)
+        }
+        fn box_pids(&self, _: &Ctx) -> Vec<Vec<u8>> {
+            Vec::new()
+        }
+        fn on_box_io(&self, _: &Ctx, _: &[Vec<u8>], _: Out, _: ErrTo) -> crate::exec::Ran {
+            crate::exec::Ran {
+                rc: 6,
+                out: Vec::new(),
+                refused: false,
+                gone_said: false,
+            }
+        }
+        fn desk_snap(&self, _: &Ctx) -> Vec<u8> {
+            self.after.clone()
+        }
+        fn kb_layers(&self, _: &Ctx) -> Vec<u8> {
+            Vec::new()
+        }
+    }
+
+    fn sctx() -> Ctx {
+        let mut c = Ctx::new(b"wait", shell::bytes(&std::env::temp_dir()).to_vec());
+        c.parsed();
+        c.name = b"u".to_vec();
+        c.d = b"/nonexistent".to_vec();
+        c
+    }
+
+    /// The tool's output: PARTS written one after the other, PAUSE apart, then its end (EOF).
+    fn tool_says(parts: &[&str], pause: Duration) -> OwnedFd {
+        let (r, w) = pipe().unwrap();
+        let parts: Vec<String> = parts.iter().map(|p| (*p).to_string()).collect();
+        std::thread::spawn(move || {
+            let mut f = std::fs::File::from(w);
+            for (i, p) in parts.iter().enumerate() {
+                if i > 0 {
+                    std::thread::sleep(pause);
+                }
+                let _ = std::io::Write::write_all(&mut f, p.as_bytes());
+            }
+        });
+        r
+    }
+
+    /// settle_end COND JSON "" on a watch whose first line is LINE and whose tool then says PARTS:
+    /// what it printed and said, then "rc N".
+    fn ended(st: &mut Settle, sys: &Stub, cond: &str, json: bool, sent: &[u8]) -> String {
+        let ctx = sctx();
+        let (rc, said) = crate::exit::heard_all(|| st.end_with(sys, &ctx, cond, json, sent));
+        format!("{said}rc {}", rc.unwrap())
+    }
+
+    fn watch(line: &str, parts: &[&str], pause: Duration) -> Settle {
+        Settle::given(
+            line.as_bytes(),
+            tool_says(parts, pause),
+            std::thread::spawn(|| {}),
+            Arc::new(AtomicI32::new(0)),
+        )
+    }
+
+    // t_unit_settle_read (finding 217, #310): an answer, or a ready line, split across a read's
+    // second keeps every part, a space included.
+    #[test]
+    fn split_answers_read_whole() {
+        let none = Stub { after: Vec::new() };
+        let rest = "t=2002 first=2 last=1970 change=27,31,7,10 ignored=- why=- late=- frames=42\n";
+        let mut st = watch(
+            "ready 1920x1080",
+            &["u", &format!("nsatisfied changing {rest}")],
+            Duration::from_millis(1500),
+        );
+        let out = ended(&mut st, &none, "still", false, b"");
+        assert!(
+            out.starts_with("unsatisfied: still changing after 2.00s"),
+            "an answer split across a read timeout is read whole: {out}"
+        );
+        assert!(out.ends_with("rc 124"), "...124: {out}");
+        let mut st = watch(
+            "ready 1920x1080",
+            &["unsatisfied changing ", rest],
+            Duration::from_millis(1500),
+        );
+        let out = ended(&mut st, &none, "still", false, b"");
+        assert!(
+            out.starts_with("unsatisfied: still changing after 2.00s"),
+            "an answer split at a space keeps it (#310): {out}"
+        );
+        for (parts, what) in [
+            (
+                ["r", "eady 1920x1080\n"],
+                "settle_begin: a ready line split across a read timeout too",
+            ),
+            (
+                ["ready ", "1920x1080\n"],
+                "settle_begin: a ready line split at a space too",
+            ),
+        ] {
+            let mut st = watch("", &parts, Duration::from_millis(1500));
+            st.first_line(after(12));
+            assert_eq!(
+                (st.line.as_slice(), st.err.as_slice()),
+                (&b"ready 1920x1080"[..], &b""[..]),
+                "{what}"
+            );
+        }
+    }
+
+    // t_unit_wait's (#131, #162, finding 231): the 124's hint names a small region that kept
+    // changing late as an --ignore; not a large one, nor over a quarter of what several monitors
+    // cover.
+    #[test]
+    fn hint_as_bash() {
+        let none = Stub { after: Vec::new() };
+        let hint = |ready: &str, answer: &str| {
+            let mut st = watch(ready, &[&format!("{answer}\n")], Duration::ZERO);
+            ended(&mut st, &none, "still", false, b"")
+        };
+        assert_eq!(
+            hint(
+                "ready 1920x1080",
+                "unsatisfied changing t=10000 first=10 last=9990 change=28,90,14,900 ignored=- why=- late=27,81,15,918 frames=500"
+            ),
+            "unsatisfied: still changing after 10.00s (last change 9.99s at 28,90 14x900); from 5.00s on it changed only at 27,81 15x918: --ignore \"27,81 15x918\" if that is an animation\nrc 124",
+            "a 124 still changing in one small region: named as an --ignore"
+        );
+        assert_eq!(
+            hint(
+                "ready 1920x1080",
+                "unsatisfied changing t=10000 first=10 last=9990 change=0,0,1920,1080 ignored=- why=- late=0,0,1000,1080 frames=500"
+            ),
+            "unsatisfied: still changing after 10.00s (last change 9.99s at 0,0 1920x1080)\nrc 124",
+            "...over a quarter of the screen: no hint"
+        );
+        assert_eq!(
+            hint(
+                "ready 3000x2370 area=3240000",
+                "unsatisfied changing t=10000 first=10 last=9990 change=1920,450,1080,900 ignored=- why=- late=1920,450,1080,900 frames=500"
+            ),
+            "unsatisfied: still changing after 10.00s (last change 9.99s at 1920,450 1080x900)\nrc 124",
+            "...several monitors: a quarter of their own area (area=), not of the box around them"
+        );
+    }
+
+    // t_unit_wait (#124, finding 181): a tool that never ends (and never answered) is killed after
+    // 2 s, with what runs it; a box whose Hyprland does not answer either is said so.
+    #[test]
+    #[ignore = "starts a process: run by test/run.sh (cargo test -- --ignored)"]
+    fn a_tool_that_never_ends_is_killed() {
+        let none = Stub { after: Vec::new() };
+        let (r, w) = pipe().unwrap();
+        drop(w);
+        let mut child = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .unwrap();
+        let pid = Arc::new(AtomicI32::new(i32::try_from(child.id()).unwrap()));
+        let cpid = child.id();
+        let thread = std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        let mut st = Settle::given(b"", r, thread, pid);
+        let t0 = Instant::now();
+        let out = ended(&mut st, &none, "still", false, b"");
+        let s = t0.elapsed().as_secs();
+        assert_eq!(
+            out.lines().next().unwrap_or_default(),
+            "unknown: box 'u': its Hyprland did not answer (hung? omabox log -b u; omabox down u)",
+            "settle_end: a tool that never ends is not waited for (#124)"
+        );
+        let gone = !std::path::Path::new(&format!("/proc/{cpid}")).exists();
+        assert_eq!(
+            (
+                out.lines().last().unwrap_or_default(),
+                (2..=6).contains(&s),
+                gone
+            ),
+            ("rc 1", true, true),
+            "...exit 1 within seconds ({s} s), the tool killed"
+        );
+    }
+
+    /// wf_snap JQ: the base snapshot of t_unit_wait_facts (foot "K" focused on workspace 1, the bar
+    /// drawn, the launcher mapped at 1x1) changed by JQ.
+    fn wf_snap(m: &str) -> Vec<u8> {
+        let base = r#"{events: 100,
+    clients: [{address: "0xa", mapped: true, hidden: false, class: "foot", title: "K", pid: 40, workspace: {id: 1, name: "1"},
+      at: [0, 0], size: [960, 1080], floating: false, fullscreen: 0}],
+    layers: {"HEADLESS-2": {levels: {"0": [{address: "0x1", namespace: "omarchy-background", x: 0, y: 0, w: 1920, h: 1080}], "1": [],
+      "2": [{address: "0x2", namespace: "omarchy-bar", x: 0, y: 1046, w: 1920, h: 34}],
+      "3": [{address: "0x3", namespace: "omarchy-menu", x: 0, y: 0, w: 1, h: 1}]}}},
+    active: {address: "0xa", class: "foot", title: "K", workspace: {id: 1, name: "1"}},
+    workspace: {id: 1, name: "1"},
+    monitors: [{id: 0, activeWorkspace: {id: 1}, specialWorkspace: {id: 0}}]}"#;
+        let r = jq::jq(
+            &["-c", "-n", &format!("{base} | {m}")],
+            None,
+            jq::Err::Inherit,
+        );
+        assert!(r.ok());
+        r.text()
+    }
+
+    fn jqv(js: &str, prog: &str) -> String {
+        let line = js.lines().next().unwrap_or_default();
+        String::from_utf8_lossy(
+            &jq::jq(&["-c", prog], Some(line.as_bytes()), jq::Err::Inherit).text(),
+        )
+        .into_owned()
+    }
+
+    // t_unit_wait_facts (#274): settle_end with the facts. The line keeps its start, the facts after
+    // it; JSON adds changes, target and events_since; the exit code is the screen's.
+    #[test]
+    fn facts_as_bash() {
+        let menu = r#".layers["HEADLESS-2"].levels["3"] = [{address: "0x4", namespace: "omarchy-menu", x: 660, y: 300, w: 600, h: 480}]"#;
+        let zen = r#"{address: "0xb", mapped: true, hidden: false, class: "zenity", title: "Save as", pid: 41, workspace: {id: 1, name: "1"},
+    at: [960, 0], size: [960, 1080], floating: false, fullscreen: 0}"#;
+        let s = wf_snap(&format!(
+            ".clients += [{zen} | .floating = true | .at = [800, 400] | .size = [300, 200]]"
+        ));
+        let yes = "satisfied settled t=540 first=10 last=240 change=660,300,600,480 ignored=- why=- frames=30";
+        let nothing =
+            "unsatisfied nothing t=2000 first=- last=- change=- ignored=- why=- frames=60";
+        let se = |answer: &str, facts: &'static str, before: &[u8], after: &[u8], json: bool| {
+            let mut st = watch("ready 1920x1080", &[&format!("{answer}\n")], Duration::ZERO);
+            st.facts = facts;
+            st.fxy = b"900 450".to_vec();
+            st.before = before.to_vec();
+            let sys = Stub {
+                after: after.to_vec(),
+            };
+            ended(&mut st, &sys, "settle", json, b"the keys were sent")
+        };
+        assert_eq!(
+            se(yes, "keys", &wf_snap("."), &wf_snap(menu), false),
+            "satisfied: settled after 0.54s (last change 0.24s at 660,300 600x480); layer omarchy-menu opened\nrc 0",
+            "settle_end: the facts after the screen's words"
+        );
+        assert_eq!(
+            se(nothing, "keys", &s, &s, false),
+            "unsatisfied: nothing changed in 2.00s; the keys went to foot \"K\" (focused); no window, layer or focus changed\nomabox: the keys were sent all the same (124 is about the screen): look before sending anything again\nrc 124",
+            "...a 124: where the keys went, and that nothing moved; look before sending again"
+        );
+        assert_eq!(
+            se(nothing, "click", &s, b"", false),
+            "unsatisfied: nothing changed in 2.00s; the click at 900,450 was on zenity \"Save as\" (its 100,50)\nomabox: the keys were sent all the same (124 is about the screen): take a shot before sending anything again\nrc 124",
+            "...the desktop not read after: where the click went, nothing claimed; a shot as before"
+        );
+        assert_eq!(
+            se(yes, "keys", b"", &s, false),
+            "satisfied: settled after 0.54s (last change 0.24s at 660,300 600x480)\nrc 0",
+            "...nor before: the line as it was"
+        );
+        let out = se(yes, "keys", &wf_snap("."), &wf_snap(menu), true);
+        assert_eq!(
+            jqv(&out, "keys_unsorted | join(\" \")"),
+            "\"result condition message elapsed first_change last_change change late_changes ignored frames changes target events_since\"",
+            "--json: today's fields, then changes, target and events_since"
+        );
+        assert_eq!(
+            jqv(
+                &out,
+                "[.changes, .target.kind, .target.window.class, .events_since]"
+            ),
+            r#"[[{"kind":"layer_opened","namespace":"omarchy-menu","at":{"x":660,"y":300,"w":600,"h":480}}],"window","foot",100]"#,
+            "...their values"
+        );
+        assert_eq!(
+            jqv(&out, ".message"),
+            "\"settled after 0.54s (last change 0.24s at 660,300 600x480); layer omarchy-menu opened\"",
+            "...the message has the facts too"
+        );
+        let out = se(yes, "keys", &s, b"", true);
+        assert_eq!(
+            jqv(&out, ".changes"),
+            "null",
+            "...changes null when the desktop could not be read after"
+        );
+        let out = se(yes, "", &s, &wf_snap(menu), true);
+        assert_eq!(
+            jqv(&out, "keys_unsorted | join(\" \")"),
+            "\"result condition message elapsed first_change last_change change late_changes ignored frames\"",
+            "...wait (no action): today's fields only"
+        );
     }
 }

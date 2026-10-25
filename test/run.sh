@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6534 MIN_UNIT=3828
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4455 MIN_UNIT=1947
+MIN_CHECKS=6436 MIN_UNIT=3731
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4354 MIN_UNIT=1845
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -1352,63 +1352,12 @@ t_unit_run_named_dead() {
   # a_reaper_gone_is_no_failure)
 }
 
-# #166: a command through on_box or box_exec on a box going down as it entered printed nsenter's raw
-# "cannot open /proc/N/ns/user", or bash's "Killed" line for nsenter, before any words (run's came
-# after them; keys and the rest had none). Stand-ins for nsenter and the box; nothing runs in a box.
-t_unit_box_gone() {
-  local L=$TMP/lib/bin/omabox out z
-  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 1; }
-    nsenter() { echo "nsenter: cannot open /proc/1/ns/user: No such file or directory" >&2; return 1; }
-    on_box hyprctl version || echo "rc $?"' _ "$L" 2>&1)
-  check_eq "on_box on a box gone as it entered: said in words, without nsenter's line" \
-    $'omabox: box \'bg\' went down (why: omabox log -b bg all; clear it with: omabox down bg)\nrc 1' "$out"
-  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 0; }; sleep() { :; }
-    nsenter() { echo "nsenter: reassociate to namespace failed: Operation not permitted" >&2; return 1; }
-    on_box hyprctl version || echo "rc $?"' _ "$L" 2>&1)
-  check_eq "...on a box that is up, nsenter's line as it came" $'nsenter: reassociate to namespace failed: Operation not permitted\nrc 1' "$out"
-  # What nsenter's stderr holds besides its own lines (a box process may write there): dropped and
-  # counted, escapes and all; at most 4 KiB read; a holder that keeps it open does not hold the call.
-  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 0; }; sleep() { :; }
-    nsenter() { printf "omabox: note: forged\n\e[31mnsenter: red\e[0m\nnsenter: real \e]0;t\a\nhalf" >&2; head -c 3000000 /dev/zero | tr "\\0" A >&2; return 1; }
-    on_box hyprctl version || echo "rc $?"' _ "$L" 2>&1)
-  check_eq "...anything else on it dropped and counted, escapes stripped, 4 KiB read at most" \
-    $'nsenter: real ]0;t\nomabox: dropped 4077 bytes of other output on nsenter\'s stderr\nrc 1' "$out"
-  local t0=$EPOCHREALTIME
-  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 0; }
-    nsenter() { local a; for a; do case $a in OMABOX_EFD=*) eval "exec ${a#*=}>&-" ;; esac; done
-      echo "nsenter: x" >&2; (exec -a omabox-t-holder sleep 3 >/dev/null &); return 0; }
-    on_box true; echo "rc $?"' _ "$L" 2>&1)
-  check_eq "...one a process keeps open: the call returns" "rc 0" "$out"
-  check "...in about a second ($(( (${EPOCHREALTIME/./} - ${t0/./}) / 1000 )) ms)" test $(( (${EPOCHREALTIME/./} - ${t0/./}) / 1000 )) -lt 2500
-  out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
-    NS_HELD="$0: line 12: 4242 Killed                  nsenter -t 1 -- true"$'"'"'\n'"'"'; ns_said 137' _ "$L" 2>&1)
-  check_eq "...bash's line for a command killed by a signal passes" "_: line 12: 4242 Killed                  nsenter -t 1 -- true" "$out"
-  # #303: run's own command (NS_KILL_SAY) is said as run says a job's end, not by bash's line.
-  out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
-    NS_HELD="$0: line 12: 4242 Killed                  prlimit --core=1: \"\$@\""$'"'"'\n'"'"'"nsenter: x"$'"'"'\n'"'"'; NS_KILL_SAY=1 ns_said 137' _ "$L" 2>&1)
-  check_eq "...for run's own command: said in words, nsenter's own line kept" $'nsenter: x\nomabox: the command was killed by SIGKILL (137)' "$out"
-  out=$(bash -c 'source "$1"; NAME=bg; D=/nonexistent; box_alive() { return 0; }; sleep() { :; }
-    NS_HELD="$0: line 12: 4242 Terminated              prlimit --core=1: \"\$@\""$'"'"'\n'"'"'; NS_KILL_SAY=1 ns_said 143' _ "$L" 2>&1)
-  check_eq "...SIGTERM too" "omabox: the command was killed by SIGTERM (143)" "$out"
-  # The command's own stderr is never held back: it is the caller's, through the fd the command takes.
-  out=$(bash -c 'source "$1"; NAME=bg; box_pid() { echo 1; }; box_env() { echo x; }; box_alive() { return 1; }
-    nsenter() { while [ "$1" != -- ]; do shift; done; shift; "$@"; }
-    on_box sh -c "echo said >&2; exit 2" || echo "rc $?"' _ "$L" 2>&1)
-  check_eq "...a command's own stderr passes, the box's end or not" $'said\nrc 2' "$out"
-  mkdir -p "$TMP/boxgone/run"; : > "$TMP/boxgone/run/omabox.env"
-  out=$(bash -c 'source "$1"; NAME=bg D=$2; box_pid() { echo 1; }; box_alive() { return 1; }; nocore() { "$@"; }; caller_path() { :; }
-    nsenter() { case " $* " in *" -p "*) sh -c "kill -9 \$\$" ;; *) return 1 ;; esac; }
-    box_exec true || echo "rc $?"' _ "$L" "$TMP/boxgone" 2>&1)
-  check_eq "box_exec on a box gone: no \"Killed\" line, left to run's words" "rc 137" "$out"
-  # A PID 1 that exited and is not reaped yet is no box: its namespaces are gone.
-  # (Its parent execs a sleep, which never reaps it.)
-  sh -c 'sleep 0 & echo $! > "$1"; exec sleep 10' _ "$TMP/boxgone-zpid" & local zp=$! i
-  for i in $(seq 40); do z=$(cat "$TMP/boxgone-zpid" 2>/dev/null) && [ "$(cut -d' ' -f3 "/proc/$z/stat" 2>/dev/null)" = Z ] && break; sleep 0.05; done
-  check_eq "a zombie PID 1 is not alive (nor up in ls)" "Z gone dead" \
-    "$(Z=$z bash -c 'source "$1"; NAME=bg; box_pid() { echo "$Z"; }; printf "%s " "$(cut -d" " -f3 "/proc/$Z/stat")"
-      box_alive && printf "alive " || printf "gone "; box_state' _ "$L" 2>&1)"
-  kill "$zp" 2>/dev/null; wait "$zp" 2>/dev/null
-}
+# (#166: a command through on_box or box_exec on a box going down as it entered. The entry's failure
+# said in words on a box gone, as it came on one up, a SIGKILL'd box_exec left to run's words:
+# exec.rs box_gone_as_bash; what its stderr holds, 4 KiB at most, a holder not holding the call:
+# held_reads_4k_and_returns_while_held; run's own command killed, said: said_text_counts_what_was_held;
+# a zombie PID 1 not alive: procfs.rs a_zombie_is_not_running, an #[ignore] test; the command's own
+# stderr is its own fd, never held: t_run_stdio. #324 wave 6-suite.)
 
 # Finding 345: what runs in the box's pid namespace is given only the fds it is meant to have
 # (fds_only): there any box process could open the others again through /proc/PID/fd, a caller's own
@@ -1799,57 +1748,8 @@ t_unit_calibrate() {
   local d=$TMP/calib; mkdir -p "$d"
   # cal_reads MARKS S [NOISE]: each mark read at S, plus up to NOISE px either way (a fixed seed).
   cal_reads() { awk -v s="$2" -v n="${3:-0}" 'BEGIN { srand(11) } { printf "%s %.0f %.0f\n", $1, $2 * s + n * (2 * rand() - 1), $3 * s + n * (2 * rand() - 1) }' <<<"$1"; }
-  local m sz w h bad="" sp=""
-  for sz in 1920x1080 2560x1440 3840x2160 1080x1920 800x600; do
-    w=${sz%x*} h=${sz#*x}
-    for seed in 1 2 3; do
-      m=$(lib calib_marks "$w" "$h" "$seed")
-      [ "$(cut -d' ' -f1 <<<"$m" | tr -d '\n')" = ABCDEF ] || bad+=" $sz/$seed:letters"
-      awk -v w="$w" -v h="$h" '$2 < 0.08 * w - 1 || $2 > 0.92 * w || $3 < 0.08 * h - 1 || $3 > 0.92 * h { e = 1 } END { exit e }' <<<"$m" || bad+=" $sz/$seed:edge"
-      # Spread over the card: no two marks closer than a tenth of its short side.
-      awk -v w="$w" -v h="$h" '{ x[NR] = $2; y[NR] = $3 } END { for (i = 1; i <= NR; i++) for (j = i + 1; j <= NR; j++)
-        if (sqrt((x[i] - x[j]) ^ 2 + (y[i] - y[j]) ^ 2) < 0.1 * (w < h ? w : h)) exit 1 }' <<<"$m" || bad+=" $sz/$seed:close"
-      sp+=$(cut -d' ' -f1 <<<"$m" | head -3 | tr -d '\n')" "
-    done
-  done
-  check_eq "calib_marks: A-F, off the edges, spread out (5 sizes x 3 seeds)" "" "$bad"
-  check_eq "...the same seed, the same marks" "$(lib calib_marks 1920 1080 7)" "$(lib calib_marks 1920 1080 7)"
-  check "...another, other ones" test "$(lib calib_marks 1920 1080 7)" != "$(lib calib_marks 1920 1080 8)"
-  check "...letters not in reading order every time" test "$(tr ' ' '\n' <<<"$sp" | sort -u | wc -l)" -gt 1
-  # The card: its size, the marks kept in it, each cross red at its point, the card grey around it.
-  m=$(lib calib_marks 1920 1080 5)
-  lib calib_card "$d/c.png" 1920 1080 "$m"
-  check_eq "calib_card: the size asked" 1920x1080 "$(magick identify -format '%wx%h' "$d/c.png" 2>&1)"
-  check_eq "...calib_read gives its size and marks back" "1920 1080"$'\n'"$m" "$(lib calib_read "$d/c.png")"
-  local l x y px=""
-  while read -r l x y; do px+="$l:$(magick "$d/c.png" -format "%[hex:p{$x,$y}]" info: 2>&1) "; done <<<"$m"
-  check_eq "...each mark's centre is its cross's red" "$(cut -d' ' -f1 <<<"$m" | sed 's/$/:D4141E/' | tr '\n' ' ')" "$px"
-  check_eq "...the rest the card's grey" F2F2F2 "$(magick "$d/c.png" -format '%[hex:p{5,5}]' info: 2>&1)"
-  check_fails "...a PNG that is no card is refused" lib calib_read "$(magick -size 10x10 xc:white "$d/n.png" && echo "$d/n.png")"
-  # The fitting, on synthetic readings of this card.
-  fit() { lib calib_fit 1920 1080 "$m" "$1"; }
-  check_match "1:1 readings: one" "^one 0 " "$(fit "$m")"
-  check_match "...a few px off still is" "^one [0-9] " "$(fit "$(cal_reads "$m" 1 4)")"
-  check_match "0.758x (Haiku on 1920x1080): --fit 1456, 1456x819" "^fit 0.758 0.758 0.758 1456 1456x819 [0-2] " "$(fit "$(cal_reads "$m" 0.7583)")"
-  check_match "0.5x: --fit 960" "^fit 0.500 .* 960 960x540 [0-2] " "$(fit "$(cal_reads "$m" 0.5)")"
-  check_match "0.758x with 5 px of noise: still 1456, within the tolerance" "^fit 0.75[6-9] .* 1456 1456x819 ([0-9]|1[0-2]) " "$(fit "$(cal_reads "$m" 0.7583 5)")"
-  check_match "60 px of noise: no one scale" "^off 0\.[0-9]+ 12( [A-F]:[0-9]+)+$" "$(fit "$(cal_reads "$m" 0.7583 60)")"
-  check_fails "...exit 1" fit "$(cal_reads "$m" 0.7583 60)"
-  local sw; sw=$(cal_reads "$m" 0.7583 | awk 'NR == FNR { if ($1 == "B") b = $2 " " $3; if ($1 == "E") e = $2 " " $3; next }
-    $1 == "B" { $0 = "B " e } $1 == "E" { $0 = "E " b } 1' - <(cal_reads "$m" 0.7583))
-  check_match "B and E swapped: those two named, the scale the rest show" "^off 0.758 12 B:[0-9]+ E:[0-9]+$" "$(fit "$sw")"
-  check_match "readings past the marks (1.3x): up" "^up 1.300$" "$(fit "$(cal_reads "$m" 1.3)")"
-  check_match "x and y at different scales: off" "^off " "$(fit "$(awk '{ printf "%s %d %d\n", $1, $2 * 0.75, $3 * 0.6 }' <<<"$m")")"
-  local pm; pm=$(lib calib_marks 1080 1920 5)
-  check_match "a portrait card at 0.758x: 819x1456" "^fit 0.758 .* 1456 819x1456 " "$(lib calib_fit 1080 1920 "$pm" "$(cal_reads "$pm" 0.7583)")"
-  check_match "a 4K card at 0.379x: --fit 1456" "^fit 0.379 .* 1456 1456x819 " \
-    "$(m4=$(lib calib_marks 3840 2160 3); lib calib_fit 3840 2160 "$m4" "$(cal_reads "$m4" 0.3792)")"
-  # The answer's forms.
-  check_eq "calib_answer: A X,Y pairs" $'A 12 34\nB 56 78' "$(lib calib_answer "A 12,34 B 56,78")"
-  check_eq "...lower case, colons, brackets, decimals" $'A 12 34\nB 5.5 78\nC 1 2' "$(lib calib_answer "a: (12, 34); b=5.5,78 c 1 2")"
-  for bad in "" "A 12" "A 12,34 B" "AB 1,2" "A x,y" "A 1,2 A 3,4" "A -1,2"; do
-    check_fails "...'$bad' refused" lib calib_answer "$bad"
-  done
+  # (calib_marks, calib_card, calib_read and calib_fit: calibrate.rs card_as_bash, an #[ignore] test
+  # t_unit_rust_ignored runs; calib_answer: answers_as_bash; #324 wave 6-suite.)
   # The command: draw, then answer.
   local h2=$d/home; mkdir -p "$h2"
   cal() { HOME=$h2 OMABOX_SHOT_FIT=${CSF:-} "$CLI" calibrate "$@"; }
@@ -1857,7 +1757,9 @@ t_unit_calibrate() {
   check_match "...and how to answer, on stderr" "calibrate .*card.png --answer \"A X,Y B X,Y" "$(cal --size 1920x1080 -o "$d/card.png" 2>&1 >/dev/null)"
   check_eq "...the size asked" 1456x819 "$(cal --size 1456x819 -o "$d/c2.png" >/dev/null 2>&1; magick identify -format '%wx%h' "$d/c2.png" 2>&1)"
   for bad in 1920 1920x 10x10 99999x1080 axb; do check_fails "...--size $bad refused" cal --size "$bad" -o "$d/c3.png"; done
-  m=$(lib calib_read "$d/card.png" | tail -n +2)
+  # (the card's marks, from its PNG comment: "omabox-calibrate 1 W H L X Y...")
+  m=$(magick identify -format '%c' "$d/card.png" | sed -E 's/^omabox-calibrate 1 [0-9]+ [0-9]+ //; s/ ([A-Z] )/\n\1/g')
+  check_match "...its marks kept in it, A to F" "^A [0-9]+ [0-9]+ B .* F [0-9]+ [0-9]+$" "$(tr '\n' ' ' <<<"$m" | sed 's/ $//')"
   local out
   out=$(cal "$d/card.png" --answer "$(tr '\n' ' ' <<<"$m")" 2>&1); rc=$?
   check_match "--answer 1:1: says so, exit 0" "^read 1:1: .*no --fit needed" "$out $rc"
@@ -2009,47 +1911,9 @@ t_unit_shell_warnings() {
     $'Plugin widget x.qml failed: boom\nbad' "$(probe shell_warnings "$f")"
 }
 
-# #303 (finding 408): the shell's crash reports are its own, not another Quickshell's in the box (a
-# project's instance under test), told by the report's config; a shell its launcher started again
-# (killed: no report) is said by the next command, once.
-t_unit_shell_reports() {
-  local d=$TMP/$P-shrep c out
-  c=$d/home/.cache/quickshell/crashes
-  mkdir -p "$c"/{ours,other,unwritten,linked,odd} "$d/run" "$d/elsewhere"
-  printf 'Signal: x\nCrashed process ID: 77\nConfig Path: /usr/share/omarchy/shell/shell.qml\n' > "$c/ours/report.txt"
-  printf 'Crashed process ID: 78\nConfig Path: /tmp/qt/shell.qml\n' > "$c/other/report.txt"
-  printf 'Config Path: /usr/share/omarchy/shell/shell.qml\n' > "$d/elsewhere/report.txt"
-  ln -s "$d/elsewhere/report.txt" "$c/linked/report.txt"
-  printf 'Config Path: /usr/share/omarchy//shell/shell.qml\nConfig Path: /tmp/x/shell.qml\n' > "$c/odd/report.txt"
-  echo '{"shell": true}' > "$d/box.json"
-  out=$(bash -c 'source "$1"; D=$2; shell_crash_dirs | sort | tr "\n" " "; shell_crashes' _ "$TMP/lib/bin/omabox" "$d" 2>&1)
-  check_eq "the shell's reports only: not another instance's, one not written yet, nor a link (its first Config Path, slashes squeezed)" "odd ours 2" "$out"
-  echo '{"shell": true, "omarchy": "/x/om"}' > "$d/box.json"
-  printf 'Config Path: /x/om/shell/shell.qml\n' > "$c/unwritten/report.txt"
-  check_eq "...an --omarchy tree's shell" "unwritten" "$(bash -c 'source "$1"; D=$2; shell_crash_dirs' _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
-  rm -rf "$c"; mkdir -p "$c/other"; printf 'Config Path: /tmp/qt/shell.qml\n' > "$c/other/report.txt"
-  echo '{"shell": true}' > "$d/box.json"; echo 100 > "$d/run/omabox-shell.mark"; : > "$d/home/shell.log"
-  # shellcheck disable=SC2016 # the inner bash's
-  local note='source "$1"; D=$2 NAME=sr; shell_state() { echo running; }; shell_note'
-  check_eq "shell_note: a first look says nothing" "" "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
-  check_eq "...nor another instance's crash" "" "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
-  echo '2026-10-20 16:00:00.000 omarchy-shell: Omarchy shell exited with status 137; relaunching.' >> "$d/home/shell.log"
-  check_eq "...the launcher starting a killed shell again: said" \
-    "omabox: warning: the shell was killed by SIGKILL (137) since the last command and was started again (omabox log -b sr shell)" \
-    "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
-  check_eq "...once" "" "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
-  # A new start of shell.sh (its mark): a fresh log, every line in it new.
-  echo 200 > "$d/run/omabox-shell.mark"
-  echo 'omarchy-shell: Omarchy shell exited with status 1; relaunching.' > "$d/home/shell.log"
-  check_match "...after a new start, one that exited: its status" "the shell exited with status 1 since the last command" \
-    "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
-  mkdir -p "$c/mine"; printf 'Config Path: /usr/share/omarchy/shell/shell.qml\n' > "$c/mine/report.txt"
-  echo 'omarchy-shell: Omarchy shell exited with status 134; relaunching.' >> "$d/home/shell.log"
-  check_eq "...a crash and its relaunch: the crash said, once" \
-    "omabox: warning: the shell crashed since the last command and was started again (omabox log -b sr shell)" \
-    "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
-  check_eq "...and not again" "" "$(bash -c "$note" _ "$TMP/lib/bin/omabox" "$d" 2>&1)"
-}
+# (shell_crash_dirs, shell_crashes and shell_note, #303, finding 408: shellnote.rs
+# shell_reports_as_bash, an #[ignore] test t_unit_rust_ignored runs, the box's answers stand-ins;
+# #324 wave 6-suite.)
 
 # #294 (finding 407): the box's Xwayland stand-in keeps the core limit at 1 byte (hard too, so
 # Xwayland's -core cannot raise it), and passes a limit the user raised on as it is. A fake Xwayland
@@ -10581,7 +10445,8 @@ t_user_hypr() {
   # did) is said, exit 1; nothing was said. Stopped by a timer the reload sets when stop-once is there
   # (kept in a global: an unreferenced timer can be collected before it fires). A 1 ms timer still
   # races the CLI's configerrors under load (Hyprland may answer it first and stop after), so a try
-  # whose stop came too late is taken again; t_unit_hypr_errors_note has the logic without the race.
+  # whose stop came too late is taken again; hypr.rs hypr_errors_note_as_bash has the logic without
+  # the race.
   printf '\nif os.remove("%s/stop-once") then omabox_test_stop = hl.timer(function() os.execute("kill -STOP $PPID") end, { timeout = 1, type = "oneshot" }) end\n' \
     "$c" >> "$H/.config/hypr/looknfeel.lua"
   # (This box has nothing to draw, --no-shell: its Hyprland ran the timer late, after the next request,
@@ -13341,85 +13206,8 @@ t_hung() {
   ob down "$B" >/dev/null
 }
 
-# How up and restart-shell tell a shell that crashed as it started (#126, finding 183): a new report
-# folder, a crash line in shell.log, or its pid gone; then what they say.
-t_unit_shell_crash() {
-  local d=$TMP/sc
-  mkdir -p "$d/home/.cache/quickshell/crashes/old" "$d/run"; : > "$d/home/shell.log"; echo 42 > "$d/run/omabox-shell.pid"
-  # finding 258: the pid file is in the box's runtime dir, which the box writes: read as a regular
-  # file only. A FIFO there hung the host's read (`ls --json`, the widget's poll); a link read a host file.
-  rp() { timeout 5 bash -c 'source "$1"; NAME=u D=$2; shell_pid && echo "rc 0" || echo "rc $?"' _ "$TMP/lib/bin/omabox" "$d" 2>&1 | tr '\n' ' '; }
-  check_eq "shell_pid: the file's number" "42 rc 0 " "$(rp)"
-  mv "$d/run/omabox-shell.pid" "$d/run/pid.real"; ln -s "$d/run/pid.real" "$d/run/omabox-shell.pid"
-  check_eq "...a link to it: nothing" "rc 1 " "$(rp)"
-  rm "$d/run/omabox-shell.pid"; mkfifo "$d/run/omabox-shell.pid"
-  check_eq "...a FIFO: nothing, at once (not hung)" "rc 1 " "$(rp)"
-  rm "$d/run/omabox-shell.pid"; mv "$d/run/pid.real" "$d/run/omabox-shell.pid"
-  sc() {   # STAT: what /proc/PID/stat says in the box ("" for no such process)
-    STAT=$1 bash -c 'source "$1"; NAME=u D=$2; SHELL_BEFORE=old
-      on_box() { [ -n "$STAT" ] && echo "$STAT"; }
-      shell_crash "$(shell_pid)" && echo "rc 0" || echo "rc $?"' _ "$TMP/lib/bin/omabox" "$d" 2>&1 | tr '\n' ' '
-  }
-  check_eq "no new report, no crash line, the shell running: no crash" "rc 1 " "$(sc "42 (quickshell) S 1")"
-  # (#303: a folder counts once its report names the box shell's config; another Quickshell's does not.)
-  local cp='Config Path: /usr/share/omarchy/shell/shell.qml'
-  mkdir "$d/home/.cache/quickshell/crashes/q1k4dmt"
-  check_eq "a report folder not written yet: no crash yet" "rc 1 " "$(sc "42 (quickshell) S 1")"
-  printf 'Config Path: /tmp/qt/shell.qml\n' > "$d/home/.cache/quickshell/crashes/q1k4dmt/report.txt"
-  check_eq "...another Quickshell's: no crash (#303)" "rc 1 " "$(sc "42 (quickshell) S 1")"
-  printf '%s\n' "$cp" > "$d/home/.cache/quickshell/crashes/q1k4dmt/report.txt"
-  check_eq "a new report folder: crashed, its report named" "crashed $d/home/.cache/quickshell/crashes/q1k4dmt/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
-  check_eq "...said with it" "warning: the shell crashed after starting (report: /r/report.txt; omabox log -b u shell)" \
-    "$(bash -c 'source "$1"; NAME=u D=/nonexistent; shell_crash_text after "crashed /r/report.txt"' _ "$TMP/lib/bin/omabox")"
-  rm -r "$d/home/.cache/quickshell/crashes/q1k4dmt"; mkdir "$d/home/.cache/quickshell/crashes/a b"
-  printf '%s\n' "$cp" > "$d/home/.cache/quickshell/crashes/a b/report.txt"
-  check_eq "a folder named oddly (the box names it): crashed, no path" "crashed - rc 0 " "$(sc "42 (quickshell) S 1")"
-  rm -r "$d/home/.cache/quickshell/crashes/a b"
-  printf ' ERROR: Quickshell has crashed under pid 43\n' > "$d/home/shell.log"
-  check_eq "only the log's crash line: crashed" "crashed - rc 0 " "$(sc "42 (quickshell) S 1")"
-  check_eq "...said without a report" "warning: the shell crashed while starting (omabox log -b u shell)" \
-    "$(bash -c 'source "$1"; NAME=u D=/nonexistent; shell_crash_text while "crashed -"' _ "$TMP/lib/bin/omabox")"
-  : > "$d/home/shell.log"
-  check_eq "its pid gone: exited" "exited rc 0 " "$(sc "")"
-  check_eq "...or a zombie" "exited rc 0 " "$(sc "42 (quickshell) Z 1")"
-  check_eq "...said as exited" "warning: the shell exited after starting (omabox log -b u shell)" \
-    "$(bash -c 'source "$1"; NAME=u D=/nonexistent; shell_crash_text after exited' _ "$TMP/lib/bin/omabox")"
-  check_eq "the report folders before a restart are not a crash" "rc 1 " "$(sc "42 (quickshell) S 1")"
-  # finding 255: a report of a process older than this start (its pid below shell.sh's mark) is an old
-  # shell's, stopped as it loaded, not this start's crash.
-  local m=$d/home/.cache/quickshell/crashes/m1
-  mkdir "$m"; printf 'Signal: Segmentation fault (11)\nCrashed process ID: 30\n%s\n' "$cp" > "$m/report.txt"
-  echo 40 > "$d/run/omabox-shell.mark"
-  check_eq "a report of a process older than this start (below shell.sh's mark): no crash (finding 255)" "rc 1 " "$(sc "42 (quickshell) S 1")"
-  printf 'Crashed process ID: 41\n%s\n' "$cp" > "$m/report.txt"
-  check_eq "...one of this start's (above it): crashed" "crashed $m/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
-  rm "$d/run/omabox-shell.mark"; printf 'Crashed process ID: 30\n%s\n' "$cp" > "$m/report.txt"
-  check_eq "...no mark (a box an older omabox started): every report counts, as before" "crashed $m/report.txt rc 0 " "$(sc "42 (quickshell) S 1")"
-  rm -r "$m"
-  # finding 248: its pid gone as a duplicate of a shell another start brought up meanwhile.
-  dup() {   # LIST: what `quickshell list -j` says in the box; pid 77 is up, 42 gone
-    QSL=$1 bash -c 'source "$1"; NAME=u D=$2; SHELL_BEFORE=old
-      on_box() {
-        case "$1 ${2:-}" in
-          "/usr/bin/quickshell list") echo "$QSL" ;;
-          "cat /proc/77/stat") echo "77 (quickshell) S 1" ;;
-          "sh -c") echo "$5" > "$D/run/omabox-shell.pid" ;;
-          *) return 1 ;;
-        esac
-      }
-      shell_crash "$(shell_pid)" && echo "rc 0" || echo "rc $?"' _ "$TMP/lib/bin/omabox" "$d" 2>&1 | tr '\n' ' '
-  }
-  printf 'An instance of this configuration is already running.\n' > "$d/home/shell.log"
-  check_eq "a duplicate, no shell of its config up: exited" "exited rc 0 " "$(dup '[]')"
-  check_eq "...one up (#192): no failure, it is the box's shell now" \
-    "omabox: box 'u': another start of the shell came first; that one (pid 77) is up, started after the old one was stopped: the box's shell now rc 1 " \
-    "$(dup '[{"pid": 77}]')"
-  check_eq "...its pid recorded where shell.sh keeps it" 77 "$(cat "$d/run/omabox-shell.pid")"
-  echo 42 > "$d/run/omabox-shell.pid"
-  check_eq "...not one whose pid is gone too" "exited rc 0 " "$(dup '[{"pid": 78}]')"
-  : > "$d/home/shell.log"
-  check_eq "no duplicate line: exited, whatever runs" "exited rc 0 " "$(dup '[{"pid": 77}]')"
-}
+# (shell_pid, shell_crash and shell_crash_text, #126, findings 183, 248, 255, 258: ready.rs
+# shell_crash_as_bash, an #[ignore] test t_unit_rust_ignored runs, and crash_words; #324 wave 6-suite.)
 
 # shell_segv BOX [PID]: a SIGSEGV for box BOX's shell (PID, or the one recorded there), aimed at one of
 # its threads waiting in poll (#200, finding 280). A plain `kill -SEGV` is taken by whichever thread
@@ -13847,30 +13635,8 @@ t_throwaway_dead() {
   check "the dead box goes within 15 s" until_ok 15 bash -c "! '$CLI' ls --json | jq -e '.[] | select(.name == \"$n\")'"
 }
 
-# The still tool's answer split across settle_end's 1 s reads (finding 217): bash keeps what a timed-out
-# read had of a line; it was dropped, and "nsatisfied ..." read as no answer ("lost the box's screen").
-t_unit_settle_read() {
-  local out
-  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; box_alive() { return 0; }
-    exec {SETTLE_OUT}< <(printf u; sleep 1.5; printf "%s\n" "nsatisfied changing t=2002 first=2 last=1970 change=27,31,7,10 ignored=- why=- late=- frames=42")
-    exec {SETTLE_IN}>/dev/null; sleep 0.1 & SETTLE_PID=$!
-    SETTLE_LINE="ready 1920x1080" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); rc=0; settle_end still 0 "" || rc=$?; echo "rc $rc"' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
-  check_match "an answer split across a read timeout is read whole" "^unsatisfied: still changing after 2\.00s" "$out"
-  check_match "...124" "rc 124$" "$out"
-  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; on_box() { { printf r; sleep 1.5; printf "eady 1920x1080\n"; sleep 5; }; }
-    settle_begin still; echo "line [$SETTLE_LINE] err [$SETTLE_ERR]"' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
-  check_match "settle_begin: a ready line split across a read timeout too" "line \[ready 1920x1080\] err \[\]" "$out"
-  # #310: split right at a space, a read with the default IFS dropped it from both parts:
-  # "unsatisfied: changingt=2002".
-  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; box_alive() { return 0; }
-    exec {SETTLE_OUT}< <(printf "unsatisfied changing "; sleep 1.5; printf "%s\n" "t=2002 first=2 last=1970 change=27,31,7,10 ignored=- why=- late=- frames=42")
-    exec {SETTLE_IN}>/dev/null; sleep 0.1 & SETTLE_PID=$!
-    SETTLE_LINE="ready 1920x1080" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); rc=0; settle_end still 0 "" || rc=$?; echo "rc $rc"' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
-  check_match "an answer split at a space keeps it (#310)" "^unsatisfied: still changing after 2\.00s" "$out"
-  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; on_box() { { printf "ready "; sleep 1.5; printf "1920x1080\n"; sleep 5; }; }
-    settle_begin still; echo "line [$SETTLE_LINE] err [$SETTLE_ERR]"' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
-  check_match "settle_begin: a ready line split at a space too" "line \[ready 1920x1080\] err \[\]" "$out"
-}
+# (settle_end and settle_begin reading an answer or a ready line split across a read's second, a
+# space included, finding 217, #310: settle.rs split_answers_read_whole; #324 wave 6-suite.)
 
 # (up's waits on a box that died meanwhile, #157, finding 216: ready.rs bar_settle_on_a_dead_box,
 # #324 wave 6-suite.)
@@ -18765,75 +18531,11 @@ os.write(os.open("/proc/self/comm", os.O_WRONLY), b"x\x1b[1my\nz"); open("/tmp/t
   ob down "$B" >/dev/null 2>&1
 }
 
-# #232: a call that got no answer from a Hyprland that crashed is not "hung". hypr_lost on a fake box
-# dir: its Hyprland (a sleep of ours, named by the lock) stopped, held by gdb --watch at a signal, or
-# gone with labwc's line; hypr_down_text and need_box's words from that line.
-t_unit_hypr_lost() {
-  local d=$TMP/hlost out sp
-  mkdir -p "$d/run/hypr/sig" "$d/home"
-  printf 'HYPRLAND_INSTANCE_SIGNATURE=sig\0' > "$d/run/omabox.env"
-  sleep 300 & sp=$!
-  echo "$sp" > "$d/run/hypr/sig/hyprland.lock"
-  hl() { timeout 10 bash -c 'source "$1"; NAME=u D=$2 SP=$3 ST=$4; box_alive() { return 0; }; box_pids() { echo "$SP"; }
-    pid_state() { echo "$ST"; }; t0=$SECONDS; hung_text; echo "in $((SECONDS - t0))s"' _ "$TMP/lib/bin/omabox" "$d" "$sp" "$1" 2>&1; }
-  out=$(hl "T (stopped)")
-  check_match "hypr_lost: a stopped Hyprland is hung, said at once" \
-    $'^box \'u\': its Hyprland did not answer \\(hung\\? omabox log -b u; omabox down u\\)\nin [01]s$' "$out"
-  printf '\n== omabox gdb --watch Hyprland (pid 55 in the box), T\nThread 1 "Hyprland" received signal SIGSEGV, Segmentation fault.\n' > "$d/home/gdb.log"
-  check_match "...held by gdb --watch at a signal: crashed, held, and where the backtrace goes" \
-    "^box 'u': its Hyprland crashed \\(SIGSEGV\\), held by gdb --watch .*omabox log -b u gdb --crash" "$(hl "t (tracing stop)")"
-  check_match "...traced but not stopped at a signal: hung" "did not answer \\(hung" "$(hl "S (sleeping)")"
-  # hypr_gone: ls's one look (finding 350).
-  hgone() { timeout 10 bash -c 'source "$1"; NAME=u D=$2 SP=$3; box_pids() { echo "$SP"; }; hypr_gone' _ "$TMP/lib/bin/omabox" "$d" "$sp" 2>&1; }
-  check_fails "hypr_gone: a Hyprland that runs is not gone (hung, for ls)" hgone
-  kill "$sp"; wait "$sp" 2>/dev/null
-  check_eq "...gone, no line yet: going" going "$(hgone)"
-  printf '[ERROR] [../labwc/src/server.c:207] spawned child %s terminated with signal 11 (Segmentation fault)\n' "$sp" > "$d/home/labwc.log"
-  check_eq "...labwc's line: crashed" crashed "$(hgone)"
-  check_match "...gone, labwc's line: went down, crashed (SIGSEGV), the gdb log's backtrace named" \
-    "^box 'u' went down: its Hyprland crashed \\(SIGSEGV\\) \\(its backtrace: omabox log -b u gdb --crash; clear it with: omabox down u\\)" "$(hl "")"
-  rm "$d/home/gdb.log"
-  check_match "...with no watch: how to get a backtrace" \
-    "^box 'u' went down: its Hyprland crashed \\(SIGSEGV\\) \\(a backtrace: .*omabox gdb --watch; boxes keep no core dumps;" "$(hl "")"
-  printf 'x spawned child 9 exited with 1\n' > "$d/home/labwc.log"
-  check_eq "hypr_end: an exit's status" "exited (status 1)" "$(D=$d lib hypr_end)"
-  check_eq "hypr_gone: an exit: exited" exited "$(hgone)"
-  : > "$d/home/labwc.log"
-  check_match "...no line, gone for 2 s: went down, in the usual words" "^box 'u' went down \\(why: omabox log -b u all; clear it with: omabox down u\\)"$'\nin [23]s$' "$(hl "")"
-  printf 'Hyprland says\nomabox: Hyprland terminated with signal 6\n' > "$d/home/hyprland.log"
-  check_eq "hypr_end: an interactive box's (session.sh's line in hyprland.log)" "crashed (SIGABRT)" "$(D=$d lib hypr_end)"
-  printf 'omabox: Hyprland exited with 0\n' > "$d/home/hyprland.log"
-  check_eq "...an exit" "exited (status 0)" "$(D=$d lib hypr_end)"
-  rm "$d/home/hyprland.log"
-  ln -sf /etc/passwd "$d/home/labwc.log"
-  check_fails "hypr_end: a link is not read" lib eval "D='$d'; hypr_end"
-}
+# (hypr_lost, hung_text, hypr_gone and hypr_end, #232, findings 181-182, 350: hypr.rs
+# hypr_lost_as_bash, its box's processes and states stand-ins; #324 wave 6-suite.)
 
-# hypr_errors_note (finding 353), hyprctl stubbed: the errors, control characters dropped; none:
-# nothing; a Hyprland that does not answer: said, 1; gone: said as gone, 1; one that answers a ping
-# but whose configerrors fails: said, 0.
-t_unit_hypr_errors_note() {
-  local out
-  hen() {   # MODE: what the stubbed `hyprctl configerrors` does. Prints the output, then the status.
-    timeout 10 bash -c 'source "$1"; NAME=u M=$2
-      on_box() { case $M in
-        errors) printf "a\033[31mb\n\n  c\n" ;; none) printf "\n" ;;
-        hung|gone) echo "Hyprland IPC didn'"'"'t respond in time"; return 6 ;; fails) return 3 ;; esac; }
-      hypr_lost() { [ "$M" = gone ] && echo "box '"'"'u'"'"' went down: its Hyprland crashed (SIGSEGV)"; }
-      hypr_answers() { [ "$M" = fails ]; }
-      r=0; hypr_errors_note || r=$?; echo "rc=$r"' _ "$TMP/lib/bin/omabox" "$1" 2>&1
-  }
-  check_eq "hypr_errors_note: the errors, control characters dropped, blank lines out" \
-    "omabox: box 'u': its config has errors (the rest of the config loaded):"$'\n'"omabox:   a[31mb"$'\n'"omabox:     c"$'\n'"rc=0" "$(hen errors)"
-  check_eq "...none: nothing" "rc=0" "$(hen none)"
-  out=$(hen hung)
-  check_match "...no answer: said, with what to do, 1" \
-    "^omabox: box 'u': its Hyprland did not answer hyprctl configerrors, so the config's errors are unknown \(hung\? its threads: omabox gdb -b u; .*omabox down u\)"$'\n'"rc=1$" "$out"
-  check_fails "...hyprctl's own words not taken for an error of the config" grep -q "respond in time" <<<"$out"
-  check_eq "...gone: said as gone, 1" "omabox: box 'u' went down: its Hyprland crashed (SIGSEGV)"$'\n'"rc=1" "$(hen gone)"
-  check_eq "...answers a ping, configerrors fails: said, 0" \
-    "omabox: box 'u': could not read its config's errors (hyprctl configerrors: exit 3)"$'\n'"rc=0" "$(hen fails)"
-}
+# (hypr_errors_note, finding 353, hyprctl's answers stand-ins: hypr.rs hypr_errors_note_as_bash;
+# #324 wave 6-suite.)
 
 # log gdb --crash (#233) on a gdb log of two watches: one whose process was killed (gdb runs its crash
 # commands anyway: no crash), one that crashed in thread 3. Only that one, without the other threads.
@@ -19506,23 +19208,8 @@ t_unit_wait() {
   check_eq "...one inside it is not" "" "$(ob keys -b "$P-x" --wait -g "0,0 10x10" --ignore "5,5 5x5" a 2>&1 | grep outside)"
   local ig=() i; for i in $(seq 17); do ig+=(--ignore "$i,1 5x5"); done
   check_match "17 --ignore refused" "at most 16" "$(ob wait -b "$P-x" still "${ig[@]}" 2>&1)"
-  # The 124's hint: changes kept to a small region late in the wait are named as an --ignore; a large
-  # one is not (ignoring most of the screen is not waiting on it).
-  local hint='source "$1"; NAME=u D=$2; exec {SETTLE_IN}>/dev/null {SETTLE_OUT}< <(echo "$3"); sleep 0.1 & SETTLE_PID=$!
-    SETTLE_LINE="ready 1920x1080" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); settle_end still 0 ""'
-  out=$(bash -c "$hint" _ "$TMP/lib/bin/omabox" "$TMP" \
-    "unsatisfied changing t=10000 first=10 last=9990 change=28,90,14,900 ignored=- why=- late=27,81,15,918 frames=500" 2>&1)
-  check_eq "a 124 still changing in one small region: named as an --ignore" \
-    'unsatisfied: still changing after 10.00s (last change 9.99s at 28,90 14x900); from 5.00s on it changed only at 27,81 15x918: --ignore "27,81 15x918" if that is an animation' "$out"
-  out=$(bash -c "$hint" _ "$TMP/lib/bin/omabox" "$TMP" \
-    "unsatisfied changing t=10000 first=10 last=9990 change=0,0,1920,1080 ignored=- why=- late=0,0,1000,1080 frames=500" 2>&1)
-  check_eq "...over a quarter of the screen: no hint" 'unsatisfied: still changing after 10.00s (last change 9.99s at 0,0 1920x1080)' "$out"
-  # Several monitors (#162, finding 231): a quarter of what they cover, not of the box around them
-  # (3000x2370 here, with gaps); the tool says so as area=N.
-  out=$(bash -c "${hint/ready 1920x1080/ready 3000x2370 area=3240000}" _ "$TMP/lib/bin/omabox" "$TMP" \
-    "unsatisfied changing t=10000 first=10 last=9990 change=1920,450,1080,900 ignored=- why=- late=1920,450,1080,900 frames=500" 2>&1)
-  check_eq "...several monitors: a quarter of their own area (area=), not of the box around them" \
-    'unsatisfied: still changing after 10.00s (last change 9.99s at 1920,450 1080x900)' "$out"
+  # (The 124's hint, an --ignore named for a small region changing late, #131, #162, finding 231:
+  # settle.rs hint_as_bash; #324 wave 6-suite.)
   check_match "help scroll and help drag have the --wait section (#162)" "take --wait.*take --wait" \
     "$(ob help scroll --long | tr '\n' ' ') $(ob help drag --long | tr '\n' ' ')"
   local out rc=0
@@ -19534,17 +19221,8 @@ t_unit_wait() {
         env -i "$ROOT/tools/burst/omabox-burst" -n 2 2>&1) || rc=$?
   check_eq "omabox-burst refuses outside a box (#196)" 2 "$rc"
   check_match "...and says so" "only runs inside an omabox box" "$out"
-  # #124, finding 181: settle_end waited on the tool with no limit. One that never ends (and never
-  # answered) is killed after 2 s, with what runs it; a box not answering either is said so.
-  out=$(timeout 30 bash -c 'source "$1"; NAME=u D=$2; box_alive() { return 0; }; hypr_answers() { return 1; }
-    sleep 300 & SETTLE_PID=$!; exec {SETTLE_IN}>/dev/null {SETTLE_OUT}</dev/null
-    SETTLE_LINE="" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); t0=$SECONDS rc=0
-    settle_end still 0 "" || rc=$?
-    echo "rc $rc in $((SECONDS - t0))s, the tool $(kill -0 "$SETTLE_PID" 2>/dev/null && echo alive || echo gone)"' \
-    _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
-  check_match "settle_end: a tool that never ends is not waited for (#124)" \
-    "^unknown: box 'u': its Hyprland did not answer \(hung\? omabox log -b u; omabox down u\)$" "$(head -n 1 <<<"$out")"
-  check_match "...exit 1 within seconds, the tool killed" "^rc 1 in [2-6]s, the tool gone$" "$(tail -n 1 <<<"$out")"
+  # (#124, finding 181: a tool that never ends is killed after 2 s, a box not answering said so:
+  # settle.rs a_tool_that_never_ends_is_killed, an #[ignore] test t_unit_rust_ignored runs; #324.)
 }
 
 # What an action's --wait says changed on the desktop (#274): DESK_FACTS_JQ on canned snapshots (as
@@ -19609,10 +19287,7 @@ t_unit_wait_facts() {
     "$(wf_line "$six")"
   check_eq "...every one in changes" 7 "$(probe desk_facts "$(wf_snap)" "$(wf_snap "$six")" | jq '.changes | length')"
   check_eq "a snapshot missing (the box did not answer): nothing" "" "$(probe desk_facts "$(wf_snap)" "")"
-  # desk_snap's own check of what hyprctl --batch printed: five JSON values, else nothing.
-  check_eq "desk_snap: five values read as a snapshot" '{"events":7,"clients":[],"layers":{},"active":{},"workspace":{"id":1},"monitors":[]}' \
-    "$(lib eval 'on_box() { printf "7\n[]\n{}\n{}\n{\"id\":1}\n[]\n"; }; desk_snap')"
-  check_eq "...an error from hyprctl: nothing" "" "$(lib eval 'on_box() { printf -- "-\nIPC did not respond\n"; }; desk_snap')"
+  # (desk_snap's own check of what hyprctl --batch printed: desk.rs snap_of_as_bash; #324.)
 
   # Where the input went (the 124's sentence).
   local s; s=$(wf_snap ".clients += [$zen | .floating = true | .at = [800, 400] | .size = [300, 200]]")
@@ -19654,38 +19329,8 @@ t_unit_wait_facts() {
   check_eq "run: no window with the job's pid" "no window from pid 99 yet|none" "$(probe desk_target run "$s" 99 | jq -r '"\(.text)|\(.kind)"')"
   check_eq "...its window" "window|0xb" "$(probe desk_target run "$s" 41 | jq -r '"\(.kind)|\(.window.address)"')"
 
-  # settle_end with them: the line keeps its start, the facts after it; JSON adds changes, target and
-  # events_since; the exit code is the screen's.
-  local se='source "$1"; NAME=u D=$2; exec {SETTLE_IN}>/dev/null {SETTLE_OUT}< <(echo "$3"); sleep 0.1 & SETTLE_PID=$!
-    SETTLE_LINE="ready 1920x1080" SETTLE_ERR="" SETTLE_T0=$(date +%s%3N); SETTLE_FACTS=$4 SETTLE_FXY="900 450" SETTLE_BEFORE=$5
-    AFTER=$6; desk_snap() { printf "%s" "$AFTER"; }; kb_layers() { :; }; rc=0; settle_end settle "$7" "the keys were sent" || rc=$?; echo "rc $rc"'
-  local yes="satisfied settled t=540 first=10 last=240 change=660,300,600,480 ignored=- why=- frames=30"
-  local nothing="unsatisfied nothing t=2000 first=- last=- change=- ignored=- why=- frames=60"
-  local out
-  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" keys "$(wf_snap)" "$(wf_snap "$menu")" 0 2>&1)
-  check_eq "settle_end: the facts after the screen's words" \
-    $'satisfied: settled after 0.54s (last change 0.24s at 660,300 600x480); layer omarchy-menu opened\nrc 0' "$out"
-  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$nothing" keys "$s" "$s" 0 2>&1)
-  check_eq "...a 124: where the keys went, and that nothing moved; look before sending again" \
-    $'unsatisfied: nothing changed in 2.00s; the keys went to foot "K" (focused); no window, layer or focus changed\nomabox: the keys were sent all the same (124 is about the screen): look before sending anything again\nrc 124' "$out"
-  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$nothing" click "$s" "" 0 2>&1)
-  check_eq "...the desktop not read after: where the click went, nothing claimed; a shot as before" \
-    $'unsatisfied: nothing changed in 2.00s; the click at 900,450 was on zenity "Save as" (its 100,50)\nomabox: the keys were sent all the same (124 is about the screen): take a shot before sending anything again\nrc 124' "$out"
-  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" keys "" "$s" 0 2>&1)
-  check_eq "...nor before: the line as it was" $'satisfied: settled after 0.54s (last change 0.24s at 660,300 600x480)\nrc 0' "$out"
-  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" keys "$(wf_snap)" "$(wf_snap "$menu")" 1 2>&1)
-  check_eq "--json: today's fields, then changes, target and events_since" \
-    "result condition message elapsed first_change last_change change late_changes ignored frames changes target events_since" \
-    "$(head -n 1 <<<"$out" | jq -r 'keys_unsorted | join(" ")')"
-  check_eq "...their values" '[[{"kind":"layer_opened","namespace":"omarchy-menu","at":{"x":660,"y":300,"w":600,"h":480}}],"window","foot",100]' \
-    "$(head -n 1 <<<"$out" | jq -c '[.changes, .target.kind, .target.window.class, .events_since]')"
-  check_eq "...the message has the facts too" "settled after 0.54s (last change 0.24s at 660,300 600x480); layer omarchy-menu opened" \
-    "$(head -n 1 <<<"$out" | jq -r .message)"
-  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" keys "$s" "" 1 2>&1)
-  check_eq "...changes null when the desktop could not be read after" "null" "$(head -n 1 <<<"$out" | jq -c .changes)"
-  out=$(bash -c "$se" _ "$TMP/lib/bin/omabox" "$TMP" "$yes" "" "$s" "$(wf_snap "$menu")" 1 2>&1)
-  check_eq "...wait (no action): today's fields only" "result condition message elapsed first_change last_change change late_changes ignored frames" \
-    "$(head -n 1 <<<"$out" | jq -r 'keys_unsorted | join(" ")')"
+  # (settle_end with them, the line's start kept, the facts after it, JSON's changes, target and
+  # events_since: settle.rs facts_as_bash; #324 wave 6-suite.)
 }
 
 # omabox wait and --wait (finding 82) in a box of their own: two terminals side by side, one of them
@@ -20295,8 +19940,8 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
-  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
+  t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
 

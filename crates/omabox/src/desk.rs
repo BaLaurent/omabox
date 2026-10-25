@@ -47,7 +47,13 @@ pub fn desk_snap(ctx: &Ctx, stdin_null: bool) -> Vec<u8> {
     if r.rc != 0 {
         return Vec::new();
     }
-    let out = shell::subst(&r.out);
+    snap_of(&r.out)
+}
+
+/// desk_snap's reading of what its call printed: the events log's size, then hyprctl --batch's five
+/// JSON values; nothing when they are not five.
+fn snap_of(printed: &[u8]) -> Vec<u8> {
+    let out = shell::subst(printed);
     let (size, js) = match out.iter().position(|&c| c == b'\n') {
         Some(i) => (&out[..i], &out[i + 1..]),
         None => (&out[..], &out[..]),
@@ -83,13 +89,8 @@ pub enum Target<'a> {
     At(&'a str, &'a [u8]),
 }
 
-/// desk_target WHAT SNAPSHOT [X Y | PID]: DESK_TARGET_JQ's object, or nothing. keys reads the layers
-/// holding the keyboard now (kb_layers).
-pub fn desk_target(ctx: &Ctx, what: Target, s: &[u8]) -> Vec<u8> {
-    desk_target_with(what, s, || kb_layers(ctx))
-}
-
-/// desk_target, keys' layers holding the keyboard read by KBL (kb_layers).
+/// desk_target WHAT SNAPSHOT [X Y | PID]: DESK_TARGET_JQ's object, or nothing; keys' layers holding
+/// the keyboard now read by KBL_OF (kb_layers).
 pub fn desk_target_with(what: Target, s: &[u8], kbl_of: impl FnOnce() -> Vec<u8>) -> Vec<u8> {
     if s.is_empty() {
         return Vec::new();
@@ -149,4 +150,24 @@ pub fn kb_layers(ctx: &Ctx) -> Vec<u8> {
     out.strip_prefix(b"error: omabox-kbl:".as_slice())
         .map(<[u8]>::to_vec)
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // t_unit_wait_facts': desk_snap's own check of what hyprctl --batch printed.
+    #[test]
+    fn snap_of_as_bash() {
+        assert_eq!(
+            snap_of(b"7\n[]\n{}\n{}\n{\"id\":1}\n[]\n"),
+            br#"{"events":7,"clients":[],"layers":{},"active":{},"workspace":{"id":1},"monitors":[]}"#,
+            "desk_snap: five values read as a snapshot"
+        );
+        assert_eq!(
+            snap_of(b"-\nIPC did not respond\n"),
+            b"",
+            "...an error from hyprctl: nothing"
+        );
+    }
 }

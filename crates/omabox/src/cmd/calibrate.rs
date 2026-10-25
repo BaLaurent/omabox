@@ -49,13 +49,17 @@ fn awk(vars: &[(&str, &[u8])], prog: &str) -> (Vec<u8>, bool) {
 
 /// calib_marks W H: "L X Y" a line, A-F, sorted.
 fn calib_marks(w: &[u8], h: &[u8]) -> Vec<u8> {
-    let s = seed();
+    calib_marks_seeded(w, h, seed().as_bytes())
+}
+
+/// calib_marks W H SEED: the marks awk's rand gives from SEED (the same seed, the same marks).
+fn calib_marks_seeded(w: &[u8], h: &[u8], seed: &[u8]) -> Vec<u8> {
     let (o, _) = awk(
         &[
             ("w", w),
             ("h", h),
             ("n", CALIB_MARKS.as_bytes()),
-            ("seed", s.as_bytes()),
+            ("seed", seed),
         ],
         CALIB_MARKS_AWK,
     );
@@ -216,6 +220,15 @@ fn calib_answer(t: &[u8]) -> Option<Vec<Vec<u8>>> {
     Some(out)
 }
 
+/// calib_fit W H MARKS READINGS: awk's verdict line ("one", "fit", "off", "up" or "none"), and
+/// whether it ended 0 (one and fit).
+fn calib_fit(w: &[u8], h: &[u8], marks: &[u8], reads: &[u8]) -> (Vec<u8>, bool) {
+    awk(
+        &[("w", w), ("h", h), ("marks", marks), ("reads", reads)],
+        CALIB_FIT_AWK,
+    )
+}
+
 /// The first word of each line.
 fn letters(lines: &[Vec<u8>]) -> Vec<Vec<u8>> {
     lines
@@ -279,15 +292,7 @@ fn calib_verdict(card: &[u8], answer: &[u8], json: bool) -> Res<()> {
             format!(" (the verdict is from the other {n})")
         ));
     }
-    let (o, _) = awk(
-        &[
-            ("w", &w),
-            ("h", &h),
-            ("marks", &marks),
-            ("reads", &reads.join(&b'\n')),
-        ],
-        CALIB_FIT_AWK,
-    );
+    let (o, _) = calib_fit(&w, &h, &marks, &reads.join(&b'\n'));
     let mut res = strip_nl(&o);
     if res.is_empty() {
         res = b"none".to_vec();
@@ -661,5 +666,276 @@ mod tests {
             letters(&[b"A 1 2".to_vec(), b"B 3 4".to_vec()]),
             vec![b"A".to_vec(), b"B".to_vec()]
         );
+    }
+
+    // t_unit_calibrate's calib_answer cases: the forms, and each refusal said.
+    #[test]
+    fn answers_as_bash() {
+        let ans = |t: &str| calib_answer(t.as_bytes()).map(|v| v.join(&b'\n'));
+        assert_eq!(
+            ans("A 12,34 B 56,78").as_deref(),
+            Some(&b"A 12 34\nB 56 78"[..]),
+            "calib_answer: A X,Y pairs"
+        );
+        assert_eq!(
+            ans("a: (12, 34); b=5.5,78 c 1 2").as_deref(),
+            Some(&b"A 12 34\nB 5.5 78\nC 1 2"[..]),
+            "...lower case, colons, brackets, decimals"
+        );
+        for bad in [
+            "",
+            "A 12",
+            "A 12,34 B",
+            "AB 1,2",
+            "A x,y",
+            "A 1,2 A 3,4",
+            "A -1,2",
+        ] {
+            let (r, said) = crate::exit::heard(|| ans(bad));
+            assert_eq!(r, None, "...'{bad}' refused");
+            assert!(said.starts_with("omabox: calibrate --answer: "), "{said}");
+        }
+    }
+
+    /// The cards' marks read at S, plus up to N px either way (awk's rand from seed 11, as the suite's
+    /// cal_reads).
+    fn cal_reads(m: &[u8], s: &str, n: &str) -> Vec<u8> {
+        let o = std::process::Command::new("awk")
+            .args(["-v", &format!("s={s}"), "-v", &format!("n={n}")])
+            .arg(
+                "BEGIN { srand(11) } { printf \"%s %.0f %.0f\\n\", $1, $2 * s + n * (2 * rand() - 1), $3 * s + n * (2 * rand() - 1) }",
+            )
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut c| {
+                std::io::Write::write_all(c.stdin.as_mut().unwrap(), m)?;
+                drop(c.stdin.take());
+                c.wait_with_output()
+            })
+            .unwrap();
+        strip_nl(&o.stdout)
+    }
+
+    fn rows(m: &[u8]) -> Vec<(String, f64, f64)> {
+        m.split(|&c| c == b'\n')
+            .filter(|l| !l.is_empty())
+            .map(|l| {
+                let f = shell::words(l);
+                let n = |i: usize| String::from_utf8_lossy(&f[i]).parse::<f64>().unwrap();
+                (String::from_utf8_lossy(&f[0]).into_owned(), n(1), n(2))
+            })
+            .collect()
+    }
+
+    fn magick_fmt(file: &std::path::Path, fmt: &str) -> String {
+        let o = std::process::Command::new("magick")
+            .arg(file)
+            .args(["-format", fmt, "info:"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    }
+
+    /// t_unit_calibrate's marks, card and fitting: awk's rand and magick, as the command runs them.
+    /// (#[ignore]: awk's rand differs by awk, and magick is no build tool; test/run.sh's unit tier
+    /// runs it.)
+    #[test]
+    #[ignore = "runs awk and magick: run by test/run.sh (cargo test -- --ignored)"]
+    fn card_as_bash() {
+        let mut bad = String::new();
+        let mut sp = std::collections::BTreeSet::new();
+        for (w, h) in [
+            (1920, 1080),
+            (2560, 1440),
+            (3840, 2160),
+            (1080, 1920),
+            (800, 600),
+        ] {
+            for seed in ["1", "2", "3"] {
+                let m = calib_marks_seeded(
+                    w.to_string().as_bytes(),
+                    h.to_string().as_bytes(),
+                    seed.as_bytes(),
+                );
+                let r = rows(&m);
+                let letters: String = r.iter().map(|x| x.0.as_str()).collect();
+                if letters != "ABCDEF" {
+                    bad += &format!(" {w}x{h}/{seed}:letters");
+                }
+                let (wf, hf) = (f64::from(w), f64::from(h));
+                if r.iter().any(|(_, x, y)| {
+                    *x < 0.08 * wf - 1.0 || *x > 0.92 * wf || *y < 0.08 * hf - 1.0 || *y > 0.92 * hf
+                }) {
+                    bad += &format!(" {w}x{h}/{seed}:edge");
+                }
+                // Spread over the card: no two marks closer than a tenth of its short side.
+                for i in 0..r.len() {
+                    for j in i + 1..r.len() {
+                        if ((r[i].1 - r[j].1).powi(2) + (r[i].2 - r[j].2).powi(2)).sqrt()
+                            < 0.1 * wf.min(hf)
+                        {
+                            bad += &format!(" {w}x{h}/{seed}:close");
+                        }
+                    }
+                }
+                // (the letters in reading order: the top row's cells, left to right, then the
+                // bottom's)
+                let mut cells: Vec<_> = r
+                    .iter()
+                    .map(|(l, x, y)| ((*y >= hf / 2.0, (*x * 3.0 / wf) as u8), l.clone()))
+                    .collect();
+                cells.sort();
+                sp.insert(cells.into_iter().map(|c| c.1).collect::<String>());
+            }
+        }
+        assert_eq!(
+            bad, "",
+            "calib_marks: A-F, off the edges, spread out (5 sizes x 3 seeds)"
+        );
+        let m7 = || calib_marks_seeded(b"1920", b"1080", b"7");
+        assert_eq!(m7(), m7(), "...the same seed, the same marks");
+        assert_ne!(
+            m7(),
+            calib_marks_seeded(b"1920", b"1080", b"8"),
+            "...another, other ones"
+        );
+        assert!(sp.len() > 1, "...letters not in reading order every time");
+        // The card: its size, the marks kept in it, each cross red at its point, the card grey around it.
+        let d = std::env::temp_dir().join(format!("omabox-calib-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let m = calib_marks_seeded(b"1920", b"1080", b"5");
+        let ms = strip_nl(&m);
+        let c = d.join("c.png");
+        assert_eq!(
+            calib_card(shell::bytes(&c), b"1920", b"1080", &m),
+            Some(true)
+        );
+        let id = std::process::Command::new("magick")
+            .args(["identify", "-format", "%wx%h"])
+            .arg(&c)
+            .output()
+            .unwrap();
+        assert_eq!(id.stdout, b"1920x1080", "calib_card: the size asked");
+        assert_eq!(
+            calib_read(shell::bytes(&c)),
+            Some((b"1920 1080".to_vec(), ms.clone())),
+            "...calib_read gives its size and marks back"
+        );
+        let mut px = String::new();
+        let mut want = String::new();
+        for (l, x, y) in rows(&m) {
+            px += &format!("{l}:{} ", magick_fmt(&c, &format!("%[hex:p{{{x},{y}}}]")));
+            want += &format!("{l}:D4141E ");
+        }
+        assert_eq!(px, want, "...each mark's centre is its cross's red");
+        assert_eq!(
+            magick_fmt(&c, "%[hex:p{5,5}]"),
+            "F2F2F2",
+            "...the rest the card's grey"
+        );
+        let n = d.join("n.png");
+        assert!(
+            std::process::Command::new("magick")
+                .args(["-size", "10x10", "xc:white"])
+                .arg(&n)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(
+            calib_read(shell::bytes(&n)),
+            None,
+            "...a PNG that is no card is refused"
+        );
+        // The fitting, on synthetic readings of this card.
+        let fit = |r: &[u8]| {
+            let (o, ok) = calib_fit(b"1920", b"1080", &ms, r);
+            (String::from_utf8_lossy(&strip_nl(&o)).into_owned(), ok)
+        };
+        let is = |what: &str, re: &str, (got, _): (String, bool)| {
+            assert!(
+                shell::re_match(re, got.as_bytes()),
+                "{what}: {got:?} !~ {re}"
+            );
+        };
+        is("1:1 readings: one", "^one 0 ", fit(&ms));
+        is(
+            "...a few px off still is",
+            "^one [0-9] ",
+            fit(&cal_reads(&ms, "1", "4")),
+        );
+        is(
+            "0.758x (Haiku on 1920x1080): --fit 1456, 1456x819",
+            "^fit 0.758 0.758 0.758 1456 1456x819 [0-2] ",
+            fit(&cal_reads(&ms, "0.7583", "0")),
+        );
+        is(
+            "0.5x: --fit 960",
+            "^fit 0.500 .* 960 960x540 [0-2] ",
+            fit(&cal_reads(&ms, "0.5", "0")),
+        );
+        is(
+            "0.758x with 5 px of noise: still 1456, within the tolerance",
+            "^fit 0.75[6-9] .* 1456 1456x819 ([0-9]|1[0-2]) ",
+            fit(&cal_reads(&ms, "0.7583", "5")),
+        );
+        let noisy = fit(&cal_reads(&ms, "0.7583", "60"));
+        assert!(!noisy.1, "...exit 1");
+        is(
+            "60 px of noise: no one scale",
+            "^off 0\\.[0-9]+ 12( [A-F]:[0-9]+)+$",
+            noisy,
+        );
+        // B and E swapped: each given the other's reading.
+        let r = cal_reads(&ms, "0.7583", "0");
+        let at = |l: &[u8]| {
+            r.split(|&c| c == b'\n')
+                .find(|x| x.starts_with(l))
+                .map(|x| x[1..].to_vec())
+                .unwrap()
+        };
+        let (b, e) = (at(b"B "), at(b"E "));
+        let sw: Vec<Vec<u8>> = r
+            .split(|&c| c == b'\n')
+            .map(|x| match x.first() {
+                Some(b'B') => cat!("B", e),
+                Some(b'E') => cat!("E", b),
+                _ => x.to_vec(),
+            })
+            .collect();
+        is(
+            "B and E swapped: those two named, the scale the rest show",
+            "^off 0.758 12 B:[0-9]+ E:[0-9]+$",
+            fit(&sw.join(&b'\n')),
+        );
+        is(
+            "readings past the marks (1.3x): up",
+            "^up 1.300$",
+            fit(&cal_reads(&ms, "1.3", "0")),
+        );
+        let xy: Vec<u8> = rows(&m)
+            .iter()
+            .flat_map(|(l, x, y)| {
+                format!("{l} {} {}\n", (x * 0.75) as i64, (y * 0.6) as i64).into_bytes()
+            })
+            .collect();
+        is("x and y at different scales: off", "^off ", fit(&xy));
+        let pm = strip_nl(&calib_marks_seeded(b"1080", b"1920", b"5"));
+        let (o, _) = calib_fit(b"1080", b"1920", &pm, &cal_reads(&pm, "0.7583", "0"));
+        is(
+            "a portrait card at 0.758x: 819x1456",
+            "^fit 0.758 .* 1456 819x1456 ",
+            (String::from_utf8_lossy(&o).into_owned(), true),
+        );
+        let m4 = strip_nl(&calib_marks_seeded(b"3840", b"2160", b"3"));
+        let (o, _) = calib_fit(b"3840", b"2160", &m4, &cal_reads(&m4, "0.3792", "0"));
+        is(
+            "a 4K card at 0.379x: --fit 1456",
+            "^fit 0.379 .* 1456 1456x819 ",
+            (String::from_utf8_lossy(&o).into_owned(), true),
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

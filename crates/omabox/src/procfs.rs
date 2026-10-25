@@ -278,4 +278,38 @@ mod tests {
         assert_eq!(status_last(s, "NSpid"), b"1");
         assert_eq!(status_last(s, "State"), b"");
     }
+
+    // t_unit_box_gone: a PID 1 that exited and is not reaped yet is no box (its namespaces are
+    // gone): not running, so not alive, and dead in ls. (Its parent execs a sleep, which never
+    // reaps it.)
+    #[test]
+    #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
+    fn a_zombie_is_not_running() {
+        let mut c = std::process::Command::new("sh")
+            .args(["-c", "sleep 0 & echo $!; exec sleep 10"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut out = String::new();
+        std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(c.stdout.take().unwrap()),
+            &mut out,
+        )
+        .unwrap();
+        let z = out.trim().as_bytes().to_vec();
+        let mut st = Vec::new();
+        for _ in 0..40 {
+            st = read(&z, "stat").unwrap_or_default();
+            if after_comm(&st).starts_with(b"Z") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let zombie = after_comm(&st).starts_with(b"Z");
+        let alive = running(&z);
+        let _ = c.kill();
+        let _ = c.wait();
+        assert!(zombie, "a zombie: {:?}", String::from_utf8_lossy(&st));
+        assert!(!alive, "a zombie PID 1 is not alive (nor up in ls)");
+    }
 }

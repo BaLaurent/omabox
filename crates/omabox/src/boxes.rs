@@ -166,13 +166,38 @@ pub trait BoxSys {
     }
     /// `on_box ARGS 2>/dev/null`, its output captured.
     fn on_box(&self, ctx: &Ctx, args: &[Vec<u8>]) -> crate::exec::Ran {
-        crate::exec::on_box(
+        self.on_box_io(
             ctx,
             args,
-            false,
             crate::exec::Out::Capture(None),
             crate::exec::ErrTo::Null,
         )
+    }
+    /// `on_box ARGS`, its stdout and stderr where OUT and ERR say (stdin the caller's).
+    fn on_box_io(
+        &self,
+        ctx: &Ctx,
+        args: &[Vec<u8>],
+        out: crate::exec::Out,
+        err: crate::exec::ErrTo,
+    ) -> crate::exec::Ran {
+        crate::exec::on_box(ctx, args, false, out, err)
+    }
+    /// The box's processes, as the host numbers them.
+    fn box_pids(&self, ctx: &Ctx) -> Vec<Vec<u8>> {
+        crate::jobs::box_pids(ctx)
+    }
+    /// A process's state as /proc/PID/status says it.
+    fn pid_state(&self, pid: &[u8]) -> Vec<u8> {
+        crate::hypr::pid_state(pid)
+    }
+    /// The box's desktop now, as one snapshot (desk_snap), in the foreground.
+    fn desk_snap(&self, ctx: &Ctx) -> Vec<u8> {
+        crate::desk::desk_snap(ctx, false)
+    }
+    /// The mapped layers that hold the keyboard against any window (kb_layers).
+    fn kb_layers(&self, ctx: &Ctx) -> Vec<u8> {
+        crate::desk::kb_layers(ctx)
     }
     fn rm_box(&self, ctx: &Ctx) {
         crate::ready::rm_box(ctx);
