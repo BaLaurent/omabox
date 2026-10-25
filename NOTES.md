@@ -10087,7 +10087,9 @@ from them.
     as the call came, as bash's reads /proc/$$/environ (finding 74). With that, t_clip's direct leg
     (finding 505), which sets no OMABOX_BASH, had its --pass refused (125) while the bash leg ran: at
     27d9613 every leg was refused alike, so its seven other parity cases compared nothing. Its wrap now
-    passes OMABOX_BASH only where the leg sets it. Tests: t_clip, t_run_stdio ("run --pass
+    passes OMABOX_BASH only where the leg sets it (RP_IN_BOX), and so does t_monitors_window's, whose
+    four interactive parity cases failed the same way at 8d9069e. Tests: t_clip, t_monitors_window,
+    t_run_stdio ("run --pass
     OMABOX_BASH: the caller's value", fails at 27d9613).
 
 515. **Two box tests leaned on the bash front's pace** (2026-10-24, #324 wave 6-front; the suite at
