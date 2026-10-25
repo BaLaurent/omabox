@@ -384,7 +384,7 @@ fn utf8_char_len(v: &[u8]) -> usize {
 
 /// repo_link_out TOP PATH (#235): PATH (under TOP, there on the host) reached through a link in TOP
 /// that leads out of it: (that link, where it leads, where PATH is then).
-fn repo_link_out(top: &[u8], p: &[u8]) -> Option<[Vec<u8>; 3]> {
+pub fn repo_link_out(top: &[u8], p: &[u8]) -> Option<[Vec<u8>; 3]> {
     let under = |x: &[u8]| x.starts_with(&cat!(top, "/"));
     if !under(p) || !shell::path(p).exists() {
         return None;
@@ -433,7 +433,7 @@ fn link_dangles(pid: &[u8], link: &[u8], resolved: &[u8]) -> bool {
 }
 
 /// link_mountable TARGET: why no mount is offered for a link's target, or None when one may be.
-fn link_mountable(t: &[u8]) -> Option<Vec<u8>> {
+pub fn link_mountable(t: &[u8]) -> Option<Vec<u8>> {
     let t = cat!(t.strip_suffix(b"/").unwrap_or(t), "/");
     let h = home();
     let c = env_or("XDG_CACHE_HOME", cat!(h, "/.cache"));
@@ -467,7 +467,7 @@ fn link_mountable(t: &[u8]) -> Option<Vec<u8>> {
 
 /// link_note WHAT LINK TARGET HOW: LINK -> TARGET outside the box, and the mount that gives it, or
 /// why a box may not have it.
-fn link_note(what: &[u8], link: &[u8], target: &[u8], how: &str) {
+pub fn link_note(what: &[u8], link: &[u8], target: &[u8], how: &str) {
     let (w, l, t) = (no_cntrl(what), no_cntrl(link), no_cntrl(target));
     let head = cat!(
         "note: ",

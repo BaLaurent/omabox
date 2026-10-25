@@ -86,6 +86,11 @@ pub enum Target<'a> {
 /// desk_target WHAT SNAPSHOT [X Y | PID]: DESK_TARGET_JQ's object, or nothing. keys reads the layers
 /// holding the keyboard now (kb_layers).
 pub fn desk_target(ctx: &Ctx, what: Target, s: &[u8]) -> Vec<u8> {
+    desk_target_with(what, s, || kb_layers(ctx))
+}
+
+/// desk_target, keys' layers holding the keyboard read by KBL (kb_layers).
+pub fn desk_target_with(what: Target, s: &[u8], kbl_of: impl FnOnce() -> Vec<u8>) -> Vec<u8> {
     if s.is_empty() {
         return Vec::new();
     }
@@ -93,7 +98,7 @@ pub fn desk_target(ctx: &Ctx, what: Target, s: &[u8]) -> Vec<u8> {
         (Vec::new(), b"0".to_vec(), b"0".to_vec(), b"0".to_vec());
     let name = match what {
         Target::Keys => {
-            kbl = kb_layers(ctx);
+            kbl = kbl_of();
             "keys"
         }
         Target::Run(p) => {

@@ -48,6 +48,11 @@ pub const NAMES: &[(&str, &str)] = &[
     ("aq_const", "AQ_FIX_SYMBOL|AQ_FIXED_AFTER|AQ_BUILD"),
     ("desk_facts", "BEFORE AFTER"),
     ("box_pids", "NAME"),
+    // Where the input went: keys with the layers holding the keyboard given (kb_layers' answer).
+    (
+        "desk_target",
+        "keys|click|scroll|drag|run SNAPSHOT [KB_LAYERS | X_Y | PID]",
+    ),
     (
         "record_overlay",
         "INPUT MARKS FIRST X0 Y0 K W H DUR SHOW CAPS [AREA]",
@@ -118,6 +123,10 @@ pub const NAMES: &[(&str, &str)] = &[
     ("widget_section", "SECTION SPLIT"),
     ("workspace_widgets", ""),
     ("cwd_path_word", "DIR HOME WORD..."),
+    // A repo's links that lead out of it (#235): which, the note up says, whether one may be mounted.
+    ("repo_link_out", "TOP PATH"),
+    ("link_note", "WHAT LINK TARGET HOW"),
+    ("link_mountable", "PATH"),
     ("cwd_note", "NAME HOW WORD DIR NOREPO"),
     // Processes: an agent's, a run's owner, by pid and start time.
     ("agent_proc", ""),
@@ -129,6 +138,14 @@ pub const NAMES: &[(&str, &str)] = &[
     ("box_starter", ""),
     ("up_session_note", "NAME"),
     ("box_orphan", "D"),
+    // A box's windows as the commands read them (the lists given: stdin, or words).
+    ("windows_table", ""),
+    ("windows_layers", ""),
+    ("win_annotate", "CLIENTS MONITORS ACTIVE [LAYERS]"),
+    ("win_select", "WINDOWS SEL..."),
+    ("win_answer", "WANT WINDOWS SEL..."),
+    ("win_blocked", "WINDOW X Y"),
+    ("win_layer", "WINDOW X Y"),
 ];
 
 /// One line a word: the probe's own usage, for a name it does not have.
@@ -300,6 +317,29 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             _ => Err(usage()),
         },
         (b"desk_facts", [before, after]) => out(crate::desk::desk_facts(before, after)),
+        (b"desk_target", [what, snap, rest @ ..]) if rest.len() <= 1 => {
+            use crate::desk::Target;
+            let arg = rest.first().copied().unwrap_or_default();
+            let t = match *what {
+                b"keys" => Target::Keys,
+                b"run" => Target::Run(arg),
+                b"click" => Target::At("click", arg),
+                b"scroll" => Target::At("scroll", arg),
+                b"drag" => Target::At("drag", arg),
+                _ => return Err(usage()),
+            };
+            out(crate::desk::desk_target_with(t, snap, || arg.to_vec()))
+        }
+        (b"repo_link_out", [top, p]) => {
+            let [l, t, at] = crate::repo::repo_link_out(top, p).ok_or(Exit(1))?;
+            line(&cat!(l, "\t", t, "\t", at))
+        }
+        (b"link_note", [what, l, t, how]) => {
+            let how = std::str::from_utf8(how).map_err(|_| usage())?;
+            crate::repo::link_note(what, l, t, how);
+            Ok(())
+        }
+        (b"link_mountable", [p]) => yes(crate::repo::link_mountable(p).is_none()),
         (b"box_pids", [n]) => {
             ctx.name = n.to_vec();
             ctx.d = cat!(ctx.boxes, "/", n);
@@ -660,6 +700,36 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             ctx.d = cat!(ctx.boxes, "/", n);
             crate::boxes::covers_held(&ctx)
         }
+        (b"windows_table", []) => ran(crate::jq::jq(
+            &["-r", crate::jqprog::WINDOWS_TABLE_JQ],
+            Some(&stdin_all()?),
+            crate::jq::Err::Inherit,
+        )),
+        (b"windows_layers", []) => ran(crate::jq::jq(
+            &["-r", crate::jqprog::WINDOWS_LAYERS_JQ],
+            Some(&stdin_all()?),
+            crate::jq::Err::Inherit,
+        )),
+        (b"win_annotate", [c, m, act, l @ ..]) if l.len() <= 1 => {
+            ran(crate::win::win_annotate(c, m, act, l.first().copied()))
+        }
+        (b"win_select", [w, sels @ ..]) => line(&crate::win::win_select(&ctx, w, &owned(sels))?),
+        (b"win_answer", [want, w, sels @ ..]) => {
+            let want = std::str::from_utf8(want).map_err(|_| usage())?;
+            let (rc, o) = crate::cmd::wait::win_answer(want, w, &owned(sels));
+            if !o.is_empty() {
+                line(&o)?;
+            }
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(Exit(u8::try_from(rc).unwrap_or(1)))
+            }
+        }
+        (b"win_blocked", [w, x, y]) => {
+            ran(crate::win::jq_xy(crate::jqprog::WIN_BLOCKED_JQ, w, x, y))
+        }
+        (b"win_layer", [w, x, y]) => ran(crate::win::jq_xy(crate::jqprog::WIN_LAYER_JQ, w, x, y)),
         _ => Err(usage()),
     }
 }

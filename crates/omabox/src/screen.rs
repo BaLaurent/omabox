@@ -298,6 +298,32 @@ pub fn shot_point(ctx: &Ctx, file: &[u8], x: &[u8], y: &[u8]) -> Res<Point> {
 mod tests {
     use super::*;
 
+    // --in (finding 81): image pixel -> screen pixel under its centre (t_unit_window_select's).
+    #[test]
+    fn img_px_as_bash() {
+        let px = |p: &str, i: &str, s: &str| img_px(p.as_bytes(), i.as_bytes(), s.as_bytes());
+        assert_eq!(
+            (px("0", "1920", "1920"), px("1919", "1920", "1920")),
+            (Some(0), Some(1919)),
+            "1:1 maps to itself"
+        );
+        assert_eq!(
+            px("500", "1000", "1920"),
+            Some(960),
+            "x1.92: 500 of 1000 is 960"
+        );
+        assert_eq!(
+            px("999", "1000", "1920"),
+            Some(1919),
+            "x1.92: the last pixel stays inside"
+        );
+        assert_eq!(
+            px("101", "200", "100"),
+            Some(50),
+            "x0.5 (an image larger than the screen)"
+        );
+    }
+
     // What bash's awk wrote for each.
     #[test]
     fn buffer_regions() {

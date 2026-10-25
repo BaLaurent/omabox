@@ -111,7 +111,7 @@ impl Probe<'_> {
 }
 
 /// win_answer WANT WINDOWS SEL...: win_probe's answer for these windows.
-fn win_answer(want: &str, wins: &[u8], sels: &[Vec<u8>]) -> (i32, Vec<u8>) {
+pub fn win_answer(want: &str, wins: &[u8], sels: &[Vec<u8>]) -> (i32, Vec<u8>) {
     // No list: the box not answering, not "none match" (finding 176).
     if wins.is_empty() {
         return (1, Vec::new());

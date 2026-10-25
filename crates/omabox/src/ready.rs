@@ -1206,6 +1206,32 @@ mod tests {
 
     use std::sync::Mutex;
 
+    // wait layer (finding 146; t_unit_wait's): a hidden menu mapped at 1x1 is not the menu.
+    #[test]
+    fn layer_at_as_bash() {
+        let lj = r#"{"HEADLESS-1":{"levels":{"2":[{"namespace":"omarchy-bar","x":0,"y":0,"w":1920,"h":34}],
+    "3":[{"namespace":"omarchy-menu","x":0,"y":0,"w":1,"h":1},{"namespace":"omarchy-osd","x":0,"y":0,"w":0,"h":0}]}}}"#;
+        let at = |l: &str, ns: &str| {
+            String::from_utf8(layer_at(l.as_bytes(), ns, jq::Err::Inherit).text()).unwrap()
+        };
+        assert_eq!(
+            at(lj, "omarchy-bar"),
+            "0,0 1920x34",
+            "wait layer: a drawn layer is there"
+        );
+        assert_eq!(at(lj, "omarchy-menu"), "", "...a hidden 1x1 one is not");
+        assert_eq!(at(lj, "omarchy-osd"), "", "...nor an empty one");
+        let both = lj.replace(
+            r#""w":1,"h":1}"#,
+            r#""w":1,"h":1},{"namespace":"omarchy-menu","x":660,"y":300,"w":600,"h":480}"#,
+        );
+        assert_eq!(
+            at(&both, "omarchy-menu"),
+            "660,300 600x480",
+            "...the drawn one when both are mapped"
+        );
+    }
+
     /// bash's stubs for up's waits: box_alive's answer, on_box failing (no frame), kill_box's
     /// answer, rm_box saying it ran; box_pid and box_pasta given (kill_box's own test).
     #[derive(Default)]

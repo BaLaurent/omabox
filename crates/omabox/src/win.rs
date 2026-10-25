@@ -294,7 +294,7 @@ pub fn win_refocus(ctx: &Ctx, w: &[u8]) -> Res<()> {
 }
 
 /// `jq -r --argjson x X --argjson y Y PROGRAM <<<"$W"` as `$(...)`.
-fn jq_xy(prog: &str, w: &[u8], x: &[u8], y: &[u8]) -> jq::Ran {
+pub fn jq_xy(prog: &str, w: &[u8], x: &[u8], y: &[u8]) -> jq::Ran {
     Args::new(&["-r"])
         .kv("--argjson", "x", x)
         .kv("--argjson", "y", y)

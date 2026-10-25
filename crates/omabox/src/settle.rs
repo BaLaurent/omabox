@@ -1026,6 +1026,70 @@ mod tests {
         assert_eq!(cursor_rect(b"-5 3"), Some(b"-21,-13,64,64".to_vec()));
     }
 
+    // t_unit_wait's -g, geom_clip, durations and the cursor's rectangle.
+    #[test]
+    fn wait_values_as_bash() {
+        let g = |v: &str| {
+            geom_parse(v.as_bytes()).map(|g| g.map(|x| String::from_utf8(x).unwrap()).join(" "))
+        };
+        assert_eq!(g("1,2 30x40").as_deref(), Some("1 2 30 40"), "-g X,Y WxH");
+        assert_eq!(g("1,2,30,40").as_deref(), Some("1 2 30 40"), "-g X,Y,W,H");
+        assert_eq!(g("-1,2 30,40").as_deref(), Some("-1 2 30 40"), "-g X,Y W,H");
+        assert_eq!(g("1,2 0x4"), None, "-g junk refused");
+        let clip = |r: [i64; 4], lw: i64, lh: i64| {
+            crate::shots::geom_clip(r, lw, lh).map(|(r, cut)| {
+                format!(
+                    "{} {} {} {}\t{}",
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
+                    String::from_utf8(cut).unwrap()
+                )
+            })
+        };
+        assert_eq!(
+            clip([10, 20, 30, 40], 100, 100).as_deref(),
+            Some("10 20 30 40\t"),
+            "geom_clip: inside, nothing cut"
+        );
+        assert_eq!(
+            clip([1380, 40, 480, 330], 1854, 1056).as_deref(),
+            Some("1380 40 474 330\t6 px past the right edge"),
+            "geom_clip: 6 px past the right edge"
+        );
+        assert_eq!(
+            clip([-5, -3, 120, 60], 100, 50).as_deref(),
+            Some(
+                "0 0 100 50\t5 px past the left edge, 3 px past the top edge, 15 px past the right edge, 7 px past the bottom edge"
+            ),
+            "geom_clip: every edge"
+        );
+        assert_eq!(
+            clip([100, 0, 10, 10], 100, 50),
+            None,
+            "geom_clip: nothing inside (right of it)"
+        );
+        assert_eq!(
+            clip([0, -10, 10, 10], 100, 50),
+            None,
+            "geom_clip: nothing inside (above it)"
+        );
+        let ms = |v: &str| crate::num::ms_duration(v.as_bytes());
+        assert_eq!(ms("300ms"), Some(300), "300ms");
+        assert_eq!(ms("1.5s"), Some(1500), "1.5s");
+        assert_eq!(ms("2m"), Some(120_000), "2m");
+        assert_eq!(ms("10"), Some(10_000), "a bare number is seconds");
+        assert_eq!(ms("0"), None, "0 refused");
+        assert_eq!(ms("2h"), Some(7_200_000), "2h (#273: hours too)");
+        assert_eq!(ms("2d"), None, "junk refused");
+        assert_eq!(
+            cursor_rect(b"960 540"),
+            Some(b"944,524,64,64".to_vec()),
+            "the cursor's rectangle"
+        );
+    }
+
     #[test]
     fn options_as_settle_opt() {
         let c = Ctx::new(b"run", b"/x".to_vec());

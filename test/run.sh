@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6579 MIN_UNIT=3873
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4500 MIN_UNIT=1992
+MIN_CHECKS=6556 MIN_UNIT=3851
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4478 MIN_UNIT=1970
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -17728,7 +17728,7 @@ t_unit_window_select() {
   local c m m_sp act='{"address":"0xb"}'
   # windows' table (#105, finding 174): a title's quotes escaped once, as in --json; an empty class
   # keeps its column (the title starts at the 99th character, after the six padded ones).
-  local rows; rows=$(lib windows_table <<<'[
+  local rows; rows=$(probe windows_table <<<'[
     {"address":"0xa","pid":7,"workspace":1,"onscreen":true,"cover":[],"active":true,"size":[10,20],"at":[1,2],"class":"foot","title":"say \"hi\" \\ x"},
     {"address":"0xb","pid":8,"workspace":2,"onscreen":false,"cover":[],"active":false,"size":[3,4],"at":[5,6],"class":"","title":"no class"}]')
   check_eq "windows: a quoted title escaped once" '"say \"hi\" \\ x"' "$(sed -n 1p <<<"$rows" | cut -c99-)"
@@ -17749,13 +17749,13 @@ t_unit_window_select() {
      w("0xe"; "foot"; "gone"; 1; 0; 0; 10; 10; false) + {mapped: false}]')
   m='[{"activeWorkspace":{"id":1},"specialWorkspace":{"id":0}}]'
   m_sp='[{"activeWorkspace":{"id":1},"specialWorkspace":{"id":-98}}]'
-  local W Wsp; W=$(lib win_annotate "$c" "$m" "$act") Wsp=$(lib win_annotate "$c" "$m_sp" "$act")
-  sel() { lib win_select "$W" "$@" 2>/dev/null | jq -r .address; }
+  local W Wsp; W=$(probe win_annotate "$c" "$m" "$act") Wsp=$(probe win_annotate "$c" "$m_sp" "$act")
+  sel() { probe win_select "$W" "$@" 2>/dev/null | jq -r .address; }
   check_eq "title:RE" 0xa "$(sel 'title:^A$')"
   check_eq "a word: part of the title, any case" 0xc "$(sel docs)"
   check_eq "a word: the class, any case" 0xc "$(sel chromium)"
   check_eq "a word: a reverse-DNS class's last part (#20)" 0xh "$(sel nautilus)"
-  check_eq "...whole, not a prefix of it" 2 "$(lib win_select "$W" naut >/dev/null 2>&1; echo $?)"
+  check_eq "...whole, not a prefix of it" 2 "$(probe win_select "$W" naut >/dev/null 2>&1; echo $?)"
   check_eq "...the whole class still works" 0xh "$(sel org.gnome.nautilus)"
   check_eq "pid:N and a word, ANDed" 0xa "$(sel pid:42 foot)"
   check_eq "an address, any case" 0xa "$(sel 0xA)"
@@ -17763,40 +17763,40 @@ t_unit_window_select() {
   check_eq "active" 0xb "$(sel active)"
   check_eq "initialTitle:RE" 0xa "$(sel initialTitle:^first)"
   check_eq "class:RE ANDed with title:RE" 0x2 "$(sel class:zen 'title:^oth')"
-  check_eq "several matches: exit 2" 2 "$(lib win_select "$W" foot >/dev/null 2>&1; echo $?)"
-  check_match "...listing them" "matches 4 windows.*0xa.*0xb.*0xg.*0xd" "$(lib win_select "$W" foot 2>&1 | tr '\n' ' ')"
-  check_eq "none: exit 2" 2 "$(lib win_select "$W" nope >/dev/null 2>&1; echo $?)"
-  check_match "...listing the box's windows" "no window matches nope.*0xf" "$(lib win_select "$W" nope 2>&1 | tr '\n' ' ')"
-  check_eq "an unmapped window is not a window" 2 "$(lib win_select "$W" 'title:^gone$' >/dev/null 2>&1; echo $?)"
-  check_match "a bad regex: exit 2, said" "bad window selector" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
-  check_match "...rc 2" "rc=2" "$(lib win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
+  check_eq "several matches: exit 2" 2 "$(probe win_select "$W" foot >/dev/null 2>&1; echo $?)"
+  check_match "...listing them" "matches 4 windows.*0xa.*0xb.*0xg.*0xd" "$(probe win_select "$W" foot 2>&1 | tr '\n' ' ')"
+  check_eq "none: exit 2" 2 "$(probe win_select "$W" nope >/dev/null 2>&1; echo $?)"
+  check_match "...listing the box's windows" "no window matches nope.*0xf" "$(probe win_select "$W" nope 2>&1 | tr '\n' ' ')"
+  check_eq "an unmapped window is not a window" 2 "$(probe win_select "$W" 'title:^gone$' >/dev/null 2>&1; echo $?)"
+  check_match "a bad regex: exit 2, said" "bad window selector" "$(probe win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
+  check_match "...rc 2" "rc=2" "$(probe win_select "$W" 'title:(' 2>&1; echo " rc=$?")"
   # A hyphen-separated part of the class (#244), only when nothing matches the word otherwise.
   local hc='[{"address":"0xp","class":"xdg-desktop-portal-gtk","title":"Back up","onscreen":true,"active":false,"workspace":"1"},
     {"address":"0xk","class":"xdg-desktop-portal-kde","title":"Open","onscreen":true,"active":false,"workspace":"1"},
     {"address":"0xn","class":"org.gnome.Nautilus","title":"Home","onscreen":true,"active":false,"workspace":"1"}]'
-  hsel() { lib win_select "$1" "${@:2}" 2>/dev/null | jq -r .address; }
+  hsel() { probe win_select "$1" "${@:2}" 2>/dev/null | jq -r .address; }
   check_eq "a word: a hyphen-separated part of the class (#244)" 0xp "$(hsel "$hc" gtk)"
   check_eq "...one in the middle" 0xk "$(hsel "$hc" kde)"
-  check_match "...several: refused, each named" "matches 2 windows.*0xp.*0xk" "$(lib win_select "$hc" portal 2>&1 | tr '\n' ' ')"
-  check_eq "...whole, not part of a part" 2 "$(lib win_select "$hc" port >/dev/null 2>&1; echo $?)"
+  check_match "...several: refused, each named" "matches 2 windows.*0xp.*0xk" "$(probe win_select "$hc" portal 2>&1 | tr '\n' ' ')"
+  check_eq "...whole, not part of a part" 2 "$(probe win_select "$hc" port >/dev/null 2>&1; echo $?)"
   check_eq "...narrowed by another selector" 0xp "$(hsel "$hc" portal 'title:^back')"
   check_eq "...a whole class wins over it" 0xg "$(hsel "$(jq -c '. + [{"address":"0xg","class":"gtk","title":"x","onscreen":true,"active":false,"workspace":"2"}]' <<<"$hc")" gtk)"
   check_eq "...so does a title" 0xt "$(hsel "$(jq -c '. + [{"address":"0xt","class":"foot","title":"gtk notes","onscreen":true,"active":false,"workspace":"2"}]' <<<"$hc")" gtk)"
-  check_eq "...wait window counts the same" "yes 2" "$(lib win_answer present "$hc" portal | cut -d' ' -f1-2)"
+  check_eq "...wait window counts the same" "yes 2" "$(probe win_answer present "$hc" portal | cut -d' ' -f1-2)"
   # wait window (#37): any of several matching windows is an answer, and all are named.
-  check_match "wait window: several match, satisfied, each named" '^yes 4 windows: 0xa foot "A" at 0,0 1000x1000; 0xb foot "B" at 1000,0 900x1000, focused; 0xg .*; 0xd ' "$(lib win_answer present "$W" foot)"
-  check_match "...one: as before" '^yes 0xh org.gnome.Nautilus "Home" at 0,0 800x600$' "$(lib win_answer present "$W" nautilus)"
-  check_eq "...none" no "$(lib win_answer present "$W" nope)"
-  check_eq "--focused: the focused one of several" 'yes 0xb foot "B" at 1000,0 900x1000, focused (1 of 4 matching)' "$(lib win_answer focused "$W" foot)"
-  check_eq "...several, none focused" "no 2 matching, none focused" "$(lib win_answer focused "$W" zenity)"
-  check_eq "...one, not focused" 'no 0xa foot "A" is there' "$(lib win_answer focused "$W" 'title:^A$')"
-  check_eq "--gone: several still there" "no 4 matching" "$(lib win_answer gone "$W" foot)"
-  check_eq "a bad regex: exit 2 (never answerable)" 2 "$(lib win_answer present "$W" 'title:(' >/dev/null 2>&1; echo $?)"
+  check_match "wait window: several match, satisfied, each named" '^yes 4 windows: 0xa foot "A" at 0,0 1000x1000; 0xb foot "B" at 1000,0 900x1000, focused; 0xg .*; 0xd ' "$(probe win_answer present "$W" foot)"
+  check_match "...one: as before" '^yes 0xh org.gnome.Nautilus "Home" at 0,0 800x600$' "$(probe win_answer present "$W" nautilus)"
+  check_eq "...none" no "$(probe win_answer present "$W" nope)"
+  check_eq "--focused: the focused one of several" 'yes 0xb foot "B" at 1000,0 900x1000, focused (1 of 4 matching)' "$(probe win_answer focused "$W" foot)"
+  check_eq "...several, none focused" "no 2 matching, none focused" "$(probe win_answer focused "$W" zenity)"
+  check_eq "...one, not focused" 'no 0xa foot "A" is there' "$(probe win_answer focused "$W" 'title:^A$')"
+  check_eq "--gone: several still there" "no 4 matching" "$(probe win_answer gone "$W" foot)"
+  check_eq "a bad regex: exit 2 (never answerable)" 2 "$(probe win_answer present "$W" 'title:(' >/dev/null 2>&1; echo $?)"
   cov() { jq -r --arg a "$2" '.[] | select(.address == $a) | [.cover[].address] | join(" ")' <<<"$1"; }
   on() { jq -r --arg a "$2" '.[] | select(.address == $a) | .onscreen' <<<"$1"; }
   check_eq "floats cover the tiled window under them, though one is earlier in the list" "0xf 0x2" "$(cov "$W" 0xa)"
   check_eq "...a tiled window never covers a float" "" "$(cov "$W" 0xf)"
-  check_eq "...a later float covers an earlier one" "0x2" "$(jq -r '.[] | select(.address == "0xf") | .cover[0].address // ""' <<<"$(lib win_annotate "$(jq -c 'map(if .address == "0x2" then .at = [150, 150] else . end)' <<<"$c")" "$m" "$act")")"
+  check_eq "...a later float covers an earlier one" "0x2" "$(jq -r '.[] | select(.address == "0xf") | .cover[0].address // ""' <<<"$(probe win_annotate "$(jq -c 'map(if .address == "0x2" then .at = [150, 150] else . end)' <<<"$c")" "$m" "$act")")"
   check_eq "...and not the other way" "" "$(cov "$W" 0x2)"
   check_eq "another workspace is off screen" false "$(on "$W" 0xc)"
   check_eq "an inactive group tab is off screen" false "$(on "$W" 0xg)"
@@ -17804,13 +17804,13 @@ t_unit_window_select() {
   check_eq "a hidden special workspace is off screen" false "$(on "$W" 0xd)"
   check_eq "a shown one is on screen" true "$(on "$Wsp" 0xd)"
   check_eq "...above the workspace under it" "0xf 0x2 0xd" "$(cov "$Wsp" 0xa)"
-  local Wfs; Wfs=$(lib win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$act")
+  local Wfs; Wfs=$(probe win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$act")
   check_eq "a fullscreen window: nothing covers it" "" "$(cov "$Wfs" 0xa)"
   check_eq "...it covers the rest" 0xa "$(cov "$Wfs" 0xf | tr ' ' '\n' | grep -x 0xa)"
   local A; A=$(jq -c '.[] | select(.address == "0xa")' <<<"$W")
-  check_match "a point under the float is covered, named" "covered there by 0xf zenity" "$(lib win_blocked "$A" 150 150)"
-  check_eq "a point beside it is not" "" "$(lib win_blocked "$A" 900 900)"
-  check_match "off screen says so" "not on screen \(workspace 5\)" "$(lib win_blocked "$(jq -c '.[] | select(.address == "0xc")' <<<"$W")" 1 1)"
+  check_match "a point under the float is covered, named" "covered there by 0xf zenity" "$(probe win_blocked "$A" 150 150)"
+  check_eq "a point beside it is not" "" "$(probe win_blocked "$A" 900 900)"
+  check_match "off screen says so" "not on screen \(workspace 5\)" "$(probe win_blocked "$(jq -c '.[] | select(.address == "0xc")' <<<"$W")" 1 1)"
   # Layer surfaces over windows (#263): top and overlay only, bottom to top, not 1x1 hidden menus,
   # not over an off-screen window, not a top one over a workspace with a real fullscreen window.
   local l Wl
@@ -17820,28 +17820,28 @@ t_unit_window_select() {
          {"namespace":"osd","pid":1,"x":20,"y":500,"w":100,"h":100}]}}}'
   lay() { jq -r --arg a "$2" '.[] | select(.address == $a) | [.layers[] | "\(.namespace):\(.layer)"] | join(" ")' <<<"$1"; }
   check_eq "no LAYERS: no layers field" null "$(jq -c '.[0].layers' <<<"$W")"
-  Wl=$(lib win_annotate "$c" "$m" "$act" "$l")
+  Wl=$(probe win_annotate "$c" "$m" "$act" "$l")
   check_eq "layers over a tiled window: the bar (top) and an overlay, bottom to top; not the background nor a 1x1 menu" "bar:top osd:overlay" "$(lay "$Wl" 0xa)"
   check_eq "...a top panel and a toast over the other one" "panel:top toast:overlay" "$(lay "$Wl" 0xb)"
   check_eq "...none over an off-screen window" "" "$(lay "$Wl" 0xc)"
   check_eq "...none over a float clear of them" "" "$(lay "$Wl" 0x2)"
   local Wf2 Wf1
-  Wf2=$(lib win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 2 else . end)' <<<"$c")" "$m" "$act" "$l")
+  Wf2=$(probe win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 2 else . end)' <<<"$c")" "$m" "$act" "$l")
   check_eq "a real fullscreen window (2): top layers pass it by, overlays not" "osd:overlay" "$(lay "$Wf2" 0xa)"
   check_eq "...nor over another window on its workspace" "toast:overlay" "$(lay "$Wf2" 0xb)"
-  Wf1=$(lib win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$act" "$l")
+  Wf1=$(probe win_annotate "$(jq -c 'map(if .address == "0xa" then .fullscreen = 1 else . end)' <<<"$c")" "$m" "$act" "$l")
   check_eq "...a maximized one (1): they count" "bar:top osd:overlay" "$(lay "$Wf1" 0xa)"
   A=$(jq -c '.[] | select(.address == "0xa")' <<<"$Wl")
-  check_eq "win_layer: the one over the point" 'certain "osd" overlay 100x100 at 20,500' "$(lib win_layer "$A" 50 550)"
-  check_eq "...the bar's" 'certain "bar" top 42x1080 at 0,0' "$(lib win_layer "$A" 10 10)"
-  check_eq "...nothing beside them" "" "$(lib win_layer "$A" 500 500)"
-  check_eq "...the topmost of two (an overlay over the bar)" 'certain "osd" overlay 100x100 at 20,500' "$(lib win_layer "$A" 30 550)"
-  check_eq "...the edge is outside (x + w)" "" "$(lib win_layer "$A" 120 550)"
-  check_eq "...a window without the field: nothing" "" "$(lib win_layer "$(jq -c '.[] | select(.address == "0xa")' <<<"$W")" 10 10)"
+  check_eq "win_layer: the one over the point" 'certain "osd" overlay 100x100 at 20,500' "$(probe win_layer "$A" 50 550)"
+  check_eq "...the bar's" 'certain "bar" top 42x1080 at 0,0' "$(probe win_layer "$A" 10 10)"
+  check_eq "...nothing beside them" "" "$(probe win_layer "$A" 500 500)"
+  check_eq "...the topmost of two (an overlay over the bar)" 'certain "osd" overlay 100x100 at 20,500' "$(probe win_layer "$A" 30 550)"
+  check_eq "...the edge is outside (x + w)" "" "$(probe win_layer "$A" 120 550)"
+  check_eq "...a window without the field: nothing" "" "$(probe win_layer "$(jq -c '.[] | select(.address == "0xa")' <<<"$W")" 10 10)"
   check_eq "windows: one line per layer, naming the windows under it" \
     'layer "toast" (overlay 400x100 at 1500,0) is over 0xb: where it takes input, input there goes to it' \
-    "$(lib windows_layers <<<"$Wl" | grep toast)"
-  check_eq "...nothing without layers" "" "$(lib windows_layers <<<"$W")"
+    "$(probe windows_layers <<<"$Wl" | grep toast)"
+  check_eq "...nothing without layers" "" "$(probe windows_layers <<<"$W")"
   check_eq "...each layer certain while the monitors have no geometry" "true" \
     "$(jq -c '[.[] | .layers[]? | .certain] | unique | map(tostring) | join(",")' -r <<<"$Wl")"
   # A full-screen layer (#263, finding 398: Omarchy's notifications, input on their toasts only) is
@@ -17849,19 +17849,19 @@ t_unit_window_select() {
   local mg ln Wn
   mg='[{"name":"M","x":0,"y":0,"width":1920,"height":1080,"scale":1,"transform":0,"activeWorkspace":{"id":1},"specialWorkspace":{"id":0}}]'
   ln=$(jq -c '.M.levels["3"] += [{"namespace":"notif","pid":2,"x":0,"y":0,"w":1920,"h":1080}]' <<<"$l")
-  Wn=$(lib win_annotate "$c" "$mg" "$act" "$ln")
+  Wn=$(probe win_annotate "$c" "$mg" "$act" "$ln")
   check_eq "a full-screen overlay: certain false; the smaller ones true" "bar:true osd:true notif:false" \
     "$(jq -r '.[] | select(.address == "0xa") | [.layers[] | "\(.namespace):\(.certain)"] | join(" ")' <<<"$Wn")"
   A=$(jq -c '.[] | select(.address == "0xa")' <<<"$Wn")
-  check_eq "win_layer: only the full-screen one there: possible" 'possible "notif" overlay 1920x1080 at 0,0' "$(lib win_layer "$A" 500 500)"
-  check_eq "...a smaller one under it: that one, certain (certain wins over possible)" 'certain "osd" overlay 100x100 at 20,500' "$(lib win_layer "$A" 50 550)"
-  check_eq "...a top one (the bar) under it: certain too" 'certain "bar" top 42x1080 at 0,0' "$(lib win_layer "$A" 10 10)"
+  check_eq "win_layer: only the full-screen one there: possible" 'possible "notif" overlay 1920x1080 at 0,0' "$(probe win_layer "$A" 500 500)"
+  check_eq "...a smaller one under it: that one, certain (certain wins over possible)" 'certain "osd" overlay 100x100 at 20,500' "$(probe win_layer "$A" 50 550)"
+  check_eq "...a top one (the bar) under it: certain too" 'certain "bar" top 42x1080 at 0,0' "$(probe win_layer "$A" 10 10)"
   check_eq "windows: a full-screen layer spans the screen, possibly over the windows" \
     'layer "notif" (overlay 1920x1080 at 0,0) spans the screen, possibly over 0xf, 0xa, 0xb, 0x2: input goes to it only where one of its items (a toast, a dock icon) is, elsewhere to the window' \
-    "$(lib windows_layers <<<"$Wn" | grep notif)"
+    "$(probe windows_layers <<<"$Wn" | grep notif)"
   check_eq "...a smaller one still is over them" \
-    'layer "toast" (overlay 400x100 at 1500,0) is over 0xb: where it takes input, input there goes to it' "$(lib windows_layers <<<"$Wn" | grep '^layer "toast"')"
-  whole() { jq -r --argjson m "$1" --arg mon "${3:-M}" "$(lib eval 'printf %s "$LAYER_SPAN_JQ"') ($2 | spans(\$m; \$mon))" -n; }
+    'layer "toast" (overlay 400x100 at 1500,0) is over 0xb: where it takes input, input there goes to it' "$(probe windows_layers <<<"$Wn" | grep '^layer "toast"')"
+  whole() { jq -r --argjson m "$1" --arg mon "${3:-M}" "$("$PROBE" _rust-jq LAYER_SPAN_JQ) ($2 | spans(\$m; \$mon))" -n; }
   check_eq "whole: the output's size at scale 2 (3840x2160 mode, 1920x1080 logical)" true \
     "$(whole "$(jq -c '.[0] += {width: 3840, height: 2160, scale: 2}' <<<"$mg")" '{x: 0, y: 0, w: 1920, h: 1080}')"
   check_eq "...turned (transform 1): 1080x1920" "true false" \
@@ -17884,14 +17884,10 @@ t_unit_window_select() {
     "$(whole "$mr" '{x: 1455, y: 26, w: 465, h: 900}') $(whole "$mr" '{x: 100, y: 873, w: 1820, h: 207}')"
   check_eq "...the reserved edges unknown: only a whole one" "false true" \
     "$(whole "$mg" '{x: 1455, y: 0, w: 465, h: 1080}') $(whole "$mg" '{x: 0, y: 0, w: 1920, h: 1080}')"
-  local Wc; Wc=$(lib win_annotate "$c" "$mr" "$act" "$(jq -c '.M.levels["3"] += [{"namespace":"col","pid":2,"x":1455,"y":0,"w":465,"h":1080}]' <<<"$l")")
+  local Wc; Wc=$(probe win_annotate "$c" "$mr" "$act" "$(jq -c '.M.levels["3"] += [{"namespace":"col","pid":2,"x":1455,"y":0,"w":465,"h":1080}]' <<<"$l")")
   check_eq "win_layer: under an idle column (4.5's notifications): possible" 'possible "col" overlay 465x1080 at 1455,0' \
-    "$(lib win_layer "$(jq -c '.[] | select(.address == "0xb")' <<<"$Wc")" "$((1600 - $(jq -r '.[] | select(.address == "0xb") | .at[0]' <<<"$Wc")))" 500)"
-  # --in (finding 81): image pixel -> screen pixel under its centre
-  check_eq "1:1 maps to itself" "0 1919" "$(lib img_px 0 1920 1920) $(lib img_px 1919 1920 1920)"
-  check_eq "x1.92: 500 of 1000 is 960" 960 "$(lib img_px 500 1000 1920)"
-  check_eq "x1.92: the last pixel stays inside" 1919 "$(lib img_px 999 1000 1920)"
-  check_eq "x0.5 (an image larger than the screen)" 50 "$(lib img_px 101 200 100)"
+    "$(probe win_layer "$(jq -c '.[] | select(.address == "0xb")' <<<"$Wc")" "$((1600 - $(jq -r '.[] | select(.address == "0xb") | .at[0]' <<<"$Wc")))" 500)"
+  # --in (finding 81): image pixel -> screen pixel under its centre: screen.rs img_px_as_bash.
 }
 
 # Window-targeted shot, click and keys, and --in (finding 81), with the box's own windows: two
@@ -19501,34 +19497,10 @@ t_pointer() {
 # omabox wait and --wait (finding 82): the pure parts, and the tool's refusal outside a box, checked
 # in a bare namespace with no /opt/omabox and no display (where a broken check could reach nothing).
 t_unit_wait() {
-  # -g (#27): grim's form, and the ones agents type.
-  check_eq "-g X,Y WxH" "1 2 30 40" "$(lib geom_parse "1,2 30x40")"
-  check_eq "-g X,Y,W,H" "1 2 30 40" "$(lib geom_parse "1,2,30,40")"
-  check_eq "-g X,Y W,H" "-1 2 30 40" "$(lib geom_parse "-1,2 30,40")"
-  check_fails "-g junk refused" lib geom_parse "1,2 0x4"
-  # geom_clip (#240): a region past the window or screen cut to it, and what was cut, by edge.
-  check_eq "geom_clip: inside, nothing cut" "10 20 30 40"$'\t' "$(lib geom_clip 10 20 30 40 100 100)"
-  check_eq "geom_clip: 6 px past the right edge" "1380 40 474 330"$'\t'"6 px past the right edge" "$(lib geom_clip 1380 40 480 330 1854 1056)"
-  check_eq "geom_clip: every edge" "0 0 100 50"$'\t'"5 px past the left edge, 3 px past the top edge, 15 px past the right edge, 7 px past the bottom edge" \
-    "$(lib geom_clip -5 -3 120 60 100 50)"
-  check_fails "geom_clip: nothing inside (right of it)" lib geom_clip 100 0 10 10 100 50
-  check_fails "geom_clip: nothing inside (above it)" lib geom_clip 0 -10 10 10 100 50
-  check_eq "300ms" 300 "$(lib ms_duration 300ms)"
-  check_eq "1.5s" 1500 "$(lib ms_duration 1.5s)"
-  check_eq "2m" 120000 "$(lib ms_duration 2m)"
-  check_eq "a bare number is seconds" 10000 "$(lib ms_duration 10)"
-  check_fails "0 refused" lib ms_duration 0
-  check_eq "2h (#273: hours too)" 7200000 "$(lib ms_duration 2h)"
-  check_fails "junk refused" lib ms_duration 2d
-  check_eq "the cursor's rectangle" "944,524,64,64" "$(lib cursor_rect "960 540")"
+  # -g (#27), geom_clip (#240), the duration grammar and the cursor's rectangle: settle.rs
+  # wait_values_as_bash.
   # wait layer (finding 146): newer Omarchy keeps a hidden menu mapped at 1x1; that is not the menu.
-  local lj='{"HEADLESS-1":{"levels":{"2":[{"namespace":"omarchy-bar","x":0,"y":0,"w":1920,"h":34}],
-    "3":[{"namespace":"omarchy-menu","x":0,"y":0,"w":1,"h":1},{"namespace":"omarchy-osd","x":0,"y":0,"w":0,"h":0}]}}}'
-  check_eq "wait layer: a drawn layer is there" "0,0 1920x34" "$(lib layer_at omarchy-bar <<<"$lj")"
-  check_eq "...a hidden 1x1 one is not" "" "$(lib layer_at omarchy-menu <<<"$lj")"
-  check_eq "...nor an empty one" "" "$(lib layer_at omarchy-osd <<<"$lj")"
-  check_eq "...the drawn one when both are mapped" "660,300 600x480" \
-    "$(lib layer_at omarchy-menu <<<"${lj/\"w\":1,\"h\":1\}/\"w\":1,\"h\":1\},{\"namespace\":\"omarchy-menu\",\"x\":660,\"y\":300,\"w\":600,\"h\":480\}}")"
+  # ...: ready.rs layer_at_as_bash.
   check_match "wait --timeout over 10 min refused" "at most 10m" "$(ob wait -b "$P-x" --timeout 11m still 2>&1)"
   check_match "keys --timeout over 10 min refused" "at most 10m" "$(ob keys -b "$P-x" --wait --timeout 601s a 2>&1)"
   check_match "keys --quiet over 10 min refused" "--quiet is at most 10m" "$(ob keys -b "$P-x" --wait --quiet 20m a 2>&1)"
@@ -19633,7 +19605,7 @@ t_unit_wait_facts() {
     "$(wf_line ".clients += [$zen] | $zact")"
   check_eq "...its changes: the window (focused) and the focus, from foot to zenity" \
     '[{"kind":"window_opened","window":{"address":"0xb","class":"zenity","title":"Save as","workspace":"1"},"focused":true},{"kind":"focus","from":{"address":"0xa","class":"foot","title":"K","workspace":"1"},"to":{"address":"0xb","class":"zenity","title":"Save as","workspace":"1"}}]' \
-    "$(lib desk_facts "$(wf_snap)" "$(wf_snap ".clients += [$zen] | $zact")" | jq -c .changes)"
+    "$(probe desk_facts "$(wf_snap)" "$(wf_snap ".clients += [$zen] | $zact")" | jq -c .changes)"
   check_eq "a window opened, not focused" 'window opened: zenity "Save as"' "$(wf_line ".clients += [$zen]")"
   check_eq "...on a workspace not shown: said" 'window opened on workspace 2: zenity "Save as"' \
     "$(wf_line ".clients += [$zen | .workspace = {id: 2, name: \"2\"}]")"
@@ -19643,7 +19615,7 @@ t_unit_wait_facts() {
   local menu='.layers["HEADLESS-2"].levels["3"] = [{address: "0x4", namespace: "omarchy-menu", x: 660, y: 300, w: 600, h: 480}]'
   check_eq "the launcher drawn (from 1x1): layer opened" "layer omarchy-menu opened" "$(wf_line "$menu")"
   check_eq "...with where it is" '{"kind":"layer_opened","namespace":"omarchy-menu","at":{"x":660,"y":300,"w":600,"h":480}}' \
-    "$(lib desk_facts "$(wf_snap)" "$(wf_snap "$menu")" | jq -c '.changes[0]')"
+    "$(probe desk_facts "$(wf_snap)" "$(wf_snap "$menu")" | jq -c '.changes[0]')"
   check_eq "...back to 1x1, hidden (finding 146): layer closed" "layer omarchy-menu closed" "$(wf_line . "$menu")"
   check_eq "...unmapped: closed too" "layer omarchy-bar closed" "$(wf_line '.layers["HEADLESS-2"].levels["2"] = []')"
   check_eq "the focused window's title" 'foot title now "~/code/app"' \
@@ -19666,8 +19638,8 @@ t_unit_wait_facts() {
   check_eq "six facts: three said, then +N more and where to read them" \
     'window opened: zenity "Save as"; window opened: zenity "B"; window closed: foot "K"; +4 more (omabox events --since 100)' \
     "$(wf_line "$six")"
-  check_eq "...every one in changes" 7 "$(lib desk_facts "$(wf_snap)" "$(wf_snap "$six")" | jq '.changes | length')"
-  check_eq "a snapshot missing (the box did not answer): nothing" "" "$(lib desk_facts "$(wf_snap)" "")"
+  check_eq "...every one in changes" 7 "$(probe desk_facts "$(wf_snap)" "$(wf_snap "$six")" | jq '.changes | length')"
+  check_eq "a snapshot missing (the box did not answer): nothing" "" "$(probe desk_facts "$(wf_snap)" "")"
   # desk_snap's own check of what hyprctl --batch printed: five JSON values, else nothing.
   check_eq "desk_snap: five values read as a snapshot" '{"events":7,"clients":[],"layers":{},"active":{},"workspace":{"id":1},"monitors":[]}' \
     "$(lib eval 'on_box() { printf "7\n[]\n{}\n{}\n{\"id\":1}\n[]\n"; }; desk_snap')"
@@ -19676,42 +19648,42 @@ t_unit_wait_facts() {
   # Where the input went (the 124's sentence).
   local s; s=$(wf_snap ".clients += [$zen | .floating = true | .at = [800, 400] | .size = [300, 200]]")
   check_eq "keys: the focused window" 'the keys went to foot "K" (focused)' \
-    "$(S=$s lib eval 'kb_layers() { :; }; desk_target keys "$S"' | jq -r .text)"
+    "$(probe desk_target keys "$s" "" | jq -r .text)"
   check_eq "...a layer with the keyboard (finding 276) first" "the keys went to layer omarchy-menu (it has the keyboard)|layer" \
-    "$(S=$s lib eval 'kb_layers() { echo omarchy-menu; }; desk_target keys "$S"' | jq -r '"\(.text)|\(.kind)"')"
+    "$(probe desk_target keys "$s" omarchy-menu | jq -r '"\(.text)|\(.kind)"')"
   check_eq "...none focused" "the keys went to no window (none focused)|none" \
-    "$(S=$(wf_snap '.active = {}') lib eval 'kb_layers() { :; }; desk_target keys "$S"' | jq -r '"\(.text)|\(.kind)"')"
+    "$(probe desk_target keys "$(wf_snap '.active = {}')" "" | jq -r '"\(.text)|\(.kind)"')"
   check_eq "click: the floating window over the tiled one, in its own coordinates" \
     'the click at 900,450 was on zenity "Save as" (its 100,50)|{"x":100,"y":50}' \
-    "$(lib desk_target click "$s" "900 450" | jq -r '"\(.text)|\(.at | tojson)"')"
-  check_eq "...beside it, the tiled one" 'the click at 100,450 was on foot "K" (its 100,450)' "$(lib desk_target click "$s" "100 450" | jq -r .text)"
+    "$(probe desk_target click "$s" "900 450" | jq -r '"\(.text)|\(.at | tojson)"')"
+  check_eq "...beside it, the tiled one" 'the click at 100,450 was on foot "K" (its 100,450)' "$(probe desk_target click "$s" "100 450" | jq -r .text)"
   check_eq "...the bar (a top layer) before any window" 'the click at 30,1060 was on layer omarchy-bar (over foot "K")|layer' \
-    "$(lib desk_target click "$s" "30 1060" | jq -r '"\(.text)|\(.kind)"')"
-  check_eq "...a hidden 1x1 menu is not there" 'the click at 0,0 was on foot "K" (its 0,0)' "$(lib desk_target click "$s" "0 0" | jq -r .text)"
+    "$(probe desk_target click "$s" "30 1060" | jq -r '"\(.text)|\(.kind)"')"
+  check_eq "...a hidden 1x1 menu is not there" 'the click at 0,0 was on foot "K" (its 0,0)' "$(probe desk_target click "$s" "0 0" | jq -r .text)"
   check_eq "...no window: the background" 'the scroll at 1500,500 was on no window (layer omarchy-background)' \
-    "$(lib desk_target scroll "$s" "1500 500" | jq -r .text)"
+    "$(probe desk_target scroll "$s" "1500 500" | jq -r .text)"
   check_eq "...a bottom layer there is over the background: it, not the background (finding 398)" \
     'the scroll at 1500,500 was on no window (layer waybar-like)' \
-    "$(lib desk_target scroll "$(jq -c '.layers["HEADLESS-2"].levels["1"] = [{address: "0x6", namespace: "waybar-like", x: 1400, y: 400, w: 200, h: 200}]' <<<"$s")" "1500 500" | jq -r .text)"
+    "$(probe desk_target scroll "$(jq -c '.layers["HEADLESS-2"].levels["1"] = [{address: "0x6", namespace: "waybar-like", x: 1400, y: 400, w: 200, h: 200}]' <<<"$s")" "1500 500" | jq -r .text)"
   check_eq "...a window on a workspace not shown is not there" 'the drag from 100,450 started on no window or layer' \
-    "$(lib desk_target drag "$(wf_snap '.clients[0].workspace = {id: 2, name: "2"} | .layers = {}')" "100 450" | jq -r .text)"
-  check_eq "...certain" true "$(lib desk_target click "$s" "100 450" | jq -r .certain)"
+    "$(probe desk_target drag "$(wf_snap '.clients[0].workspace = {id: 2, name: "2"} | .layers = {}')" "100 450" | jq -r .text)"
+  check_eq "...certain" true "$(probe desk_target click "$s" "100 450" | jq -r .certain)"
   # A full-screen overlay (#263, finding 398: Omarchy's notifications) may have taken a click or not:
   # the target is what is under it, certain false; a layer smaller than its output still wins.
   local sn; sn=$(jq -c '.monitors[0] += {name: "HEADLESS-2", x: 0, y: 0, width: 1920, height: 1080, scale: 1, transform: 0}
     | .layers["HEADLESS-2"].levels["3"] += [{address: "0x5", namespace: "omarchy-notifications", x: 0, y: 0, w: 1920, h: 1080}]' <<<"$s")
   check_eq "a full-screen overlay over the point: the window under it, possibly the layer" \
     'the click at 100,450 was on foot "K" (its 100,450), or possibly on layer omarchy-notifications (it spans the screen: if one of its items, a toast, is there)|window|false|null' \
-    "$(lib desk_target click "$sn" "100 450" | jq -r '"\(.text)|\(.kind)|\(.certain)|\(.namespace)"')"
+    "$(probe desk_target click "$sn" "100 450" | jq -r '"\(.text)|\(.kind)|\(.certain)|\(.namespace)"')"
   check_eq "...the bar (top, smaller) under it wins: certain" 'the click at 30,1060 was on layer omarchy-bar (over foot "K")|layer|true' \
-    "$(lib desk_target click "$sn" "30 1060" | jq -r '"\(.text)|\(.kind)|\(.certain)"')"
+    "$(probe desk_target click "$sn" "30 1060" | jq -r '"\(.text)|\(.kind)|\(.certain)"')"
   check_eq "...no window under it: the background, possibly the layer" \
     'the scroll at 1500,500 was on no window (layer omarchy-background), or possibly on layer omarchy-notifications (it spans the screen: if one of its items, a toast, is there)|layer|omarchy-background|false' \
-    "$(lib desk_target scroll "$sn" "1500 500" | jq -r '"\(.text)|\(.kind)|\(.namespace)|\(.certain)"')"
+    "$(probe desk_target scroll "$sn" "1500 500" | jq -r '"\(.text)|\(.kind)|\(.namespace)|\(.certain)"')"
   check_eq "...the same layer a toast's size: on it, certain" 'the click at 100,450 was on layer omarchy-notifications (over foot "K")|true' \
-    "$(lib desk_target click "$(jq -c '.layers["HEADLESS-2"].levels["3"][-1] += {y: 400, h: 100}' <<<"$sn")" "100 450" | jq -r '"\(.text)|\(.certain)"')"
-  check_eq "run: no window with the job's pid" "no window from pid 99 yet|none" "$(lib desk_target run "$s" 99 | jq -r '"\(.text)|\(.kind)"')"
-  check_eq "...its window" "window|0xb" "$(lib desk_target run "$s" 41 | jq -r '"\(.kind)|\(.window.address)"')"
+    "$(probe desk_target click "$(jq -c '.layers["HEADLESS-2"].levels["3"][-1] += {y: 400, h: 100}' <<<"$sn")" "100 450" | jq -r '"\(.text)|\(.certain)"')"
+  check_eq "run: no window with the job's pid" "no window from pid 99 yet|none" "$(probe desk_target run "$s" 99 | jq -r '"\(.text)|\(.kind)"')"
+  check_eq "...its window" "window|0xb" "$(probe desk_target run "$s" 41 | jq -r '"\(.kind)|\(.window.address)"')"
 
   # settle_end with them: the line keeps its start, the facts after it; JSON adds changes, target and
   # events_since; the exit code is the screen's.
@@ -20219,47 +20191,47 @@ t_unit_link_out() {
   ln -s "$o" "$r/target"; ln -s ../out "$r/rel"; ln -s sub "$r/inside"; ln -s "$o" "$r/sub/in/deep"
   ln -s "$d/nothing" "$r/gone"; ln -s "$d/h/.ssh" "$r/keys"
   check_eq "a path through a link out of the repo: the link, where it leads, the path resolved" \
-    "$r/target"$'\t'"$o"$'\t'"$o/debug/app" "$(lib repo_link_out "$r" "$r/target/debug/app")"
-  check_eq "...the link itself" "$r/target"$'\t'"$o"$'\t'"$o" "$(lib repo_link_out "$r" "$r/target")"
-  check_eq "...a relative link out (../out)" "$r/rel"$'\t'"$o"$'\t'"$o/debug" "$(lib repo_link_out "$r" "$r/rel/debug")"
+    "$r/target"$'\t'"$o"$'\t'"$o/debug/app" "$(probe repo_link_out "$r" "$r/target/debug/app")"
+  check_eq "...the link itself" "$r/target"$'\t'"$o"$'\t'"$o" "$(probe repo_link_out "$r" "$r/target")"
+  check_eq "...a relative link out (../out)" "$r/rel"$'\t'"$o"$'\t'"$o/debug" "$(probe repo_link_out "$r" "$r/rel/debug")"
   check_eq "...through a link that stays in the repo first" "$r/inside/in/deep"$'\t'"$o"$'\t'"$o/debug" \
-    "$(lib repo_link_out "$r" "$r/inside/in/deep/debug")"
-  check_eq "...a path with .. in it, normalized" "$r/target"$'\t'"$o"$'\t'"$o/debug" "$(lib repo_link_out "$r" "$r/sub/../target/debug")"
-  check_fails "a link that stays in the repo: nothing" lib repo_link_out "$r" "$r/inside/in/f"
-  check_fails "a plain path in the repo: nothing" lib repo_link_out "$r" "$r/sub/in/f"
-  check_fails "a link that dangles on the host too: nothing" lib repo_link_out "$r" "$r/gone"
-  check_fails "a path not there on the host: nothing" lib repo_link_out "$r" "$r/target/debug/nope"
-  check_fails "a path outside the repo: nothing" lib repo_link_out "$r" "$o/debug/app"
-  check_fails "...nor the repo's own top" lib repo_link_out "$r" "$r"
+    "$(probe repo_link_out "$r" "$r/inside/in/deep/debug")"
+  check_eq "...a path with .. in it, normalized" "$r/target"$'\t'"$o"$'\t'"$o/debug" "$(probe repo_link_out "$r" "$r/sub/../target/debug")"
+  check_fails "a link that stays in the repo: nothing" probe repo_link_out "$r" "$r/inside/in/f"
+  check_fails "a plain path in the repo: nothing" probe repo_link_out "$r" "$r/sub/in/f"
+  check_fails "a link that dangles on the host too: nothing" probe repo_link_out "$r" "$r/gone"
+  check_fails "a path not there on the host: nothing" probe repo_link_out "$r" "$r/target/debug/nope"
+  check_fails "a path outside the repo: nothing" probe repo_link_out "$r" "$o/debug/app"
+  check_fails "...nor the repo's own top" probe repo_link_out "$r" "$r"
   check_match "link_note: the mount that gives it" "^omabox: note: $r/target -> $o: outside the box, where the link dangles; up --ro-bind $o mounts it$" \
-    "$(HOME=$d/h lib link_note "" "$r/target" "$o" up 2>&1)"
+    "$(HOME=$d/h probe link_note "" "$r/target" "$o" up 2>&1)"
   check_match "...one a box may not mount: why, no mount offered" "^omabox: note: $r/keys -> $d/h/.ssh: outside the box, where the link dangles; a box may not mount it \(it is inside $d/h/.ssh/ " \
-    "$(HOME=$d/h lib link_note "" "$r/keys" "$d/h/.ssh" up 2>&1)"
+    "$(HOME=$d/h probe link_note "" "$r/keys" "$d/h/.ssh" up 2>&1)"
   # The repo may be anyone's: its link is offered a mount only to a cache, outside HOME, or in no hidden
   # folder of HOME; elsewhere (settings, logins) the note says so and offers none.
   # shellcheck disable=SC2329 # called below
-  lmlib() { env -u XDG_CACHE_HOME -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME HOME="$d/h" bash -c 'source "$1"; shift; "$@"' lib "$TMP/lib/bin/omabox" "$@"; }
-  check "link_mountable: under ~/.cache (a build cache's targets)" lmlib link_mountable "$d/h/.cache/cc/targets/ab12"
-  check "...under HOME in no hidden folder (another checkout's target)" lmlib link_mountable "$d/h/code/other/target"
-  check "...outside HOME" lmlib link_mountable "$o"
-  check_fails "...not ~/.cache itself" lmlib link_mountable "$d/h/.cache"
-  check_fails "...not a dot-dir of HOME" lmlib link_mountable "$d/h/.config/someapp"
-  check_fails "...nor a hidden folder deeper in HOME" lmlib link_mountable "$d/h/code/app/.secrets"
-  check_fails "...nor XDG_CONFIG_HOME elsewhere" env HOME="$d/h" XDG_CONFIG_HOME="$d/cfg" bash -c 'source "$1"; link_mountable "$2"' _ "$TMP/lib/bin/omabox" "$d/cfg/app"
+  lmprobe() { env -u XDG_CACHE_HOME -u XDG_CONFIG_HOME -u XDG_DATA_HOME -u XDG_STATE_HOME HOME="$d/h" "$PROBE" _rust probe "$@"; }
+  check "link_mountable: under ~/.cache (a build cache's targets)" lmprobe link_mountable "$d/h/.cache/cc/targets/ab12"
+  check "...under HOME in no hidden folder (another checkout's target)" lmprobe link_mountable "$d/h/code/other/target"
+  check "...outside HOME" lmprobe link_mountable "$o"
+  check_fails "...not ~/.cache itself" lmprobe link_mountable "$d/h/.cache"
+  check_fails "...not a dot-dir of HOME" lmprobe link_mountable "$d/h/.config/someapp"
+  check_fails "...nor a hidden folder deeper in HOME" lmprobe link_mountable "$d/h/code/app/.secrets"
+  check_fails "...nor XDG_CONFIG_HOME elsewhere" env HOME="$d/h" XDG_CONFIG_HOME="$d/cfg" "$PROBE" _rust probe link_mountable "$d/cfg/app"
   mkdir -p "$d/h/.config/someapp"
   check_match "link_note: a dot-dir of HOME is said outside the box, no mount offered" \
     "^omabox: note: $r/conf -> $d/h/.config/someapp: outside the box, where the link dangles; no mount is offered for it \(it is in a hidden folder of your HOME, where settings and keys live\)$" \
-    "$(lmlib link_note "" "$r/conf" "$d/h/.config/someapp" up 2>&1)"
+    "$(lmprobe link_note "" "$r/conf" "$d/h/.config/someapp" up 2>&1)"
   check_match "...an agent's store: refused, as a secret store" "^omabox: note: $r/ag -> $d/h/.claude: outside the box, where the link dangles; a box may not mount it \(it is inside $d/h/.claude/ " \
-    "$(HOME=$d/h lib link_note "" "$r/ag" "$d/h/.claude" up 2>&1)"
+    "$(HOME=$d/h probe link_note "" "$r/ag" "$d/h/.claude" up 2>&1)"
   # Names as the repo has them: control characters printed as ?, and one with a tab or newline skipped.
   local esc=$'e\e[31mRED\e[0m'
   check_eq "link_note: a control character in a name or target printed as ?" \
     "omabox: note: w?x leads through $r/e?[31mRED?[0m -> $o/e?[0m: outside the box, where the link dangles; up --ro-bind $o/e?[0m mounts it" \
-    "$(HOME=$d/h lib link_note $'w\ax leads through ' "$r/$esc" "$o/"$'e\e[0m' up 2>&1)"
+    "$(HOME=$d/h probe link_note $'w\ax leads through ' "$r/$esc" "$o/"$'e\e[0m' up 2>&1)"
   ln -s "$o" "$r/"$'new\nline'; ln -s "$o" "$r/"$'a\tb'
-  check_fails "repo_link_out: a link with a newline in its name: nothing" lib repo_link_out "$r" "$r/"$'new\nline'
-  check_fails "...a tab: nothing" lib repo_link_out "$r" "$r/"$'a\tb'
+  check_fails "repo_link_out: a link with a newline in its name: nothing" probe repo_link_out "$r" "$r/"$'new\nline'
+  check_fails "...a tab: nothing" probe repo_link_out "$r" "$r/"$'a\tb'
 }
 
 # #235: a link at the top of the repo out of it, to a scratch folder (not the real HOME), named by `up`
