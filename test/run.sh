@@ -2723,12 +2723,6 @@ rp_differs() {
 # users call it), compared. The hand-off leg (bash's front handing the command over, A2) went at A7,
 # and with the flip (#324 wave 6-flip) the hand-off itself; an expected difference's rp_rust is the
 # direct leg's. Under --installed there is no oracle: rust_built skips.
-# A parity wrap that runs the leg's omabox in a stand-in box: rp_wrap=(bash -c "$RP_IN_BOX" rp-in CLI BOX
-# [WORDS...]). --pass OMABOX_BASH only where the leg sets it: the direct leg has none, and a --pass of
-# it there is refused (125), as every leg's was at 27d9613 while the binary could not see it (finding
-# 514), so those parity cases compared nothing.
-# shellcheck disable=SC2016 # the wrap's bash expands them
-RP_IN_BOX='c=$1 b=$2; shift 2; exec "$c" run -b "$b" ${OMABOX_BASH+--pass OMABOX_BASH} -- "$@"'
 rp_legs() { echo direct; }
 parity() {
   local label=$1 side d=$TMP/rp-out.$BASHPID legs cli; shift
@@ -2771,6 +2765,56 @@ parity() {
     [ -z "${RP_DIFF:-}" ] || { echo "== $label: omabox $*"; for o in "${legs[@]}"; do for f in rc out err state; do diff "$d/bash.$f" "$d/$o.$f"; done; done; } >> "$RP_DIFF" 2>&1
     no "$label" "omabox $* -> $diffs"
   fi
+}
+
+# cx_case LABEL ARGS...: one case of the CLI (#324 wave 6b-end: what parity compared with bash's omabox
+# until the port ended, now each stated). Runs `omabox ARGS` (the binary, $CLI) once from $cx_dir,
+# with XDG_RUNTIME_DIR=$cx_rt and ${cx_env[@]} (env's words: -u NAME, NAME=VALUE), ${cx_wrap[@]}
+# before it (a `timeout`, rp-sig, a stand-in box's run) and $cx_in its stdin; $cx_prep, a function,
+# first (the fixture put back). Then $cx_check, a function, is given its raw stdout and stderr files
+# (for checks of its own: ok/no), $cx_sed, a sed -E script, is run over both (what differs from call
+# to call: a log's name, a time), and its state is taken: with cx_snap=1 what the runtime dir holds
+# (paths, types, file contents; $cx_mask, a sed -E script, over each file first), and what $cx_also,
+# a function, prints. It is checked against cx_want, each FIELD=TEXT (the field after the sed,
+# trailing newlines aside), FIELD~ERE (a line of it matches) or FIELD!~ERE (no line does); FIELD is
+# rc, out, err or state. omabox's "stopping once the step in progress ends" line (finding 453, said
+# where a stop waits past a second: timing) is taken out of err first. A case with no want and no
+# cx_check fails. cx_want is reset after it. CX_DUMP=FILE: each case's fields appended there.
+cx_dir=/ cx_rt="" cx_env=() cx_prep="" cx_snap=0 cx_wrap=() cx_in=/dev/null cx_sed="" cx_also="" cx_check="" cx_mask=""
+cx_want=()
+cx_state() {
+  if [ "$cx_snap" = 1 ]; then
+    # (run's marks, $D/runs, are named by pid and time: by kind here)
+    (cd "$cx_rt" && command find . -printf '%p %y\n' | LC_ALL=C sort && if [ -z "$cx_mask" ]; then command find . -type f -exec md5sum {} + | LC_ALL=C sort
+      else command find . -type f -print0 | LC_ALL=C sort -z | while IFS= read -r -d '' f; do echo "$(sed -E "$cx_mask" "$f" | md5sum | cut -d' ' -f1)  $f"; done; fi) |
+      sed -E 's#/runs/(o|c)\.[0-9]+\.[0-9]+#/runs/\1.MARK#'
+  fi
+  [ -z "$cx_also" ] || "$cx_also"
+}
+cx_case() {
+  local label=$1 d=$TMP/cx-out.$BASHPID w f op want bad="" re='^(rc|out|err|state)(=|~|!~)(.*)$'; shift
+  local -a wants=("${cx_want[@]}"); cx_want=()
+  mkdir -p "$d"
+  [ -z "$cx_prep" ] || "$cx_prep"
+  (cd "$cx_dir" && env -u OMABOX -u OMABOX_NAME -u OMABOX_JAIL -u OMABOX_RELAY_DEFAULT -u SELECT_PLAIN \
+    ${cx_env[@]+"${cx_env[@]}"} XDG_RUNTIME_DIR="$cx_rt" \
+    ${cx_wrap[@]+"${cx_wrap[@]}"} "$CLI" "$@" >"$d/out" 2>"$d/err" <"$cx_in"; echo $? > "$d/rc")
+  cx_state > "$d/state"
+  [ -z "$cx_check" ] || "$cx_check" "$label" "$d/out" "$d/err"
+  if [ -n "$cx_sed" ]; then for f in out err; do sed -i -E "$cx_sed" "$d/$f"; done; fi
+  sed -i '/^omabox: stopping once the step in progress ends (at most 20 s)$/d' "$d/err"
+  [ -z "${CX_DUMP:-}" ] || { echo "=== $label"; for f in rc out err state; do echo "--- $f"; cat "$d/$f"; done; } >> "$CX_DUMP"
+  [ ${#wants[@]} -gt 0 ] || [ -n "$cx_check" ] || { no "$label" "a case that states nothing"; return; }
+  for w in ${wants[@]+"${wants[@]}"}; do
+    [[ $w =~ $re ]] || { bad+="'$w' is not FIELD=TEXT, FIELD~ERE or FIELD!~ERE; "; continue; }
+    f=$d/${BASH_REMATCH[1]} op=${BASH_REMATCH[2]} want=${BASH_REMATCH[3]}
+    case $op in
+      =) [ "$(cat "$f")" = "$want" ] || bad+="${BASH_REMATCH[1]}: [$(head -c 400 "$f")], not [$want]; " ;;
+      '~') grep -qE -- "$want" "$f" || bad+="${BASH_REMATCH[1]}: no line matches /$want/ in [$(head -c 400 "$f")]; " ;;
+      '!~') ! grep -qE -- "$want" "$f" || bad+="${BASH_REMATCH[1]}: a line matches /$want/: [$(grep -m1 -E -- "$want" "$f" | head -c 400)]; " ;;
+    esac
+  done
+  if [ -z "$bad" ]; then ok "$label"; else no "$label" "omabox $* -> $bad"; fi
 }
 
 # rp_sig_write FILE (wave 3b, shared since 4a): the signal cases' wrapper, `rp-sig SIG MARK CMD...`:
@@ -7929,10 +7973,10 @@ t_run_stdio() {
   # (the keeper is the binary's: bash's nsenter waited outside the box)
   # shellcheck disable=SC2016 # the box's sh expands it
   check_eq "...the session's leader shows its name alone" omabox-session "$(ob run -b "$B" -- sh -c 'tr -d "\0" < /proc/$PPID/cmdline' 2>&1)"
-  # --pass of a variable omabox takes out of its own environment (OMABOX_BASH, for this call only):
-  # the caller's, as it came (finding 514; the binary said it was not there).
+  # --pass VAR: the caller's value, read from what omabox came with (/proc/self/environ), not from an
+  # environment of its own that may have changed it (finding 514).
   # shellcheck disable=SC2016 # the box's sh expands it
-  check_eq "run --pass OMABOX_BASH: the caller's value" "[1]" "$(OMABOX_BASH=1 ob run -b "$B" --pass OMABOX_BASH -- sh -c 'echo "[$OMABOX_BASH]"' 2>&1)"
+  check_eq "run --pass VAR: the caller's value" "[a b]" "$(T514='a b' ob run -b "$B" --pass T514 -- sh -c 'echo "[$T514]"' 2>&1)"
   # From another box process: a `run` writing a host file is seen holding pipes, never the file.
   ob run -b "$B" -- sh -c 'sleep 4' < "$d/in" > "$d/target" 2>&1 & local bp=$!
   sleep 1.5
@@ -9989,12 +10033,15 @@ t_ports() {
   out=$(ob ports -b "$B")
   check_match "ports -b lists that box only" "^BOX .*"$'\n'"$B +$shared +0\.0\.0\.0 +python3? +one of $A, $B" "$out"
   check_eq "...one line" 2 "$(wc -l <<<"$out")"
-  # The Rust half's parity (#324, wave 4a): these states both ways, the box's rows only (any box up
-  # is read; another's come and go).
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_prep="" rp_also="" rp_snap=0 rp_sed="" rp_wrap=()
-  parity "ports -b (both ways): a box's own, shared and resetting servers" ports -b "$A"
-  parity "ports -b --json (both ways)" ports -b "$B" --json
-  rp_rt="" rp_snap=1
+  # -b: that box's rows alone, each state said (#324: what wave 4a compared with bash's, now stated).
+  cx_rt=$XDG_RUNTIME_DIR cx_dir=/ cx_env=() cx_prep="" cx_also="" cx_snap=0 cx_sed="" cx_wrap=()
+  cx_want=(rc=0 'out~^BOX +PORT +ADDRESS +PROCESS +ON 127\.0\.0\.1:PORT HERE$' "out~^$A +$own +127\\.0\\.0\\.1 +python3 +this box\$"
+    "out~^$A +$shared +127\\.0\\.0\\.1 +python3 +one of $A, $B: only one of them gets it"
+    "out~^$A +$local6 +::1 +python3 +this box's pasta holds it, but connections are reset" "out!~^$B " err=)
+  cx_case "ports -b: a box's own, shared and resetting servers" ports -b "$A"
+  cx_want=(rc=0 "out~^\\[\\{\"box\":\"$B\",\"port\":$shared,\"addresses\":\\[\"0\\.0\\.0\\.0\"\\],\"process\":\"python3\",\"host\":\\{\"state\":\"shared\",\"boxes\":\\[\"$A\",\"$B\"\\]" "out!~\"box\":\"$A\"" err=)
+  cx_case "ports -b --json: that box's rows alone" ports -b "$B" --json
+  cx_rt=""
   # Both boxes serve on the shared port, so whichever lost it holds a port pasta cannot bind.
   for b in "$A" "$B"; do
     until later=$(free_port); [ "$later" -gt "$shared" ] && [ "$later" != "$own" ] && [ "$later" != "$local6" ] && [ "$later" != "$hostp" ]; do :; done
@@ -13663,25 +13710,23 @@ t_own_processes() {
   ob down "$B" >/dev/null 2>&1
 }
 
-# Wave 5a: `up` itself, both ways, on a box name of its own, taken down before each side: what it says
-# (durations evened out) and what it leaves in the box dir: launch.sh as written (every bwrap, pasta
-# and env word), box.json without its times and pids, and the files there.
-t_rust_parity_up() {
-  rust_built "rust parity up" || return 0
+# `up` itself on a box name of its own, taken down before each case (#324: what wave 5a compared with
+# bash's up, each now stated): what it says (durations evened out) and what it leaves in the box dir,
+# launch.sh, box.json and the files there; then ls, save, saves, brief, reload, restart-shell and down
+# on the box up.
+t_cli_up() {
   local U=$P-rpu r=$TMP/rpu
   rm -rf "$r"; mkdir -p "$r/td/rp-theme" "$r/norepo"; echo seeded > "$r/seed.txt"; echo 'name = "rp"' > "$r/td/rp-theme/colors.toml"
   # A HOME of the test's own, so the user's own ~/.config/omabox/config (protect-ports, a gpu) cannot
-  # make the halves differ: its theme the user's current one, its config empty.
+  # change what up does: its theme the user's current one, its config empty.
   local h=$r/home st=${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current
   mkdir -p "$h/.config/omabox" "$h/.local/state/omarchy/current"; : > "$h/.config/omabox/config"
   ln -s "$(readlink -f "$st/theme")" "$h/.local/state/omarchy/current/theme"
   cp "$st/theme.name" "$h/.local/state/omarchy/current/" 2>/dev/null
-  # (and the user's bar, as the halves seed it from the desk)
+  # (and the user's bar, as up seeds it from the desk)
   mkdir -p "$h/.config/omarchy"; cp "$HOME/.config/omarchy/shell.json" "$HOME/.config/omarchy/shell.toml" "$h/.config/omarchy/" 2>/dev/null
-  # (bash's down: one through the binary is over within the clock tick an up started right after it
-  # starts in, and bash's up takes that tie, its .down- marker a start in ticks, for a down that came
-  # while it was starting)
-  rpu_down() { HOME=$h obb down "$U" >/dev/null 2>&1; true; }
+  rpu_down() { HOME=$h ob down "$U" >/dev/null 2>&1; true; }
+  # (what each up made: its launch script, box.json and files, the seeds in its HOME)
   rpu_state() {
     local d=$XDG_RUNTIME_DIR/omabox/$U
     echo "== launch.sh"; sed -E "s/omabox-$U-[0-9]+/omabox-$U-PID/" "$d/launch.sh" 2>/dev/null
@@ -13689,221 +13734,337 @@ t_rust_parity_up() {
     echo "== files"; (cd "$d" 2>/dev/null && command find . -maxdepth 1 -printf '%p %y\n' | LC_ALL=C sort)
     echo "== home"; (cd "$d/home" 2>/dev/null && command find .config/rp .config/omarchy/themes/rp-theme -maxdepth 0 -printf '%p %y %l\n' 2>/dev/null)
   }
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=$r/norepo rp_env=("HOME=$h") rp_snap=0 rp_prep=rpu_down rp_also=rpu_state
-  rp_sed='s/\b[0-9]+(\.[0-9]+)? ?(s|ms)\b/T/g; s/"created":"[^"]*"/"created":T/'
-  parity "up: headless, no shell, isolated" up "$U" --no-shell --net isolated
-  parity "up --json: with its shell" up "$U" --net isolated --json
-  parity "up: connected" up "$U" --no-shell
-  parity "up --clean" up "$U" --clean
-  parity "up --stock-bar --no-pointer --xwayland" up "$U" --stock-bar --no-pointer --xwayland --net isolated
-  parity "up --monitor: two more, placed" up "$U" --no-shell --net isolated --monitor 800x600 --monitor 1024x768,below
-  parity "up --seed and --theme-dir" up "$U" --no-shell --net isolated --seed "$r/seed.txt:.config/rp/seed.txt" --theme-dir "$r/td/rp-theme"
-  parity "up --addr and --allow" up "$U" --no-shell --net isolated --addr 192.0.2.7 --addr 2001:db8::7 --allow 18081,18080
-  parity "up --idle 0: an orphan to be, said" up "$U" --no-shell --net isolated --idle 0
-  parity "up --env and --size with a scale" up "$U" --no-shell --net isolated --env RPV=1 --size 1280x720,scale=1.5
-  parity "up --no-seed fonts,extensions" up "$U" --no-shell --net isolated --no-seed fonts,extensions
-  # A save whose HOME has a link where --clean writes its wallpaper (finding 461): bash wrote the PNG
-  # through it, onto the host file it leads to; the Rust half writes it in the box HOME.
+  cx_rt=$XDG_RUNTIME_DIR cx_dir=$r/norepo cx_env=("HOME=$h") cx_snap=0 cx_prep=rpu_down cx_also=rpu_state
+  cx_sed='s/\b[0-9]+(\.[0-9]+)? ?(s|ms)\b/T/g; s/"created":"[^"]*"/"created":T/'
+  # (each up's line on stderr, said after the bar's seeding, when the desk has a bar to seed)
+  local qr; qr=$(printf '%s' "$XDG_RUNTIME_DIR/omabox/$U" | sed -E 's/[][\\.*^$()+?{}|]/\\&/g')
+  rpu_said() { echo "err~^omabox: box '$U' up \\($1\\) in $qr\$"; }
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "net": "isolated",$' 'state~^  "shell": false,$' 'state~^  "size": "1920x1080@60",$')
+  cx_case "up: headless, no shell, isolated" up "$U" --no-shell --net isolated
+  cx_want=(rc=0 "out~^\\{\"name\":\"$U\",\"mode\":\"headless\",\"size\":\"1920x1080@60\",\"scale\":1,\"created\":T,.*\"net\":\"isolated\"" "$(rpu_said 1920x1080@60)" 'state~^  "shell": true,$')
+  cx_case "up --json: with its shell" up "$U" --net isolated --json
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "net": "connected",$')
+  cx_case "up: connected" up "$U" --no-shell
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" "err~^omabox: clean: Omarchy's bar, theme tokyo-night, wallpaper #ff00ff .*, no network, animations off$" 'state~^  "bar": "stock",$' 'state~^  "clean": \{$' 'state~^  "net": "isolated",$')
+  cx_case "up --clean" up "$U" --clean
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "bar": "stock",$' 'state~^  "xwayland": true$' 'state~^\./pointer f$')
+  cx_case "up --stock-bar --no-pointer --xwayland" up "$U" --stock-bar --no-pointer --xwayland --net isolated
+  cx_want=(rc=0 out= "$(rpu_said '1920x1080@60 \+ 800x600@60 \+ 1024x768@60')" 'state~^      "name": "HEADLESS-3",$' 'state~^      "name": "HEADLESS-4",$' 'state~^    "1024x768,below"$')
+  cx_case "up --monitor: two more, placed" up "$U" --no-shell --net isolated --monitor 800x600 --monitor 1024x768,below
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^\.config/rp d $' "state~^\\.config/omarchy/themes/rp-theme l $r/td/rp-theme\$")
+  cx_case "up --seed and --theme-dir" up "$U" --no-shell --net isolated --seed "$r/seed.txt:.config/rp/seed.txt" --theme-dir "$r/td/rp-theme"
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "allow": "18080,18081",$' 'state~^    "192\.0\.2\.7",?$' 'state~^    "2001:db8::7",?$' 'state~ -T 18080\\,18081 ')
+  cx_case "up --addr and --allow" up "$U" --no-shell --net isolated --addr 192.0.2.7 --addr 2001:db8::7 --allow 18081,18080
+  cx_want=(rc=0 out= "err~^omabox: note: box '$U' has no idle limit and goes with no agent: nothing takes it down but omabox down $U; " 'state~^  "idle": 0,$')
+  cx_case "up --idle 0: an orphan to be, said" up "$U" --no-shell --net isolated --idle 0
+  # (its size's scale rounded to whole pixels, as Hyprland takes it: finding 510)
+  cx_want=(rc=0 out= "$(rpu_said '1280x720@60,scale=1\.6')" 'state~^  "scale": 1\.5,$' 'state~^  "size": "1280x720@60",$' 'state~ --setenv RPV 1 ')
+  cx_case "up --env and --size with a scale" up "$U" --no-shell --net isolated --env RPV=1 --size 1280x720,scale=1.5
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "no_seed": \[$')
+  cx_case "up --no-seed fonts,extensions" up "$U" --no-shell --net isolated --no-seed fonts,extensions
+  # A save whose HOME has a link where --clean writes its wallpaper (finding 461): the PNG is written
+  # in the box HOME, never through the link onto the host file it leads to.
   mkdir -p "$r/data/omabox/saves/rp-save/home/.config/omabox"; ln -s "$r/victim" "$r/data/omabox/saves/rp-save/home/.config/omabox/clean-wallpaper.png"
   rpu_victim() { rpu_state; echo "== victim"; head -c 4 "$r/victim" | od -An -c | tr -s ' '; echo victim > "$r/victim"; }
   echo victim > "$r/victim"
-  rp_env=("HOME=$h" "XDG_DATA_HOME=$r/data") rp_also=rpu_victim rp_why=461 rp_bash=('state~^ 211 P N G$') rp_rust=('state~^ v i c t$')
-  parity "up --from a save with a link at the clean wallpaper's place" up "$U" --no-shell --clean --from rp-save
-  rp_env=("HOME=$h") rp_also=rpu_state
-  # A desk with no shell.json: bash's own redirection error said, the Rust half's empty bar unsaid
-  # (finding 462).
+  cx_env=("HOME=$h" "XDG_DATA_HOME=$r/data") cx_also=rpu_victim
+  cx_want=(rc=0 "$(rpu_said 1920x1080@60)" 'state~^ v i c t$')
+  cx_case "up --from a save with a link at the clean wallpaper's place (finding 461)" up "$U" --no-shell --clean --from rp-save
+  cx_env=("HOME=$h") cx_also=rpu_state
+  # A desk with no shell.json: an empty bar, nothing said of a file not there (finding 462).
   mkdir -p "$r/desk-empty"
-  rp_env=("HOME=$h" "OMABOX_DESK_CONFIG=$r/desk-empty") rp_why=462 rp_bash=('err~shell\.json: No such file or directory$') rp_rust=('err!~No such file or directory')
-  parity "up with a desk that has no shell.json" up "$U" --no-shell --net isolated; rp_env=("HOME=$h")
-  # protect-ports set (finding 459): the Rust half starts a connected box with the port left out of
-  # pasta's host rules; bash's half, which cannot hold it, refuses to start one.
+  cx_env=("HOME=$h" "OMABOX_DESK_CONFIG=$r/desk-empty")
+  cx_want=(rc=0 "$(rpu_said 1920x1080@60)" 'err!~No such file or directory')
+  cx_case "up with a desk that has no shell.json (finding 462)" up "$U" --no-shell --net isolated; cx_env=("HOME=$h")
+  # protect-ports set (finding 459): a connected box starts with the port left out of pasta's host rules.
   local pp; pp=$(free_port); echo "protect-ports=$pp" > "$h/.config/omabox/config"
-  rp_why=459 rp_bash=(rc=1 'err~^omabox: up: protect-ports is set in ' 'err~.' 'state~.') rp_rust=(rc=0 "state~ -T \\\\~$pp\\\\,auto " 'err~.' 'state~.')
-  parity "up of a connected box with protect-ports set" up "$U" --no-shell
+  cx_want=(rc=0 "$(rpu_said 1920x1080@60)" "state~ -T \\\\~$pp\\\\,auto ")
+  cx_case "up of a connected box with protect-ports set (finding 459)" up "$U" --no-shell
   : > "$h/.config/omabox/config"
-  # Up already: said (the box is the bash half's of the case before, kept), or refused for what it lacks.
-  rp_prep=""
-  parity "up of the box up already" up "$U"
-  parity "up --json of the box up already" up "$U" --json
-  parity "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected --stock-bar
-  # Wave 5b on the box up: ls (its own line or entry; other boxes come and go), save and saves (in a
-  # data dir of the test's own; sizes evened out: its HOME moves), then down, a box up for each side.
-  # (rp_check: each side's stdout, its entry of the box alone)
+  # Up already: said, or refused for what it lacks.
+  cx_prep=""
+  cx_want=(rc=0 out= "err=omabox: box '$U' is already up")
+  cx_case "up of the box up already" up "$U"
+  cx_want=(rc=0 "out~^\\{\"name\":\"$U\",\"mode\":\"headless\",.*\"net\":\"connected\"" "err=omabox: box '$U' is already up")
+  cx_case "up --json of the box up already" up "$U" --json
+  cx_want=(rc=1 out= "err=omabox: box '$U' is already up, without what you asked for: --size 800x600@60 (it is 1920x1080@60); --stock-bar (it has your bar). omabox down $U first, or omabox up --new for a box of your own")
+  cx_case "up of the box up already, without what is asked" up "$U" --size 800x600 --net connected --stock-bar
+  # On the box up: ls (its own line or entry; other boxes come and go), save and saves (in a data dir
+  # of the test's own; sizes evened out: its HOME moves), then down.
+  # (cx_check: its stdout, its entry of the box alone)
   rpu_json() { jq -c --arg n "$U" '[.[] | select(.name == $n)]' "$2" > "$2.t" && mv "$2.t" "$2"; }
-  rp_also="" rp_check="" rp_sed="/^$U /!d; s/ [0-9]+m\/2h / Nm\/2h /"
-  parity "ls: the box up" ls
-  rp_sed="" rp_check=rpu_json
-  parity "ls --json: the box up" ls --json
-  rp_check="" rp_env=("XDG_DATA_HOME=$r/data5b")
+  cx_also="" cx_check="" cx_sed="/^$U /!d; s/ [0-9]+m\/2h / Nm\/2h /"
+  cx_want=(rc=0 "out~^$U +headless +1920x1080@60 +up +- +connected +Nm/2h *\$" err=)
+  cx_case "ls: the box up" ls
+  cx_sed="" cx_check=rpu_json
+  cx_want=(rc=0 "out~^\\[\\{\"name\":\"$U\",\"mode\":\"headless\",\"size\":\"1920x1080@60\",.*\"net\":\"connected\"" err=)
+  cx_case "ls --json: the box up" ls --json
+  cx_check="" cx_env=("XDG_DATA_HOME=$r/data5b")
   rpu_nosave() { rm -rf "$r/data5b"; }
-  rp_prep=rpu_nosave rp_sed='s/\(([0-9.,]+[KMG]?)(, keyring secrets included)?\)/(SIZE\2)/; s/ is [0-9.,]+[KMG]?: / is SIZE: /'
-  parity "save of the box up" save rp5b-save -b "$U"
-  rp_prep="" rp_sed='s/^(rp5b-save +)[0-9.,]+[KMG]? /\1SIZE /; s/"size":"[^"]*","size_kb":[0-9]+/"size":S,"size_kb":K/'
-  parity "saves: that save" saves
-  parity "saves --json" saves --json
-  rp_sed=""; rpu_resave() { rpu_nosave; ob save rp5b-save -b "$U" >/dev/null 2>&1; }
-  rp_prep=rpu_resave; parity "saves rm" saves rm rp5b-save
-  # Wave 5c on the box up: brief names it, reload gives its Hyprland the config again (unchanged: not
-  # written), both ways. restart-shell on a box with its shell, below.
-  rp_env=("HOME=$h") rp_prep="" rp_sed="" rp_check="" rp_also=""
-  parity "brief -b: the box up, no windows" brief -b "$U"
-  parity "reload: the box up" reload -b "$U"
-  parity "reload by its name" reload "$U"
-  parity "restart-shell -b with a name too" restart-shell -b "$U" x
-  rp_env=() rp_prep=""
+  cx_prep=rpu_nosave cx_sed='s/\(([0-9.,]+[KMG]?)(, keyring secrets included)?\)/(SIZE\2)/; s/ is [0-9.,]+[KMG]?: / is SIZE: /'
+  cx_want=(rc=0 out= "err=omabox: saved box '$U' as 'rp5b-save' (SIZE); start from it: omabox up --from rp5b-save (or run --from rp5b-save)")
+  cx_case "save of the box up" save rp5b-save -b "$U"
+  cx_prep="" cx_sed='s/^(rp5b-save +)[0-9.,]+[KMG]? /\1SIZE /; s/"size":"[^"]*","size_kb":[0-9]+/"size":S,"size_kb":K/; s/"saved":"[^"]*"/"saved":T/'
+  cx_want=(rc=0 'out~^NAME +SIZE +SAVED +FROM +KEYRING$' "out~^rp5b-save +SIZE +[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} +$U +no\$" err=)
+  cx_case "saves: that save" saves
+  cx_want=(rc=0 "out=[{\"name\":\"rp5b-save\",\"box\":\"$U\",\"saved\":T,\"size\":S,\"size_kb\":K,\"keyring\":false}]" err=)
+  cx_case "saves --json" saves --json
+  cx_sed=""; rpu_resave() { rpu_nosave; XDG_DATA_HOME=$r/data5b ob save rp5b-save -b "$U" >/dev/null 2>&1; }
+  cx_prep=rpu_resave cx_snap=0
+  rpu_saves() { find "$r/data5b/omabox/saves" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null; }
+  cx_also=rpu_saves cx_want=(rc=0 out= "err=omabox: save 'rp5b-save' removed" 'state=')
+  cx_case "saves rm" saves rm rp5b-save
+  cx_also=""
+  # brief names the box, reload gives its Hyprland the config again; restart-shell on a box with its
+  # shell, below.
+  cx_env=("HOME=$h") cx_prep="" cx_sed="" cx_check=""
+  cx_want=(rc=0 "out~^You drive omabox box '$U' \\(1920x1080, scale 1\\): a private Omarchy desktop, not the user's\\. " "out~^  none yet \\(omabox -b $U run -d --wait -- APP opens one\\)\$" err=)
+  cx_case "brief -b: the box up, no windows" brief -b "$U"
+  local reloaded="err~^omabox: box '$U': config reloaded from .*/share/hyprland\\.lua \\(binds, rules and Lua state added since are gone\\)\$"
+  cx_want=(rc=0 out= "$reloaded"); cx_case "reload: the box up" reload -b "$U"
+  cx_want=(rc=0 out= "$reloaded"); cx_case "reload by its name" reload "$U"
+  cx_want=(rc=2 out= "err=omabox: restart-shell: one box name, got $U and x (omabox help restart-shell)")
+  cx_case "restart-shell -b with a name too" restart-shell -b "$U" x
+  cx_env=() cx_prep=""
   rpu_up() { ob up "$U" --no-shell --net isolated >/dev/null 2>&1; probe box_pid "$U" > "$r/rpu-pid1"; }
-  # (its PID 1 recorded before each side's down, in rpu_up: gone after it, or not)
+  # (its PID 1 recorded before the down, in rpu_up: gone after it)
   rpu_gone() { echo "== dir $(test -e "$XDG_RUNTIME_DIR/omabox/$U" && echo there || echo gone)"; echo "== reaper $(pgrep -fc "omabox _reap $U " || true)"
     echo "== HOME $(test -e "${XDG_CACHE_HOME:-$HOME/.cache}/omabox/$U" && echo there || echo gone)"
     echo "== PID 1 $(kill -0 "$(cat "$r/rpu-pid1" 2>/dev/null)" 2>/dev/null && echo up || echo gone)"; }
-  rp_prep=rpu_up rp_also=rpu_gone; parity "down of the box up" down "$U"
+  cx_prep=rpu_up cx_also=rpu_gone
+  cx_want=(rc=0 out= "err=omabox: box '$U' down" $'state=== dir gone\n== reaper 0\n== HOME gone\n== PID 1 gone')
+  cx_case "down of the box up" down "$U"
   rpu_down
-  # restart-shell (wave 5c) on a box with its shell: each side restarts it, then brief and reload see
-  # the box as it is after.
-  rp_prep="" rp_also="" rp_env=("HOME=$h")
+  # restart-shell on a box with its shell: it restarts it, then brief and reload see the box as it is.
+  cx_prep="" cx_also="" cx_env=("HOME=$h")
   if HOME=$h ob up "$U" --net isolated >/dev/null 2>&1; then
-    parity "restart-shell: the box's shell restarted" restart-shell -b "$U"
-    parity "brief -b: the box with its bar" brief -b "$U"
-    parity "reload: the box with its shell" reload -b "$U"
+    cx_want=(rc=0 out= "err=omabox: shell restarted in box '$U'")
+    cx_case "restart-shell: the box's shell restarted" restart-shell -b "$U"
+    cx_want=(rc=0 "out~^You drive omabox box '$U' \\(1920x1080, scale 1\\)" err=)
+    cx_case "brief -b: the box with its bar" brief -b "$U"
+    cx_want=(rc=0 out= "$reloaded"); cx_case "reload: the box with its shell" reload -b "$U"
   else
-    no "up of a box with its shell for restart-shell's parity"
+    no "up of a box with its shell for restart-shell"
   fi
   rpu_down
-  # A down of a box not up, then an up of it at once, from the binary (a few ms each): the down's
-  # .down- marker, its start in clock ticks, ties with the up's start, and that up was cancelled as
-  # one the down came during (finding 506). Never now, a few times over.
+  # A down of a box not up, then an up of it at once (a few ms each): the down's .down- marker, its
+  # start in clock ticks, ties with the up's start, and that up was cancelled as one the down came
+  # during (finding 506). Never now, a few times over.
   local i out bad=""
   for i in 1 2 3; do
     HOME=$h ob down "$U" >/dev/null 2>&1
     out=$(HOME=$h ob up "$U" --no-shell --net isolated 2>&1) || bad+="[$out] "
     HOME=$h ob down "$U" >/dev/null 2>&1
   done
-  check_eq "down then up at once, from the binary: the up not cancelled (finding 506)" "" "$bad"
-  rp_prep="" rp_also="" rp_sed="" rp_rt="" rp_snap=1 rp_dir=/ rp_check="" rp_env=()
+  check_eq "down then up at once: the up not cancelled (finding 506)" "" "$bad"
+  cx_prep="" cx_also="" cx_sed="" cx_rt="" cx_snap=0 cx_dir=/ cx_check="" cx_env=()
 }
 
-# The Rust half's parity (#324) on a real box: what t_unit_rust_parity checks on fakes, against a box
-# up (its own processes, logs and runtime dir), each call both ways.
-t_rust_parity() {
+# The CLI on a real box (#324: what parity compared with bash's omabox on a live box until the port
+# ended, wave 6b-end, each case now stated): its own processes, logs, runtime dir, windows, input,
+# shots, monitors, gdb, check and record. What a box's run gives every time is stated whole; what
+# hangs on the moment (times, addresses, pids, the desk's bar) is evened out or left to a pattern.
+t_cli_box() {
   local B=$P-rp sp="" p ns
   up_ok "$B" --net isolated || { no "up" "$UP_OUT"; return; }
   ns=$(jq -r '.pidns // empty' "$XDG_RUNTIME_DIR/omabox/$B/box.json")
   for p in $(pgrep -x quickshell); do [ "$(readlink "/proc/$p/ns/pid" 2>/dev/null)" != "$ns" ] || sp=$p; done
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_prep="" rp_snap=0
+  cx_rt=$XDG_RUNTIME_DIR cx_dir=/ cx_env=() cx_prep="" cx_snap=0
   # (the box's socket, hard-linked into its dir, which only the host writes: finding 493)
-  rp_why=493 rp_bash=("out~^export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/run/wayland-[0-9]+\$") rp_rust=("out~^export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/wayland\$")
-  parity "env of a box up" env -b "$B"
-  parity "path" path -b "$B"
-  parity "path --home" path --home "$B"
-  parity "path --run" path -b "$B" --run
-  parity "path --logs" path --logs -b "$B"
-  parity "path --logs --json" path --logs --json -b "$B"
+  cx_want=(rc=0 "out=export WAYLAND_DISPLAY=$XDG_RUNTIME_DIR/omabox/$B/wayland"$'\n''unset DISPLAY WAYLAND_SOCKET HYPRLAND_INSTANCE_SIGNATURE' err=)
+  cx_case "env of a box up" env -b "$B"
+  cx_want=(rc=0 "out=$XDG_RUNTIME_DIR/omabox/$B" err=)
+  cx_case "path" path -b "$B"
+  cx_want=(rc=0 "out=$XDG_RUNTIME_DIR/omabox/$B/home" err=)
+  cx_case "path --home" path --home "$B"
+  cx_want=(rc=0 "out=$XDG_RUNTIME_DIR/omabox/$B/run" err=)
+  cx_case "path --run" path -b "$B" --run
+  cx_want=(rc=0 "out~^hyprland  $XDG_RUNTIME_DIR/omabox/$B/run/hypr/[^/]+/hyprland\\.log\$" "out~^journal   $XDG_RUNTIME_DIR/omabox/$B/home/journal\\.log\$" err=)
+  cx_case "path --logs" path --logs -b "$B"
+  cx_want=(rc=0 "out~^\\{\"hyprland\":\"$XDG_RUNTIME_DIR/omabox/$B/run/hypr/[^/]+/hyprland\\.log\",\"shell\":\"$XDG_RUNTIME_DIR/omabox/$B/home/shell\\.log\",\"events\":\"$XDG_RUNTIME_DIR/omabox/$B/home/events\\.log\"," err=)
+  cx_case "path --logs --json" path --logs --json -b "$B"
   check_eq "which names the box by its shell (what the next two compare)" "$B" "$(ob which "${sp:-0}" 2>/dev/null)"
-  parity "which: its shell's host pid" which "${sp:-0}"
-  parity "which --json: the same" which --json "${sp:-0}"
-  parity "which: the host shell" which $$
+  cx_want=(rc=0 "out=$B" err=)
+  cx_case "which: its shell's host pid" which "${sp:-0}"
+  cx_want=(rc=0 "out={\"pid\":${sp:-0},\"box\":\"$B\",\"by\":\"pidns\"}" err=)
+  cx_case "which --json: the same" which --json "${sp:-0}"
+  cx_want=(rc=1 'out=not in a box' err=)
+  cx_case "which: the host shell" which $$
   # Wave 2: events first (a reload below is an event), then hyprctl, lua, run, log.
-  parity "events -n 3" events -b "$B" -n 3
-  parity "events --json -n 2" events -b "$B" --json -n 2
-  parity "events --grep" events -b "$B" --grep 'monitor|workspace' -n 2
-  parity "events --mark" events -b "$B" --mark rp
-  parity "events --mark --json" events -b "$B" --mark rp --json
-  parity "events --since the mark: nothing since" events -b "$B" --since rp
-  parity "events --until: none in time, 124" events -b "$B" --until 'rp-never' --timeout 300ms
-  rp_wrap=(timeout -s TERM 1); parity "events -f: ended by TERM" events -b "$B" -f
-  parity "log -f box: ended by TERM" log -b "$B" -f box; rp_wrap=()
-  parity "hyprctl version" hyprctl -b "$B" version
-  parity "hyprctl -j monitors" hyprctl -b "$B" -j monitors
-  parity "hyprctl: a bad dispatch, hyprctl's own status" hyprctl -b "$B" dispatch rp-bogus
-  parity "hyprctl getoption of none" hyprctl -b "$B" getoption rp:none
-  parity "hyprctl reload: its config errors (none)" hyprctl -b "$B" reload
-  parity "hyprctl alone: its usage, its status" hyprctl -b "$B"
-  parity "lua" lua -b "$B" 1+1
+  cx_want=(rc=0 'out~^[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} [a-z0-9]+>>' err=)
+  cx_case "events -n 3" events -b "$B" -n 3
+  cx_want=(rc=0 'out~^\{"time":[0-9]+\.[0-9]+,"event":"[a-z0-9]+","data":".*"\}$' err=)
+  cx_case "events --json -n 2" events -b "$B" --json -n 2
+  cx_want=(rc=0 'out~^[0-9:.]+ [a-z0-9]+>>.*(monitor|workspace)' 'out!~^[0-9:.]+ [a-z0-9]+>>[^mw]*$' err=)
+  cx_case "events --grep" events -b "$B" --grep 'monitor|workspace' -n 2
+  cx_want=(rc=0 'out~^[0-9]+$' "err~^omabox: events: mark 'rp' at byte [0-9]+ \\(--since rp\\)\$")
+  cx_case "events --mark" events -b "$B" --mark rp
+  cx_want=(rc=0 'out~^\{"mark":"rp","offset":[0-9]+\}$' "err~^omabox: events: mark 'rp' at byte [0-9]+ \\(--since rp\\)\$")
+  cx_case "events --mark --json" events -b "$B" --mark rp --json
+  cx_want=(rc=0 out= err=)
+  cx_case "events --since the mark: nothing since" events -b "$B" --since rp
+  cx_want=(rc=124 out= 'err=omabox: events: no event matching rp-never in 0.30s')
+  cx_case "events --until: none in time, 124" events -b "$B" --until 'rp-never' --timeout 300ms
+  cx_wrap=(timeout -s TERM 1); cx_want=(rc=124 out= err=)
+  cx_case "events -f: ended by TERM" events -b "$B" -f
+  cx_want=(rc=124 out= err=)
+  cx_case "log -f box: ended by TERM" log -b "$B" -f box; cx_wrap=()
+  cx_want=(rc=0 'out~^Hyprland [0-9.]+ built from branch ' err=)
+  cx_case "hyprctl version" hyprctl -b "$B" version
+  cx_want=(rc=0 'out~^\[\{$' 'out~^\}\]$' 'out~"name": "(WAYLAND|HEADLESS)-[0-9]+"' err=)
+  cx_case "hyprctl -j monitors" hyprctl -b "$B" -j monitors
+  cx_want=(rc=7 'out~^error: ' err=)
+  cx_case "hyprctl: a bad dispatch, hyprctl's own status" hyprctl -b "$B" dispatch rp-bogus
+  cx_want=(rc=0 'out=no such option' err=)
+  cx_case "hyprctl getoption of none" hyprctl -b "$B" getoption rp:none
+  cx_want=(rc=0 'out=ok' err=)
+  cx_case "hyprctl reload: its config errors (none)" hyprctl -b "$B" reload
+  cx_want=(rc=1 'out~^usage: hyprctl \[flags\] <command> \[args\.\.\.\|--help\]$' err=)
+  cx_case "hyprctl alone: its usage, its status" hyprctl -b "$B"
+  cx_want=(rc=0 'out=2' err=)
+  cx_case "lua" lua -b "$B" 1+1
   # (a number in standard form, where bash's jq wrote decNumber's 1E+300: finding 449)
-  rp_why=449 rp_bash=('out~^1E\+300$') rp_rust=('out~^1e\+300$')
-  parity "lua --json: its values" lua -b "$B" --json 'return "a", nil, {x = 1.5}, 960.0, 1e300'
-  parity "lua: values as text" lua -b "$B" 'return "a", nil, {1, 2}, true, "\255x"'
-  parity "lua: an error" lua -b "$B" 'error("boom")'
-  parity "lua: a source with ]] in it" lua -b "$B" 'return "]]", "]=]"'
-  parity "lua: a function returned" lua -b "$B" 'return print'
-  rp_sed='s/0x[0-9a-f]+/0xADDR/g'; parity "lua: a dispatcher returned" lua -b "$B" 'hl.dsp.window.close()'; rp_sed=""
-  echo 'return 6 * 7' > "$TMP/rp-lua"; rp_in=$TMP/rp-lua; parity "lua -: the source on stdin" lua -b "$B" -; rp_in=/dev/null
-  parity "run: its output, its status" run -b "$B" -- sh -c 'echo out; echo err >&2; exit 3'
-  parity "run: the box HOME from /, the session's marker left out (finding 424)" run -b "$B" -- sh -c 'pwd; echo "${OMABOX_OWN_SESSION:-none} $OMABOX $OMABOX_NAME"'
-  parity "run: a command not there" run -b "$B" -- rp-no-such-command
-  parity "run: killed by SIGKILL" run -b "$B" -- sh -c 'kill -KILL $$'
+  cx_want=(rc=0 $'out="a"\nnull\n{"x":1.5}\n960.0\n1e+300' err=)
+  cx_case "lua --json: its values" lua -b "$B" --json 'return "a", nil, {x = 1.5}, 960.0, 1e300'
+  cx_want=(rc=0 'out~^a$' 'out~^true$' 'out~^ÿx$' err=)
+  cx_case "lua: values as text" lua -b "$B" 'return "a", nil, {1, 2}, true, "\255x"'
+  cx_want=(rc=1 out= 'err=lua: lua:1: boom')
+  cx_case "lua: an error" lua -b "$B" 'error("boom")'
+  cx_want=(rc=0 $'out=]]\n]=]' err=)
+  cx_case "lua: a source with ]] in it" lua -b "$B" 'return "]]", "]=]"'
+  cx_want=(rc=0 'out~^function: 0x[0-9a-f]+$' 'err=omabox: lua: a function, returned and not called')
+  cx_case "lua: a function returned" lua -b "$B" 'return print'
+  cx_sed='s/0x[0-9a-f]+/0xADDR/g'; cx_want=(rc=0 'out=HL.Dispatcher' "err=omabox: lua: a dispatcher, returned and not run: omabox lua 'hl.dispatch(EXPR)' (or omabox hyprctl dispatch 'EXPR')")
+  cx_case "lua: a dispatcher returned" lua -b "$B" 'hl.dsp.window.close()'; cx_sed=""
+  echo 'return 6 * 7' > "$TMP/rp-lua"; cx_in=$TMP/rp-lua; cx_want=(rc=0 'out=42' err=)
+  cx_case "lua -: the source on stdin" lua -b "$B" -; cx_in=/dev/null
+  cx_want=(rc=3 'out=out' 'err=err')
+  cx_case "run: its output, its status" run -b "$B" -- sh -c 'echo out; echo err >&2; exit 3'
+  cx_want=(rc=0 "out=/home/sbx"$'\n'"none 1 $B" err=)
+  cx_case "run: the box HOME from /, the session's marker left out (finding 424)" run -b "$B" -- sh -c 'pwd; echo "${OMABOX_OWN_SESSION:-none} $OMABOX $OMABOX_NAME"'
+  cx_want=(rc=127 out= 'err~exec: rp-no-such-command: not found$')
+  cx_case "run: a command not there" run -b "$B" -- rp-no-such-command
+  cx_want=(rc=137 out= 'err=omabox: the command was killed by SIGKILL (137)')
+  cx_case "run: killed by SIGKILL" run -b "$B" -- sh -c 'kill -KILL $$'
   # (bash's own "Terminated" job line was counted as nsenter's, after a 2 s wait for the box: finding 440)
-  rp_why=440 rp_bash=("err=omabox: dropped 50 bytes of other output on nsenter's stderr") rp_rust=("err=omabox: the command was killed by SIGTERM (143)")
-  parity "run: by SIGTERM" run -b "$B" -- sh -c 'kill -TERM $$'
-  parity "run: by SIGSEGV" run -b "$B" -- sh -c 'kill -SEGV $$'
-  parity "run: by SIGINT" run -b "$B" -- sh -c 'kill -INT $$'
+  cx_want=(rc=143 out= 'err=omabox: the command was killed by SIGTERM (143)')
+  cx_case "run: by SIGTERM" run -b "$B" -- sh -c 'kill -TERM $$'
+  cx_want=(rc=139 out= 'err=omabox: the command was killed by SIGSEGV (139)')
+  cx_case "run: by SIGSEGV" run -b "$B" -- sh -c 'kill -SEGV $$'
+  cx_want=(rc=0 out= err=)
+  cx_case "run: by SIGINT" run -b "$B" -- sh -c 'kill -INT $$'
   printf 'A=1\nexport B="b b"\n' > "$TMP/rp-env"
-  rp_env=(RPP=p1); parity "run --env-file, --env, --pass" run -b "$B" --env-file "$TMP/rp-env" --env A=2 --pass RPP -- sh -c 'echo "$A $B $RPP"'; rp_env=()
-  rp_in=$TMP/rp-env; parity "run: stdin passed through" run -b "$B" -- cat; rp_in=/dev/null
-  rp_sed='s/run-[0-9]+\.log/run-N.log/g; s/stopped the earlier job \(0 windows\) in [0-9.]+s/stopped the earlier job (0 windows) in Ts/; s/pid [0-9]+/pid P/g'
-  parity "run -d: a job that exits at once, its status" run -b "$B" -d -- sh -c 'echo said; exit 4'
-  parity "run -d -q: a 0 at once is not said" run -b "$B" -d -q -- true
-  parity "run -d: a host path the box has not" run -b "$B" -d -- ls "$TMP"
-  parity "run -d --print-log: started" run -b "$B" -d --print-log -- sleep 610
-  rp_jobs() { ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1; obb run -b "$B" -d -q -- sleep 611 >/dev/null 2>&1; }
-  rp_prep=rp_jobs
-  parity "run -d --replace: the earlier job stopped" run -b "$B" -d --replace -- sleep 611
-  parity "run -d --replace: another job of the program named" run -b "$B" -d --replace -- sleep 612
-  parity "run -d --replace -q: none of this command" run -b "$B" -d --replace -q -- true
-  rp_prep="" rp_sed=""
+  cx_env=(RPP=p1); cx_want=(rc=0 'out=2 b b p1' err=)
+  cx_case "run --env-file, --env, --pass" run -b "$B" --env-file "$TMP/rp-env" --env A=2 --pass RPP -- sh -c 'echo "$A $B $RPP"'; cx_env=()
+  cx_in=$TMP/rp-env; cx_want=(rc=0 $'out=A=1\nexport B="b b"' err=)
+  cx_case "run: stdin passed through" run -b "$B" -- cat; cx_in=/dev/null
+  cx_sed='s/run-[0-9]+\.log/run-N.log/g; s/stopped the earlier job \(0 windows\) in [0-9.]+s/stopped the earlier job (0 windows) in Ts/; s/pid [0-9]+/pid P/g'
+  cx_want=(rc=4 out= "err~^omabox: the command exited with status 4 at once in box '$B', and left nothing running \\(log: $XDG_RUNTIME_DIR/omabox/$B/home/run-N\\.log\\)\$" "err~^omabox: its log ends \\(omabox log -b $B run\\):\$" 'err~^  said$')
+  cx_case "run -d: a job that exits at once, its status" run -b "$B" -d -- sh -c 'echo said; exit 4'
+  cx_want=(rc=0 out= err=)
+  cx_case "run -d -q: a 0 at once is not said" run -b "$B" -d -q -- true
+  cx_want=(rc=2 out= "err~^omabox: the command exited with status 2 at once in box '$B', and left nothing running " "err~^  ls: cannot access '.*': No such file or directory\$")
+  cx_case "run -d: a host path the box has not" run -b "$B" -d -- ls "$TMP"
+  cx_want=(rc=0 "out=$XDG_RUNTIME_DIR/omabox/$B/home/run-N.log" "err=omabox: started in box '$B' (log: $XDG_RUNTIME_DIR/omabox/$B/home/run-N.log)")
+  cx_case "run -d --print-log: started" run -b "$B" -d --print-log -- sleep 610
+  cx_jobs() { ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1; ob run -b "$B" -d -q -- sleep 611 >/dev/null 2>&1; }
+  cx_prep=cx_jobs
+  cx_want=(rc=0 out= 'err~^omabox: --replace: stopped the earlier job \(0 windows\) in Ts$' "err~^omabox: started in box '$B' ")
+  cx_case "run -d --replace: the earlier job stopped" run -b "$B" -d --replace -- sleep 611
+  cx_want=(rc=0 out= 'err~^omabox: --replace: no earlier job with these arguments; sleep \(pid P, 611\) still runs: stop it, or --replace with its arguments$' "err~^omabox: started in box '$B' ")
+  cx_case "run -d --replace: another job of the program named" run -b "$B" -d --replace -- sleep 612
+  cx_want=(rc=0 out= err=)
+  cx_case "run -d --replace -q: none of this command" run -b "$B" -d --replace -q -- true
+  cx_prep="" cx_sed=""
   ob run -b "$B" -- sh -c 'pkill -x sleep; true' >/dev/null 2>&1
-  parity "log box" log -b "$B" box
-  parity "log: a --grep that matches nothing" log -b "$B" shell --grep 'rp-never-said'
-  parity "log gdb: none yet" log -b "$B" gdb
-  parity "log run -n 1: the latest run -d's" log -b "$B" run -n 1
+  cx_want=(rc=0 out= err=)
+  cx_case "log box" log -b "$B" box
+  cx_want=(rc=0 out= err=)
+  cx_case "log: a --grep that matches nothing" log -b "$B" shell --grep 'rp-never-said'
+  cx_want=(rc=1 out= "err=omabox: box '$B' has no gdb log yet ($XDG_RUNTIME_DIR/omabox/$B/home/gdb.log)")
+  cx_case "log gdb: none yet" log -b "$B" gdb
+  cx_want=(rc=0 out= err=)
+  cx_case "log run -n 1: the latest run -d's" log -b "$B" run -n 1
   # Wave 3a: wait, windows, tree, pixel, run -d --wait. Times, frame counts and the events log's size
   # differ from call to call (sed); so do the pixels the screen settled on (animation frames: where
   # the last change was, what was ignored), which only the tool's timing decides.
-  rp_sed='s/\b[0-9]+\.[0-9]+s\b/Ts/g; s/"(elapsed|first_change|last_change)":[0-9.]+/"\1":T/g; s/"frames":[0-9]+/"frames":N/; s/"events_since":[0-9]+/"events_since":N/; s/run-[0-9]+\.log/run-N.log/g'
-  parity "windows: none yet" windows -b "$B"
-  parity "windows --json: none" windows -b "$B" --json
-  parity "wait layer: the bar" wait -b "$B" layer omarchy-bar
-  parity "wait layer --gone --json: none such" wait -b "$B" layer rp-none --gone --json
-  parity "wait layer: none such, 124" wait -b "$B" layer rp-none --timeout 300ms
-  parity "wait window --json: none such, 124" wait -b "$B" window rp-none --timeout 300ms --json
-  parity "wait until: a command that succeeds" wait -b "$B" until -- true
-  parity "wait until: one still failing, 124" wait -b "$B" until --timeout 400ms -- false
-  parity "wait still: a part of the background" wait -b "$B" still -g '900,300 40x40' --quiet 200ms
-  parity "wait change: nothing changed, 124" wait -b "$B" change -g '900,300 40x40' --timeout 400ms
-  parity "wait still --json, an --ignore outside the region (said)" wait -b "$B" still --json -g '900,300 40x40' --quiet 200ms --ignore '0,0 10x10'
-  parity "pixel: one point" pixel -b "$B" 920 320
-  parity "pixel --json: several" pixel -b "$B" --json 920 320 10 10
-  parity "pixel: off the screen" pixel -b "$B" 5000 1
-  parity "tree: no window" tree -b "$B"
-  parity "tree --layer: the bar" tree -b "$B" --layer omarchy-bar
-  parity "tree --layer: none such, 2" tree -b "$B" --layer rp-none
+  cx_sed='s/\b[0-9]+\.[0-9]+s\b/Ts/g; s/"(elapsed|first_change|last_change)":[0-9.]+/"\1":T/g; s/"frames":[0-9]+/"frames":N/; s/"events_since":[0-9]+/"events_since":N/; s/run-[0-9]+\.log/run-N.log/g'
+  cx_want=(rc=0 'out~^ADDRESS +PID +WORKSPACE +STATE +GEOMETRY +CLASS +TITLE$' 'out!~^0x' err=)
+  cx_case "windows: none yet" windows -b "$B"
+  cx_want=(rc=0 'out=[]' err=)
+  cx_case "windows --json: none" windows -b "$B" --json
+  cx_want=(rc=0 'out~^satisfied: layer omarchy-bar after Ts: at ' err=)
+  cx_case "wait layer: the bar" wait -b "$B" layer omarchy-bar
+  cx_want=(rc=0 'out={"result":"satisfied","condition":"layer","message":"layer rp-none gone after Ts","elapsed":T,"detail":null}' err=)
+  cx_case "wait layer --gone --json: none such" wait -b "$B" layer rp-none --gone --json
+  cx_want=(rc=124 'out=unsatisfied: no layer rp-none after Ts' err=)
+  cx_case "wait layer: none such, 124" wait -b "$B" layer rp-none --timeout 300ms
+  cx_want=(rc=124 'out={"result":"unsatisfied","condition":"window","message":"no window rp-none after Ts","elapsed":T,"detail":null}' err=)
+  cx_case "wait window --json: none such, 124" wait -b "$B" window rp-none --timeout 300ms --json
+  cx_want=(rc=0 'out=satisfied: command succeeded after Ts' err=)
+  cx_case "wait until: a command that succeeds" wait -b "$B" until -- true
+  cx_want=(rc=124 'out=unsatisfied: command still failing after Ts (exit 1)' err=)
+  cx_case "wait until: one still failing, 124" wait -b "$B" until --timeout 400ms -- false
+  cx_want=(rc=0 'out=satisfied: still after Ts (no change)' err=)
+  cx_case "wait still: a part of the background" wait -b "$B" still -g '900,300 40x40' --quiet 200ms
+  cx_want=(rc=124 'out=unsatisfied: nothing changed in Ts' err=)
+  cx_case "wait change: nothing changed, 124" wait -b "$B" change -g '900,300 40x40' --timeout 400ms
+  cx_want=(rc=0 'out~^\{"result":"satisfied","condition":"still","message":"still after Ts \(no change\)",' 'err~^omabox: wait: --ignore "0,0 10x10" is outside the region watched: it leaves nothing out')
+  cx_case "wait still --json, an --ignore outside the region (said)" wait -b "$B" still --json -g '900,300 40x40' --quiet 200ms --ignore '0,0 10x10'
+  cx_want=(rc=0 'out~^#[0-9a-f]{6}$' err=)
+  cx_case "pixel: one point" pixel -b "$B" 920 320
+  cx_want=(rc=0 'out~^\{"x":920,"y":320,"hex":"#[0-9a-f]{6}","r":[0-9]+,"g":[0-9]+,"b":[0-9]+\}$' 'out~^\{"x":10,"y":10,"hex":"#[0-9a-f]{6}",' err=)
+  cx_case "pixel --json: several" pixel -b "$B" --json 920 320 10 10
+  cx_want=(rc=1 out= 'err~^omabox: pixel: 5000,1 is outside the screen \([0-9]+x[0-9]+\)$')
+  cx_case "pixel: off the screen" pixel -b "$B" 5000 1
+  cx_want=(rc=2 out= "err=omabox: tree: the box has no window; the shell's bar, panels and menus are layers: tree --layer NAMESPACE (omabox hyprctl layers)")
+  cx_case "tree: no window" tree -b "$B"
+  cx_want=(rc=1 out= 'err~^omabox: tree: layer "omarchy-bar" \(pid [0-9]+, [0-9]+x[0-9]+ at [0-9]+,[0-9]+\): the layer publishes no accessible items')
+  cx_case "tree --layer: the bar" tree -b "$B" --layer omarchy-bar
+  cx_want=(rc=2 out= "err~^omabox: no layer matches rp-none \\(a namespace, address:0x\\.\\.\\. or pid:PID\\); the box's layers:\$" 'err~"omarchy-bar"')
+  cx_case "tree --layer: none such, 2" tree -b "$B" --layer rp-none
   # Windows of its own, the same for both sides: two of one class.
   ob run -b "$B" -d -q -- foot -a rp-a -T 'rp "one"' sleep 600 >/dev/null 2>&1
   ob run -b "$B" -d -q -- foot -a rp-a -T 'rp two' sleep 600 >/dev/null 2>&1
   ob wait -b "$B" window rp-a title:two >/dev/null 2>&1; ob wait -b "$B" window 'title:"one' >/dev/null 2>&1
   ob wait -b "$B" still --quiet 500ms >/dev/null 2>&1
-  parity "windows: two of a class and the layers over them" windows -b "$B"
-  parity "windows --json" windows -b "$B" --json
-  parity "wait window: two match, both named" wait -b "$B" window rp-a
-  parity "wait window --focused --json: one of two" wait -b "$B" window rp-a --focused --json
-  parity "wait window --gone: still there, 124" wait -b "$B" window rp-a --gone --timeout 300ms
-  parity "wait window: a bad selector, 2" wait -b "$B" window 'class:('
-  parity "wait still --window: two match, 2" wait -b "$B" still --window rp-a
-  parity "wait still --window: --ignore in its own coordinates, one outside it" wait -b "$B" still --window 'title:"one' --quiet 200ms --ignore '0,0 10x10' --ignore '5000,0 10x10'
-  parity "tree --window: a terminal has none" tree -b "$B" --window 'title:"one'
-  parity "tree: two match, 2" tree -b "$B" --window rp-a
-  parity "pixel --window" pixel -b "$B" --window 'title:"one' 5 5 20 20
-  parity "pixel --window: outside it" pixel -b "$B" --window 'title:"one' 5000 5
-  obb shot -b "$B" -o "$TMP/rp-s.png" >/dev/null 2>&1
-  obb shot -b "$B" --window 'title:"one' -o "$TMP/rp-w.png" >/dev/null 2>&1
-  parity "pixel --in: a shot's pixel" pixel -b "$B" --in "$TMP/rp-s.png" 920 320
-  parity "pixel --in: a window shot's" pixel -b "$B" --in "$TMP/rp-w.png" 5 5
-  parity "pixel --in: outside the image" pixel -b "$B" --in "$TMP/rp-s.png" 99999 1
-  # run -d --wait: each side's window closed before the other's opens (the same layout). Its own
+  cx_want=(rc=0 'out~^ADDRESS +PID +WORKSPACE +STATE +GEOMETRY +CLASS +TITLE$' 'out~^0x[0-9a-f]+ .* rp-a +"rp \\"one\\""$' 'out~^0x[0-9a-f]+ .* rp-a +"rp two"$' err=)
+  cx_case "windows: two of a class and the layers over them" windows -b "$B"
+  cx_want=(rc=0 'out~^\[\{"address":"0x[0-9a-f]+",.*"class":"rp-a","title":"rp \\"one\\"",.*\{"address":"0x[0-9a-f]+",.*"class":"rp-a","title":"rp two"' err=)
+  cx_case "windows --json" windows -b "$B" --json
+  cx_want=(rc=0 'out~^satisfied: window rp-a after Ts: 2 windows: 0x[0-9a-f]+ rp-a "rp \\"one\\"" at [0-9]+,[0-9]+ [0-9]+x[0-9]+; 0x[0-9a-f]+ rp-a "rp two" at [0-9]+,[0-9]+ [0-9]+x[0-9]+, focused$' err=)
+  cx_case "wait window: two match, both named" wait -b "$B" window rp-a
+  cx_want=(rc=0 'out~^\{"result":"satisfied","condition":"window","message":"window rp-a focused after Ts: 0x[0-9a-f]+ rp-a \\"rp two\\" at [0-9]+,[0-9]+ [0-9]+x[0-9]+, focused \(1 of 2 matching\)",' err=)
+  cx_case "wait window --focused --json: one of two" wait -b "$B" window rp-a --focused --json
+  cx_want=(rc=124 'out=unsatisfied: window rp-a still there after Ts (2 matching)' err=)
+  cx_case "wait window --gone: still there, 124" wait -b "$B" window rp-a --gone --timeout 300ms
+  cx_want=(rc=2 out= 'err~^omabox: bad window selector \(class:\(\): ')
+  cx_case "wait window: a bad selector, 2" wait -b "$B" window 'class:('
+  cx_want=(rc=2 out= 'err~^omabox: rp-a matches 2 windows: name one by its address \(or add a selector\):$' 'err~^  0x[0-9a-f]+  rp-a  "rp two"  workspace [0-9]+$')
+  cx_case "wait still --window: two match, 2" wait -b "$B" still --window rp-a
+  cx_want=(rc=0 'out=satisfied: still after Ts (no change)' 'err~^omabox: wait: --ignore "5000,0 10x10" is outside window 0x[0-9a-f]+ rp-a "rp \\"one\\"" \([0-9]+x[0-9]+, in its own coordinates\): it leaves nothing out$')
+  cx_case "wait still --window: --ignore in its own coordinates, one outside it" wait -b "$B" still --window 'title:"one' --quiet 200ms --ignore '0,0 10x10' --ignore '5000,0 10x10'
+  cx_want=(rc=1 out= 'err~^omabox: tree: 0x[0-9a-f]+ rp-a "rp \\"one\\"": no accessibility tree: pid [0-9]+ is not on the box.s accessibility bus')
+  cx_case "tree --window: a terminal has none" tree -b "$B" --window 'title:"one'
+  cx_want=(rc=2 out= 'err~^omabox: rp-a matches 2 windows: name one by its address \(or add a selector\):$')
+  cx_case "tree: two match, 2" tree -b "$B" --window rp-a
+  cx_want=(rc=0 'out~^5,5 #[0-9a-f]{6}$' 'out~^20,20 #[0-9a-f]{6}$' err=)
+  cx_case "pixel --window" pixel -b "$B" --window 'title:"one' 5 5 20 20
+  cx_want=(rc=1 out= 'err~^omabox: pixel: 5000,5 is outside the window \(0x[0-9a-f]+ rp-a "rp \\"one\\""\) \([0-9]+x[0-9]+\)$')
+  cx_case "pixel --window: outside it" pixel -b "$B" --window 'title:"one' 5000 5
+  ob shot -b "$B" -o "$TMP/rp-s.png" >/dev/null 2>&1
+  ob shot -b "$B" --window 'title:"one' -o "$TMP/rp-w.png" >/dev/null 2>&1
+  cx_want=(rc=0 'out~^#[0-9a-f]{6}$' err=)
+  cx_case "pixel --in: a shot's pixel" pixel -b "$B" --in "$TMP/rp-s.png" 920 320
+  cx_want=(rc=0 'out~^#[0-9a-f]{6}$' err=)
+  cx_case "pixel --in: a window shot's" pixel -b "$B" --in "$TMP/rp-w.png" 5 5
+  cx_want=(rc=1 out= 'err~^omabox: --in: 99999,1 is outside the image \([0-9]+x[0-9]+\)$')
+  cx_case "pixel --in: outside the image" pixel -b "$B" --in "$TMP/rp-s.png" 99999 1
+  # run -d --wait: each case's window closed before the next opens (the same layout). Its own
   # addresses and pids differ, and the screen's settling is the tool's timing (above).
-  rp_sed+='; s/\b0x[0-9a-f]+/0xA/g; s/pid [0-9]+/pid P/g; s/at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/at G/g; s/[0-9]+x[0-9]+ at -?[0-9]+,-?[0-9]+/G/g'
-  rp_sed+='; s/"(change|late_changes|ignored)":\{[^}]*\}/"\1":OBJ/g'
-  rp_sed+='; s/-?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/G/g'
+  cx_sed+='; s/\b0x[0-9a-f]+/0xA/g; s/pid [0-9]+/pid P/g; s/at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/at G/g; s/[0-9]+x[0-9]+ at -?[0-9]+,-?[0-9]+/G/g'
+  cx_sed+='; s/"(change|late_changes|ignored)":\{[^}]*\}/"\1":OBJ/g'
+  cx_sed+='; s/-?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/G/g'
   # A small part that never stops changing (a counter): 124, its place named for an --ignore, in the
   # screen's coordinates (-g) and in the window's (--window).
   ob run -b "$B" -d -q -- foot -a rp-tick -T tick sh -c 'while :; do printf "\r%s" "$(date +%N)"; sleep 0.03; done' >/dev/null 2>&1
@@ -13912,47 +14073,54 @@ t_rust_parity() {
   # Each side's own words, before the sed evens the rectangles out: the part named for an --ignore is
   # inside the region watched, and in the window's coordinates it is that place less the window's.
   local tx ty tw th; IFS=', x' read -r tx ty tw th <<<"$tg"
-  rp_rect() { sed -E 's/^(-?[0-9]+),(-?[0-9]+) ([0-9]+)x([0-9]+)$/\1 \2 \3 \4/' <<<"$1"; }
-  rp_late_screen() {
+  cx_rect() { sed -E 's/^(-?[0-9]+),(-?[0-9]+) ([0-9]+)x([0-9]+)$/\1 \2 \3 \4/' <<<"$1"; }
+  cx_late_screen() {
     local m x y w h; m=$(grep -oE 'changed only at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+: --ignore "[^"]*"' "$2") ||
       { no "$1: a part named for an --ignore" "$(cat "$2")"; return; }
-    read -r x y w h <<<"$(rp_rect "$(sed -E 's/^changed only at ([^:]*):.*/\1/' <<<"$m")")"
+    read -r x y w h <<<"$(cx_rect "$(sed -E 's/^changed only at ([^:]*):.*/\1/' <<<"$m")")"
     check_eq "$1: the --ignore is that part" "$x,$y ${w}x$h" "$(sed -E 's/.*--ignore "(.*)"$/\1/' <<<"$m")"
     check "$1: inside the region watched ($tg)" test "$x" -ge "$tx" -a "$y" -ge "$ty" -a $((x + w)) -le $((tx + tw)) -a $((y + h)) -le $((ty + th))
   }
-  rp_late_window() {
+  cx_late_window() {
     local m x y w h ox oy ow oh; m=$(grep -oE 'changed only at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+ \(the window.s -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+\): --ignore \\"[^\\]*' "$2") ||
       { no "$1: a part named for an --ignore" "$(cat "$2")"; return; }
-    read -r x y w h <<<"$(rp_rect "$(sed -E 's/^changed only at ([^ ]+ [^ ]+) .*/\1/' <<<"$m")")"
-    read -r ox oy ow oh <<<"$(rp_rect "$(sed -E 's/.*the window.s ([^)]*)\).*/\1/' <<<"$m")")"
+    read -r x y w h <<<"$(cx_rect "$(sed -E 's/^changed only at ([^ ]+ [^ ]+) .*/\1/' <<<"$m")")"
+    read -r ox oy ow oh <<<"$(cx_rect "$(sed -E 's/.*the window.s ([^)]*)\).*/\1/' <<<"$m")")"
     check_eq "$1: the window's own place of it" "$((x - tx)) $((y - ty)) $w $h" "$ox $oy $ow $oh"
     check_eq "$1: the --ignore is that" "$ox,$oy ${ow}x$oh" "$(sed -E 's/.*--ignore \\"//' <<<"$m")"
     check_eq "$1: late_changes is the screen's place" "$x $y $w $h" "$(jq -r '.late_changes | "\(.x) \(.y) \(.w) \(.h)"' "$2")"
   }
-  rp_check=rp_late_screen; parity "wait still: one part never still, 124, its place named for an --ignore" wait -b "$B" still -g "$tg" --timeout 1500ms
-  rp_check=rp_late_window; parity "...with --window: in the window's own coordinates (--json)" wait -b "$B" still --window rp-tick --timeout 1500ms --json
-  rp_check=""
+  cx_check=cx_late_screen; cx_want=(rc=124 'out=unsatisfied: still changing after Ts (last change Ts at G); from Ts on it changed only at G: --ignore "G" if that is an animation' err=)
+  cx_case "wait still: one part never still, 124, its place named for an --ignore" wait -b "$B" still -g "$tg" --timeout 1500ms
+  cx_check=cx_late_window; cx_want=(rc=124 'out~^\{"result":"unsatisfied","condition":"still","message":"still changing after Ts \(last change Ts at G\); from Ts on it changed only at G \(the window.s G\): --ignore \\"G\\" if that is an animation",' err=)
+  cx_case "...with --window: in the window's own coordinates (--json)" wait -b "$B" still --window rp-tick --timeout 1500ms --json
+  cx_check=""
   ob run -b "$B" -- sh -c 'pkill -f rp-tick; true' >/dev/null 2>&1
   # (then the screen still: the window's close drawn, not left to the case. pkill's sh, which its -f
   # also kills, cost 2 s more before finding 440, which covered that)
-  rp_w3_kill() { ob run -b "$B" -- sh -c 'pkill -f rp-w3; true' >/dev/null 2>&1; ob wait -b "$B" window rp-w3 --gone >/dev/null 2>&1; ob wait -b "$B" still --timeout 5s >/dev/null 2>&1; }
-  # What each side's run -d left in the box dir: its job records, the ends it noted, run's marks (their
+  cx_w3_kill() { ob run -b "$B" -- sh -c 'pkill -f rp-w3; true' >/dev/null 2>&1; ob wait -b "$B" window rp-w3 --gone >/dev/null 2>&1; ob wait -b "$B" still --timeout 5s >/dev/null 2>&1; }
+  # What each case's run -d left in the box dir: its job records, the ends it noted, run's marks (their
   # pids, times and log names aside).
-  local jd=$XDG_RUNTIME_DIR/omabox/$B rp_noted=0
-  rp_w3_prep() { rp_w3_kill; touch "$TMP/rp-mark"; rp_noted=$(cat "$jd/jobs-noted" 2>/dev/null | wc -l); }
-  rp_w3_also() {
+  local jd=$XDG_RUNTIME_DIR/omabox/$B cx_noted=0
+  cx_w3_prep() { cx_w3_kill; touch "$TMP/rp-mark"; cx_noted=$(cat "$jd/jobs-noted" 2>/dev/null | wc -l); }
+  cx_w3_also() {
     local j; for j in "$jd"/jobs/*; do
       [ "$j" -nt "$TMP/rp-mark" ] && jq -c '.pid = "P" | .start = "S" | .log |= sub("run-[0-9]+"; "run-N")' "$j"
     done
-    tail -n +$((rp_noted + 1)) "$jd/jobs-noted" 2>/dev/null | sed -E 's/run-[0-9]+/run-N/'
+    tail -n +$((cx_noted + 1)) "$jd/jobs-noted" 2>/dev/null | sed -E 's/run-[0-9]+/run-N/'
     find "$jd/runs" -newer "$TMP/rp-mark" -printf '%f\n' 2>/dev/null | sed -E 's/^(o|c)\.[0-9]+\.[0-9]+/\1.MARK/' | sort
   }
-  rp_prep=rp_w3_prep rp_also=rp_w3_also
-  parity "run -d --wait: its window opened, the screen settled" run -b "$B" -d --wait -- foot -a rp-w3 -T w3 sleep 600
-  parity "run -d --wait --json: what changed, its target" run -b "$B" -d --wait --json -- foot -a rp-w3 -T w3 sleep 600
-  parity "run -d --wait: a command that exits 3, its end said (124)" run -b "$B" -d --wait --timeout 1s -- sh -c 'exit 3'
-  parity "run -d --wait: one that exits 0 and changes nothing (124)" run -b "$B" -d --wait --timeout 1s -- true
-  parity "run -d --wait --strict --start 3s -g, an --ignore inside it" run -b "$B" -d --wait --strict --start 3s -g '0,0 1920x1080' --ignore '0,0 10x10' -- foot -a rp-w3 -T w3 sleep 600
+  cx_prep=cx_w3_prep cx_also=cx_w3_also
+  cx_want=(rc=0 'out~^satisfied: settled after Ts \(last change Ts at G.*\); window opened, focused: rp-w3 "w3"$' "err~^omabox: started in box '$B' " 'state~"exe":"foot","argv":\["foot","-a","rp-w3","-T","w3","sleep","600"\]')
+  cx_case "run -d --wait: its window opened, the screen settled" run -b "$B" -d --wait -- foot -a rp-w3 -T w3 sleep 600
+  cx_want=(rc=0 'out~^\{"result":"satisfied","condition":"settle","message":"settled after Ts \(last change Ts at G.*\); window opened, focused: rp-w3 \\"w3\\"",' "err~^omabox: started in box '$B' " 'state~"exe":"foot"')
+  cx_case "run -d --wait --json: what changed, its target" run -b "$B" -d --wait --json -- foot -a rp-w3 -T w3 sleep 600
+  cx_want=(rc=3 'out=unsatisfied: nothing changed in Ts; no window from pid P yet; no window, layer or focus changed' 'err~^omabox: the command exited with status 3 before the screen settled, and left nothing running' 'state~^omabox\.run-N\.exit$')
+  cx_case "run -d --wait: a command that exits 3, its end said (124)" run -b "$B" -d --wait --timeout 1s -- sh -c 'exit 3'
+  cx_want=(rc=124 'out=unsatisfied: nothing changed in Ts; no window from pid P yet; no window, layer or focus changed' 'err~^omabox: the command exited with status 0 before the screen settled, and left nothing running' 'state~^omabox\.run-N\.exit$')
+  cx_case "run -d --wait: one that exits 0 and changes nothing (124)" run -b "$B" -d --wait --timeout 1s -- true
+  cx_want=(rc=0 'out~^satisfied: settled after Ts \(last change Ts at G\); window opened, focused: rp-w3 "w3"$' "err~^omabox: started in box '$B' " 'state~"exe":"foot"')
+  cx_case "run -d --wait --strict --start 3s -g, an --ignore inside it" run -b "$B" -d --wait --strict --start 3s -g '0,0 1920x1080' --ignore '0,0 10x10' -- foot -a rp-w3 -T w3 sleep 600
   # Wave 3b: keys, click, scroll, pointer, drag, shot, calibrate on the real box, into a terminal of
   # its own that echoes what it gets. Each side's input lands on the same desktop: what both say is
   # compared (times, and the rectangles of the screen's settling, as above), the shots' records with
@@ -13960,112 +14128,155 @@ t_rust_parity() {
   ob run -b "$B" -d -q -- foot -a rp-k -T rpk cat >/dev/null 2>&1
   ob wait -b "$B" window rp-k >/dev/null 2>&1; ob wait -b "$B" still --quiet 500ms >/dev/null 2>&1
   local o3=$TMP/rp-out3 bd=$XDG_RUNTIME_DIR/omabox/$B
-  local rp_shots0=0
-  rp_live3_prep() { rm -rf "${o3:?}"; mkdir -p "$o3"; rp_shots0=$(cat "$bd/shots.tsv" 2>/dev/null | wc -l); }
-  # (what each side's shots added to the box's record)
-  rp_live3_also() {
-    [ ! -f "$bd/shots.tsv" ] || tail -n +$((rp_shots0 + 1)) "$bd/shots.tsv" | sed -E 's/\t[0-9]+ [0-9]+\.[0-9]{9}\t/\tSTAMP\t/'
+  local cx_shots0=0
+  cx_live3_prep() { rm -rf "${o3:?}"; mkdir -p "$o3"; cx_shots0=$(cat "$bd/shots.tsv" 2>/dev/null | wc -l); }
+  # (what each case's shots added to the box's record)
+  cx_live3_also() {
+    [ ! -f "$bd/shots.tsv" ] || tail -n +$((cx_shots0 + 1)) "$bd/shots.tsv" | sed -E 's/\t[0-9]+ [0-9]+\.[0-9]{9}\t/\tSTAMP\t/'
     [ ! -f "$bd/pointer" ] || sed -E 's/(hold shot) [0-9]+/\1 PID/' "$bd/pointer"
     (cd "$o3" && command find . -printf '%p %y\n' | LC_ALL=C sort)
     local f; for f in "$o3"/*.png "$o3"/*/*.png; do [ -f "$f" ] && echo "${f#"$o3"/} $(magick identify -format '%w %h' "$f")"; done
     return 0
   }
-  rp_prep=rp_live3_prep rp_also=rp_live3_also rp_env=(RPSEC=rp-secret)
-  rp_sed='s/\b[0-9]+\.[0-9]+s\b/Ts/g; s/"(elapsed|first_change|last_change)":[0-9.]+/"\1":T/g; s/"frames":[0-9]+/"frames":N/; s/"events_since":[0-9]+/"events_since":N/'
-  rp_sed+='; s/\b0x[0-9a-f]+/0xA/g; s/pid [0-9]+/pid P/g; s/at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/at G/g; s/[0-9]+x[0-9]+ at -?[0-9]+,-?[0-9]+/G/g'
-  rp_sed+='; s/"(change|late_changes|ignored)":\{[^}]*\}/"\1":OBJ/g; s/-?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/G/g'
-  parity "keys -t into the active window" keys -b "$B" -t 'rp one' Return
-  parity "keys --window --pass" keys -b "$B" --window rp-k --pass RPSEC Return
-  parity "keys down:/up: in one call (the holder in the box)" keys -b "$B" down:shift up:shift
-  parity "keys --wait --window: what the keys did" keys -b "$B" --wait --window rp-k -t x
-  parity "keys --window: none such" keys -b "$B" --window rp-none a
-  parity "click --window" click -b "$B" --window rp-k 20 20
-  parity "click --steps --mod" click -b "$B" --steps 3 --mod ctrl --window rp-k 30 30
-  # (each side's pointer from the same place: the bash side's click left it at the point, so the
-  # second side's made no move and no cursor change to ignore, a difference of the order, not of
-  # the halves; seen twice in wave 4a's runs)
-  rp_ptr_home() { rp_live3_prep; obb pointer -b "$B" -- move 5 5 >/dev/null 2>&1; obb wait -b "$B" still --quiet 300ms >/dev/null 2>&1; }
-  rp_prep=rp_ptr_home
-  parity "click --wait --json --window" click -b "$B" --wait --json --window rp-k 40 40
-  rp_prep=rp_live3_prep
-  parity "click off the screen" click -b "$B" 99999 1
-  parity "scroll --window" scroll -b "$B" --window rp-k 20 20 15
-  parity "scroll --source wheel: notches" scroll -b "$B" --window rp-k 20 20 20 -7 --source wheel
-  parity "pointer: a move and a click" pointer -b "$B" -- move 100 100 click
-  parity "pointer --steps --window" pointer -b "$B" --steps 3 --window rp-k -- move 10 10 sleep 20ms
-  parity "pointer hide" pointer -b "$B" hide
-  parity "pointer show" pointer -b "$B" show
-  parity "drag" drag -b "$B" --window rp-k 10 10 60 60
-  parity "drag --wait --json" drag -b "$B" --wait --json --window rp-k 10 10 60 60
-  parity "drag --shot" drag -b "$B" --shot "$o3/d.png" --shot-fit 300 --window rp-k 10 10 60 60
-  parity "shot -o" shot -b "$B" -o "$o3/s.png"
-  parity "shot --json -g" shot -b "$B" --json -g '100,100 200x100' -o "$o3/g.png"
-  parity "shot --window --json" shot -b "$B" --window rp-k --json -o "$o3/w.png"
-  parity "shot --fit --no-pointer" shot -b "$B" --fit 500 --no-pointer -o "$o3/f.png"
-  parity "shot --zoom" shot -b "$B" --zoom 4 -g '0,0 40x30' -o "$o3/z.png"
-  parity "shot --monitor" shot -b "$B" --monitor HEADLESS-2 --json -o "$o3/m.png"
-  parity "shot --monitor: none such" shot -b "$B" --monitor rp-none -o "$o3/m.png"
-  rp_live3_ref() { rp_live3_prep; obb shot -b "$B" --window rp-k -o "$o3/ref.png" >/dev/null 2>&1; rp_live3_prep_keep; }
-  rp_live3_prep_keep() { rp_shots0=$(cat "$bd/shots.tsv" 2>/dev/null | wc -l); }
-  rp_prep=rp_live3_ref
-  parity "shot --changed --window: nothing changed" shot -b "$B" --changed --window rp-k --json -o "$o3/c.png"
-  parity "shot --changed --since" shot -b "$B" --changed --window rp-k --since "$o3/ref.png" -o "$o3/c.png"
-  rp_prep=rp_live3_prep
-  parity "shot --burst --window --diff" shot -b "$B" --burst 2 --every 0 --window rp-k --diff -o "$o3/b"
-  parity "calibrate: the box's full-shot size" calibrate -b "$B" -o "$o3/card.png"
-  parity "keys-to-box: a headless box" keys-to-box -b "$B" on
-  rp_prep="" rp_sed="" rp_also="" rp_env=()
+  cx_prep=cx_live3_prep cx_also=cx_live3_also cx_env=(RPSEC=rp-secret)
+  cx_sed='s/\b[0-9]+\.[0-9]+s\b/Ts/g; s/"(elapsed|first_change|last_change)":[0-9.]+/"\1":T/g; s/"frames":[0-9]+/"frames":N/; s/"events_since":[0-9]+/"events_since":N/'
+  cx_sed+='; s/\b0x[0-9a-f]+/0xA/g; s/pid [0-9]+/pid P/g; s/at -?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/at G/g; s/[0-9]+x[0-9]+ at -?[0-9]+,-?[0-9]+/G/g'
+  cx_sed+='; s/"(change|late_changes|ignored)":\{[^}]*\}/"\1":OBJ/g; s/-?[0-9]+,-?[0-9]+ [0-9]+x[0-9]+/G/g'
+  cx_want=(rc=0 out= err=)
+  cx_case "keys -t into the active window" keys -b "$B" -t 'rp one' Return
+  cx_want=(rc=0 out= err=)
+  cx_case "keys --window --pass" keys -b "$B" --window rp-k --pass RPSEC Return
+  cx_want=(rc=0 out= err= 'state!~^\./pointer')
+  cx_case "keys down:/up: in one call (the holder in the box)" keys -b "$B" down:shift up:shift
+  cx_want=(rc=0 'out~^satisfied: settled after Ts' err=)
+  cx_case "keys --wait --window: what the keys did" keys -b "$B" --wait --window rp-k -t x
+  cx_want=(rc=2 out= "err~^omabox: no window matches rp-none; the box's windows:\$" 'err~^  0xA  rp-k  "rpk"  workspace [0-9]+$')
+  cx_case "keys --window: none such" keys -b "$B" --window rp-none a
+  cx_want=(rc=0 out= 'err!~^omabox: [^a]')
+  cx_case "click --window" click -b "$B" --window rp-k 20 20
+  cx_want=(rc=0 out= 'err!~^omabox: [^a]')
+  cx_case "click --steps --mod" click -b "$B" --steps 3 --mod ctrl --window rp-k 30 30
+  # (the pointer from the same place: the click before left it at its point, so this one would make
+  # no move and no cursor change to ignore)
+  cx_ptr_home() { cx_live3_prep; ob pointer -b "$B" -- move 5 5 >/dev/null 2>&1; ob wait -b "$B" still --quiet 300ms >/dev/null 2>&1; }
+  cx_prep=cx_ptr_home
+  cx_want=('rc~^(0|124)$' 'out~^\{"result":"(satisfied|unsatisfied)","condition":"settle","message":".*the click at [0-9]+,[0-9]+ was on rp-k \\"rpk\\" \(its 40,40\)')
+  cx_case "click --wait --json --window" click -b "$B" --wait --json --window rp-k 40 40
+  cx_prep=cx_live3_prep
+  cx_want=(rc=1 out= "err~^omabox: click: 99999,1 is off the [0-9]+x[0-9]+ screen of box '$B'\$")
+  cx_case "click off the screen" click -b "$B" 99999 1
+  cx_want=(rc=0 out= 'err!~^omabox: [^a]')
+  cx_case "scroll --window" scroll -b "$B" --window rp-k 20 20 15
+  cx_want=(rc=0 out= 'err~^omabox: scroll: a wheel turns in notches of 15: DY 20 is 1 notch \(15\), DX -7 is 1 notch \(-15\)$')
+  cx_case "scroll --source wheel: notches" scroll -b "$B" --window rp-k 20 20 20 -7 --source wheel
+  cx_want=(rc=0 out= err=)
+  cx_case "pointer: a move and a click" pointer -b "$B" -- move 100 100 click
+  cx_want=(rc=0 out= 'err!~^omabox: [^a]')
+  cx_case "pointer --steps --window" pointer -b "$B" --steps 3 --window rp-k -- move 10 10 sleep 20ms
+  cx_want=(rc=0 out= "err=omabox: pointer: hidden in box '$B' (shots, recordings, peek) until omabox pointer show; it still moves, and focus follows it" 'state~^hidden$')
+  cx_case "pointer hide" pointer -b "$B" hide
+  cx_want=(rc=0 out= "err=omabox: pointer: shown in box '$B'" 'state!~^hidden$')
+  cx_case "pointer show" pointer -b "$B" show
+  cx_want=(rc=0 out= 'err!~^omabox: [^a]')
+  cx_case "drag" drag -b "$B" --window rp-k 10 10 60 60
+  cx_want=('rc~^(0|124)$' 'out~^\{"result":"(satisfied|unsatisfied)","condition":"settle","message":".*the drag from [0-9]+,[0-9]+ started on rp-k \\"rpk\\" \(its 10,10\)')
+  cx_case "drag --wait --json" drag -b "$B" --wait --json --window rp-k 10 10 60 60
+  cx_want=(rc=0 "out=$o3/d.png" 'state~^\./d\.png f$' 'state~^d\.png 300 [0-9]+$')
+  cx_case "drag --shot" drag -b "$B" --shot "$o3/d.png" --shot-fit 300 --window rp-k 10 10 60 60
+  cx_want=(rc=0 "out=$o3/s.png" err= 'state~^s\.png [0-9]+ [0-9]+$' 'state~	screen 0,0	')
+  cx_case "shot -o" shot -b "$B" -o "$o3/s.png"
+  cx_want=(rc=0 "out={\"path\":\"$o3/g.png\",\"kind\":\"region\",\"region\":{\"x\":100,\"y\":100,\"w\":200,\"h\":100},\"image\":{\"w\":200,\"h\":100},\"scale\":1,\"window\":null,\"monitor\":null,\"fit\":null,\"zoom\":null,\"changed\":null}" "err=omabox: 200x100 image of the screen's G; click with --in $o3/g.png" 'state~^g\.png 200 100$')
+  cx_case "shot --json -g" shot -b "$B" --json -g '100,100 200x100' -o "$o3/g.png"
+  cx_want=(rc=0 "out~^\\{\"path\":\"$o3/w\\.png\",\"kind\":\"window\",.*\"window\":\\{\"address\":\"0xA\",\"class\":\"rp-k\",\"title\":\"rpk\"," 'state~^w\.png [0-9]+ [0-9]+$')
+  cx_case "shot --window --json" shot -b "$B" --window rp-k --json -o "$o3/w.png"
+  cx_want=(rc=0 "out=$o3/f.png" "err~^omabox: 500x[0-9]+ image of the screen's G \\(x[0-9.]+\\); click with --in $o3/f\\.png\$" 'state~^f\.png 500 [0-9]+$')
+  cx_case "shot --fit --no-pointer" shot -b "$B" --fit 500 --no-pointer -o "$o3/f.png"
+  cx_want=(rc=0 "out=$o3/z.png" "err=omabox: 160x120 image of the screen's G (zoomed 4 times); click with --in $o3/z.png" 'state~^z\.png 160 120$')
+  cx_case "shot --zoom" shot -b "$B" --zoom 4 -g '0,0 40x30' -o "$o3/z.png"
+  # (a headless box's screen is HEADLESS-2; NVIDIA's is WAYLAND-1, and it has no HEADLESS-2)
+  if [ "$(ob mode -b "$B" 2>/dev/null | cut -d' ' -f1)" = HEADLESS-2 ]; then
+    cx_want=(rc=0 "out~^\\{\"path\":\"$o3/m\\.png\",\"kind\":\"monitor\",.*\"monitor\":\"HEADLESS-2\"," 'state~^m\.png 1920 1080$')
+  else cx_want=(rc=1 out= "err=omabox: shot: box '$B' has no monitor HEADLESS-2 (WAYLAND-1)"); fi
+  cx_case "shot --monitor" shot -b "$B" --monitor HEADLESS-2 --json -o "$o3/m.png"
+  cx_want=(rc=1 out= "err~^omabox: shot: box '$B' has no monitor rp-none \\((WAYLAND-1|HEADLESS-2)\\)\$")
+  cx_case "shot --monitor: none such" shot -b "$B" --monitor rp-none -o "$o3/m.png"
+  cx_live3_ref() { cx_live3_prep; ob shot -b "$B" --window rp-k -o "$o3/ref.png" >/dev/null 2>&1; cx_live3_prep_keep; }
+  cx_live3_prep_keep() { cx_shots0=$(cat "$bd/shots.tsv" 2>/dev/null | wc -l); }
+  cx_prep=cx_live3_ref
+  cx_want=(rc=0 "out~^\\{\"path\":null,\"kind\":\"window\",.*\"changed\":\\{\"result\":\"nothing\",\"since\":\"$o3/ref\\.png\"" 'state!~^\./c\.png')
+  cx_case "shot --changed --window: nothing changed" shot -b "$B" --changed --window rp-k --json -o "$o3/c.png"
+  cx_want=(rc=0 out= "err~^omabox: --changed: nothing changed in window 0xA rp-k \"rpk\" since $o3/ref\\.png \\(Ts ago\\): no image\$" 'state!~^\./c\.png')
+  cx_case "shot --changed --since" shot -b "$B" --changed --window rp-k --since "$o3/ref.png" -o "$o3/c.png"
+  cx_prep=cx_live3_prep
+  cx_want=(rc=0 "out~^$o3/b/frame-001\\.png Ts\$" "out~^$o3/b/frame-002\\.png Ts( same)?\$" "err~^omabox: 2 frames of [0-9]+x[0-9]+ \\(window 0xA\\) over Ts, Ts apart, in $o3/b; click with --in a frame\$" 'state~^\./b/frame-002\.png f$')
+  cx_case "shot --burst --window --diff" shot -b "$B" --burst 2 --every 0 --window rp-k --diff -o "$o3/b"
+  cx_want=(rc=0 "out=$o3/card.png" 'err~^omabox: a [0-9]+x[0-9]+ test card \(the size of a full shot of the box\): 6 marks, A to F,' 'state~^\./card\.png f$')
+  cx_case "calibrate: the box's full-shot size" calibrate -b "$B" -o "$o3/card.png"
+  cx_want=(rc=1 out= "err=omabox: keys-to-box: box '$B' is headless: it has no window on your desktop to type into (omabox keys sends it keys)")
+  cx_case "keys-to-box: a headless box" keys-to-box -b "$B" on
+  cx_prep="" cx_sed="" cx_also="" cx_env=()
   ob run -b "$B" -- sh -c 'pkill -x foot; true' >/dev/null 2>&1
-  # Wave 4a: mode, monitor, output, gpu, cpu on a real box, each side from the same layout (put back
-  # by bash before it), what it left in box.json and the box's records compared after it. A box of
-  # its own with no shell, checked alive after each group (a crash would make every case after it a
-  # dead box's on both sides).
+  # Wave 4a: mode, monitor, output, gpu, cpu on a real box, each case from the same layout (put back
+  # before it), what it left in box.json and the box's records after it. A box of its own with no
+  # shell, checked alive after each group (a crash would make every case after it a dead box's).
   ob down "$B" >/dev/null 2>&1
   B=$P-rp4
   up_ok "$B" --no-shell --net isolated || { no "up (wave 4a)" "$UP_OUT"; return; }
-  local mon_d=$XDG_RUNTIME_DIR/omabox/$B
-  rp_lay() {
-    local n; for n in $(obb monitor -b "$B" list --json 2>/dev/null | jq -r '.[] | select(.name != "HEADLESS-2") | .name'); do
-      if [ "$(jq -r --arg n "$n" 'any(.[]; .name == $n and .dropped)' < <(obb monitor -b "$B" list --json))" = true ]; then obb output -b "$B" back "$n" >/dev/null 2>&1; fi
-      obb monitor -b "$B" remove "$n" >/dev/null 2>&1
+  local mon_d=$XDG_RUNTIME_DIR/omabox/$B mn m2 nv=""
+  # (its screen: HEADLESS-2 on a headless box, WAYLAND-1 on NVIDIA's, whose monitors are Wayland
+  # outputs; the first monitor added is HEADLESS-3 or WAYLAND-2)
+  mn=$(ob mode -b "$B" 2>/dev/null | cut -d' ' -f1)
+  case $mn in WAYLAND-*) m2=WAYLAND-2 nv=1 ;; *) m2=HEADLESS-3 ;; esac
+  cx_lay() {
+    local n; for n in $(ob monitor -b "$B" list --json 2>/dev/null | jq -r '.[] | select(.name != "'"$mn"'") | .name'); do
+      if [ "$(jq -r --arg n "$n" 'any(.[]; .name == $n and .dropped)' < <(ob monitor -b "$B" list --json))" = true ]; then ob output -b "$B" back "$n" >/dev/null 2>&1; fi
+      ob monitor -b "$B" remove "$n" >/dev/null 2>&1
     done
-    [ ! -s "$mon_d/output.dropped" ] || obb output -b "$B" back >/dev/null 2>&1
-    [ "$(obb mode -b "$B" 2>/dev/null)" = "HEADLESS-2 1920x1080@60" ] || obb mode -b "$B" 1920x1080 >/dev/null 2>&1
+    [ ! -s "$mon_d/output.dropped" ] || ob output -b "$B" back >/dev/null 2>&1
+    [ "$(ob mode -b "$B" 2>/dev/null)" = "$mn 1920x1080@60" ] || ob mode -b "$B" 1920x1080 >/dev/null 2>&1
   }
-  rp_lay_m() { rp_lay; obb monitor -b "$B" add 800x600 >/dev/null 2>&1; }
-  rp_lay_also() {
+  cx_lay_m() { cx_lay; ob monitor -b "$B" add 800x600 >/dev/null 2>&1; }
+  cx_lay_also() {
     jq -c '{size, scale, monitors}' "$mon_d/box.json"; cat "$mon_d/run/omabox.monitors" "$mon_d/run/omabox.mode" "$mon_d/output.dropped" 2>/dev/null
-    obb hyprctl -b "$B" -j monitors | jq -c '[.[] | {name, width, height, x, y, scale}]'
+    ob hyprctl -b "$B" -j monitors | jq -c '[.[] | {name, width, height, x, y, scale}]'
   }
-  rp_prep=rp_lay rp_also=rp_lay_also
-  parity "mode (both ways)" mode -b "$B"
-  parity "mode --json (both ways)" mode -b "$B" --json
-  parity "mode WxH (both ways)" mode -b "$B" 1280x720
-  parity "mode WxH@HZ,scale=S (both ways)" mode -b "$B" 2560x1440@30,scale=1.5
-  parity "monitor list (both ways)" monitor -b "$B" list
-  parity "monitor add (both ways)" monitor -b "$B" add 800x600
-  parity "monitor add below, scaled, named (both ways)" monitor -b "$B" add 1024x768,scale=2,below --name rp-side
+  cx_prep=cx_lay cx_also=cx_lay_also
+  cx_want=(rc=0 "out=$mn 1920x1080@60" err= 'state~^\{"size":"1920x1080@60","scale":1,')
+  cx_case "mode" mode -b "$B"
+  cx_want=(rc=0 "out={\"name\":\"$mn\",\"mode\":\"1920x1080@60\",\"scale\":1}" err=)
+  cx_case "mode --json" mode -b "$B" --json
+  cx_want=(rc=0 "out=$mn 1280x720@60" err= 'state~^\{"size":"1280x720@60","scale":1,' 'state~"width":1280,"height":720,')
+  cx_case "mode WxH" mode -b "$B" 1280x720
+  cx_want=(rc=0 "out~^$mn 2560x1440@30,scale=1\\.[56]\$" 'state~^\{"size":"2560x1440@30",' 'state~"width":2560,"height":1440,')
+  cx_case "mode WxH@HZ,scale=S" mode -b "$B" 2560x1440@30,scale=1.5
+  cx_want=(rc=0 'out~^NAME +MODE +SCALE +POSITION +WORKSPACE$' "out~^$mn +1920x1080@60 +1 +0,0 " err=)
+  cx_case "monitor list" monitor -b "$B" list
+  cx_want=(rc=0 "out=$m2" "err=omabox: box '$B' has a monitor $m2 800x600@60 1920x0 1" "state~\"name\":\"$m2\",\"mode\":\"800x600@60\",\"scale\":1,\"x\":1920,\"y\":0")
+  cx_case "monitor add" monitor -b "$B" add 800x600
+  # (a name of its own: a headless box's alone, NVIDIA's names are the outputs')
+  if [ -n "$nv" ]; then cx_want=(rc=1 out= "err=omabox: monitor add: an NVIDIA box's monitors are Wayland outputs, WAYLAND-N as its screen is: no --name")
+  else cx_want=(rc=0 'out=rp-side' 'state~"name":"rp-side","mode":"1024x768@60","scale":2,"x":0,"y":1080'); fi
+  cx_case "monitor add below, scaled, named" monitor -b "$B" add 1024x768,scale=2,below --name rp-side
   check "...the box lived through them" ob hyprctl -b "$B" version
-  rp_prep=rp_lay_m
-  parity "monitor list --json: one made (both ways)" monitor -b "$B" list --json
-  parity "mode: the monitor placed next to it moves (both ways)" mode -b "$B" 1280x720
-  parity "monitor remove (both ways)" monitor -b "$B" remove HEADLESS-3
-  parity "output drop: a monitor (both ways)" output -b "$B" drop HEADLESS-3
-  parity "output drop --for --cycles (both ways)" output -b "$B" drop HEADLESS-3 --for 100ms --cycles 2
+  cx_prep=cx_lay_m
+  cx_want=(rc=0 "out~^\\[\\{\"name\":\"$mn\",\"mode\":\"1920x1080@60\",\"scale\":1,\"x\":0,\"y\":0,.*\\{\"name\":\"$m2\",\"mode\":\"800x600@60\",\"scale\":1,\"x\":1920,\"y\":0," err=)
+  cx_case "monitor list --json: one made" monitor -b "$B" list --json
+  cx_want=(rc=0 "out=$mn 1280x720@60" "err=omabox: mode: moved the monitors placed next to it: $m2 to 1280,0" "state~\"name\":\"$m2\",\"mode\":\"800x600@60\",\"scale\":1,\"x\":1280,\"y\":0")
+  cx_case "mode: the monitor placed next to it moves" mode -b "$B" 1280x720
+  cx_want=(rc=0 "state!~\"name\":\"$m2\"")
+  cx_case "monitor remove" monitor -b "$B" remove "$m2"
+  cx_want=(rc=0)
+  cx_case "output drop: a monitor" output -b "$B" drop "$m2"
+  cx_want=(rc=0)
+  cx_case "output drop --for --cycles" output -b "$B" drop "$m2" --for 100ms --cycles 2
   check "...the box lived through them" ob hyprctl -b "$B" version
-  rp_prep=rp_lay
+  cx_prep=cx_lay
   # (the figures are the window's: their numbers left out, the rows and what they are kept)
-  rp_sed='s/[0-9]+\.[0-9]+(%|M|G)/N\1/g; s/: [0-9]+(\.[0-9]+)?(,?)$/: N\2/'
-  # (NVIDIA: pmon recorded once and replayed, through a stand-in nvidia-smi on PATH. The real one
-  # samples once a second and says "-" for a process that did not draw in that second, a number (an
-  # engines entry) when it did: which of the box's processes drew in which half's window was the
-  # moment's (labwc's on one side at 500 ms and at 2 s, then Hyprland's or quickshell's with labwc's
-  # left out). So bash's side runs the real `nvidia-smi pmon` and its bytes are kept, and the Rust
-  # side is given them, its words checked against the recorded ones: both halves read the real
-  # driver's table of the box's real processes, the box found on NVIDIA, its slot, the figures. Not
-  # compared: two live samplings (t_main's gpu --json on NVIDIA has the real one). Without a working
-  # nvidia-smi, a fixed table for every process named Hyprland, quickshell or omabox-labwc; a box
-  # not on NVIDIA never calls it.)
+  cx_sed='s/[0-9]+\.[0-9]+(%|M|G)/N\1/g; s/: [0-9]+(\.[0-9]+)?(,?)$/: N\2/'
+  # (NVIDIA: gpu reads `nvidia-smi pmon` through a stand-in on PATH that logs the words it was given
+  # and passes the real one's table on, or, where nvidia-smi does not work, a fixed table for every
+  # process named Hyprland, quickshell or omabox-labwc; a box not on NVIDIA never calls it. t_main's
+  # gpu --json on NVIDIA has a live sampling's figures.)
   local rpnv=$TMP/rp-nv; mkdir -p "$rpnv"
   cat > "$rpnv/nvidia-smi" <<EOF
 #!/bin/bash
@@ -14097,90 +14308,104 @@ fi
 cat $rpnv/pmon.rec; exit "\$(cat $rpnv/pmon.rc)"
 EOF
   chmod +x "$rpnv/nvidia-smi"
-  # (its words, compared both ways; the recording dropped before each gpu case)
-  rp_gpu_also() { cat "$rpnv/log" 2>/dev/null; rm -f "$rpnv/log"; }
-  rp_gpu_fresh() { rm -f "$rpnv/pmon.rec" "$rpnv/pmon.args" "$rpnv/pmon.rc"; }
-  rp_gpu_fresh
-  rp_env=(PATH="$rpnv:$PATH") rp_also=rp_gpu_also
-  parity "gpu --json (both ways)" gpu -b "$B" 500ms --json
-  rp_env=() rp_also=rp_lay_also
-  rp_check=""
-  parity "cpu --pid 1 (both ways)" cpu -b "$B" 300ms --pid 1
+  # (its words, the case's state; the recording dropped before each gpu case)
+  cx_gpu_also() { cat "$rpnv/log" 2>/dev/null; rm -f "$rpnv/log"; }
+  cx_gpu_fresh() { rm -f "$rpnv/pmon.rec" "$rpnv/pmon.args" "$rpnv/pmon.rc"; }
+  cx_gpu_fresh
+  cx_env=(PATH="$rpnv:$PATH") cx_also=cx_gpu_also
+  cx_want=(rc=0 'out~^\{$' "out~^  \"box\": \"$B\",\$" "out~^  \"output\": \"$mn\",\$" err=)
+  cx_case "gpu --json" gpu -b "$B" 500ms --json
+  cx_env=() cx_also=cx_lay_also
+  cx_check=""
+  cx_want=(rc=0 "out~^box '$B': 1920x1080@60 on $mn, 0\\.3s, CPU as % of one core \\([0-9]+ cores\\), memory as last seen\$" 'out~^  total ' err=)
+  cx_case "cpu --pid 1" cpu -b "$B" 300ms --pid 1
   # (--threads of a one-thread process of its own: PID 1's threads come in CPU order, which flakes)
   ob run -b "$B" -d -q -- sleep 600 >/dev/null 2>&1
-  parity "cpu --app --threads --json (both ways)" cpu -b "$B" 300ms --app sleep --threads --json
-  rp_gpu_fresh
-  rp_sed='s/^  [^ ]+ +[0-9]+\.[0-9]%$/  ROW/' rp_env=(PATH="$rpnv:$PATH") rp_also=rp_gpu_also
-  parity "gpu (both ways): its rows" gpu -b "$B" 300ms
-  rp_sed="" rp_env=() rp_also=rp_lay_also
+  cx_want=(rc=0 'out~^\{$' "out~^  \"box\": \"$B\",\$" 'out~"threads"' err=)
+  cx_case "cpu --app --threads --json" cpu -b "$B" 300ms --app sleep --threads --json
+  cx_gpu_fresh
+  cx_sed='s/^  [^ ]+ +[0-9]+\.[0-9]%$/  ROW/' cx_env=(PATH="$rpnv:$PATH") cx_also=cx_gpu_also
+  cx_want=(rc=0 "out~^box '$B': 1920x1080@60 on $mn, " err=)
+  cx_case "gpu: its rows" gpu -b "$B" 300ms
+  cx_sed="" cx_env=() cx_also=cx_lay_also
   check "...the box lived through them" ob hyprctl -b "$B" version
   # (The main screen's drop and back are on the stand-in desktop of t_unit_rust_parity4, and t_output's
   # on a real box: here the main screen dropped once more, after it was back, crashed this Hyprland
-  # (0.56.2, SIGSEGV), with the shell up and without, the same in bash's half: every case after it
-  # would have been a dead box's on both sides.)
+  # (0.56.2, SIGSEGV), with the shell up and without: every case after it would have been a dead
+  # box's.)
   # Wave 4b, live: gdb with the real gdb (its attach chatter left out: the values it prints, its
-  # status kept), --watch (the watcher ended before each side), check point/diff on the box's shots
+  # status kept), --watch (the watcher ended before each case), check point/diff on the box's shots
   # and check run with clean boxes of its own (approve, then a check against that baseline).
-  rp_sed='/^\$[0-9]+ = /!d'
-  parity "gdb: a value printed from Hyprland (both ways)" gdb -b "$B" -- -ex 'print 6*7'
-  parity "gdb --pid 1: a value (both ways)" gdb -b "$B" --pid 1 -- -ex 'print 1+1'
-  rp_sed=""
-  parity "gdb --pid: not in the box (both ways)" gdb -b "$B" --pid 999999
-  rp_gdbw() { ob run -b "$B" -- sh -c 'pkill -TERM -x gdb; for i in $(seq 50); do pgrep -x gdb >/dev/null || exit 0; sleep 0.1; done' >/dev/null 2>&1 || true; }
-  rp_prep=rp_gdbw
-  parity "gdb --watch: attached (both ways)" gdb -b "$B" --watch
-  # (only after the case ran: an install has no oracle, so none; t_gdb checks the header there)
-  if [ -x "$BASH_CLI" ]; then check "...its log has the header" grep -q '^== omabox gdb --watch ' "$XDG_RUNTIME_DIR/omabox/$B/home/gdb.log"
-  else skip "...its log has the header" "no test oracle (an install has none)"; fi
-  parity "gdb: traced already by the watcher (both ways)" gdb -b "$B" --watch
-  rp_gdbw; rp_prep=""
+  cx_sed='/^\$[0-9]+ = /!d'
+  cx_want=(rc=0 'out=$1 = 42' err=)
+  cx_case "gdb: a value printed from Hyprland" gdb -b "$B" -- -ex 'print 6*7'
+  cx_want=(rc=0 'out=$1 = 2' err=)
+  cx_case "gdb --pid 1: a value" gdb -b "$B" --pid 1 -- -ex 'print 1+1'
+  cx_sed=""
+  cx_want=(rc=1 out= "err=omabox: gdb: box '$B' has no process 999999 (omabox run -b $B -- ps -e)")
+  cx_case "gdb --pid: not in the box" gdb -b "$B" --pid 999999
+  cx_gdbw() { ob run -b "$B" -- sh -c 'pkill -TERM -x gdb; for i in $(seq 50); do pgrep -x gdb >/dev/null || exit 0; sleep 0.1; done' >/dev/null 2>&1 || true; }
+  cx_prep=cx_gdbw
+  cx_want=(rc=0 out= "err~^omabox: gdb watches Hyprland \\(pid [0-9]+ in box '$B'\\): on a crash, every thread's backtrace goes to omabox log -b $B gdb")
+  cx_case "gdb --watch: attached" gdb -b "$B" --watch
+  check "...its log has the header" grep -q '^== omabox gdb --watch ' "$XDG_RUNTIME_DIR/omabox/$B/home/gdb.log"
+  cx_want=(rc=0 out= "err~^omabox: gdb watches Hyprland \\(pid [0-9]+ in box '$B'\\)")
+  cx_case "gdb: traced already by the watcher" gdb -b "$B" --watch
+  cx_gdbw; cx_prep=""
   local ck=$TMP/rp-check; rm -rf "$ck"; mkdir -p "$ck"
   local r_sig=$TMP/rp-sig-live; rp_sig_write "$r_sig"
-  rp_ckp() { rm -rf "$ck/p"; mkdir -p "$ck/p"; }
-  rp_ckls() { (cd "$ck" && command find . -printf '%p %y\n' | LC_ALL=C sort; for f in $(command find . -name '*.point' | LC_ALL=C sort); do echo "== $f"; cat "$f"; done); }
-  rp_prep=rp_ckp rp_also=rp_ckls
-  parity "check point: the screen (both ways)" check point -b "$B" rp1 -o "$ck/p"
-  parity "check point -g, --ignore (both ways)" check point -b "$B" rp2 -o "$ck/p" -g "0,0 300x200" --ignore "10,10 20x20" --ignore "900,900 5x5"
-  # (decimal: 08 is 8, the region kept; bash's arithmetic ended at it, and the region was left out
-  # as if outside the shot: finding 448)
-  rp_why=448 rp_bash=('err~: line [0-9]+: 08: value too great for base' 'err~--ignore "08,0 10x10" has nothing in the shot' 'state!~^ignore ') rp_rust=(err= 'state~^ignore 8 0 10 10$')
-  parity "check point --ignore 08: decimal, kept" check point -b "$B" rp3 -o "$ck/p" --ignore "08,0 10x10"
-  # (its .point that cannot be written: bash's redirection line and 1, check's "changed"; Rust's words
-  # and 2, check's own failure: finding 442)
-  rp_ckpd() { rp_ckp; mkdir -p "$ck/p/rpx.point"; }
-  rp_why=442 rp_bash=(rc=1 'err~/rpx\.point: Is a directory$') rp_rust=(rc=2 "err~^omabox: check: cannot write [^ ]*/rpx\\.point: Is a directory$")
-  rp_prep=rp_ckpd; parity "check point: its .point cannot be written (2 in Rust)" check point -b "$B" rpx -o "$ck/p"; rp_prep=rp_ckp
-  rp_ckp; ob check point -b "$B" s1 -o "$ck/p" >/dev/null 2>&1; ob check point -b "$B" s2 -o "$ck/p" -g "0,0 300x200" >/dev/null 2>&1
-  rp_prep="" rp_sed='s/\(specks: [0-9]+, [0-9]+ px\)/(specks)/; s/^specks: [0-9]+, [0-9]+ px$/specks/'
-  parity "check diff: two shots of the box (both ways)" check diff "$ck/p/s1.png" "$ck/p/s1.png"
-  parity "check diff: sizes (both ways)" check diff --json "$ck/p/s1.png" "$ck/p/s2.png"
+  cx_ckp() { rm -rf "$ck/p"; mkdir -p "$ck/p"; }
+  cx_ckls() { (cd "$ck" && command find . -printf '%p %y\n' | LC_ALL=C sort; for f in $(command find . -name '*.point' | LC_ALL=C sort); do echo "== $f"; cat "$f"; done); }
+  cx_prep=cx_ckp cx_also=cx_ckls
+  cx_want=(rc=0 "out=$ck/p/rp1.png" err= 'state~^of screen$' 'state~^settled yes$')
+  cx_case "check point: the screen" check point -b "$B" rp1 -o "$ck/p"
+  cx_want=(rc=0 "out=$ck/p/rp2.png" "err=omabox: check point rp2: --ignore \"900,900 5x5\" has nothing in the shot (the screen's coordinates; it covers 300x200 at 0,0): left out" 'state~^of region 0,0 300x200$' 'state~^ignore 10 10 20 20$' 'state!~^ignore 900 ')
+  cx_case "check point -g, --ignore" check point -b "$B" rp2 -o "$ck/p" -g "0,0 300x200" --ignore "10,10 20x20" --ignore "900,900 5x5"
+  # (decimal: 08 is 8, the region kept; bash's omabox ended at it, the region left out: finding 448)
+  cx_want=(rc=0 "out=$ck/p/rp3.png" err= 'state~^ignore 8 0 10 10$')
+  cx_case "check point --ignore 08: decimal, kept" check point -b "$B" rp3 -o "$ck/p" --ignore "08,0 10x10"
+  # (its .point that cannot be written: said in omabox's words, 2, check's own failure: finding 442)
+  cx_ckpd() { cx_ckp; mkdir -p "$ck/p/rpx.point"; }
+  cx_prep=cx_ckpd; cx_want=(rc=2 out= "err=omabox: check: cannot write $ck/p/rpx.point: Is a directory")
+  cx_case "check point: its .point cannot be written (2 in Rust)" check point -b "$B" rpx -o "$ck/p"; cx_prep=cx_ckp
+  cx_ckp; ob check point -b "$B" s1 -o "$ck/p" >/dev/null 2>&1; ob check point -b "$B" s2 -o "$ck/p" -g "0,0 300x200" >/dev/null 2>&1
+  cx_prep="" cx_sed='s/\(specks: [0-9]+, [0-9]+ px\)/(specks)/; s/^specks: [0-9]+, [0-9]+ px$/specks/'
+  cx_want=(rc=0 'out=same (specks)' err=)
+  cx_case "check diff: two shots of the box" check diff "$ck/p/s1.png" "$ck/p/s1.png"
+  cx_want=(rc=1 'out={"result":"changed","size":{"from":"1920x1080","to":"300x200"},"regions":[],"specks":null,"marked":null,"report":null}' err=)
+  cx_case "check diff: sizes" check diff --json "$ck/p/s1.png" "$ck/p/s2.png"
   # check run: a scenario that takes two checkpoints; its boxes named as the suite's.
   printf '#!/bin/sh\nomabox check point whole && omabox check point part -g "0,0 400x300"\n' > "$ck/scen"; chmod +x "$ck/scen"
-  # (a checkpoint with -g and --ignore in numbers bash reads as octal, 010, or not at all, 08, on a
-  # clean box: its holes and regions as bash has them)
+  # (a checkpoint with -g and --ignore with zeros in front, 010 and 08, on a clean box: read as
+  # decimal, its --ignore 010,010 is 0,0 of its region at 10,10 and 08,0 is outside it, finding 448)
   printf '#!/bin/sh\nomabox check point lz -g "010,010 400x300" --ignore "08,0 10x10" --ignore "010,010 20x20"; omabox check point lz8 -g "08,0 400x300"; omabox check point whole\n' > "$ck/lz"; chmod +x "$ck/lz"
   printf '#!/bin/sh\necho trying; exit 5\n' > "$ck/bad"; printf '#!/bin/sh\necho nothing\n' > "$ck/none"; chmod +x "$ck/bad" "$ck/none"
-  rp_ckr() { rm -rf "$ck/base" "$ck/o"; }
-  rp_prep=rp_ckr rp_env=(OMABOX_CHECK_NAME="$P-rpc") rp_also=rp_ckls
-  rp_sed='s/box up in [0-9]+ s/box up in N s/; s/(the runs. largest stray part was) [0-9]+ px/\1 N px/; s/(under|was) [0-9]+ px/\1 N px/g'
-  parity "check run --approve --runs 2 (both ways)" check run --approve --runs 2 --base "$ck/base" -o "$ck/o" -- "$ck/scen"
-  rp_ckr; OMABOX_CHECK_NAME="$P-rpc" obb check run --approve --runs 2 --base "$ck/base" -o "$ck/o" -- "$ck/scen" >/dev/null 2>&1
+  cx_ckr() { rm -rf "$ck/base" "$ck/o"; }
+  cx_prep=cx_ckr cx_env=(OMABOX_CHECK_NAME="$P-rpc") cx_also=cx_ckls
+  cx_sed='s/box up in [0-9]+ s/box up in N s/; s/(the runs. largest stray part was) [0-9]+ px/\1 N px/; s/(under|was) [0-9]+ px/\1 N px/g'
+  cx_want=(rc=0 'out~^baseline whole \(specks under N px left out: the runs agreed to the pixel\)$' 'out~^baseline part ' "err~^omabox: check: run 1 of 2: a clean box \\($P-rpc-1\\), then: $ck/scen\$" 'state~^\./base/whole\.point f$' 'state~^\./base/part\.png f$')
+  cx_case "check run --approve --runs 2" check run --approve --runs 2 --base "$ck/base" -o "$ck/o" -- "$ck/scen"
+  cx_ckr; OMABOX_CHECK_NAME="$P-rpc" ob check run --approve --runs 2 --base "$ck/base" -o "$ck/o" -- "$ck/scen" >/dev/null 2>&1
   rm -rf "$ck/base0"; cp -a "$ck/base" "$ck/base0"
-  rp_ckc() { rm -rf "$ck/base" "$ck/o"; cp -a "$ck/base0" "$ck/base"; }
-  rp_prep=rp_ckc
-  parity "check run: against its baseline (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/scen"
-  parity "check run --json: against its baseline (both ways)" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/scen"
-  parity "check run: the scenario failed, exit 3 (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/bad"
-  parity "check run --json: no checkpoint taken (both ways)" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/none"
-  # (bash's own line for a command not found names its script and line: the rest compared; the
-  # Rust half says it in omabox's words, finding 441)
-  rp_sed='s#[^ ]*/bin/omabox: (line [0-9]+: )?#bash: #; s/box up in [0-9]+ s/box up in N s/'
-  rp_why=441 rp_bash=("err~\\(exit 127\\): bash: rp-no-such-scenario: command not found \\(") rp_rust=("err~\\(exit 127\\): omabox: check: cannot run scenario rp-no-such-scenario: not found in PATH \\(")
-  parity "check run: a scenario not there, 127 (both ways)" check run --base "$ck/base" -o "$ck/o" -- rp-no-such-scenario
-  # (bash ran its own function say as the scenario; the Rust half runs programs only: finding 451)
-  rp_why=451 rp_bash=("err~: the scenario took no checkpoint \\(") rp_rust=("err~\\(exit 127\\): omabox: check: cannot run scenario say: not found in PATH \\(")
-  parity "check run: a scenario named like omabox's say" check run --base "$ck/base" -o "$ck/o" -- say
-  parity "check run --json: checkpoints with 010 and 08 in them (both ways)" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/lz"
+  cx_ckc() { rm -rf "$ck/base" "$ck/o"; cp -a "$ck/base0" "$ck/base"; }
+  cx_prep=cx_ckc
+  cx_want=(rc=0 "out=same     whole"$'\n'"same     part"$'\n'"check: 2 of 2 same; shots in $ck/o/run1" "err~^omabox: check: run 1 of 1: a clean box \\($P-rpc-1\\), then: $ck/scen\$")
+  cx_case "check run: against its baseline" check run --base "$ck/base" -o "$ck/o" -- "$ck/scen"
+  cx_want=(rc=0 'out~^\{"result":"same",.*"counts":\{"checkpoints":2,"same":2,"changed":0,"as_another":0,"holes":0,"new":0,"missing":0\},')
+  cx_case "check run --json: against its baseline" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/scen"
+  cx_want=(rc=3 out= "err~^omabox: check: the scenario failed in run 1 \\(exit 5\\): trying \\($ck/o/run1\\.log\\)\$")
+  cx_case "check run: the scenario failed, exit 3" check run --base "$ck/base" -o "$ck/o" -- "$ck/bad"
+  cx_want=(rc=3 "out={\"result\":\"failed\",\"exit\":0,\"log\":\"$ck/o/run1.log\",\"message\":\"the scenario took no checkpoint\"}" 'err~^omabox: check: the scenario took no checkpoint')
+  cx_case "check run --json: no checkpoint taken" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/none"
+  # (a scenario not there, said in omabox's words: finding 441)
+  cx_sed='s/box up in [0-9]+ s/box up in N s/'
+  cx_want=(rc=3 out= "err~^omabox: check: the scenario failed in run 1 \\(exit 127\\): omabox: check: cannot run scenario rp-no-such-scenario: not found in PATH \\($ck/o/run1\\.log\\)\$")
+  cx_case "check run: a scenario not there, 127" check run --base "$ck/base" -o "$ck/o" -- rp-no-such-scenario
+  # (a scenario named like a function of bash's omabox: a program, and there is none, finding 451)
+  cx_want=(rc=3 out= "err~^omabox: check: the scenario failed in run 1 \\(exit 127\\): omabox: check: cannot run scenario say: not found in PATH \\($ck/o/run1\\.log\\)\$")
+  cx_case "check run: a scenario named like omabox's say" check run --base "$ck/base" -o "$ck/o" -- say
+  cx_want=(rc=1 'out~^\{"result":"changed",.*"counts":\{"checkpoints":4,"same":1,"changed":0,"as_another":0,"holes":0,"new":2,"missing":1\},' 'state~^== \./o/run1/lz8\.point$' 'state~^ignore 0 0 20 20$' 'state!~^ignore 8 ')
+  cx_case "check run --json: checkpoints with 010 and 08 in them" check run --json --base "$ck/base" -o "$ck/o" -- "$ck/lz"
   # Scenarios bash cannot run as they are: not executable, a dir, binary; one with no #! is a
   # script bash runs itself; a path to nothing.
   printf 'echo hi\n' > "$ck/noexec"; mkdir -p "$ck/adir"; printf '\000\001x' > "$ck/binary"; chmod +x "$ck/binary"
@@ -14192,20 +14417,9 @@ EOF
   python3 -c 'import sys; d = open("/usr/bin/true", "rb").read(); i = d.index(b"/lib64/ld-linux"); open(sys.argv[1], "wb").write(d[:i] + b"/nonexistent/ld.so\0".ljust(len(b"/lib64/ld-linux-x86-64.so.2"), b"\0") + d[i + len(b"/lib64/ld-linux-x86-64.so.2"):])' "$ck/noload"
   printf '#!/etc/passwd\n' > "$ck/eacces"; printf '#!/nonexistent/interp' > "$ck/nonl"; printf '#!/bin/s\rh x\n' > "$ck/midcr"
   chmod +x "$ck/noload" "$ck/eacces" "$ck/nonl" "$ck/midcr"
-  # (bash's words for each, then the Rust half's, after "the scenario failed in run 1 (exit N): ":
-  # finding 441; nosb and xonly run alike)
-  local -A rp_scb=(
-    [noexec]="126): bash: $ck/noexec: Permission denied"
-    [adir]="126): bash: $ck/adir: Is a directory"
-    [binary]="126): bash: $ck/binary: cannot execute binary file: Exec format error"
-    [nowhere]="127): bash: $ck/nowhere: No such file or directory"
-    [crlf]="126): bash: $ck/crlf: /bin/sh^M: bad interpreter: No such file or directory"
-    [badint]="126): bash: $ck/badint: /nonexistent/interp: bad interpreter: No such file or directory"
-    [noload]="127): bash: $ck/noload: cannot execute: required file not found"
-    [eacces]="126): bash: $ck/eacces: /etc/passwd: bad interpreter: Permission denied"
-    [nonl]="126): bash: $ck/nonl: /nonexistent/inter: bad interpreter: No such file or directory"
-    [midcr]="126): bash: $ck/midcr: /bin/s"$'\r'"h: bad interpreter: No such file or directory")
-  local -A rp_scr=(
+  # (what each gets, after "the scenario failed in run 1 (exit N): ", in omabox's words, finding 441;
+  # nosb is a script bash runs, xonly runs: neither takes a checkpoint)
+  local -A cx_scr=(
     [noexec]="126): omabox: check: cannot run scenario $ck/noexec: it is not executable (chmod +x)"
     [adir]="126): omabox: check: cannot run scenario $ck/adir: it is a directory"
     [binary]="126): omabox: check: cannot run scenario $ck/binary: it is a binary this system cannot run (Exec format error)"
@@ -14216,83 +14430,98 @@ EOF
     [eacces]="126): omabox: check: cannot run scenario $ck/eacces: its #! interpreter '/etc/passwd' cannot run: Permission denied"
     [nonl]="126): omabox: check: cannot run scenario $ck/nonl: its #! interpreter '/nonexistent/interp' is not there"
     [midcr]="126): omabox: check: cannot run scenario $ck/midcr: its #! interpreter '/bin/s^Mh' is not there (CRLF line ends?)")
-  rp_q() { printf '%s' "$1" | sed -E 's/[][\\.*^$()+?{}|]/\\&/g'; }
+  cx_q() { printf '%s' "$1" | sed -E 's/[][\\.*^$()+?{}|]/\\&/g'; }
   for i in noexec adir binary nosb nowhere crlf badint xonly noload eacces nonl midcr; do
-    [ -z "${rp_scb[$i]:-}" ] || rp_why=441 rp_bash=("err~\\(exit $(rp_q "${rp_scb[$i]}") \\(") rp_rust=("err~\\(exit $(rp_q "${rp_scr[$i]}") \\(")
-    parity "check run: a scenario that is $i (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/$i"
+    case $i in
+      nosb) cx_want=(rc=1 out="same     whole"$'\n'"missing  part: in the baseline, not taken this run"$'\n'"check: 1 of 2 same, 1 missing; shots in $ck/o/run1") ;;
+      xonly) cx_want=(rc=3 out= 'err~^omabox: check: the scenario took no checkpoint \(omabox check point ID in it\)$') ;;
+      *) cx_want=(rc=3 out= "err~^omabox: check: the scenario failed in run 1 \\(exit $(cx_q "${cx_scr[$i]}") \\($(cx_q "$ck")/o/run1\\.log\\)\$") ;;
+    esac
+    cx_case "check run: a scenario that is $i" check run --base "$ck/base" -o "$ck/o" -- "$ck/$i"
   done
   # Signals during its box's up and during its scenario: the exit, and no check box left.
   printf '#!/bin/sh\n: > "%s/scen-started"; sleep 6; omabox check point whole\n' "$ck" > "$ck/slow"; chmod +x "$ck/slow"
   # (an up a signal left running finishes first, then what it left is listed, then taken down)
-  rp_ckwait() { local k; for k in $(seq 60); do pgrep -f "bin/omabox up $P-rpc" >/dev/null || break; sleep 0.5; done; }
-  rp_ckdown() { rp_ckwait; local b; for b in $(cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n'); do ob down "$b" >/dev/null 2>&1; done; }
-  rp_cks() { rp_ckdown; rp_ckc; rm -f "$ck/scen-started"; }
-  rp_ckleft() { rp_ckls; rp_ckwait; echo "== boxes"; (cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n'); }
-  rp_prep=rp_cks rp_also=rp_ckleft
-  rp_sed="$rp_sed"'; s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line N: PID \2 /'
-  # (bash's EXIT trap runs at once, and its down waits for the up's lock, findings 147 and 237: no box
-  # left either way)
+  cx_ckwait() { local k; for k in $(seq 60); do pgrep -f "bin/omabox up $P-rpc" >/dev/null || break; sleep 0.5; done; }
+  cx_ckdown() { cx_ckwait; local b; for b in $(cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n'); do ob down "$b" >/dev/null 2>&1; done; }
+  cx_cks() { cx_ckdown; cx_ckc; rm -f "$ck/scen-started"; }
+  cx_ckleft() { cx_ckls; cx_ckwait; echo "== boxes"; (cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n'); }
+  cx_prep=cx_cks cx_also=cx_ckleft
+  cx_sed="$cx_sed"'; s/ line ([0-9]+): +[0-9]+ (Hangup|Terminated|Interrupt) / line N: PID \2 /'
+  # (during the up: the up's step ends, the box goes, the signal's code; no box left)
+  local -A cx_code=([TERM]=143 [HUP]=129 [group-INT]=130 [INT]=130)
   for i in TERM HUP; do
-    rp_wrap=(env RP_LINGER=8 "$r_sig" "$i" "$ck/o/run1.up.log")
-    parity "check run and $i during its box's up (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/slow"
+    cx_wrap=(env RP_LINGER=8 "$r_sig" "$i" "$ck/o/run1.up.log")
+    cx_want=("rc=${cx_code[$i]}" out= "err~^omabox: check: run 1 of 1: a clean box \\($P-rpc-1\\), then: $ck/slow\$" 'state~^== boxes$' "state!~^$P-rpc")
+    cx_case "check run and $i during its box's up" check run --base "$ck/base" -o "$ck/o" -- "$ck/slow"
   done
-  # (a TERM or HUP to omabox alone: bash's EXIT trap takes the box down at once, the scenario left
-  # running to fail its point; the Rust half waits for the scenario, here 6 s (10 at most, then a TERM
-  # to it), so its point is taken, then the box goes: finding 453. The point's contents are left out:
-  # base's are the same lines.)
-  rp_ckleft_np() { (cd "$ck" && command find . -printf '%p %y\n' | LC_ALL=C sort); rp_ckwait; echo "== boxes"; (cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n'); }
+  # (during its scenario: a TERM or HUP to omabox alone waits for the scenario, here 6 s (10 at
+  # most, then a TERM to it), so its point is taken, then the box goes, finding 453; an INT to
+  # omabox alone stops it once the scenario is over, 130, nothing compared, finding 454; a group INT
+  # ends the scenario and omabox, 130. The point's contents are left out: base's are the same lines.)
+  cx_ckleft_np() { (cd "$ck" && command find . -printf '%p %y\n' | LC_ALL=C sort); cx_ckwait; echo "== boxes"; (cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n'); }
   for i in TERM HUP group-INT INT; do
-    rp_wrap=(env RP_LINGER=8 "$r_sig" "$i" "$ck/scen-started")
-    case $i in TERM|HUP) rp_also=rp_ckleft_np rp_why=453 rp_bash=('state!~/o/run1/whole\.') rp_rust=('state~^\./o/run1/whole\.(png|point) f$') ;; esac
-    # (an INT to omabox alone: bash goes on past the scenario, which outlives it, and compares, 1;
-    # the Rust half stops once the scenario is over, 130, nothing compared: finding 454)
-    [ "$i" != INT ] || { rp_why=454 rp_bash=(rc=1 'out~.') rp_rust=(rc=130 out=); }
-    parity "check run and $i during its scenario (both ways)" check run --base "$ck/base" -o "$ck/o" -- "$ck/slow"
-    rp_also=rp_ckleft
+    cx_wrap=(env RP_LINGER=8 "$r_sig" "$i" "$ck/scen-started")
+    cx_want=("rc=${cx_code[$i]}" out= "err~^omabox: check: run 1 of 1: box up in N s\$" 'state~^== boxes$' "state!~^$P-rpc")
+    case $i in TERM|HUP) cx_also=cx_ckleft_np; cx_want+=('state~^\./o/run1/whole\.(png|point) f$') ;; esac
+    cx_case "check run and $i during its scenario" check run --base "$ck/base" -o "$ck/o" -- "$ck/slow"
+    cx_also=cx_ckleft
   done
-  # (a scenario a Ctrl-C kills: bash ends 130 at once, its boxes taken down)
-  rp_wrap=(env RP_LINGER=8 "$r_sig" group-INT "$ck/o/run1.log")
-  parity "check run and group-INT killing a bare sleep scenario (both ways)" check run --base "$ck/base" -o "$ck/o" -- sleep 6
-  rp_wrap=() rp_also=rp_ckls; rp_ckdown
+  # (a scenario a Ctrl-C kills: 130 at once, its boxes taken down)
+  cx_wrap=(env RP_LINGER=8 "$r_sig" group-INT "$ck/o/run1.log")
+  cx_want=(rc=130 out= "err~^omabox: check: run 1 of 1: a clean box \\($P-rpc-1\\), then: sleep 6\$" 'state~^== boxes$' "state!~^$P-rpc")
+  cx_case "check run and group-INT killing a bare sleep scenario" check run --base "$ck/base" -o "$ck/o" -- sleep 6
+  cx_wrap=() cx_also=cx_ckls; cx_ckdown
   # --approve into a base that cannot be made: mkdir's failure ends it, 1, its boxes gone.
   mkdir -p "$ck/ro"; chmod 555 "$ck/ro"
-  rp_prep=rp_ckr
-  rp_why=442 rp_bash=(rc=1 "err~^mkdir: cannot create directory") rp_rust=(rc=2 "err~^omabox: check: cannot make $ck/ro/base: Permission denied$")
-  parity "check run --approve: a base that cannot be made, 1 (2 in Rust, check's own failure)" check run --approve --runs 2 --base "$ck/ro/base" -o "$ck/o" -- "$ck/scen"
+  cx_prep=cx_ckr
+  cx_want=(rc=2 out= "err~^omabox: check: cannot make $ck/ro/base: Permission denied\$")
+  cx_case "check run --approve: a base that cannot be made, 1 (2 in Rust, check's own failure)" check run --approve --runs 2 --base "$ck/ro/base" -o "$ck/o" -- "$ck/scen"
   chmod 755 "$ck/ro"
   check_eq "...every check box went down" "" "$(cd "$XDG_RUNTIME_DIR/omabox" && command find . -maxdepth 1 -name "$P-rpc*" -printf '%P\n')"
-  rp_prep="" rp_env=() rp_also="" rp_sed=""
+  cx_prep="" cx_env=() cx_also="" cx_sed=""
   # record on the box: wf-recorder and ffmpeg for real (the numbers of a take's length, its
   # times and sizes left out: they are the take's).
-  local rv=$TMP/rp-rec; rm -rf "$rv"; mkdir -p "$rv"
-  rp_recx() { obb record -b "$B" stop >/dev/null 2>&1 || true; rm -rf "$rv"; mkdir -p "$rv"; }
-  rp_recs() { rp_recx; obb record -b "$B" start -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
-  rp_recm() { rp_recs; obb record -b "$B" mark 'scene one' >/dev/null 2>&1; }
-  rp_recls() { (cd "$rv" && command find . -printf '%p %y\n' | LC_ALL=C sort; for f in *.tsv *.vtt; do [ -f "$f" ] && { echo "== $f"; sed -E 's/[0-9]+/N/g' "$f"; }; done 2>/dev/null); }
-  rp_also=rp_recls
-  rp_sed='s/[0-9]+(\.[0-9]+)?/N/g'
-  rp_prep=rp_recx
-  parity "record --for 1s --sheet --frames 2 (both ways)" record -b "$B" --for 1s --sheet --frames 2 -o "$rv/v.mp4"
-  parity "record -- ACTION --hold 200ms (both ways)" record -b "$B" --hold 200ms -o "$rv/v.mp4" -- keys a
-  parity "record status: not recording (both ways)" record -b "$B" status
-  rp_prep=rp_recs
-  parity "record status --json: recording (both ways)" record -b "$B" status --json
-  parity "record mark (both ways)" record -b "$B" mark 'scene two'
-  parity "record hold 300ms (both ways)" record -b "$B" hold 300ms
-  rp_prep=rp_recm
-  parity "record stop --captions --cut-idle (both ways)" record -b "$B" stop --captions --cut-idle
+  local rv=$TMP/rp-rec rvN; rm -rf "$rv"; mkdir -p "$rv"
+  # (its path as the cases' sed leaves it, every number an N)
+  rvN=$(sed -E 's/[0-9]+(\.[0-9]+)?/N/g' <<<"$rv")
+  cx_recx() { ob record -b "$B" stop >/dev/null 2>&1 || true; rm -rf "$rv"; mkdir -p "$rv"; }
+  cx_recs() { cx_recx; ob record -b "$B" start -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
+  cx_recm() { cx_recs; ob record -b "$B" mark 'scene one' >/dev/null 2>&1; }
+  cx_recls() { (cd "$rv" && command find . -printf '%p %y\n' | LC_ALL=C sort; for f in *.tsv *.vtt; do [ -f "$f" ] && { echo "== $f"; sed -E 's/[0-9]+/N/g' "$f"; }; done 2>/dev/null); }
+  cx_also=cx_recls
+  cx_sed='s/[0-9]+(\.[0-9]+)?/N/g'
+  cx_prep=cx_recx
+  cx_want=(rc=0 "out=$rvN/v.mpN"$'\n'"$rvN/v.sheet.png" 'err~^omabox: record: a NxN contact sheet of N frames ' 'state~^\./v\.mp4 f$' 'state~^\./v\.sheet\.png f$')
+  cx_case "record --for 1s --sheet --frames 2" record -b "$B" --for 1s --sheet --frames 2 -o "$rv/v.mp4"
+  cx_want=(rc=0 "out=$rvN/v.mpN" 'err~^omabox: record: NxN, Ns at N fps$' 'state~^\./v\.mp4 f$')
+  cx_case "record -- ACTION --hold 200ms" record -b "$B" --hold 200ms -o "$rv/v.mp4" -- keys a
+  cx_want=(rc=0 "out~^box 't[N0-9]+-rpN': not recording\$" err=)
+  cx_case "record status: not recording" record -b "$B" status
+  cx_prep=cx_recs
+  cx_want=(rc=0 "out~^\\{\"recording\":true,\"stopped\":false,\"monitors\":\\[\"[A-Z]+-N\"\\],\"fps\":N,\"file\":\"$rvN/v\\.mpN\",\"audio\":false,\"started\":N\\}\$" err=)
+  cx_case "record status --json: recording" record -b "$B" status --json
+  cx_want=(rc=0 'out=Ns scene two' err=)
+  cx_case "record mark" record -b "$B" mark 'scene two'
+  cx_want=(rc=0 'out=held Ns to Ns' err=)
+  cx_case "record hold 300ms" record -b "$B" hold 300ms
+  cx_prep=cx_recm
+  cx_want=(rc=0 "out=$rvN/v.mpN" 'err~^omabox: record: N still stretch(es)? cut to Ns' "err~^omabox: record: N mark in $rvN/v\\.marks\\.tsv \\(ms in the video\\), and $rvN/v\\.vtt \\(captions\\)\$" 'state~^N	N\.N	scene one$' 'state~^WEBVTT$')
+  cx_case "record stop --captions --cut-idle" record -b "$B" stop --captions --cut-idle
   # --no-pointer: the hold kept past start, given back at stop.
-  rp_recptr() { rp_recls; echo "== pointer"; sed -E 's/[0-9]+/N/g' "$XDG_RUNTIME_DIR/omabox/$B/pointer" 2>/dev/null; }
-  rp_also=rp_recptr rp_prep=rp_recx
-  parity "record start --no-pointer: the hold kept (both ways)" record -b "$B" start --no-pointer -o "$rv/v.mp4"
-  rp_recnp() { rp_recx; obb record -b "$B" start --no-pointer -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
-  rp_prep=rp_recnp
-  parity "record stop: the --no-pointer hold given back (both ways)" record -b "$B" stop
-  rp_recx
-  rp_prep="" rp_sed="" rp_also=""
-  rp_prep="" rp_sed="" rp_also=""
-  rp_lay
-  rp_rt="" rp_snap=1
+  cx_recptr() { cx_recls; echo "== pointer"; sed -E 's/[0-9]+/N/g' "$XDG_RUNTIME_DIR/omabox/$B/pointer" 2>/dev/null; }
+  cx_also=cx_recptr cx_prep=cx_recx
+  cx_want=(rc=0 out= "err~^omabox: record: recording [A-Z]+-N of box 't[N0-9]+-rpN' to $rvN/v\\.mpN \\(omabox record stop\\)\$" 'state~^hold record N$')
+  cx_case "record start --no-pointer: the hold kept" record -b "$B" start --no-pointer -o "$rv/v.mp4"
+  cx_recnp() { cx_recx; ob record -b "$B" start --no-pointer -o "$rv/v.mp4" >/dev/null 2>&1; sleep 0.6; }
+  cx_prep=cx_recnp
+  cx_want=(rc=0 "out=$rvN/v.mpN" 'err~^omabox: record: NxN, Ns at N fps$' 'state!~^hold record')
+  cx_case "record stop: the --no-pointer hold given back" record -b "$B" stop
+  cx_recx
+  cx_prep="" cx_sed="" cx_also=""
+  cx_prep="" cx_sed="" cx_also=""
+  cx_lay
+  cx_rt="" cx_snap=1
   ob down "$B" >/dev/null 2>&1
 }
 
@@ -15349,17 +15578,16 @@ t_audio() {
   check "...its PipeWire socket its own (${bs:-none}; yours ${hs})" test -n "$bs" -a "$bs" != "$hs"
   check_match "audio: silence while nothing plays" "^silence for 0.5s: nothing played to the speaker of box '$B'$" "$(ob audio -b "$B" 0.5 2>&1)"
   ob run -b "$B" -- ffmpeg -v error -y -f lavfi -i "sine=f=1000:d=1:sample_rate=48000" -ac 2 /home/sbx/tone.wav
-  # The Rust half's parity (#324, wave 4a): silence, and a tone played into each side's window (its
-  # levels and when it sounded are the window's timing: their numbers left out, how many kept).
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_prep="" rp_also="" rp_snap=0 rp_sed="" rp_wrap=()
-  parity "audio (both ways): silence" audio -b "$B" 0.5
-  parity "audio --json (both ways): silence" audio -b "$B" 300ms --json
-  rp_tone() { ob run -b "$B" -d -q -- sh -c 'sleep 0.3; pw-play ~/tone.wav' >/dev/null 2>&1; }
-  # (a window's level is null where the tone had not started or had ended: when, the timing's too)
-  rp_prep=rp_tone rp_sed='s/-?[0-9]+\.[0-9]+|null/N/g'
-  parity "audio (both ways): a tone" audio -b "$B" 2
-  parity "audio --json (both ways): a tone" audio -b "$B" 2 --json
-  rp_prep="" rp_sed="" rp_rt="" rp_snap=1
+  # (#324: what wave 4a compared with bash's, now stated: silence as JSON, a tone said in words; its
+  # levels and when it sounded are the window's timing, their numbers left out)
+  cx_rt=$XDG_RUNTIME_DIR cx_dir=/ cx_env=() cx_prep="" cx_also="" cx_snap=0 cx_sed="" cx_wrap=()
+  cx_want=(rc=0 "out~^\\{\"box\":\"$B\",\"seconds\":0\\.3,\"sound\":false,\"floor_db\":-70,\"sound_s\":0\\.0,\"peak_db\":null,\"rms_db\":null,\"spans\":\\[\\],\"levels\":\\[\\{\"t\":0\\.0," err=)
+  cx_case "audio --json: silence" audio -b "$B" 300ms --json
+  cx_tone() { ob run -b "$B" -d -q -- sh -c 'sleep 0.3; pw-play ~/tone.wav' >/dev/null 2>&1; }
+  cx_prep=cx_tone cx_sed='s/-?[0-9]+\.[0-9]+|null/N/g'
+  cx_want=(rc=0 'out~^sound for Ns of 2s: peak N dBFS, RMS N dBFS while it sounded; at N' err=)
+  cx_case "audio: a tone, said" audio -b "$B" 2
+  cx_prep="" cx_sed="" cx_rt=""
   sleep 2.5
   ob run -b "$B" -d -- sh -c 'sleep 0.3; pw-play ~/tone.wav' >/dev/null 2>&1
   local aj; aj=$(ob audio -b "$B" 2 --json 2>&1)
@@ -15804,22 +16032,10 @@ t_monitors_window() {
   check_eq "...the main screen at scale 1 as the remove returns" 1 "$("${in[@]}" monitor -b wm list --json | jq -r '.[] | select(.name == "WAYLAND-1") | .scale')"
   check_eq "removing the last monitor: the main window tiles again, filling the workspace" '[{"ws":"9","floating":false,"at":[12,12],"size":[3416,1416]}]' "$(boxwins)"
   check "...its screen its window's size again, at scale 1" until_ok 3 mons 'map("\(.name) \(.mode) \(.scale)") | join("|")' "WAYLAND-1 3416x1416@60 1"
-  # The Rust half's parity (#324, wave 4a): an interactive box's monitor as a window on the stand-in,
-  # added and removed both ways (each side from the main window alone, or with one monitor), the
-  # stand-in's windows and the box's monitors compared after each.
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_snap=0 rp_sed="" rp_wrap=(bash -c "$RP_IN_BOX" rp-in "$CLI" "$S" "${GUARDED[@]}")
-  rp_mw_one() { local n; for n in $("${in[@]}" monitor -b wm list --json | jq -r '.[] | select(.name != "WAYLAND-1") | .name'); do
-      OMABOX_BASH=1 "${in[@]}" monitor -b wm remove "$n" >/dev/null 2>&1; done; until_ok 3 mons 'map(.name) | join(" ")' WAYLAND-1 >/dev/null; }
-  rp_mw_two() { rp_mw_one; OMABOX_BASH=1 "${in[@]}" monitor -b wm add 800x600,below >/dev/null 2>&1; }
-  rp_mw_also() { boxwins; "${in[@]}" monitor -b wm list --json; ob hyprctl -b "$S" -j clients | jq '[.[] | select(.class | test("^aquamarine-omabox-[0-9a-f]{16}$"))] | length'; }
-  rp_also=rp_mw_also rp_prep=rp_mw_one
-  parity "monitor add, interactive (both ways): a window on the stand-in, the picture laid out" monitor -b wm add 1280x720
-  rp_prep=rp_mw_two
-  parity "monitor add, interactive, with one (both ways)" monitor -b wm add 800x600
-  parity "monitor remove, interactive (both ways): the main window tiled again" monitor -b wm remove WAYLAND-2
-  parity "monitor list, interactive (both ways)" monitor -b wm list
-  rp_mw_one
-  rp_prep="" rp_also="" rp_wrap=() rp_rt="" rp_snap=1
+  # (its table too, the main screen alone: add, remove and list --json are checked above; #324, what
+  # wave 4a compared with bash's)
+  check_match "monitor list, interactive: its table, the main screen alone" "^NAME +MODE +SCALE +POSITION +WORKSPACE"$'\n'"WAYLAND-1 +3416x1416@60 +1 +0,0 " \
+    "$("${in[@]}" monitor -b wm list 2>&1)"
   "${in[@]}" monitor -b wm add 800x600 >/dev/null 2>&1
   local main; main=$(ob hyprctl -b "$S" -j clients | jq -r '.[] | select(.class == "aquamarine" and .floating and .size[0] > 1000) | .address')
   ob hyprctl -b "$S" dispatch "hl.dsp.window.close({ window = 'address:$main' })" >/dev/null
@@ -16533,27 +16749,6 @@ t_clip() {
   "${in[@]}" sh -c 'printf "second" | wl-copy'
   check_match "with no -b: the only interactive box" "to box 'ib'$" "$("${in[@]}" "$CLI" clip 2>&1)"
   check_eq "...which has it" second "$("${inb[@]}" wl-paste -n)"
-  # The Rust half's parity (#324, wave 4a): clip both ways in the stand-in (its own run of omabox,
-  # told which half by --pass, RP_IN_BOX), the clipboards it changed compared after each side.
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_snap=0 rp_sed="" rp_wrap=(bash -c "$RP_IN_BOX" rp-in "$CLI" "$B")
-  rp_cl_also() { "${inb[@]}" sh -c 'wl-paste --list-types | LC_ALL=C sort | xargs; wl-paste -n | md5sum' 2>&1; "${in[@]}" sh -c 'wl-paste --list-types | LC_ALL=C sort | xargs; wl-paste -n | md5sum' 2>&1; }
-  rp_cl_text() { "${in[@]}" sh -c 'printf "rp t\303\251xt\n" | wl-copy'; "${inb[@]}" wl-copy --clear; }
-  rp_cl_sec() { "${in[@]}" sh -c 'printf "rp pw" | wl-copy --sensitive'; "${inb[@]}" wl-copy --clear; }
-  rp_cl_box() { "${inb[@]}" sh -c 'printf "rp from box" | wl-copy'; "${in[@]}" wl-copy --clear; }
-  rp_cl_none() { "${in[@]}" wl-copy --clear; "${inb[@]}" wl-copy --clear; }
-  rp_cl_other() { "${in[@]}" sh -c 'printf x | wl-copy --type application/x-omabox-test'; }
-  rp_also=rp_cl_also rp_prep=rp_cl_text
-  parity "clip (both ways): text into the box" clip -b ib
-  parity "clip (both ways): no -b, the only interactive box" clip
-  rp_prep=rp_cl_sec; parity "clip (both ways): a secret" clip -b ib
-  rp_prep=rp_cl_box; parity "clip --from-box (both ways)" clip --from-box -b ib
-  rp_prep=rp_cl_none; parity "clip (both ways): your clipboard empty" clip -b ib
-  parity "clip --from-box (both ways): the box's empty" clip --from-box -b ib
-  rp_prep=rp_cl_other; parity "clip (both ways): a type it does not take" clip -b ib
-  rp_prep=rp_cl_text rp_sed='s/pid [0-9]+/pid P/g' rp_wrap=(bash -c "$RP_IN_BOX" rp-in "$CLI" "$B" env CLAUDECODE=1)
-  rp_why=441 rp_bash=("err~\\(CLAUDECODE set for bash, pid P\\)") rp_rust=("err~\\(CLAUDECODE set for omabox, pid P\\)")
-  parity "clip (both ways): refused to an agent" clip -b ib
-  rp_prep="" rp_also="" rp_sed="" rp_wrap=() rp_rt="" rp_snap=1
   # An image, by its type; a PNG of the stand-in's screen
   "${in[@]}" sh -c 'grim /tmp/clip.png && wl-copy --type image/png < /tmp/clip.png'
   check_match "clip: an image" "handed an image \(image/png, [0-9.]+ [KM]iB\)" "$("${in[@]}" "$CLI" clip -b ib 2>&1)"
@@ -16630,7 +16825,8 @@ t_clip() {
   check_match "...the one whose window has focus" "to box 'ib2'$" "$("${in[@]}" "$CLI" clip 2>&1)"
   check_eq "...which has it" "to the focused one" "$("${in[@]}" "$CLI" run -b ib2 -- wl-paste -n)"
   "${in[@]}" sh -c 'printf "secret" | wl-copy'; "${inb[@]}" wl-copy --clear
-  check_match "clip refused to an agent's shell" "not for agents \(CLAUDECODE set for " "$("${in[@]}" env CLAUDECODE=1 "$CLI" clip -b ib 2>&1)"
+  # (the process named is omabox, the binary: bash's omabox named its own comm, bash, finding 441)
+  check_match "clip refused to an agent's shell" "not for agents \(CLAUDECODE set for omabox, pid [0-9]+\)" "$("${in[@]}" env CLAUDECODE=1 "$CLI" clip -b ib 2>&1)"
   check_match "...with the variable dropped (env -u) under that shell" "not for agents \(CLAUDECODE set for bash" \
     "$("${in[@]}" env CLAUDECODE=1 bash -c 'env -u CLAUDECODE "$0" clip -b ib; true' "$CLI" 2>&1)"
   check_match "...under a program named claude, whatever the environment" "not for agents \(claude, pid" \
@@ -19740,8 +19936,8 @@ t_run_cwd() {
 
 UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_layout t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_bash_changes t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
   t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_which t_unit_brief t_unit_run_job t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
-BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
-  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
+BOX=(t_leak_control t_cli_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
+  t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_cli_box t_brief t_link_out t_run_cwd t_clean t_check)
 
 # Box tests run in parallel (-j N; issue #60): each in a subshell of its own, its output shown whole
 # when it ends. By default half the CPUs, at most one per 2 GB available and 8 (on 16 CPUs: 8, a full
