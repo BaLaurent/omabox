@@ -15,6 +15,8 @@ use crate::install::{AQ_BUILD, AQ_FIX_SYMBOL, AQ_FIXED_AFTER};
 /// The helpers the probe answers for, and the words each takes.
 pub const NAMES: &[(&str, &str)] = &[
     ("host_session", ""),
+    // A screen mode as up reads it: `host` the user's focused monitor (a read-only hyprctl there).
+    ("parse_mode", "MODE"),
     // The GPUs, their devices under ROOT ("/" by default; a stand-in tree's for the unit tests).
     ("render_node", "[ROOT]"),
     ("render_nodes", "[ROOT]"),
@@ -124,6 +126,13 @@ pub const NAMES: &[(&str, &str)] = &[
     ("workspace_widgets", ""),
     ("cwd_path_word", "DIR HOME WORD..."),
     // A repo's links that lead out of it (#235): which, the note up says, whether one may be mounted.
+    ("job_exe", "ARGV0"),
+    // What windows, layers, a crash log and the monitors give, as the commands read them.
+    ("layer_select", "LAYERS SEL"),
+    ("gdb_crashes", ""),
+    ("desk_picture", ""),
+    ("zero_note", "MONITORS WAYLAND_SCREEN OTHER"),
+    ("box_cmds", ""),
     ("repo_link_out", "TOP PATH"),
     ("link_note", "WHAT LINK TARGET HOW"),
     ("link_mountable", "PATH"),
@@ -182,6 +191,7 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             let (sig, wl) = crate::host::host_session_die(&ctx)?;
             line(&cat!(sig, " ", wl))
         }
+        (b"parse_mode", [m]) => line(&crate::mon::parse_mode(&ctx, m)?),
         (b"render_node", r) if r.len() <= 1 => line(
             crate::render::render_node_in(
                 &ctx,
@@ -329,6 +339,20 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
                 _ => return Err(usage()),
             };
             out(crate::desk::desk_target_with(t, snap, || arg.to_vec()))
+        }
+        (b"job_exe", [a0]) => line(&crate::jobs::job_exe(a0)),
+        (b"layer_select", [lys, sel]) => line(&crate::layer::layer_select(&ctx, lys, sel)?),
+        (b"gdb_crashes", []) => out(crate::cmd::log::gdb_crashes(&stdin_all()?)),
+        (b"desk_picture", []) => awk_stdin(&[crate::jqprog::DESK_PICTURE_AWK.as_bytes().to_vec()]),
+        (b"zero_note", [m, ws, other]) => line(&crate::shots::zero_note(m, ws, Some(other))),
+        (b"box_cmds", []) => {
+            // (bash's BOX_CMDS: one line, a space around each)
+            let mut v = b" ".to_vec();
+            for c in crate::front::BOX_CMDS {
+                v.extend_from_slice(c);
+                v.push(b' ');
+            }
+            line(&v)
         }
         (b"repo_link_out", [top, p]) => {
             let [l, t, at] = crate::repo::repo_link_out(top, p).ok_or(Exit(1))?;

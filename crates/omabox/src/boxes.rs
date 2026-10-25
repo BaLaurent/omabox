@@ -610,6 +610,35 @@ pub fn box_file(ctx: &Ctx, p: &std::path::Path, value: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    // box_file (finding 74; t_unit_config's): a flag over a link to a FIFO is written, not blocked
+    // on; over a link to a host file, that file is untouched and the flag a plain file.
+    #[test]
+    fn box_file_replaces_links() {
+        let d = std::env::temp_dir().join(format!("omabox-boxfile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("run")).unwrap();
+        let fifo = d.join("fifo");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: a path of ours, NUL-terminated.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        std::fs::write(d.join("host-file"), "keep\n").unwrap();
+        std::os::unix::fs::symlink(&fifo, d.join("run/omabox.confirm-close")).unwrap();
+        std::os::unix::fs::symlink(d.join("host-file"), d.join("run/omabox.mode")).unwrap();
+        let mut ctx = Ctx::new(b"config", b"/x".to_vec());
+        ctx.d = shell::bytes(&d).to_vec();
+        // (a write that blocked on the FIFO would hang here: the test's own timeout)
+        assert!(box_file(&ctx, &d.join("run/omabox.confirm-close"), b"on"));
+        assert!(box_file(&ctx, &d.join("run/omabox.mode"), b"1280x720@60"));
+        assert_eq!(
+            std::fs::read_to_string(d.join("host-file")).unwrap(),
+            "keep\n",
+            "...over a link to a host file: that file untouched"
+        );
+        let m = std::fs::symlink_metadata(d.join("run/omabox.mode")).unwrap();
+        assert!(m.is_file(), "...the flag a plain file now");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// t_unit_lock_markers: a holder removes the lock file while a waiter waits on it, as down
     /// does: the waiter ends up on the path's file, so a newcomer's try fails while it holds it.
     #[test]

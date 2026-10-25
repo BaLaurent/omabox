@@ -9,7 +9,7 @@ use crate::cat;
 use crate::exit::{Ctx, Exit, Res, say};
 
 /// The commands about one box, which take `-b NAME` before them (issue #36).
-const BOX_CMDS: &[&[u8]] = &[
+pub const BOX_CMDS: &[&[u8]] = &[
     b"up",
     b"run",
     b"shot",

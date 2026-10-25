@@ -732,6 +732,87 @@ pub fn set_up_locked(on: bool) {
 mod tests {
     use super::*;
 
+    // t_unit_parse_mode's modes, the main screen's scale (finding 296) and size_text.
+    #[test]
+    fn modes_as_bash() {
+        let ctx = Ctx::new(b"up", b"/x".to_vec());
+        let pm = |m: &str| {
+            crate::exit::muted(|| parse_mode(&ctx, m.as_bytes()))
+                .ok()
+                .map(|v| String::from_utf8(v).unwrap())
+        };
+        assert_eq!(
+            pm("1920x1080").as_deref(),
+            Some("1920x1080@60"),
+            "WxH is @60"
+        );
+        assert_eq!(
+            pm("3440x1440@144").as_deref(),
+            Some("3440x1440@144"),
+            "WxH@HZ kept"
+        );
+        assert_eq!(
+            pm("2560x1440@59.95").as_deref(),
+            Some("2560x1440@59.95"),
+            "fractional HZ"
+        );
+        assert_eq!(
+            pm("1280x720@60.0").as_deref(),
+            Some("1280x720@60"),
+            "Hz normalised (@60.0 is @60)"
+        );
+        assert_eq!(pm("bogus"), None, "junk refused");
+        assert_eq!(pm("1x1@0"), None, "0 Hz refused");
+        assert_eq!(pm("0x1080"), None, "zero width refused");
+        let ss = |who: &str, spec: &str| {
+            let (r, said) = crate::exit::heard(|| split_scale(&ctx, who, spec.as_bytes()));
+            match r {
+                Ok((m, s)) => format!(
+                    "{} {}",
+                    String::from_utf8(m).unwrap(),
+                    String::from_utf8(s).unwrap()
+                ),
+                Err(_) => said,
+            }
+        };
+        assert_eq!(
+            ss("--size", "1920x1080"),
+            "1920x1080 1",
+            "split_scale: none is 1"
+        );
+        assert_eq!(
+            ss("--size", "3840x2160@120,scale=2.0"),
+            "3840x2160@120 2",
+            "...scale=2 (2.0 is 2), the rate left to parse_mode"
+        );
+        assert_eq!(
+            ss("--size", "host,scale=1.25"),
+            "host 1.25",
+            "...two decimals, and host"
+        );
+        assert!(
+            ss("--size", "1920x1080,scale=0.5")
+                .contains("scale is 1 to 4, up to 2 decimals, got 0.5"),
+            "...below 1 refused, said"
+        );
+        assert!(
+            ss("mode", "1920x1080,scale=5").contains("scale is 1 to 4"),
+            "...above 4 refused"
+        );
+        assert!(
+            ss("--size", "1920x1080,right").contains("a size is WxH[@HZ][,scale=S]"),
+            "...anything but scale=S refused"
+        );
+        assert_eq!(
+            (
+                size_text(b"1920x1080@60", b"1"),
+                size_text(b"3840x2160@60", b"2")
+            ),
+            (b"1920x1080@60".to_vec(), b"3840x2160@60,scale=2".to_vec()),
+            "size_text: scale 1 is the size alone, else ,scale=S"
+        );
+    }
+
     #[test]
     fn scale_rows_read() {
         assert_eq!(

@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6556 MIN_UNIT=3851
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4478 MIN_UNIT=1970
+MIN_CHECKS=6534 MIN_UNIT=3828
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4455 MIN_UNIT=1947
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -595,23 +595,8 @@ host_same() {
 # --- tests ---------------------------------------------------------------------------------------
 
 t_unit_parse_mode() {
-  check_eq "WxH is @60" "1920x1080@60" "$(lib parse_mode 1920x1080)"
-  check_eq "WxH@HZ kept" "3440x1440@144" "$(lib parse_mode 3440x1440@144)"
-  check_eq "fractional HZ" "2560x1440@59.95" "$(lib parse_mode 2560x1440@59.95)"
-  check_eq "Hz normalised (@60.0 is @60)" "1280x720@60" "$(lib parse_mode 1280x720@60.0)"
-  check_fails "junk refused" lib parse_mode bogus
-  check_fails "0 Hz refused" lib parse_mode 1x1@0
-  check_fails "zero width refused" lib parse_mode 0x1080
-  check_match "host = the focused monitor" '^[0-9]+x[0-9]+@[0-9.]+$' "$(lib parse_mode host)"
-  # The main screen's scale (finding 296): WxH[@HZ][,scale=S], S 1 to 4 as a monitor's.
-  check_eq "split_scale: none is 1" "1920x1080 1" "$(lib split_scale --size 1920x1080)"
-  check_eq "...scale=2 (2.0 is 2), the rate left to parse_mode" "3840x2160@120 2" "$(lib split_scale --size 3840x2160@120,scale=2.0)"
-  check_eq "...two decimals, and host" "host 1.25" "$(lib split_scale --size host,scale=1.25)"
-  check_match "...below 1 refused, said" "scale is 1 to 4, up to 2 decimals, got 0.5" "$(lib split_scale --size 1920x1080,scale=0.5 2>&1)"
-  check_match "...above 4 refused" "scale is 1 to 4" "$(lib split_scale mode 1920x1080,scale=5 2>&1)"
-  check_match "...anything but scale=S refused" "a size is WxH\[@HZ\]\[,scale=S\]" "$(lib split_scale --size 1920x1080,right 2>&1)"
-  check_eq "size_text: scale 1 is the size alone, else ,scale=S" "1920x1080@60|3840x2160@60,scale=2" \
-    "$(lib size_text 1920x1080@60 1)|$(lib size_text 3840x2160@60 2)"
+  # The modes, the main screen's scale (finding 296) and size_text: mon.rs modes_as_bash.
+  check_match "host = the focused monitor" '^[0-9]+x[0-9]+@[0-9.]+$' "$(probe parse_mode host)"
 }
 
 t_unit_rec_ff() {
@@ -1181,26 +1166,26 @@ t_unit_mount_rules() {
   # here once for the wrong reason). Only plugins/ and themes/; seed_home's look (branding, extensions).
   local fh=$TMP/mr-home o; o=$fh/.config/omarchy
   # shellcheck disable=SC2329 # called below
-  fhlib() { env HOME="$fh" "$PROBE" _rust probe "$@"; }
+  fhprobe() { env HOME="$fh" "$PROBE" _rust probe "$@"; }
   mkdir -p "$o/plugins/x.y" "$o/themes/t" "$o/hooks" "$o/branding" "$fh/proj/fixtures"
   echo fake > "$o/api-keys.env"; echo 'echo hi' > "$o/hooks/post-update"
-  check_match "a file inside ~/.config/omarchy refused (api-keys.env)" "it is inside .*/.config/omarchy/" "$(fhlib refuse_src "$o/api-keys.env")"
-  check "...a hook too" fhlib refuse_src "$o/hooks/post-update"
-  check "...branding, outside seed_home's look" fhlib refuse_src "$o/branding"
-  check_fails "...in seed_home's look it is fine" fhlib refuse_src "$o/branding" look
-  check_fails "...a plugin dir under it is fine" fhlib refuse_src "$o/plugins/x.y"
-  check_fails "...a theme dir too" fhlib refuse_src "$o/themes/t"
+  check_match "a file inside ~/.config/omarchy refused (api-keys.env)" "it is inside .*/.config/omarchy/" "$(fhprobe refuse_src "$o/api-keys.env")"
+  check "...a hook too" fhprobe refuse_src "$o/hooks/post-update"
+  check "...branding, outside seed_home's look" fhprobe refuse_src "$o/branding"
+  check_fails "...in seed_home's look it is fine" fhprobe refuse_src "$o/branding" look
+  check_fails "...a plugin dir under it is fine" fhprobe refuse_src "$o/plugins/x.y"
+  check_fails "...a theme dir too" fhprobe refuse_src "$o/themes/t"
   # ...and by the path as given: a link there (or in a secret store) to a file that would be fine.
   mkdir -p "$fh/dots" "$fh/.ssh"; echo fake > "$fh/dots/keys.env"; echo fake > "$fh/dots/id"
   ln -s ../../dots/keys.env "$o/linked-keys.env"; ln -s ../dots/id "$fh/.ssh/id_linked"
-  check_match "a link inside ~/.config/omarchy to a dotfiles file refused" "it is inside .*/.config/omarchy/" "$(fhlib refuse_src "$o/linked-keys.env")"
-  check_match "...a link in ~/.ssh too" "it is inside .*/.ssh/" "$(fhlib refuse_src "$fh/.ssh/id_linked")"
-  check_match "...given relative, as named" "it is inside .*/.config/omarchy/" "$(cd "$o" && fhlib refuse_src linked-keys.env)"
-  check_fails "...what they point at, named itself, is fine" fhlib refuse_src "$fh/dots/keys.env"
+  check_match "a link inside ~/.config/omarchy to a dotfiles file refused" "it is inside .*/.config/omarchy/" "$(fhprobe refuse_src "$o/linked-keys.env")"
+  check_match "...a link in ~/.ssh too" "it is inside .*/.ssh/" "$(fhprobe refuse_src "$fh/.ssh/id_linked")"
+  check_match "...given relative, as named" "it is inside .*/.config/omarchy/" "$(cd "$o" && fhprobe refuse_src linked-keys.env)"
+  check_fails "...what they point at, named itself, is fine" fhprobe refuse_src "$fh/dots/keys.env"
   mv "$o" "$fh/omarchy-real"; ln -s ../omarchy-real "$o"   # ~/.config/omarchy a dotfiles link
-  check "...through a dotfiles link, api-keys.env still refused" fhlib refuse_src "$fh/omarchy-real/api-keys.env"
-  check "...and the dir that holds it" fhlib refuse_src "$fh/omarchy-real"
-  check_fails "...a plugin there still fine" fhlib refuse_src "$fh/omarchy-real/plugins/x.y"
+  check "...through a dotfiles link, api-keys.env still refused" fhprobe refuse_src "$fh/omarchy-real/api-keys.env"
+  check "...and the dir that holds it" fhprobe refuse_src "$fh/omarchy-real"
+  check_fails "...a plugin there still fine" fhprobe refuse_src "$fh/omarchy-real/plugins/x.y"
   # (A jailed caller's relative --seed SRC goes absolute, one not there as given, DEST the box's; a
   # relative --theme-dir absolute, #170: t_unit_rust_jailed's.)
   # #98: omabox's own saves and box HOMEs, and other tools' tokens
@@ -1723,9 +1708,7 @@ t_unit_config() {
     "omabox: note: on this Omarchy the scratchpad is its Quake console: a half-height panel that starts the default agent when it opens empty; special:omabox gives box windows a special workspace of their own, full size|workspace=special:scratchpad" \
     "$(OMARCHY_PATH=$o45 cfg workspace special | paste -sd '|')"
   check_eq "special:NAME (special:omabox, the widget's own): no note" workspace=special:omabox "$(OMARCHY_PATH=$o45 cfg workspace special:omabox)"
-  check_eq "ws_text: a special workspace says how it shows and hides" \
-    "special workspace omabox, which the bar widget's Show opens and a workspace switch hides|the scratchpad (SUPER+S shows it)|workspace 9" \
-    "$(for w in special:omabox special:scratchpad 9; do lib ws_text "$w"; done | paste -sd '|')"
+  # ws_text: settle.rs ws_text_as_bash.
   check_eq "confirm-close yes reads on" confirm-close=on "$(cfg confirm-close yes | tail -1)"
   check_eq "bar-icon auto" bar-icon=auto "$(cfg bar-icon auto)"
   check_fails "bar-icon takes auto or always" env HOME="$h" "$CLI" config bar-icon sometimes
@@ -1772,13 +1755,7 @@ t_unit_config() {
   check "a linked config stays a link" test -L "$h/.config/omabox/config"
   check "...and its target changes" grep -qx workspace=3 "$h/dotconfig"
   # The host writes into a box's runtime dir, which the box can write too: never through what is there
-  # (finding 74). A link to a FIFO hung `omabox config`; a link to a host file would be written through.
-  local d=$TMP/fakebox; mkdir -p "$d/run"; mkfifo "$d/fifo"; echo keep > "$d/host-file"
-  ln -s "$d/fifo" "$d/run/omabox.confirm-close"; ln -s "$d/host-file" "$d/run/omabox.mode"
-  check "a flag over a link to a FIFO is written, not blocked on" timeout 5 bash -c 'source "$1"; box_file "$2/run/omabox.confirm-close" on' _ "$TMP/lib/bin/omabox" "$d"
-  lib box_file "$d/run/omabox.mode" 1280x720@60
-  check_eq "...over a link to a host file: that file untouched" keep "$(cat "$d/host-file")"
-  check "...the flag a plain file now" test -f "$d/run/omabox.mode" -a ! -L "$d/run/omabox.mode"
+  # (finding 74; a link to a FIFO hung `omabox config`): boxes.rs box_file_replaces_links.
 }
 
 # shot-fit (#188): every shot's default --fit, from the config or $OMABOX_SHOT_FIT (which wins); the
@@ -9033,7 +9010,7 @@ t_unit_replace_others() {
   local d=$TMP/ro
   mkdir -p "$d/r/jobs" "$d/build"; d=$(cd "$d" && pwd -P)
   check_eq "job_exe: ./build/app and build/app are one program" "$d/build/app $d/build/app qml" \
-    "$(cd "$d" && lib job_exe ./build/app | tr '\n' ' '; cd "$d" && lib job_exe build/app | tr '\n' ' '; lib job_exe qml)"
+    "$(cd "$d" && probe job_exe ./build/app | tr '\n' ' '; cd "$d" && probe job_exe build/app | tr '\n' ' '; probe job_exe qml)"
   # rec PID LIVE EXE ARGV...: a job record (EXE - for none, as before #255)
   rec() { local pid=$1 live=$2 exe=$3; shift 3
     jq -nc --arg pid "$pid" --arg live "$live" --arg exe "$exe" '{pid: $pid, start: "1", log: "l", live: $live, argv: $ARGS.positional}
@@ -9054,11 +9031,11 @@ t_unit_replace_others() {
 }
 
 t_unit_cli() {
-  local dn0; dn0=$(cd "$ROOT" && lib default_name)
+  local dn0; dn0=$(cd "$ROOT" && probe default_name)
   check_match "default_name gives a name (#110: compared below)" '^[A-Za-z0-9]' "$dn0"
-  check_eq "inside a box OMABOX=1 is not a box name" "$dn0" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x lib default_name)"
-  check_eq "on the host OMABOX names the box" mine "$(OMABOX=mine lib default_name)"
-  check_eq "under run, OMABOX=NAME names the box (#19)" inner "$(OMABOX=inner OMABOX_NAME=outer lib default_name)"
+  check_eq "inside a box OMABOX=1 is not a box name" "$dn0" "$(cd "$ROOT" && OMABOX=1 OMABOX_NAME=x probe default_name)"
+  check_eq "on the host OMABOX names the box" mine "$(OMABOX=mine probe default_name)"
+  check_eq "under run, OMABOX=NAME names the box (#19)" inner "$(OMABOX=inner OMABOX_NAME=outer probe default_name)"
   check_match "run: unknown option named, no box started" "unknown option --interactive" "$(ob run --interactive -- true 2>&1)"
   check_match "run: a throwaway's up error is shown" "--net is connected" "$(cd "$(tmp_repo ne)" && env -u OMABOX "$CLI" run --net bogus -- true 2>&1)"
   check_match "run --help is the usage" "omabox up" "$(ob run --help 2>&1)"
@@ -9069,11 +9046,11 @@ t_unit_cli() {
   for c in $cmds; do [[ $(ob help "$c" | head -1) == "  omabox $c "* ]] || bad+=" $c"; done
   check_eq "help CMD starts with CMD's line, for each command" "" "$bad"
   bad=""
-  for c in $(lib usage_text | awk '/^@/ {for (i = 2; i <= NF; i++) print $i}' | sort -u); do
+  for c in $(probe usage_text | awk '/^@/ {for (i = 2; i <= NF; i++) print $i}' | sort -u); do
     grep -qx -- "$c" <<<"$cmds" || [ "$c" = exit-codes ] || bad+=" $c"
   done
   check_eq "...every paragraph's @ names a command (or the exit-codes topic)" "" "$bad"
-  check_match "...the first paragraph has one (so every line has one)" "^@ " "$(lib usage_text | awk 'NR > 2 && p {print; exit} NR > 2 && $0 == "" {p = 1}')"
+  check_match "...the first paragraph has one (so every line has one)" "^@ " "$(probe usage_text | awk 'NR > 2 && p {print; exit} NR > 2 && $0 == "" {p = 1}')"
   check_fails "...the @ lines never in the full help" grep -q '^@' <<<"$full"
   check_eq "shot --help is help shot" "$(ob help shot)" "$(ob shot --help)"
   check_eq "...after -b NAME too" "$(ob help shot)" "$(ob -b "$P-x" shot --help)"
@@ -9085,7 +9062,6 @@ t_unit_cli() {
     "\`down\` too, so \`omabox down\` there takes that box down" "$(ob help down --long | tr '\n' ' ')"
   check_match "...drag's: --hold is a duration, a bare number seconds, as ms_duration reads it (#103)" \
     "--hold DURATION.*like 300ms or 2s: a bare number is seconds" "$(ob help drag --long | tr '\n' ' ')"
-  check_eq "...which it does" 2000 "$(lib ms_duration 2)"
   check "confirm-close calls the box's own hyprctl and jq (#113: a stub must not end the box)" \
     grep -qE '^hyprctl\(\) \{ /usr/bin/hyprctl .*$' "$ROOT/share/confirm-close.sh"
   check "...and jq" grep -qE '^jq\(\) \{ /usr/bin/jq ' "$ROOT/share/confirm-close.sh"
@@ -9182,15 +9158,8 @@ EOF
   check_match "run -q without -d refused" "go with -d" "$(ob run -b "$P-x" -q -- true 2>&1)"
   check_match "run --replace without -d refused" "go with -d" "$(ob run -b "$P-x" --replace -- true 2>&1)"
   check_match "run --quiet without a duration: -q named" "-q is the flag" "$(ob run -b "$P-x" -d --quiet -- true 2>&1)"
-  # job_procs: a job's processes are its session's; its pid leading a session that started at another
-  # time (or at all, when the leader had exited before the record) is a reused pid, not the job.
-  local ps=$'100 7 7 500\n101 8 7 510\n102 9 9 520'
-  check_eq "job_procs: the session's processes" $'100 7\n101 8' "$(lib job_procs 7 500 <<<"$ps")"
-  check_eq "job_procs: the leader restarted under the pid: none" "" "$(lib job_procs 7 499 <<<"$ps")"
-  check_eq "job_procs: the leader gone, its session left" "101 8" "$(lib job_procs 7 - <<<$'101 8 7 510')"
-  check_eq "job_procs: - with a leader there: none" "" "$(lib job_procs 7 - <<<"$ps")"
-  check_eq "job_procs: the leader before its setsid (run-job.sh's session): it (finding 405)" "103 7" "$(lib job_procs 7 500 <<<$'103 7 6 500')"
-  check_eq "...one of another start: none" "" "$(lib job_procs 7 500 <<<$'103 7 6 499')"
+  # job_procs (finding 405): jobs.rs job_procs_as_bash; ms_duration's bare number (drag --hold):
+  # settle.rs wait_values_as_bash.
 }
 
 # `omabox clip` (issue #23, finding 119): never for an agent, and what it hands over. Only refusals and
@@ -11313,7 +11282,7 @@ SH
   wh=$(magick identify -format '%w %h' "$d/a/baseline.png" 2>/dev/null) || wh="0 0"
   check "...inside one look ($wh)" test "${wh% *}" -gt 0 -a "${wh% *}" -le 1456 -a $((${wh% *} * ${wh#* })) -le 1150000
   check_eq "...each checkpoint's speck in its .point" "4" "$(grep -l '^speck [0-9]*$' "$d/base/"*.point | wc -l)"
-  check_eq "...check.json: the locale and timezone" "$(lib clean_locale) UTC" "$(jq -r '"\(.locale) \(.timezone)"' "$d/base/check.json" 2>&1)"
+  check_eq "...check.json: the locale and timezone" "$(probe clean_locale) UTC" "$(jq -r '"\(.locale) \(.timezone)"' "$d/base/check.json" 2>&1)"
   check_match "...the random label: unstable, every run differing" $'unstable demo: every run differed[^\n]*\n  [0-9]+,[0-9]+ [0-9]+x[0-9]+' "$out"
   check "...the baseline's files" test -s "$d/base/demo.png" -a -s "$d/base/demo.tree.json" -a -s "$d/base/demo.unstable" -a -s "$d/base/check.json"
   check_eq "...no holes: the window's rounded corners are not one" "|holes checked" "$(grep -E '^holes ' <<<"$out" || true)|$(grep '^holes' "$d/base/screen.point")"
@@ -11572,23 +11541,23 @@ t_unit_tree_layer() {
       "3": [{"address": "0xc", "namespace": "omarchy-launcher", "pid": 7, "x": 0, "y": 0, "w": 1920, "h": 1080}]}},
     "DP-2": {"levels": {"2": [{"address": "0xd", "namespace": "omarchy-bar", "pid": 7, "x": 1920, "y": 0, "w": 42, "h": 1080},
       {"address": "0xe", "namespace": "solo", "pid": 9, "x": 2100, "y": 300, "w": 200, "h": 60}]}}}'
-  out=$(lib layer_select "$J" omarchy-background 2>&1); rc=$?
+  out=$(probe layer_select "$J" omarchy-background 2>&1); rc=$?
   check_eq "a namespace: its layer, with its level and monitor" \
     '0 {"namespace":"omarchy-background","address":"0xa","pid":7,"x":0,"y":0,"w":1920,"h":1080,"monitor":"DP-1","level":"background"}' "$rc $out"
-  out=$(lib layer_select "$J" omarchy-bar 2>&1); rc=$?
+  out=$(probe layer_select "$J" omarchy-bar 2>&1); rc=$?
   check_eq "a namespace on two monitors: exit 2" 2 "$rc"
   check_match "...both listed, to name one by its address" "omarchy-bar matches 2 layers: name one by its address.*0xb .* on DP-1 .*0xd .* at 1920,0 on DP-2" "$(tr '\n' ' ' <<<"$out")"
-  check_eq "address:0xd" "0xd DP-2" "$(lib layer_select "$J" address:0xd | jq -r '"\(.address) \(.monitor)"')"
-  check_eq "pid:9" solo "$(lib layer_select "$J" pid:9 | jq -r .namespace)"
-  out=$(lib layer_select "$J" omarchy-menu 2>&1); rc=$?
+  check_eq "address:0xd" "0xd DP-2" "$(probe layer_select "$J" address:0xd | jq -r '"\(.address) \(.monitor)"')"
+  check_eq "pid:9" solo "$(probe layer_select "$J" pid:9 | jq -r .namespace)"
+  out=$(probe layer_select "$J" omarchy-menu 2>&1); rc=$?
   check_eq "a layer mapped at 1x1 only (a closed menu): exit 1" 1 "$rc"
   check_match "...said so" "layer omarchy-menu is mapped at 1x1, not drawn" "$out"
-  out=$(lib layer_select "$J" nope 2>&1); rc=$?
+  out=$(probe layer_select "$J" nope 2>&1); rc=$?
   check_eq "no such layer: exit 2" 2 "$rc"
   check_match "...the box's layers listed" '"solo"  pid 9  top 200x60 at 2100,300 on DP-2' "$out"
   # layer_read: what it asks the box's tools/tree.
   read_args() {
-    T254_L=$(lib layer_select "$J" "$1") T254_KB=$2 T254_J=$J lib eval \
+    T254_L=$(probe layer_select "$J" "$1") T254_KB=$2 T254_J=$J lib eval \
       'kb_layers() { echo "$T254_KB"; }; box_sys() { echo "$*"; }; layer_read "$T254_L" "$T254_J" /dev/null --json'
   }
   check_eq "a layer alone at its size: its pid, size and place, no hint" \
@@ -16321,8 +16290,8 @@ t_unit_host_session() {
   check_fails "hyprctl under the guard fails" "${GUARDED[@]}" hyprctl -j version
   local found; found=$("${GUARDED[@]}" "$PROBE" _rust probe host_session); found=${found%% *}
   check "under the guard omabox finds a live session ($found)" env HYPRLAND_INSTANCE_SIGNATURE="$found" hyprctl -j version
-  check "and reaches it (read-only hyprctl)" "${GUARDED[@]}" bash -c 'source "$1"; host_hyprctl -j version' _ "$TMP/lib/bin/omabox"
-  check_eq "--size host under the guard is the same monitor" "$(lib parse_mode host)" "$("${GUARDED[@]}" bash -c 'source "$1"; parse_mode host' _ "$TMP/lib/bin/omabox")"
+  check "and reaches it (read-only hyprctl -j monitors, --size host's)" "${GUARDED[@]}" "$PROBE" _rust probe parse_mode host
+  check_eq "--size host under the guard is the same monitor" "$(probe parse_mode host)" "$("${GUARDED[@]}" "$PROBE" _rust probe parse_mode host)"
   local rt=$TMP/rt n
   fake() { mkdir -p "$rt/hypr/$1"; printf '%s\n%s\n' $$ "$2" > "$rt/hypr/$1/hyprland.lock"; }
   sock() { python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$1"; }
@@ -18035,7 +18004,7 @@ t_window() {
 t_unit_monitors() {
   # Every command whose usage takes -b NAME takes it before the command too: monitor was left out.
   local bcmds missing="" c n=0 out d=$TMP/maw
-  bcmds=$(lib eval 'echo "$BOX_CMDS"')
+  bcmds=$(probe box_cmds)
   for c in $(ob help 2>&1 | sed -nE 's/^  omabox ([a-z-]+) .*-b NAME.*/\1/p' | sort -u); do
     n=$((n + 1)); [[ $bcmds == *" $c "* ]] || missing+=" $c"
   done
@@ -18043,7 +18012,7 @@ t_unit_monitors() {
   check "...the usage has them" test "$n" -gt 20
   # An interactive box's layout as a picture on the host (#174): one scale for all, whole pixels when
   # a scale near gives them, the gap between windows that touch in the box, centred; never enlarged.
-  pic() { printf '%s\n' "$@" | lib desk_picture | paste -sd'|'; }
+  pic() { printf '%s\n' "$@" | probe desk_picture | paste -sd'|'; }
   check_eq "picture: #174's layout on a 3440x1440 screen, at 63/120" "0.525 1|main 862 9 1008 567|WAYLAND-2 1882 9 567 1008|WAYLAND-3 1882 1029 672 378" \
     "$(pic '3416 1416 12' 'main 0 0 1920 1080' 'WAYLAND-2 1920 0 1080 1920' 'WAYLAND-3 1920 1920 1280 720')"
   check_eq "picture: its first two" "0.73333 1|main 602 4 1408 792|WAYLAND-2 2022 4 792 1408" \
@@ -18071,14 +18040,14 @@ t_unit_monitors() {
   check_fails "...and up stops there" grep -q "went on" <<<"$out"
   # An output listed 0x0 in an NVIDIA box (#213): one a program made with `output create headless`.
   local zm='[{"name":"WAYLAND-1","width":1920,"height":1080,"disabled":false},{"name":"MINE","width":0,"height":0,"disabled":false},{"name":"OFF","width":0,"height":0,"disabled":true}]'
-  out=$(lib zero_note "$zm" true "renderD128 amdgpu")
+  out=$(probe zero_note "$zm" true "renderD128 amdgpu")
   check_match "zero_note: the 0x0 one named, why, and a box on the other GPU" \
     "^MINE listed 0x0: this box draws on NVIDIA, .*output create headless.*monitor add makes one that works.*OMABOX_RENDER_NODE=/dev/dri/renderD128 omabox up --new \(renderD128 is amdgpu\)$" "$out"
   check_fails "...a disabled one is not" grep -q OFF <<<"$out"
-  check_match "...no other GPU: said" "a machine with a GPU other than NVIDIA's \(this one has none\)" "$(lib zero_note "$zm" true "")"
-  check_eq "...nothing in a box not drawing on NVIDIA" "" "$(lib zero_note "$zm" false "renderD128 amdgpu")"
-  check_eq "...nothing when every output has a size" "" "$(lib zero_note '[{"name":"WAYLAND-1","width":1920,"height":1080,"disabled":false}]' true "")"
-  check_eq "...nothing (and no failure) for what is not a monitor list" "" "$(lib zero_note 'nope' true "")"
+  check_match "...no other GPU: said" "a machine with a GPU other than NVIDIA's \(this one has none\)" "$(probe zero_note "$zm" true "")"
+  check_eq "...nothing in a box not drawing on NVIDIA" "" "$(probe zero_note "$zm" false "renderD128 amdgpu")"
+  check_eq "...nothing when every output has a size" "" "$(probe zero_note '[{"name":"WAYLAND-1","width":1920,"height":1080,"disabled":false}]' true "")"
+  check_eq "...nothing (and no failure) for what is not a monitor list" "" "$(probe zero_note 'nope' true "")"
 }
 
 t_unit_pixel() {
@@ -18877,12 +18846,12 @@ t_unit_gdb_crashes() {
   log+=$'\n== omabox: every thread:\n\nThread 3 (LWP 60):\n#0  0x2 in crash ()\n\nThread 1 (LWP 55):\n#0  0x4 in main ()\n== omabox: end\n'
   check_eq "gdb_crashes: the crash's header, signal and thread, nothing else" \
     $'== omabox gdb --watch Hyprland (pid 55 in the box), T2\nThread 3 "worker" received signal SIGSEGV, Segmentation fault.\n[Current thread is 3 (LWP 60)]\n#0  0x2 in crash ()\n#1  0x3 in start ()' \
-    "$(lib gdb_crashes <<<"$log")"
+    "$(probe gdb_crashes <<<"$log")"
   local one=$'== omabox gdb --watch a (pid 2 in the box), T3\nProgram received signal SIGABRT, Aborted.\n'
   one+=$'== omabox: a fatal signal; the thread it hit:\n#0  0x5 in abort ()\n== omabox: every thread:\n#0  0x5 in abort ()\n== omabox: end\n'
   check_eq "...a single-threaded one's (Program received signal), two crashes apart" \
     $'== omabox gdb --watch a (pid 2 in the box), T3\nProgram received signal SIGABRT, Aborted.\n#0  0x5 in abort ()\n\n== omabox gdb --watch a (pid 2 in the box), T3\nProgram received signal SIGABRT, Aborted.\n#0  0x5 in abort ()' \
-    "$(lib gdb_crashes <<<"$one$one")"
+    "$(probe gdb_crashes <<<"$one$one")"
 }
 
 # The gpu setting (#156, finding 214) on a stand-in tree the probe reads under (its ROOT word): an AMD
@@ -20114,7 +20083,7 @@ t_inspect() {
   check_match "events --grep -i: any case" "openwindow>>" "$(ob events -b "$B" --grep '^OPENWINDOW>>' -i)"
   check_eq "...without -i, the case as given" "" "$(ob events -b "$B" --grep '^OPENWINDOW>>')"
   ob mode -b "$B" host >/dev/null 2>&1
-  check_eq "mode host: the box takes your focused monitor's mode" "$(lib parse_mode host)" "$(ob mode -b "$B" | awk '{print $2}')"
+  check_eq "mode host: the box takes your focused monitor's mode" "$(probe parse_mode host)" "$(ob mode -b "$B" | awk '{print $2}')"
   ob mode -b "$B" 1920x1080 >/dev/null 2>&1
   ob events -b "$B" --mark m2 >/dev/null 2>&1
   (sleep 1; ob hyprctl -b "$B" dispatch "hl.dsp.focus({ workspace = '4' })" >/dev/null) & local d=$!

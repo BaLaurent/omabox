@@ -1084,9 +1084,27 @@ mod tests {
         assert_eq!(ms("2h"), Some(7_200_000), "2h (#273: hours too)");
         assert_eq!(ms("2d"), None, "junk refused");
         assert_eq!(
+            ms("2"),
+            Some(2000),
+            "drag --hold: a bare number is seconds (t_unit_cli's)"
+        );
+        assert_eq!(
             cursor_rect(b"960 540"),
             Some(b"944,524,64,64".to_vec()),
             "the cursor's rectangle"
+        );
+    }
+
+    // t_unit_config's ws_text: a special workspace says how it shows and hides.
+    #[test]
+    fn ws_text_as_bash() {
+        let t: Vec<String> = ["special:omabox", "special:scratchpad", "9"]
+            .iter()
+            .map(|w| String::from_utf8(ws_text(w.as_bytes())).unwrap())
+            .collect();
+        assert_eq!(
+            t.join("|"),
+            "special workspace omabox, which the bar widget's Show opens and a workspace switch hides|the scratchpad (SUPER+S shows it)|workspace 9"
         );
     }
 
