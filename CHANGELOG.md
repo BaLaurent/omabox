@@ -83,6 +83,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   scale, which a reload kept too. Its scale is set before it exists, and the add waits until the box
   has it (rounded to whole pixels at most, as `mode`'s); one Hyprland makes at another is removed,
   saying what it made, exit 1 ([#379](https://github.com/diogochaves/omabox/issues/379)).
+- **`check run` failed a checkpoint on holes its baseline already had**: every hole was read as
+  new, so an approved see-through design failed each run. Only holes the baseline has none
+  overlapping count as new, as before the Rust omabox.
 
 ### Changes from the bash omabox
 

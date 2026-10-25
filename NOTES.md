@@ -10153,6 +10153,15 @@ from them.
     answers omabox_monitor_scales() with its monitors' own scales; its log's one more eval is an
     expected difference).
 
+520. **The binary's `check run` read every hole of a checkpoint as new** (2026-10-25, #324 wave
+    6-suite; found moving t_unit_check's two check_new_holes cases to a `#[test]`, which failed on
+    the first). check_new_holes split each baseline hole (`X,Y WxH N`) at blanks before matching it,
+    reading bash's `${old[@]+"${old[@]}"}` as unquoted; no word alone is a region, so no baseline
+    hole ever matched, and a checkpoint whose holes were all approved (finding 362: a check fails only
+    on new ones) failed under the binary where bash passed it. **Fix** (Rust): each baseline hole is
+    matched whole, as bash does. Tests: check.rs new_holes_as_bash (a hole overlapping the
+    baseline's is not new; against a baseline from before holes all are).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
