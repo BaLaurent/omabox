@@ -9414,7 +9414,14 @@ t_unit_agent_session() {
     "$(se "$P-r-$sid $P-r-0000beef" "$TMP" "$CLI" path)"
   check_eq "...once" "$sr/omabox/$P-r-$sid" "$(se "$P-r-$sid" "$TMP" "$CLI" path)"
   rm -f "$sr/omabox/$P-r-$sid/noted-default"
-  # (...not for up: select.rs no_session_fallback_for_up)
+  # (up's own: it names the session's box and goes on with the derived name, here to a refusal before
+  # anything is made; the fallback would have taken the box that is up, with no note)
+  check_eq "...not for up: the session's box named, up's own name kept" \
+    "omabox: note: this session already has box $P-r-$sid (started from another directory); -b NAME to use it"$'\n'"omabox: up: --idle takes a duration like 30m, 2h or 90s, or 0 (never), got x" \
+    "$(se "$P-r-$sid" "$TMP" "$CLI" up --idle x)"
+  check_fails "...nothing made" test -e "$sr/omabox/default-$sid"
+  check_eq "...while path, the same session and box, falls back" "$sr/omabox/$P-r-$sid" "$(se "$P-r-$sid" "$TMP" "$CLI" path | tail -1)"
+  rm -f "$sr/omabox/$P-r-$sid/noted-default"
   check_eq "...not with OMABOX naming the box" "$sr/omabox/x" "$(se "$P-r-$sid" "$TMP" env OMABOX=x "$CLI" path)"
   check_eq "...not with -b" "$sr/omabox/default-$sid" "$(se "$P-r-$sid" "$TMP" "$CLI" path -b "default-$sid")"
   check_eq "...nor another session's box" "$sr/omabox/default-$sid" "$(se "$P-r-0000beef" "$TMP" "$CLI" path)"

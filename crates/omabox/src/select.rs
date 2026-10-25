@@ -302,15 +302,6 @@ mod tests {
     /// t_unit_agent_session (#136): `up` never takes the session's box for its derived name (it
     /// says so instead: up_session_note).
     #[test]
-    fn no_session_fallback_for_up() {
-        let mut ctx = Ctx::new(b"up", b"/nonexistent/omabox".to_vec());
-        ctx.name = b"default-5cc72cdc".to_vec();
-        ctx.d = cat!(ctx.boxes, "/", ctx.name);
-        session_fallback(&mut ctx);
-        assert_eq!(ctx.name, b"default-5cc72cdc", "...not for up");
-    }
-
-    #[test]
     fn names_made_tame() {
         assert_eq!(tame(b"my repo"), b"my-repo");
         assert_eq!(tame("dé".as_bytes()), b"d--");
