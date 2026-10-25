@@ -1342,25 +1342,51 @@ mod tests {
 
     /// git_rev for a jailed caller (t_unit_jail_policy's, #198 security): nothing, and git never run
     /// on the jail's repo, whose core.fsmonitor would run a program here.
+    /// git_rev in a jail (OMABOX_JAIL set, as the broker sets it for a jailed caller) runs no git: a
+    /// real repo whose fsmonitor hook leaves a marker when git status runs it. The control, out of a
+    /// jail: git runs, the hook leaves its marker, and the commit is read. (Without git on PATH, as
+    /// in a build root without it, the control has nothing to run: only the jailed half.)
     #[test]
     fn git_rev_runs_no_git_for_a_jailed_caller() {
         let d = std::env::temp_dir().join(format!("omabox-gitrev-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(d.join(".git")).unwrap();
+        std::fs::create_dir_all(&d).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&d)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        let have_git = git(&["init", "-q"]) && git(&["commit", "-q", "--allow-empty", "-m", "one"]);
         let ran = d.join("fsmonitor-ran");
+        let hook = d.join("fsmonitor");
         std::fs::write(
-            d.join(".git/config"),
-            format!(
-                "[core]\n\trepositoryformatversion = 0\n\tfsmonitor = touch {}\n",
-                ran.display()
-            ),
+            &hook,
+            format!("#!/bin/sh\ntouch '{}'\nexit 1\n", ran.display()),
         )
         .unwrap();
-        assert_eq!(
-            git_rev_jailed(true, d.to_str().unwrap().as_bytes()),
-            b"".to_vec()
+        std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        if have_git {
+            assert!(git(&["config", "core.fsmonitor", hook.to_str().unwrap()]));
+        }
+        let db = d.to_str().unwrap().as_bytes().to_vec();
+        let jailed = shell::with_env(&[("OMABOX_JAIL", Some(r#"{"id":"x"}"#))], || git_rev(&db));
+        assert_eq!(jailed, b"".to_vec(), "jailed: no answer");
+        assert!(
+            !ran.exists(),
+            "...and git never ran (its fsmonitor hook did not)"
         );
-        assert!(!ran.exists());
+        if have_git {
+            let free = shell::with_env(&[("OMABOX_JAIL", None)], || git_rev(&db));
+            assert!(!free.is_empty(), "out of a jail: the commit read");
+            assert!(ran.exists(), "...git ran, its fsmonitor hook with it");
+        }
         std::fs::remove_dir_all(&d).unwrap();
     }
 
