@@ -421,16 +421,24 @@ fn set_jail(pol: &Value) {
 /// omabox's own `_` commands; the boxes' own commands, and `up`'s mounts and network, are checked
 /// where they are used.
 pub fn check(ctx: &Ctx, cmd: &[u8], args: &[Vec<u8>]) -> Res<()> {
+    match refusal(cmd, args) {
+        Some(m) => Err(ctx.die(m)),
+        None => Ok(()),
+    }
+}
+
+/// broker_check's answer: why the command is refused, or None when a jailed agent may ask it.
+pub fn refusal(cmd: &[u8], args: &[Vec<u8>]) -> Option<Vec<u8>> {
     match cmd {
         b"up" | b"run" | b"shot" | b"screenshot" | b"pixel" | b"windows" | b"tree" | b"keys"
         | b"click" | b"scroll" | b"pointer" | b"drag" | b"wait" | b"hyprctl" | b"lua" | b"log"
         | b"logs" | b"gdb" | b"events" | b"restart-shell" | b"reload" | b"mode" | b"output"
         | b"monitor" | b"gpu" | b"cpu" | b"audio" | b"env" | b"path" | b"down" | b"ls"
-        | b"list" | b"brief" => Ok(()),
+        | b"list" | b"brief" => None,
         // record (#224): its files only through fds the caller's omabox opened (record checks
         // them). ports (#93): the jail's own boxes, the host side named by state only.
-        b"record" | b"ports" => Ok(()),
-        b"help" | b"-h" | b"--help" | b"version" | b"-V" | b"--version" => Ok(()),
+        b"record" | b"ports" => None,
+        b"help" | b"-h" | b"--help" | b"version" | b"-V" | b"--version" => None,
         // Reading is not changing (#114): bare, --json, or one known KEY; never KEY VALUE nor KEY
         // default. Not protect-ports: which host ports hold the user's services is not the jail's
         // to know (#374), nor in its listing (config).
@@ -441,18 +449,16 @@ pub fn check(ctx: &Ctx, cmd: &[u8], args: &[Vec<u8>]) -> Res<()> {
                 _ => false,
             };
             if args.first().is_some_and(|a| a == b"protect-ports") {
-                return Err(ctx.die("config: protect-ports is not for a jailed agent (which host ports are protected is the user's to know)"));
+                return Some(b"config: protect-ports is not for a jailed agent (which host ports are protected is the user's to know)".to_vec());
             }
-            if read {
-                Ok(())
-            } else {
-                Err(ctx.die("config: a jailed agent does not change omabox's settings"))
-            }
+            (!read).then(|| b"config: a jailed agent does not change omabox's settings".to_vec())
         }
         // Never on the allowed list: it hands the user's clipboard over (finding 119).
-        b"clip" => Err(ctx
-            .die("omabox clip is not for agents: the user hands their clipboard over themselves")),
-        _ => Err(ctx.die(cat!("omabox ", cmd, " is not for an agent inside ai-jail"))),
+        b"clip" => Some(
+            b"omabox clip is not for agents: the user hands their clipboard over themselves"
+                .to_vec(),
+        ),
+        _ => Some(cat!("omabox ", cmd, " is not for an agent inside ai-jail")),
     }
 }
 
@@ -501,6 +507,68 @@ pub fn probe(args: &[Vec<u8>]) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// broker_check (the cases of t_unit_jail_policy, t_unit_clip, t_unit_pixel, t_unit_cpu,
+    /// t_unit_pointer, t_unit_inspect, t_config_kept, t_gdb and t_output, #324 wave 6-suite): what a
+    /// jailed agent may ask, and the words of a refusal.
+    #[test]
+    fn broker_check_allows_and_refuses() {
+        let r = |w: &str| {
+            let w: Vec<Vec<u8>> = w.split(' ').map(|x| x.as_bytes().to_vec()).collect();
+            refusal(&w[0], &w[1..]).map(|m| String::from_utf8(m).unwrap())
+        };
+        for c in [
+            "host",
+            "peek",
+            "keys-to-box",
+            "guard",
+            "broker",
+            "_reap",
+            "config workspace 3",
+            "save s",
+            "saves",
+            "saves rm s",
+        ] {
+            let m = r(c).unwrap_or_else(|| panic!("{c} allowed"));
+            assert!(
+                m.contains("not for an agent inside ai-jail") || m.contains("does not change"),
+                "{c}: {m}"
+            );
+        }
+        for c in [
+            "shot",
+            "keys",
+            "up",
+            "down",
+            "config --json",
+            "config workspace",
+            "ports --json",
+            "pixel",
+            "tree",
+            "reload",
+            "restart-shell",
+            "gdb",
+            "output",
+            "cpu",
+            "gpu",
+            "scroll",
+            "lua",
+            "hyprctl",
+            "log",
+            "events",
+        ] {
+            assert_eq!(r(c), None, "{c}");
+        }
+        assert!(r("clip").is_some_and(|m| m.contains("clip is not for agents")));
+        for c in [
+            "config workspace 5",
+            "config workspace default",
+            "config nokey",
+            "config --json workspace",
+        ] {
+            assert!(r(c).is_some_and(|m| m.contains("does not change")), "{c}");
+        }
+    }
 
     fn line(w: &[&str]) -> Vec<u8> {
         let mut v = Vec::new();

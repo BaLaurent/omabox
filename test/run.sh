@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6795 MIN_UNIT=4086
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4756 MIN_UNIT=2245
+MIN_CHECKS=6768 MIN_UNIT=4062
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4729 MIN_UNIT=2221
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -8146,33 +8146,23 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
   git -C "$d/proj" init -q
   local J; J=$(jq -nc --arg p "$d/proj" --arg u "$d/under" --arg c "$d/proj/in" \
     '{id: "1 2", net: false, cwd: $c, roots: [{path: $p, masked: false}, {path: $u, masked: true}]}')
-  check_eq "jail_root: the folder itself" "$d/proj" "$(OMABOX_JAIL=$J lib jail_root "$d/proj")"
-  check_fails "jail_root: not a folder below it (a link could replace it)" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_root "$2"' _ "$TMP/lib/bin/omabox" "$d/proj/in"
-  check_fails "jail_root: not a masked one" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_root "$2"' _ "$TMP/lib/bin/omabox" "$d/under"
-  check_fails "jail_root: not one the jail lacks" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_root "$2"' _ "$TMP/lib/bin/omabox" "$d/other"
-  check_eq "jail_sees: inside a folder" "$d/proj/in" "$(OMABOX_JAIL=$J lib jail_sees "$d/proj/in")"
+  jpr() { OMABOX_JAIL=$J "$PROBE" _rust probe "$@"; }
+  check_eq "jail_root: the folder itself" "$d/proj" "$(jpr jail_root "$d/proj")"
+  check_fails "jail_root: not a folder below it (a link could replace it)" jpr jail_root "$d/proj/in"
+  check_fails "jail_root: not a masked one" jpr jail_root "$d/under"
+  check_fails "jail_root: not one the jail lacks" jpr jail_root "$d/other"
+  check_eq "jail_sees: inside a folder" "$d/proj/in" "$(jpr jail_sees "$d/proj/in")"
   ln -sfn "$d/other" "$d/proj/link"
-  check_fails "jail_sees: not through a link out of it" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_sees "$2"' _ "$TMP/lib/bin/omabox" "$d/proj/link"
+  check_fails "jail_sees: not through a link out of it" jpr jail_sees "$d/proj/link"
   # A repo's config is the jail's to write: repo_top must not run git on it.
   git -C "$d/proj" config core.fsmonitor "touch $d/fsmonitor-ran"
-  check_eq "repo_top: the jail's folder with a .git, without git" "$d/proj" "$(OMABOX_JAIL=$J lib repo_top)"
+  check_eq "repo_top: the jail's folder with a .git, without git" "$d/proj" "$(jpr repo_top)"
   check_fails "...its core.fsmonitor never ran" test -e "$d/fsmonitor-ran"
-  check_eq "the default box is the one the caller's omabox sent" mine "$(OMABOX_JAIL=$J OMABOX_RELAY_DEFAULT=mine lib default_name)"
-  check_eq "--pass reads the caller's value as sent" s3 "$(OMABOX_JAIL=$J OMABOX_RELAY_PASS_X=s3 X=host lib caller_env X)"
-  local c
-  for c in host peek keys-to-box guard broker _reap "config workspace 3" "save s" saves "saves rm s"; do
-    # shellcheck disable=SC2086 # the command and its arguments
-    check_match "refused to a jailed agent: $c" "not for an agent inside ai-jail|does not change" "$(lib broker_check $c 2>&1)"
-  done
+  check_eq "the default box is the one the caller's omabox sent" mine "$(OMABOX_RELAY_DEFAULT=mine jpr default_name)"
+  check_eq "--pass reads the caller's value as sent" s3 "$(OMABOX_RELAY_PASS_X=s3 X=host jpr caller_env X)"
+  # (broker_check's cases: broker_side.rs's broker_check_allows_and_refuses, #324 wave 6-suite)
   # A save that does not exist: were --from let through, up would stop at "no save", no box started.
   check_match "up --from refused to a jailed agent (finding 100)" "saves are the user's" "$(OMABOX_JAIL=$J "$CLI" up "$P-jf" --from nosuch 2>&1)"
-  check "allowed: shot, keys, up, down, config --json" bash -c 'source "$1"; for c in shot keys up down; do broker_check $c; done; broker_check config --json' _ "$TMP/lib/bin/omabox"
-  check "allowed: config KEY, a read (#114)" lib broker_check config workspace
-  for c in "config workspace 5" "config workspace default" "config nokey" "config --json workspace"; do
-    # shellcheck disable=SC2086 # the command and its arguments
-    check_match "...refused: $c" "does not change" "$(lib broker_check $c 2>&1)"
-  done
-  check "allowed: ports (#93)" lib broker_check ports --json
   # ports for a jailed caller: the host side by state only (#93). The stubs of t_unit_cli's ports check:
   # one box, its port held by this shell (host), then by another uid.
   # (The box's server is socket 424242; the host's listener on the port, socket 515151 of uid UID.)
@@ -8217,20 +8207,20 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
     "$(pol --bind "$d/proj" "$d/proj" --ro-bind /etc/hostname "$d/proj/in/h" -- sh | jq -r '.masks[]')"
   check_eq "...a same-path bind nested inside it is a sub-root, not masked" "" \
     "$(pol --bind "$d/proj" "$d/proj" --ro-bind "$d/proj/in" "$d/proj/in" -- sh | jq -r '.masks[]?')"
-  local JM lm; lm=$TMP/lib/bin/omabox
+  local JM
   JM=$(jq -nc --arg p "$d/proj" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: true}], masks: ["\($p)/.env"]}')
-  jm() { OMABOX_JAIL="$JM" bash -c 'source "$1"; shift; jail_masked "$@"' _ "$lm" "$@"; }
+  jm() { OMABOX_JAIL="$JM" "$PROBE" _rust probe jail_masked "$@"; }
   check "jail_masked: the masked path itself" jm "$d/proj/.env"
   check "...a file under it" jm "$d/proj/.env/k"
   check "...a folder holding it" jm "$d/proj"
   check_fails "...not a sibling of it" jm "$d/proj/in"
   check "...everything, when the policy has no masks key (an older broker)" \
-    env OMABOX_JAIL='{"id": "1 2", "net": false, "roots": []}' bash -c 'source "$1"; jail_masked "$2"' _ "$lm" "$d/proj/x"
+    env OMABOX_JAIL='{"id": "1 2", "net": false, "roots": []}' "$PROBE" _rust probe jail_masked "$d/proj/x"
   echo secret > "$d/proj/.env"; echo ok > "$d/proj/README-seed"
   check_match "seed_spec refuses a masked host file (its real content stays on the host)" "does not go into the box" \
-    "$(cd "$d/proj" && OMABOX_JAIL="$JM" bash -c 'source "$1"; seed_spec ".env:.config/leak"' _ "$lm" 2>&1)"
+    "$(cd "$d/proj" && OMABOX_JAIL="$JM" probe seed_spec ".env:.config/leak" 2>&1)"
   check_eq "...a non-masked file in the same folder still seeds" "$d/proj/README-seed"$'\t'".config/ok" \
-    "$(cd "$d/proj" && OMABOX_JAIL="$JM" bash -c 'source "$1"; seed_spec "README-seed:.config/ok"' _ "$lm" 2>&1)"
+    "$(cd "$d/proj" && OMABOX_JAIL="$JM" probe seed_spec "README-seed:.config/ok" 2>&1)"
   # jail_mounts (#198 security): the hidden paths as the kernel has them now, from the caller's
   # mountinfo. The jail renamed the folder holding its mask (config -> config2): the command line still
   # says config/.env, the mount (and the host's real file) is at config2/.env.
@@ -8257,12 +8247,8 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
     "$(jp_both jail_mounts "$(jq -nc --arg p "$d/sp ace" '{roots: [{path: $p, masked: false}], masks: []}')" "$d/mountinfo-sp" | jq -r '.masks[]')"
   mkdir -p "$d/proj/config2"; echo secret > "$d/proj/config2/.env"
   check_match "seed_spec refuses the renamed folder's masked file" "does not go into the box" \
-    "$(cd "$d/proj" && OMABOX_JAIL="$(lib jail_mounts "$jp" "$mi" | jq -c '. + {id: "1 2", cwd: ""}')" bash -c 'source "$1"; seed_spec "config2/.env:.config/leak"' _ "$lm" 2>&1)"
-  # git_rev must not run git on a jailed caller's path: its .git/config is the jail's to write, and
-  # core.fsmonitor there runs a program (#198 security).
-  git -C "$d/proj" config core.fsmonitor "touch $d/gitrev-ran"
-  check_eq "git_rev: nothing for a jailed caller" "" "$(OMABOX_JAIL=$JM lib git_rev "$d/proj")"
-  check_fails "...its core.fsmonitor never ran" test -e "$d/gitrev-ran"
+    "$(cd "$d/proj" && OMABOX_JAIL="$("$PROBE" _rust-jail jail_mounts "$jp" "$mi" | jq -c '. + {id: "1 2", cwd: ""}')" probe seed_spec "config2/.env:.config/leak" 2>&1)"
+  # (git_rev for a jailed caller, #198 security: install.rs's git_rev_runs_no_git_for_a_jailed_caller)
   [ ! -x "$ROOT/build/omabox" ] || check_eq "jail_policy and jail_mounts: the Rust half's broker reads each case as bash's" "" "$JP_DIFF"
 }
 
@@ -8271,7 +8257,7 @@ print(good, other, flush=True); time.sleep(60)' "$d/proj" > "$mf" &
 # ai-jail makes them: an empty file over a file, a tmpfs over a folder), another for the box, held
 # before it runs anything (--block-fd), as `up` holds one.
 t_unit_jail_covers() {
-  local d=$TMP/jc p lm=$TMP/lib/bin/omabox; p=$d/proj
+  local d=$TMP/jc p; p=$d/proj
   mkdir -p "$p/cfg" "$p/secrets/in" "$p/a" "$p/b" "$p/plain" "$d/box"
   echo SEKRIT > "$p/.env"; echo SEKRIT > "$p/cfg/key"; echo SEKRIT > "$p/secrets/in/k"
   echo SEKRIT > "$p/a/.env"; echo fake > "$p/b/.env"; echo hi > "$p/README"; ln -s .env "$p/envlink"
@@ -8280,14 +8266,14 @@ t_unit_jail_covers() {
   local J
   J=$(jq -nc --arg p "$p" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: true}],
     masks: ["\($p)/.env", "\($p)/cfg/key", "\($p)/secrets", "\($p)/secrets/in/k", "\($p)/a/.env", "\($p)/gone/.env", "\($p)/envlink"]}')
-  jl() { OMABOX_JAIL=$J bash -c 'source "$1"; shift; "$@"' _ "$lm" "$@"; }
+  jl() { OMABOX_JAIL=$J probe "$@"; }
   check_eq "jail_root_covered: a folder the jail hides paths in (repo_top, --ro-bind)" "$p" "$(jl jail_root_covered "$p")"
   check_fails "...jail_root still not (what the host reads: --plugin, --overlay, --theme-dir)" jl jail_root "$p"
-  check_fails "...not one hidden whole" env OMABOX_JAIL="$(jq -c --arg p "$p" '.masks += [$p]' <<<"$J")" bash -c 'source "$1"; jail_root_covered "$2"' _ "$lm" "$p"
-  check_fails "...not when the policy cannot say what is hidden (an older broker)" env OMABOX_JAIL="$(jq -c 'del(.masks)' <<<"$J")" bash -c 'source "$1"; jail_root_covered "$2"' _ "$lm" "$p"
+  check_fails "...not one hidden whole" env OMABOX_JAIL="$(jq -c --arg p "$p" '.masks += [$p]' <<<"$J")" "$PROBE" _rust probe jail_root_covered "$p"
+  check_fails "...not when the policy cannot say what is hidden (an older broker)" env OMABOX_JAIL="$(jq -c 'del(.masks)' <<<"$J")" "$PROBE" _rust probe jail_root_covered "$p"
   check_eq "repo_top: the jail's project with hidden paths in it" "$p" "$(git -C "$p" init -q && jl repo_top)"
   check "jail_deep: a hidden path below a folder of the project's" jl jail_deep "$p/README"
-  check_fails "...not with only ones straight in it" env OMABOX_JAIL="$(jq -c --arg p "$p" '.masks = ["\($p)/.env", "\($p)/secrets"]' <<<"$J")" bash -c 'source "$1"; jail_deep "$2"' _ "$lm" "$p/README"
+  check_fails "...not with only ones straight in it" env OMABOX_JAIL="$(jq -c --arg p "$p" '.masks = ["\($p)/.env", "\($p)/secrets"]' <<<"$J")" "$PROBE" _rust probe jail_deep "$p/README"
   check "jail_readable: a file straight in the folder" jl jail_readable "$p/README"
   check_fails "...not one hidden" jl jail_readable "$p/.env"
   check_fails "...nor one under a hidden folder" jl jail_readable "$p/secrets/in/k"
@@ -8295,13 +8281,13 @@ t_unit_jail_covers() {
   check_match "seed_spec: nothing from a folder with hidden paths below its own folders (one could move in)" "does not go into the box" \
     "$(cd "$p" && jl seed_spec "plain:.config/x" 2>&1)"
   local covers
-  covers=$(cd "$p" && OMABOX_JAIL=$J D=$d/box bash -c 'source "$1"; covers=() cover_srcs=(); jail_cover "$2" /dest; printf "%s\n" "${covers[@]}" "--" "${cover_srcs[@]}"' _ "$lm" "$p")
+  covers=$(cd "$p" && jl jail_cover "$d/box" "$p" /dest)
   check_eq "jail_cover: an empty file over a file, an empty folder over a folder, none inside one, nor for a link or a path not there" \
     "--ro-bind $d/box/cover-file /dest/.env|--ro-bind $d/box/cover-file /dest/a/.env|--ro-bind $d/box/cover-file /dest/cfg/key|--ro-bind $d/box/cover-dir /dest/secrets|--|$p" \
     "$(paste -sd' ' <<<"$covers" | sed 's/ --ro-bind/|--ro-bind/g; s/ -- /|--|/')"
   check "...a folder inside one of the jail's, holding nothing hidden where nothing can move" \
-    env OMABOX_JAIL="$(jq -c --arg p "$p" '.masks = ["\($p)/.env"]' <<<"$J")" bash -c 'source "$1"; covers=() cover_srcs=(); jail_cover "$2/plain" /x' _ "$lm" "$p"
-  check_fails "...not one where something hidden could be moved in" jl jail_cover "$p/plain" /x
+    env OMABOX_JAIL="$(jq -c --arg p "$p" '.masks = ["\($p)/.env"]' <<<"$J")" "$PROBE" _rust probe jail_cover "$d/box" "$p/plain" /x
+  check_fails "...not one where something hidden could be moved in" jl jail_cover "$d/box" "$p/plain" /x
   # The jail: its masks over the real files. Its process is the one the broker reads (mntpid).
   local jb bb jpid bpid info=$d/jinfo binfo=$d/binfo
   bwrap --unshare-user --die-with-parent --info-fd 3 --dev-bind / / --ro-bind "$d/empty" "$p/.env" --ro-bind "$d/empty" "$p/cfg/key" \
@@ -8325,10 +8311,10 @@ t_unit_jail_covers() {
     until_ok 5 grep -q " $p " "/proc/$bpid/mountinfo"
   }
   local F=$d/box/cover-file DIR=$d/box/cover-dir out
-  vf() { OMABOX_JAIL=$J D=$d/box bash -c 'source "$1"; shift; jail_verify "$@"' _ "$lm" "$bpid" "$p"; }
+  vf() { jl jail_verify "$d/box" "$bpid" "$p"; }
   box --ro-bind "$F" "$p/.env" --ro-bind "$F" "$p/cfg/key" --ro-bind "$DIR" "$p/secrets" --ro-bind "$F" "$p/a/.env"
-  check "box_held: the box's PID 1 waits on its go pipe" env D="$d" bash -c 'source "$1"; box_held "$2"' _ "$lm" "$bpid"
-  check_fails "...not a process that does not (the jail's)" env D="$d" bash -c 'source "$1"; box_held "$2"' _ "$lm" "$jpid"
+  check "box_held: the box's PID 1 waits on its go pipe" probe box_held "$d" "$bpid"
+  check_fails "...not a process that does not (the jail's)" probe box_held "$d" "$jpid"
   check "jail_verify: every hidden path covered (a file, one below a folder, a folder)" vf
   # Let the box go: what it reads through the project and a link in it.
   exec {go}<>"$d/go"; printf go >&"$go"; exec {go}>&-; wait "$bb" 2>/dev/null; bb=""
@@ -8359,7 +8345,7 @@ t_unit_jail_covers() {
   check "...covered on both: passed" vf
   unbox
   check_match "...the jail's process gone (or another's in its pid): refused" "gone" \
-    "$(OMABOX_JAIL="$(jq -c '.mntns = "mnt:[1]"' <<<"$J")" D=$d/box bash -c 'source "$1"; shift; jail_verify "$@"' _ "$lm" "$$" "$p" 2>&1)"
+    "$(OMABOX_JAIL="$(jq -c '.mntns = "mnt:[1]"' <<<"$J")" probe jail_verify "$d/box" "$$" "$p" 2>&1)"
   kill "$jb" 2>/dev/null; wait "$jb" 2>/dev/null
   # A jail process shown none of the jail's mounts: the policy's
   # hidden paths with none of them in its mounts is refused, not taken as nothing hidden.
@@ -8375,7 +8361,7 @@ t_unit_jail_covers() {
   # A box whose covers are not checked yet: nothing enters it (#210 review).
   mkdir -p "$d/rt/omabox/$P-held"; : > "$d/rt/omabox/$P-held/covers-pending"
   check_match "covers_held: a box still waiting for its check is not entered" "still starting" \
-    "$(XDG_RUNTIME_DIR=$d/rt bash -c 'source "$1"; select_box "$2"; covers_held' _ "$lm" "$P-held" 2>&1)"
+    "$(XDG_RUNTIME_DIR=$d/rt probe covers_held "$P-held" 2>&1)"
   # --omarchy TREE --theme NAME from a jail: TREE (in a folder with something hidden) is refused before
   # its themes are listed, the same words as without --theme.
   mkdir -p "$p/hid/bin" "$p/hid/default/hypr" "$p/hid/shell" "$p/hid/themes/secret-client-name"
@@ -8797,19 +8783,19 @@ t_unit_jail_paths() {
   local J; J=$(jq -nc --arg p "$d/proj" '{id: "1 2", net: false, cwd: $p, roots: [{path: $p, masked: false}], masks: []}')
   ln -sfn "$d/out" "$d/proj/lout"; ln -sfn "$d/proj/f" "$d/proj/fin"; ln -sfn "$d/proj/f" "$d/out/back/f"
   ln -sfn "$d/out/f" "$d/out/flink"
-  jp() { OMABOX_JAIL=$J lib jail_path "$@"; }
+  jp() { OMABOX_JAIL=$J probe jail_path "$@"; }
   check_eq "jail_path: a path inside the jail's folder" "$d/proj/f" "$(jp "$d/proj/f")"
   check_eq "...one not there yet, inside: where it would be" "$d/proj/none" "$(jp "$d/proj/none")"
   check_eq "...a link inside, to inside: followed" "$d/proj/f" "$(jp "$d/proj/fin")"
-  check_eq "...relative, against the cwd" "$d/proj/f" "$(cd "$d/proj/th" && OMABOX_JAIL=$J lib jail_path ../f)"
+  check_eq "...relative, against the cwd" "$d/proj/f" "$(cd "$d/proj/th" && jp ../f)"
   check_fails "...not one outside" jp "$d/out/f"
   check_fails "...not through a link out" jp "$d/proj/lout/f"
   check_fails "...not .. out of the folder" jp "$d/proj/../out/f"
   check_fails "...not the dir above the folder" jp "$d"
   # Out and back in: a host link outside the jail that leads back into it is never looked at.
   check_fails "...not a link out that a host link leads back in from" jp "$d/proj/lout/back/f"
-  check_eq "jail_read: a file inside" x "$(OMABOX_JAIL=$J lib jail_read "$d/proj/fin")"
-  check_fails "jail_read: not one a link inside leads out to" env OMABOX_JAIL="$J" bash -c 'source "$1"; jail_read "$2"' _ "$TMP/lib/bin/omabox" "$d/proj/lout/f"
+  check_eq "jail_read: a file inside" x "$(OMABOX_JAIL=$J probe jail_read "$d/proj/fin")"
+  check_fails "jail_read: not one a link inside leads out to" env OMABOX_JAIL="$J" "$PROBE" _rust probe jail_read "$d/proj/lout/f"
   # What each option takes, outside the jail (OUT) and inside it (IN), each a thing the option takes.
   cp /usr/bin/true "$d/out/Hyprland"; cp /usr/bin/true "$d/proj/Hyprland"; echo '{"id": "o"}' > "$d/out/dir/manifest.json"
   local t; for t in "$d/out/tree" "$d/proj/tree"; do
@@ -8846,8 +8832,8 @@ t_unit_jail_paths() {
   # same whether the host has the plugin's dir there or not, never looked at.
   mkdir -p "$d/proj/sd" "$d/out/o/plugins"; ln -sfn "$d/out/o" "$d/proj/sd/omarchy"
   local place=.config/omarchy/plugins/pid$'\t'plugin$'\t'pid
-  a=$(OMABOX_JAIL=$J lib seed_blocked "$d/proj/sd" .config "$place"); mkdir "$d/out/o/plugins/pid"
-  b=$(OMABOX_JAIL=$J lib seed_blocked "$d/proj/sd" .config "$place")
+  a=$(OMABOX_JAIL=$J probe seed_blocked "$d/proj/sd" .config "$place"); mkdir "$d/out/o/plugins/pid"
+  b=$(OMABOX_JAIL=$J probe seed_blocked "$d/proj/sd" .config "$place")
   check_eq "jailed seed over a plugin's place through a link out: refused, either way" "$a|$a" "$a|$b"
   check_match "...as over the plugin" "over$" "$a"
   # Outside a jail, as before: the host path itself, said not there.
@@ -9571,8 +9557,8 @@ t_unit_clip() {
   check_match "clip refused: under node running Claude Code" "not for agents \(an agent in node" \
     "$(cl "$TMP/node" -c '"$1" clip -b "$2"; true' /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js "$CLI" "$P-x")"
   check_match "clip refused: guard exec" "not for agents" "$(cl "$CLI" guard exec -- "$CLI" clip -b "$P-x")"
-  check_eq "clip refused: inside ai-jail (the broker's command)" "inside ai-jail" "$(OMABOX_JAIL='{}' lib agent_caller)"
-  check_match "...and the broker never takes it" "clip is not for agents" "$(lib broker_check clip 2>&1)"
+  check_match "clip refused: inside ai-jail (the broker's command)" "clip is not for agents \(inside ai-jail\)" "$(cl OMABOX_JAIL='{}' "$CLI" clip -b "$P-x")"
+  # (...and the broker never takes it: broker_side.rs's broker_check_allows_and_refuses)
   check_match "clip is in the usage" "omabox clip \[-b NAME\] \[--from-box\]" "$(ob help)"
   # The type handed over: text first, then an image, PNG first; nothing else.
   check_eq "clip_pick: text over an image" "text/plain;charset=utf-8" "$(lib clip_pick $'image/png\ntext/html\ntext/plain\ntext/plain;charset=utf-8')"
@@ -14542,7 +14528,7 @@ t_config_kept() {
   check_eq "...the Lua state fresh" nil "$(ob lua -b "$B" 'return omabox_t140')"
   sleep 2
   check_eq "...one reload, not two (the file's change is not one)" 1 "$(($(grep -c ' configreloaded' "$E") - n0))"
-  check "...a jailed agent's, as restart-shell is" lib broker_check reload
+  # (...a jailed agent's, as restart-shell is: broker_side.rs's broker_check_allows_and_refuses)
   check_match "up --autoreload on it: refused, it has autoreload off (finding 207)" "--autoreload \(its autoreload is off\)" \
     "$(ob up "$B" --autoreload 2>&1)"
   ob down "$B" >/dev/null 2>&1
@@ -18553,8 +18539,8 @@ t_unit_pixel() {
   check_match "pixel: a bad coordinate" "bad argument" "$(ob pixel -b "$P-x" 1 x 2>&1)"
   check_match "pixel: --in or --window" "not both" "$(ob pixel -b "$P-x" --in a.png -w x 1 1 2>&1)"
   check_match "pixel: at most 32 points" "at most 32" "$(ob pixel -b "$P-x" $(seq 66) 2>&1)"
-  check "pixel is a jailed agent's" lib broker_check pixel
-  check "tree is a jailed agent's (#178)" lib broker_check tree
+  # (pixel is a jailed agent's: broker_side.rs's broker_check_allows_and_refuses)
+  # (tree is a jailed agent's (#178): broker_side.rs's broker_check_allows_and_refuses)
   check_match "shot --zoom needs -g" "goes with -g" "$(ob shot -b "$P-x" --zoom 4 2>&1)"
   check_match "shot --zoom 2-16" "takes 2-16" "$(ob shot -b "$P-x" -g "0,0 9x9" --zoom 17 2>&1)"
   check_match "shot --zoom or --fit" "not both" "$(ob shot -b "$P-x" -g "0,0 9x9" --zoom 4 --fit 100 2>&1)"
@@ -18917,7 +18903,7 @@ t_output() {
   check_match "output --cycles 0" "takes 1-999" "$(ob output -b "$P-x" drop --cycles 0 2>&1)"
   check_match "output drop of two names" "one output's name, got A and B" "$(ob output -b "$P-x" drop A B 2>&1)"
   check_match "output drop of a name that is none" "not an output's name" "$(ob output -b "$P-x" drop 'a b' 2>&1)"
-  check "output is a jailed agent's" lib broker_check output
+  # (output is a jailed agent's: broker_side.rs's broker_check_allows_and_refuses)
   n=$(gpu_node other)
   [ -n "$n" ] || { skip "output drop and back" "no render node here but NVIDIA's (t_output_nvidia runs there)"; return; }
   output_on "$n" "$B" HEADLESS-2 HEADLESS-3
@@ -19121,7 +19107,7 @@ t_gdb() {
   check_match "gdb: --watch and -- ARGS refused" "--watch runs its own" "$(ob gdb -b "$P-x" --watch -- -ex bt 2>&1)"
   check_match "gdb: --pid junk refused" "--pid takes a pid" "$(ob gdb -b "$P-x" --pid x 2>&1)"
   check_match "gdb: gdb's options after --" "after --" "$(ob gdb -b "$P-x" -ex bt 2>&1)"
-  check "gdb is a jailed agent's" lib broker_check gdb
+  # (gdb is a jailed agent's: broker_side.rs's broker_check_allows_and_refuses)
   up_ok "$B" --no-shell --net isolated || { no "up" "$UP_OUT"; return; }
   D=$(ob path "$B")
   out=$(ob gdb -b "$B" 2>&1); rc=$?
@@ -19513,7 +19499,7 @@ t_unit_cpu() {
   check_match "cpu: --pid junk refused" "--pid takes a pid" "$(ob cpu -b "$P-x" --pid x 2>&1)"
   check_match "cpu: --settle junk refused" "--settle takes a duration, like 2s or 500ms" "$(ob cpu -b "$P-x" --settle 1x 2>&1)"
   check_match "...--settle 0 is none" "no box .$P-x. is up" "$(ob cpu -b "$P-x" --settle 0 2>&1)"
-  check "cpu is a jailed agent's, as gpu" lib broker_check cpu
+  # (cpu is a jailed agent's, as gpu: broker_side.rs's broker_check_allows_and_refuses)
   check_match "cpu takes -b first (a box command)" "no box .nope-$P. is up" "$(ob -b "nope-$P" cpu 2>&1)"
 }
 
@@ -19529,7 +19515,7 @@ t_unit_pointer() {
   check_match "scroll: a bad source" "--source is wheel" "$(ob scroll -b "$P-x" 1 2 3 --source mouse 2>&1)"
   check_match "scroll: --in or --window" "not both" "$(ob scroll -b "$P-x" --in a -w b 1 2 3 2>&1)"
   check_match "scroll: --quiet goes with --wait" "go with --wait" "$(ob scroll -b "$P-x" --quiet 1s 1 2 3 2>&1)"
-  check "scroll is a jailed agent's" lib broker_check scroll
+  # (scroll is a jailed agent's: broker_side.rs's broker_check_allows_and_refuses)
   check_eq "pointer marks: peek's words only" "move 1 2 scroll 15 scroll -3" "$(lib pointer_marks move 1 2 source wheel scroll 15 hscroll -3)"
   # #167: scroll --mod as click's; a wheel's rounding to whole notches said.
   check_match "scroll --mod junk refused" "not a modifier" "$(ob scroll -b "$P-x" --mod meta 1 2 3 2>&1)"
@@ -20471,7 +20457,7 @@ t_unit_inspect() {
   check_match "lua: no EXPR is refused, stdin left alone" "nothing to evaluate" "$(timeout 10 "$CLI" lua -b "$P-x" <&"$in" 2>&1)"
   exec {in}<&-; kill "$sl" 2>/dev/null
   check_match "lua: a source starting with - goes after --" "goes after --" "$(ob lua -b "$P-x" -1 2>&1)"
-  check "lua is a jailed agent's, as hyprctl is" lib broker_check lua
+  # (lua is a jailed agent's, as hyprctl is: broker_side.rs's broker_check_allows_and_refuses)
   check_match "log: an unknown log named, with the ones there are" "unknown log nope \(hyprland shell" "$(ob log -b "$P-x" nope 2>&1)"
   check_match "log -n takes a number or all" "-n takes a number" "$(ob log -b "$P-x" -n 5x 2>&1)"
   check_match "log --grep: a bad expression said" "takes a regular expression" "$(ob log -b "$P-x" --grep '(' 2>&1)"
@@ -20479,7 +20465,7 @@ t_unit_inspect() {
   check_fails "log --grep -i RE: -i is the flag, RE the expression (#130)" grep -q "no log called" \
     <<<"$(ob log -b "$P-x" --grep -i 'plugin|error' 2>&1)"
   check_match "log --grep -x: an option taken for the expression, refused" "--grep takes RE" "$(ob log -b "$P-x" --grep -x 2>&1)"
-  check "log is a jailed agent's (its own boxes only: select_box)" lib broker_check log
+  # (log is a jailed agent's (its own boxes only: select_box): broker_side.rs's broker_check_allows_and_refuses)
   check_eq "events --since OFFSET" "123 0" "$(lib events_since 123)"
   check_match "events --since 30s: from then on" "^0 [0-9]{13}$" "$(lib events_since 30s)"
   mkdir -p "$TMP/ev"; printf 'm1 10\nm2 20\nm1 30\n' > "$TMP/ev/events.marks"
@@ -20490,7 +20476,7 @@ t_unit_inspect() {
   check_match "events --mark goes alone" "goes alone" "$(ob events -b "$P-x" --mark m --grep x 2>&1)"
   check_match "events --until or -f" "not both" "$(ob events -b "$P-x" --until x -f 2>&1)"
   check_match "events: a bad expression said" "not a regular expression" "$(ob events -b "$P-x" --until '(' 2>&1)"
-  check "events is a jailed agent's (its own boxes only)" lib broker_check events
+  # (events is a jailed agent's (its own boxes only): broker_side.rs's broker_check_allows_and_refuses)
   local out rc=0
   # The checkout bound back over the empty /tmp (#194): one under /tmp had its tool hidden (exit 127).
   out=$(bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net --tmpfs /opt --tmpfs /tmp \

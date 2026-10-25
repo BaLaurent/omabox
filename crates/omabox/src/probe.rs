@@ -29,6 +29,24 @@ pub const NAMES: &[(&str, &str)] = &[
         "record_overlay",
         "INPUT MARKS FIRST X0 Y0 K W H DUR SHOW CAPS [AREA]",
     ),
+    // A jailed caller's paths (OMABOX_JAIL the policy, as the broker sets it).
+    ("jail_path", "PATH"),
+    ("jail_read", "FILE"),
+    ("jail_root", "PATH"),
+    ("jail_root_covered", "PATH"),
+    ("jail_deep", "PATH"),
+    ("jail_readable", "FILE"),
+    ("repo_top", ""),
+    ("seed_spec", "SRC:DEST"),
+    ("seed_blocked", "SRC REL PLACE..."),
+    ("jail_cover", "D SRC DEST"),
+    ("box_held", "D PID"),
+    ("jail_verify", "D BOXPID SRC..."),
+    ("covers_held", "NAME"),
+    ("jail_sees", "PATH"),
+    ("jail_masked", "PATH"),
+    ("default_name", ""),
+    ("caller_env", "NAME"),
 ];
 
 /// One line a word: the probe's own usage, for a name it does not have.
@@ -142,8 +160,87 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
             .ok_or(Exit(1))?;
             out(ass)
         }
+        (b"jail_path", [p]) => line(&crate::jailpath::jail_path(p).ok_or(Exit(1))?),
+        (b"jail_read", [f]) => out(crate::jailpath::jail_read(f).ok_or(Exit(1))?),
+        (b"jail_root", [p]) => line(&crate::repo::jail_root(p).ok_or(Exit(1))?),
+        (b"jail_root_covered", [p]) => line(&crate::jailpath::jail_root_covered(p).ok_or(Exit(1))?),
+        (b"jail_deep", [p]) => yes(crate::jailpath::jail_deep(p)),
+        (b"jail_readable", [f]) => yes(crate::jailpath::jail_readable(f)),
+        (b"repo_top", []) => line(&crate::repo::repo_top().ok_or(Exit(1))?),
+        // SRC, a tab, DEST; a refusal said, 1 (3 for a jailed caller's).
+        (b"seed_spec", [spec]) => match crate::upspec::seed_spec(spec) {
+            Ok((src, dest)) => line(&cat!(src, "\t", dest)),
+            Err(crate::upspec::SeedRefused::Bad) => Err(Exit(1)),
+            Err(crate::upspec::SeedRefused::Jail) => Err(Exit(3)),
+        },
+        // Each PLACE "AT<tab>KIND<tab>NAME", as bash's list; the one blocked, a tab, in or over.
+        (b"seed_blocked", [src, rel, places @ ..]) => {
+            let mut ps = Vec::new();
+            for x in places {
+                let f: Vec<&[u8]> = x.split(|&c| c == b'\t').collect();
+                let [at, kind, name] = f.as_slice() else {
+                    return Err(usage());
+                };
+                let kind = match *kind {
+                    b"plugin" => "plugin",
+                    b"theme" => "theme",
+                    _ => return Err(usage()),
+                };
+                ps.push(crate::seed::Place {
+                    at: at.to_vec(),
+                    kind,
+                    name: name.to_vec(),
+                });
+            }
+            let (x, how) = crate::seed::seed_blocked(src, rel, &ps, &crate::jailpath::jail_path)
+                .ok_or(Exit(1))?;
+            line(&cat!(x.at, "\t", x.kind, "\t", x.name, "\t", how))
+        }
+        // bash's covers (--ro-bind EMPTY PLACE, one word a line), "--", then cover_srcs.
+        (b"jail_cover", [d, src, dest]) => {
+            let c = crate::jailpath::jail_cover(src, dest).ok_or(Exit(1))?;
+            for (k, at) in &c.binds {
+                let empty = match k {
+                    crate::jailpath::CoverKind::File => "cover-file",
+                    crate::jailpath::CoverKind::Dir => "cover-dir",
+                };
+                line(&cat!("--ro-bind\n", d, "/", empty, "\n", at))?;
+            }
+            line(b"--")?;
+            match c.src {
+                Some(s) => line(&s),
+                None => Ok(()),
+            }
+        }
+        (b"box_held", [d, pid]) => {
+            ctx.d = d.to_vec();
+            yes(crate::ready::box_held(&ctx, pid))
+        }
+        // What is not covered on stdout (its words, as `$(jail_verify ... 2>&1)` has them), 1.
+        (b"jail_verify", [d, bp, srcs @ ..]) => {
+            let srcs: Vec<Vec<u8>> = srcs.iter().map(|s| s.to_vec()).collect();
+            crate::jailpath::jail_verify(d, bp, &srcs).or_else(|w| {
+                out(w)?;
+                Err(Exit(1))
+            })
+        }
+        (b"jail_sees", [p]) => line(&crate::jailpath::jail_sees(p).ok_or(Exit(1))?),
+        (b"jail_masked", [p]) => yes(crate::jailpath::jail_masked(p)),
+        (b"default_name", []) => line(&crate::select::default_name()),
+        // (printf '%s': no newline added)
+        (b"caller_env", [n]) => out(crate::exec::caller_env(n).ok_or(Exit(1))?),
+        (b"covers_held", [n]) => {
+            ctx.name = n.to_vec();
+            ctx.d = cat!(ctx.boxes, "/", n);
+            crate::boxes::covers_held(&ctx)
+        }
         _ => Err(usage()),
     }
+}
+
+/// A test's answer as its status: 0 yes, 1 no.
+fn yes(b: bool) -> Res<()> {
+    if b { Ok(()) } else { Err(Exit(1)) }
 }
 
 #[cfg(test)]

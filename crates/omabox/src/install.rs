@@ -958,7 +958,12 @@ pub fn omarchy_version() -> Vec<u8> {
 /// Never git on a jailed caller's path (#198 security): its .git/config is the jail's to write, and
 /// core.fsmonitor and other settings there run programs here, outside the jail.
 pub fn git_rev(dir: &[u8]) -> Vec<u8> {
-    if in_jail() {
+    git_rev_jailed(in_jail(), dir)
+}
+
+/// git_rev, JAILED telling whether the caller is a jailed agent's (in_jail).
+fn git_rev_jailed(jailed: bool, dir: &[u8]) -> Vec<u8> {
+    if jailed {
         return Vec::new();
     }
     let git = |args: &[&[u8]]| -> Option<(i32, Vec<u8>)> {
@@ -1190,6 +1195,30 @@ fn box_output(ctx: &mut Ctx, argv: &[Vec<u8>]) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
     use std::cmp::Ordering;
+
+    /// git_rev for a jailed caller (t_unit_jail_policy's, #198 security): nothing, and git never run
+    /// on the jail's repo, whose core.fsmonitor would run a program here.
+    #[test]
+    fn git_rev_runs_no_git_for_a_jailed_caller() {
+        let d = std::env::temp_dir().join(format!("omabox-gitrev-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".git")).unwrap();
+        let ran = d.join("fsmonitor-ran");
+        std::fs::write(
+            d.join(".git/config"),
+            format!(
+                "[core]\n\trepositoryformatversion = 0\n\tfsmonitor = touch {}\n",
+                ran.display()
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            git_rev_jailed(true, d.to_str().unwrap().as_bytes()),
+            b"".to_vec()
+        );
+        assert!(!ran.exists());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 
     #[test]
     fn versions_as_sort_v() {
