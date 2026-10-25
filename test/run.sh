@@ -71,12 +71,13 @@ tools_ready() {
     echo "built tools/$t (it was missing or older than its sources)"
   done
   # omabox itself (#324): cargo's own check says whether it is current; build/omabox is what bin/omabox
-  # links to, renamed into place (finding 522). An install has its binary at bin/omabox.
+  # links to, renamed into place (finding 522), built in ROOT's own target/ whatever the user's cargo
+  # says (finding 525). An install has its binary at bin/omabox.
   if [ "${1:-}" = installed ]; then
     [ -x "$ROOT/bin/omabox" ] || { echo "bin/omabox is missing from this install"; return 1; }
     return 0
   fi
-  out=$(flock "$ROOT/tools" sh -c 'cargo build --release --locked -q --manifest-path "$1/Cargo.toml" &&
+  out=$(flock "$ROOT/tools" sh -c 'CARGO_TARGET_DIR="$1/target" cargo build --release --locked -q --manifest-path "$1/Cargo.toml" &&
     install -Dm755 "$1/target/release/omabox" "$1/build/omabox.new" && mv -f "$1/build/omabox.new" "$1/build/omabox"' _ "$ROOT" 2>&1) ||
     { printf 'building crates/omabox failed (cargo, from rust or rustup):\n%s\n' "$out"; return 1; }
 }
@@ -13385,10 +13386,10 @@ t_unit_install() {
   cp "$stub/omarchy" "$stub/omarchy-shell"
   mkdir -p "$h/.config/omabox"; date -Is > "$h/.config/omabox/widget-declined"
   # cargo under this HOME has no toolchain (rustup's, or mise's shim, which refuses a config it has
-  # not been told to trust): the Rust half's build (#324) is this checkout's binary put where cargo
-  # would leave it.
+  # not been told to trust): its build (#324) is this checkout's binary put where cargo would leave
+  # it (CARGO_TARGET_DIR, as cargo takes it).
   # (--version: the stand-in's, or a rustup's with no toolchain while $stub/notoolchain is there)
-  printf '#!/bin/sh\nif [ "$1" = --version ]; then [ ! -e "%s/notoolchain" ] || { echo "error: rustup could not choose a version of cargo to run" >&2; exit 1; }; echo "cargo (stand-in)"; exit 0; fi\nwhile [ $# -gt 0 ]; do [ "$1" = --manifest-path ] && m=$2; shift; done\nd=$(dirname "$m")/target/release\nmkdir -p "$d" && cp "%s/build/omabox" "$d/omabox"\n' "$stub" "$ROOT" > "$stub/cargo"
+  printf '#!/bin/sh\nif [ "$1" = --version ]; then [ ! -e "%s/notoolchain" ] || { echo "error: rustup could not choose a version of cargo to run" >&2; exit 1; }; echo "cargo (stand-in)"; exit 0; fi\nwhile [ $# -gt 0 ]; do [ "$1" = --manifest-path ] && m=$2; shift; done\nd=${CARGO_TARGET_DIR:-$(dirname "$m")/target}/release\nmkdir -p "$d" && cp "%s/build/omabox" "$d/omabox"\n' "$stub" "$ROOT" > "$stub/cargo"
   chmod +x "$stub/sudo" "$stub/pacman" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell" "$stub/cargo"
   echo omabox-no-such-package > "$stub/missing"
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); local rc=$?
@@ -13427,6 +13428,13 @@ t_unit_install() {
   check_fails "...no temp file left" test -e "$c/build/omabox.new"
   exec {fd}<&-
   check_eq "...and nothing in the checkout under test (#187)" "$tools0" "$(stat -c '%n %.9Y' "$ROOT"/tools/*/omabox-* 2>&1)"
+  # finding 525: a user's CARGO_TARGET_DIR (or build.target-dir in cargo's config, which it overrides)
+  # put the build elsewhere, and install.sh installed a stale target/release/omabox (or died, none).
+  printf 'stale\n' > "$c/target/release/omabox"
+  check "a CARGO_TARGET_DIR of the user's: install.sh still builds into its ROOT's target/" \
+    env HOME="$h" PATH="$stub:$PATH" CARGO_TARGET_DIR="$TMP/ic-target" "$c/install.sh"
+  check "...and installs that build, not a stale one" cmp -s "$ROOT/build/omabox" "$c/build/omabox"
+  check_fails "...leaving the user's target dir alone" test -e "$TMP/ic-target"
   check_eq "the skill is a link" "$c/skill" "$(readlink "$h/.claude/skills/omabox")"
   check_fails "...not the feedback skill: opt-in (finding 326)" test -L "$h/.claude/skills/omabox-feedback"
   check "...of the directory: the reference SKILL.md points to comes with it, for every agent" \

@@ -10258,6 +10258,16 @@ from them.
     tests, so a failing test hid whether the release built: fmt, clippy, the release build and the
     tests are now steps of their own, in that order.
 
+525. **install.sh installed a stale binary when cargo's target dir was elsewhere** (2026-10-25, #324
+    wave 6-flip's fix round). install.sh and the suite's tools_ready ran `cargo build --release` and
+    copied `ROOT/target/release/omabox`, but a user's `CARGO_TARGET_DIR`, or `build.target-dir` in
+    `~/.cargo/config.toml`, puts the build elsewhere: install.sh then died after a good build (no
+    file there) or, with one left from an earlier build, installed that stale binary without a word.
+    **Fix:** both builds run with `CARGO_TARGET_DIR=ROOT/target` (the variable wins over cargo's
+    config). Tests: t_unit_install (its stand-in cargo honours CARGO_TARGET_DIR as cargo does; a
+    stale `target/release/omabox` and a user's CARGO_TARGET_DIR: build/omabox is the new build and
+    the user's target dir is never made; the old install.sh fails all three checks).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

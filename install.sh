@@ -54,8 +54,10 @@ for t in pointer keyboard wlfd peek still burst tree relay events; do
   echo "tools/$t"
 done
 # omabox itself (crates/omabox): into build/omabox by a rename, so no caller ever runs a half-written
-# file, and a command running meanwhile keeps the binary it started with (finding 66).
-cargo build --release --locked -q --manifest-path "$ROOT/Cargo.toml" || die "building crates/omabox failed"
+# file, and a command running meanwhile keeps the binary it started with (finding 66). Into ROOT's own
+# target/, whatever target dir the user's CARGO_TARGET_DIR or cargo config names (finding 525).
+CARGO_TARGET_DIR="$ROOT/target" cargo build --release --locked -q --manifest-path "$ROOT/Cargo.toml" ||
+  die "building crates/omabox failed"
 install -Dm755 "$ROOT/target/release/omabox" "$ROOT/build/omabox.new" || die "installing build/omabox failed"
 mv -f "$ROOT/build/omabox.new" "$ROOT/build/omabox" || die "installing build/omabox failed"
 echo "build/omabox"
