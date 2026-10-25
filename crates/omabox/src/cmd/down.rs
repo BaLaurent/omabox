@@ -367,6 +367,275 @@ fn submap_release(ctx: &Ctx) {
 mod tests {
     use super::*;
 
+    use std::sync::Mutex;
+
+    /// bash's stubs for a down (`kill_box() { :; }; peek_pid() { return 1; }; rm_box() {...}`): no
+    /// peek window, PID 1 gone at once; rm_box removes the box dir (RM_DIR) or only says it ran;
+    /// START, proc_start's answer when given; a box up while its dir is there.
+    struct Fake {
+        rm_dir: bool,
+        start: Option<Box<dyn Fn() -> Option<Vec<u8>> + Sync>>,
+        log: Mutex<Vec<String>>,
+    }
+
+    impl Fake {
+        fn new(rm_dir: bool) -> Fake {
+            Fake {
+                rm_dir,
+                start: None,
+                log: Mutex::new(Vec::new()),
+            }
+        }
+        fn log(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+    }
+
+    impl BoxSys for Fake {
+        fn peek_pids(&self, _: &Ctx) -> Vec<Vec<u8>> {
+            Vec::new()
+        }
+        fn kill_box(&self, _: &Ctx) -> bool {
+            self.log.lock().unwrap().push("kill_box".into());
+            true
+        }
+        fn rm_box(&self, ctx: &Ctx) {
+            self.log.lock().unwrap().push("rm_box".into());
+            if self.rm_dir {
+                let _ = std::fs::remove_dir_all(shell::path(&ctx.d));
+            }
+        }
+        fn proc_start(&self, pid: &[u8]) -> Option<Vec<u8>> {
+            match &self.start {
+                Some(f) => f(),
+                None => crate::procfs::proc_start(pid),
+            }
+        }
+        fn box_state(&self, d: &[u8]) -> &'static str {
+            if shell::path(d).is_dir() {
+                "up"
+            } else {
+                "gone"
+            }
+        }
+    }
+
+    fn tmp(tag: &str) -> String {
+        let d = std::env::temp_dir().join(format!("omabox-down-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d.to_str().unwrap().to_string()
+    }
+
+    fn put(f: &str, t: &str) {
+        std::fs::create_dir_all(std::path::Path::new(f).parent().unwrap()).unwrap();
+        std::fs::write(f, t).unwrap();
+    }
+
+    fn there(f: &str) -> bool {
+        std::path::Path::new(f).exists()
+    }
+
+    /// `cmd_down ARGS` with BOXES the dir B: its status and what it said. No jail, no session.
+    fn down(sys: &Fake, b: &str, args: &[&str]) -> (Res<()>, String) {
+        let mut ctx = Ctx::new(b"down", b.as_bytes().to_vec());
+        let args: Vec<Vec<u8>> = args.iter().map(|a| a.as_bytes().to_vec()).collect();
+        let vars = [
+            ("OMABOX_JAIL", None),
+            ("OMABOX", None),
+            ("OMABOX_SESSION", None),
+            ("CLAUDE_CODE_SESSION_ID", None),
+            ("CODEX_THREAD_ID", None),
+        ];
+        crate::exit::heard(|| shell::with_env(&vars, || run_with(sys, &mut ctx, &args)))
+    }
+
+    /// t_unit_run_named_dead (#115, finding 178): a down whose reaper is gone since it was looked
+    /// for is no failure, and the box is cleared (kill_reapers ends what it finds and returns
+    /// nothing, so a reaper gone meanwhile cannot fail it).
+    #[test]
+    fn a_reaper_gone_is_no_failure() {
+        let b = tmp("race");
+        put(
+            &format!("{b}/racebox/box.json"),
+            "{\"mode\":\"headless\"}\n",
+        );
+        let f = Fake::new(false);
+        let (r, said) = down(&f, &b, &["racebox"]);
+        assert_eq!(
+            (r, said.as_str(), f.log()),
+            (
+                Ok(()),
+                "omabox: box 'racebox' down\n",
+                vec!["kill_box".to_string(), "rm_box".into()]
+            ),
+            "down: a reaper gone since it was looked for is no failure, the box is cleared"
+        );
+        std::fs::remove_dir_all(&b).unwrap();
+    }
+
+    /// t_unit_lock_markers: a down removes the box's lock file, and one with no box; one that finds
+    /// no box sweeps old .down- markers and .expired- notes (finding 237) and writes its own.
+    #[test]
+    fn lock_files_and_markers_as_bash() {
+        let b = tmp("lockm");
+        put(&format!("{b}/gone/box.json"), "{\"mode\":\"headless\"}\n");
+        put(&format!("{b}/.lock-gone"), "");
+        put(&format!("{b}/.lock-nodir"), "");
+        let (_, said) = down(&Fake::new(true), &b, &["gone", "nodir"]);
+        assert!(
+            said.contains("box 'gone' down"),
+            "down takes the box down: {said}"
+        );
+        assert!(
+            !there(&format!("{b}/.lock-gone")),
+            "...and removes its lock file"
+        );
+        assert!(
+            !there(&format!("{b}/.lock-nodir")),
+            "a lock file with no box: down removes it too"
+        );
+        let aged = |n: &str, secs: u64| {
+            let f = format!("{b}/{n}");
+            put(&f, "");
+            let t = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+            std::fs::File::options()
+                .write(true)
+                .open(&f)
+                .unwrap()
+                .set_modified(t)
+                .unwrap();
+        };
+        aged(".down-old", 11 * 60);
+        aged(".down-new", 0);
+        aged(".expired-old", 25 * 3600);
+        aged(".expired-new", 23 * 3600);
+        let _ = down(&Fake::new(true), &b, &["none"]);
+        assert!(
+            !there(&format!("{b}/.down-old")),
+            "a down that finds no box sweeps a .down- marker older than 10 minutes"
+        );
+        assert!(there(&format!("{b}/.down-new")), "...keeps a fresh one");
+        assert!(
+            std::fs::metadata(format!("{b}/.down-none")).is_ok_and(|m| m.len() > 0),
+            "...and writes its own"
+        );
+        assert!(
+            !there(&format!("{b}/.expired-old")),
+            "...and an idle box's .expired- note older than a day (finding 237)"
+        );
+        assert!(
+            there(&format!("{b}/.expired-new")),
+            "...keeping a younger one"
+        );
+        std::fs::remove_dir_all(&b).unwrap();
+    }
+
+    /// t_unit_lock_markers, finding 237: a down that finds the lock but no box writes its marker
+    /// before it lets go of the lock (here its start takes half a second to read), so an up waiting
+    /// on the lock reads it; one that finds neither looks for the lock again once its marker is
+    /// written, and goes through a lock that appeared meanwhile.
+    #[test]
+    fn a_waiter_on_the_lock_reads_the_marker() {
+        let b = tmp("lockr");
+        let lk = format!("{b}/.lock-raced");
+        put(&lk, "");
+        let mut f = Fake::new(true);
+        f.start = Some(Box::new(|| {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            Some(b"12345".to_vec())
+        }));
+        let got = std::thread::scope(|s| {
+            s.spawn(|| down(&f, &b, &["raced"]));
+            let p = std::path::Path::new(&lk);
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while crate::boxes::lock_file(p, std::time::Duration::ZERO).is_some()
+                && std::time::Instant::now() < end
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let _w = crate::boxes::lock_file(p, std::time::Duration::from_secs(10));
+            std::fs::read_to_string(format!("{b}/.down-raced"))
+                .unwrap_or_else(|_| "no marker".into())
+        });
+        assert_eq!(
+            got.split(' ').next(),
+            Some("12345"),
+            "an up waiting on the lock of a down that finds no box reads its marker once it has the lock: {got}"
+        );
+        let late = format!("{b}/.lock-late");
+        let mut f = Fake::new(true);
+        let l2 = late.clone();
+        f.start = Some(Box::new(move || {
+            let _ = std::fs::write(&l2, "");
+            Some(b"12345".to_vec())
+        }));
+        let _ = down(&f, &b, &["late"]);
+        assert!(
+            !there(&late),
+            "a lock that appears as a down writes its marker: the down goes through it"
+        );
+        std::fs::remove_dir_all(&b).unwrap();
+    }
+
+    /// t_unit_orphan's down --orphans (#220): the orphans only, each named with what started it,
+    /// and taken down; none, said so; no names with it. A box is up while its dir is there.
+    #[test]
+    fn orphans_as_bash() {
+        let b = tmp("orph");
+        let me = std::process::id().to_string();
+        let my_start =
+            String::from_utf8(crate::procfs::proc_start(me.as_bytes()).unwrap()).unwrap();
+        // (a pid no process has: pid_max is one past the last)
+        let gone = std::fs::read_to_string("/proc/sys/kernel/pid_max")
+            .unwrap()
+            .trim()
+            .to_string();
+        let dead = format!(
+            "{{\"pid\": {gone}, \"start\": \"5\", \"command\": \"sleep\", \"terminal\": false}}"
+        );
+        let live = format!(
+            "{{\"pid\": {me}, \"start\": \"{my_start}\", \"command\": \"bash\", \"terminal\": false}}"
+        );
+        put(
+            &format!("{b}/lost/box.json"),
+            &format!(
+                "{{\"mode\": \"headless\", \"idle\": 0, \"created\": \"1\", \"starter\": {dead}}}"
+            ),
+        );
+        put(
+            &format!("{b}/kept/box.json"),
+            &format!(
+                "{{\"mode\": \"headless\", \"idle\": 0, \"created\": \"2\", \"starter\": {live}}}"
+            ),
+        );
+        let f = Fake::new(true);
+        let (_, said) = down(&f, &b, &["--orphans"]);
+        assert!(
+            said.contains(&format!(
+                "box 'lost': an orphan (no idle limit; what started it, sleep, pid {gone}, is gone)"
+            )),
+            "down --orphans names each orphan and what started it: {said}"
+        );
+        assert!(!there(&format!("{b}/lost")), "...and takes it down");
+        assert!(
+            there(&format!("{b}/kept/box.json")),
+            "...not a box whose starter runs"
+        );
+        assert_eq!(
+            down(&f, &b, &["--orphans"]).1,
+            "omabox: no orphan boxes\n",
+            "...none left: said so"
+        );
+        assert!(
+            down(&f, &b, &["--orphans", "kept"])
+                .1
+                .contains("takes no names"),
+            "...takes no names"
+        );
+        std::fs::remove_dir_all(&b).unwrap();
+    }
+
     #[test]
     fn markers_of_the_user() {
         assert!(user_marker(b"123\n"));

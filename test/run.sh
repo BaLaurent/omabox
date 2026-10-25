@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6633 MIN_UNIT=3927
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4580 MIN_UNIT=2071
+MIN_CHECKS=6606 MIN_UNIT=3901
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4552 MIN_UNIT=2043
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -1374,30 +1374,13 @@ t_unit_refusals() {
   check_eq "refusals left no box behind" 0 "$left"
 }
 
-# kill_box under set -e, as up's failure trap once ran it (#91, finding 157): every step runs, so
-# pasta is killed and PID 1 waited for. PID 1 and pasta are two sleeps that are not this shell's
-# children (a killed child stays a zombie, alive to kill -0). On the old kill_box the pkill that found
-# no stopped launcher ended it, pasta left running (t_failed_up's state check could not see that).
-t_unit_kill_box() {
-  local one pasta out
-  read -r one pasta < <(bash -c 'sleep 300 & a=$!; sleep 300 & echo "$a $!"')
-  out=$(ONE=$one PASTA=$pasta bash -c 'source "$1"; NAME=kb; box_pid() { echo "$ONE"; }; box_pasta() { echo "$PASTA"; }
-    kill_box; echo "ran to its end"' _ "$TMP/lib/bin/omabox" 2>&1)
-  check_eq "kill_box under set -e runs every step: PID 1 and pasta killed, then waited for" \
-    "ran to its end, PID 1 gone, pasta gone" \
-    "$out, PID 1 $(kill -0 "$one" 2>/dev/null && echo alive || echo gone), pasta $(kill -0 "$pasta" 2>/dev/null && echo alive || echo gone)"
-  kill "$one" "$pasta" 2>/dev/null || true
-}
+# (kill_box under set -e, #91, finding 157: every step runs, PID 1 and pasta killed, then waited
+# for: ready.rs kill_box_ends_pid1_and_pasta, an #[ignore] test t_unit_rust_ignored runs; #324.)
 
 t_unit_run_named_dead() {
   check_fails "run -b on a box that is not up fails (no throwaway)" ob run -b "$P-nope" -- true
-  # #115, finding 178: a reaper that exits between down's pgrep and its kill (it saw the box dead)
-  # failed that kill, the last of an || list, and errexit ended `down` silently before rm_box.
-  # The real cmd_down under the CLI's set -e; pgrep names a pid that is gone.
-  local b=$TMP/downrace; mkdir -p "$b/racebox"; echo '{"mode":"headless"}' > "$b/racebox/box.json"
-  check_eq "down: a reaper gone since pgrep is no failure, the box is cleared" $'rm_box\nomabox: box \'racebox\' down\nrc 0' \
-    "$(bash -c 'source "$1"; BOXES=$2; kill_box() { :; }; peek_pid() { return 1; }; pgrep() { echo 999999999; }
-      rm_box() { echo rm_box; }; cmd_down racebox; echo "rc $?"' _ "$TMP/lib/bin/omabox" "$b" 2>&1)"
+  # (#115, finding 178: a reaper gone since down looked for it is no failure: down.rs
+  # a_reaper_gone_is_no_failure)
 }
 
 # #166: a command through on_box or box_exec on a box going down as it entered printed nsenter's raw
@@ -1642,51 +1625,9 @@ PLANTED
   rm -rf "$t"
 }
 
-# #158: the runtime dir kept a .lock- per box name ever used and a .down- per down that found none.
-# down removes the lock it holds once the box is gone; lock_file opens again a lock file removed
-# while it waited, so it and a newcomer never both hold one; a down sweeps markers past 10 min.
-t_unit_lock_markers() {
-  local b=$TMP/lockm out; mkdir -p "$b/gone"; echo '{"mode":"headless"}' > "$b/gone/box.json"
-  : > "$b/.lock-gone"; : > "$b/.lock-nodir"
-  out=$(bash -c 'source "$1"; BOXES=$2; kill_box() { :; }; peek_pid() { return 1; }; pgrep() { :; }
-    rm_box() { rm -rf "$D"; }; cmd_down gone nodir' _ "$TMP/lib/bin/omabox" "$b" 2>&1)
-  check_match "down takes the box down" "box 'gone' down" "$out"
-  check_fails "...and removes its lock file" test -e "$b/.lock-gone"
-  check_fails "a lock file with no box: down removes it too" test -e "$b/.lock-nodir"
-  : > "$b/.down-old"; touch -d '-11 min' "$b/.down-old"; : > "$b/.down-new"
-  : > "$b/.expired-old"; touch -d '-25 hours' "$b/.expired-old"; : > "$b/.expired-new"; touch -d '-23 hours' "$b/.expired-new"
-  bash -c 'source "$1"; BOXES=$2; cmd_down none' _ "$TMP/lib/bin/omabox" "$b" >/dev/null 2>&1
-  check_fails "a down that finds no box sweeps a .down- marker older than 10 minutes" test -e "$b/.down-old"
-  check "...keeps a fresh one" test -e "$b/.down-new"
-  check "...and writes its own" test -s "$b/.down-none"
-  check_fails "...and an idle box's .expired- note older than a day (finding 237)" test -e "$b/.expired-old"
-  check "...keeping a younger one" test -e "$b/.expired-new"
-  # Finding 237: a down that finds the lock but no box writes its marker before it lets go of the lock,
-  # so an `up` waiting on the lock reads it. Here the down holds it a second (its rm of the lock file
-  # slowed) and its marker takes half a second to write: a waiter that gets the lock reads it, or not.
-  out=$(timeout 30 bash -c 'source "$1"; BOXES=$2; f=$BOXES/.lock-raced; : > "$f"
-    rm() { [ "${!#}" != "$f" ] || sleep 1; command rm "$@"; }
-    proc_start() { sleep 0.5; echo 12345; }
-    ( cmd_down raced ) >/dev/null 2>&1 &
-    until ! flock -n "$f" true; do sleep 0.02; done
-    ( lock_file w "$f" -w 10; cat "$BOXES/.down-raced" 2>/dev/null || echo "no marker" )
-    wait' _ "$TMP/lib/bin/omabox" "$b" 2>&1)
-  check_eq "an up waiting on the lock of a down that finds no box reads its marker once it has the lock" 12345 "$out"
-  # ...and one that finds neither box nor lock looks for the lock again once its marker is written: an
-  # `up` that opened it between the two read no marker, and the down goes through the lock (here the
-  # lock appears as the marker is written; the down removes it once it holds it).
-  bash -c 'source "$1"; BOXES=$2; proc_start() { : > "$BOXES/.lock-late"; echo 12345; }; cmd_down late' _ "$TMP/lib/bin/omabox" "$b" >/dev/null 2>&1
-  check_fails "a lock that appears as a down writes its marker: the down goes through it" test -e "$b/.lock-late"
-  # A holder removes the file while a waiter waits on it, as down does: the waiter must end up on
-  # the path's file, so a newcomer's -n fails while it holds it.
-  out=$(timeout 20 bash -c 'source "$1"; f=$2/.lock-x
-    ( lock_file h "$f" -w 5; sleep 1; rm -f "$f"; sleep 0.5 ) & sleep 0.3
-    ( lock_file w "$f" -w 10; echo "waiter on path: $([ "$(stat -Lc %i /dev/fd/$w)" = "$(stat -c %i "$f")" ] && echo yes || echo no)"
-      ( lock_file n "$f" -n && echo "newcomer locked it too" || echo "newcomer refused" ); sleep 0.2 )
-    wait' _ "$TMP/lib/bin/omabox" "$b" 2>&1)
-  check_match "a lock file removed under a waiter: the waiter locks the new one" "waiter on path: yes" "$out"
-  check_match "...and holds it alone" "newcomer refused" "$out"
-}
+# (#158, finding 237: down's lock files and markers, lock_file under a removal: down.rs
+# lock_files_and_markers_as_bash, a_waiter_on_the_lock_reads_the_marker; boxes.rs
+# a_lock_removed_under_a_waiter; #324 wave 6-suite.)
 
 # t_main's S2 checks (#355), on a made-up HOME: they find a planted copy of a secret file and a token,
 # and not the one-word files a box writes itself that a host has too.
@@ -2801,25 +2742,7 @@ echo "real $*"
   rm -rf "$d"
 }
 
-# rm_box and sweep_homes (#264): a HOME holding a read-only dir (an app's), and a runtime dir whose
-# own dir is mode 000 (systemd's), are removed; a removal that still fails says so, once, on stderr.
-t_unit_rm_tree() {
-  local r=$TMP/rmt out
-  mk() { mkdir -p "$r/run/omabox/$1/run/x" "$r/cache/omabox/$1/home/locked/dest"; touch "$r/cache/omabox/$1/home/locked/dest/f"
-    chmod a-w "$r/cache/omabox/$1/home/locked/dest" "$r/cache/omabox/$1/home/locked"; chmod 000 "$r/run/omabox/$1/run/x"; }
-  lib_rm() { XDG_RUNTIME_DIR=$r/run XDG_CACHE_HOME=$r/cache lib bash -c "source $TMP/lib/bin/omabox; $1"; }
-  mk b1; mk b2; rm -rf "$r/run/omabox/b2"   # b2: a box that is gone, its HOME left
-  mkdir -p "$r/outside/keep"; chmod a-w "$r/outside/keep"; ln -s "$r/outside" "$r/cache/omabox/b3"
-  out=$(lib_rm 'NAME=b1; D=$BOXES/b1; rm_box; sweep_homes' 2>&1)
-  check_eq "rm_box: the box dir and its HOME go, read-only dirs and all; sweep_homes: a gone box's too" \
-    "|gone gone gone" "$out|$(for p in run/omabox/b1 cache/omabox/b1 cache/omabox/b2; do [ -e "$r/$p" ] && echo "left" || echo gone; done | paste -sd ' ')"
-  check "...a link in the cache is not followed (what it points to keeps its modes)" test ! -w "$r/outside/keep"
-  mk b4; rm -rf "$r/run/omabox/b4"
-  out=$(lib_rm 'rm() { echo "rm: cannot remove '\''x'\'': Device or resource busy" >&2; echo "rm: and more" >&2; return 1; }; sweep_homes' 2>&1)
-  check_eq "...a removal that still fails: said, with rm's first complaint" \
-    "omabox: could not remove all of the HOME of box 'b4', which is gone: rm: cannot remove 'x': Device or resource busy" "$out"
-  chmod -R u+w "$r"; command rm -rf "$r"
-}
+# (rm_box and sweep_homes, #264: ready.rs rm_tree_as_bash, #324 wave 6-suite.)
 
 # share/bin/inotifywait's idle watch (#129) waits without starting a process (#275: Omarchy's idle-spawn
 # test counted its `sleep 5` every 5 s) and ends with its shell. A stand-in shell holds the write end of
@@ -5683,6 +5606,21 @@ PYEOF
   wait "$ufk" "$u1" "$un" "$un2" "$hsrv" 2>/dev/null
 }
 
+# The crate's #[ignore] tests (#324 wave 6-suite, D5): what a #[test] in CI or the package's check()
+# may not do (start and kill processes of its own), run here, each test a check. Not from an install,
+# which has no crate build.
+t_unit_rust_ignored() {
+  if [ "$INSTALLED" = 1 ]; then skip "the crate's #[ignore] tests" "an install has no crate build"; return; fi
+  local out rc=0 l n=0
+  out=$(cargo test --locked --manifest-path "$ROOT/Cargo.toml" -- --ignored --test-threads=4 2>&1) || rc=$?
+  while IFS= read -r l; do
+    [[ $l =~ ^test\ (.+)\ \.\.\.\ (ok|FAILED|ignored)$ ]] || continue
+    n=$((n + 1))
+    if [ "${BASH_REMATCH[2]}" = ok ]; then ok "cargo test --ignored: ${BASH_REMATCH[1]}"
+    else no "cargo test --ignored: ${BASH_REMATCH[1]}" "$out"; fi
+  done <<<"$out"
+  check_eq "...each of them ran, and cargo test passed (rc)" "0 yes" "$rc $([ "$n" -gt 0 ] && echo yes || echo "no tests: $out")"
+}
 # Wave 4b (#324): peek, gdb, check and record, both ways, on stand-ins of their own: a box whose
 # Hyprland (a stand-in hyprctl) and gdb are bound over the real ones in its mount namespace, with
 # processes named Hyprland, a traced one and one whose name needs taming; a host Hyprland in the
@@ -9519,14 +9457,15 @@ t_unit_agent_session() {
 # gone an orphan (box_orphan), and `down --orphans` takes those down. Nothing else: no agent, owner,
 # idle limit or interactive box is ever one, nor one a person started at a terminal.
 t_unit_orphan() {
-  local L=$TMP/lib/bin/omabox d=$TMP/orphan out pid
+  local d=$TMP/orphan pid
   mkdir -p "$d"
-  # Each starter script prints its pid, then what box_starter finds from below it.
-  printf '%s\n' 'echo "$$"' 'bash -c '"'"'source "$1"; box_starter'"'"' _ "$1"' > "$d/direct.sh"
-  printf '%s\n' 'echo "$$"' 'bash -c '"'"'bash -c "source \"\$1\"; box_starter" _ "$1"; true'"'"' _ "$1"' > "$d/dash-c.sh"
-  printf '%s\n' 'echo "$$"' '( bash -c '"'"'source "$1"; box_starter'"'"' _ "$1"; true )' > "$d/subshell.sh"
-  printf '%s\n' 'echo "$$"' 'timeout 20 bash -c '"'"'source "$1"; box_starter'"'"' _ "$1"' > "$d/timeout.sh"
-  starter_is() { local o; o=$(bash "$d/$1" "$L" 2>&1); [[ $(sed -n 2p <<<"$o") =~ ^$(head -1 <<<"$o")\ [0-9]+\ bash$ ]] || { echo "$o"; return 1; }; }
+  # Each starter script prints its pid, then what box_starter finds from below it: the probe, run where
+  # up would be (the script's command, under a bash -c, its subshell, timeout).
+  printf '%s\n' 'echo "$$"' '"$1" _rust probe box_starter' > "$d/direct.sh"
+  printf '%s\n' 'echo "$$"' 'bash -c '"'"'"$1" _rust probe box_starter; true'"'"' _ "$1"' > "$d/dash-c.sh"
+  printf '%s\n' 'echo "$$"' '( "$1" _rust probe box_starter; true )' > "$d/subshell.sh"
+  printf '%s\n' 'echo "$$"' 'timeout 20 "$1" _rust probe box_starter' > "$d/timeout.sh"
+  starter_is() { local o; o=$(bash "$d/$1" "$PROBE" 2>&1); [[ $(sed -n 2p <<<"$o") =~ ^$(head -1 <<<"$o")\ [0-9]+\ bash$ ]] || { echo "$o"; return 1; }; }
   check "box_starter: the script that ran up (its pid, start time, command)" starter_is direct.sh
   check "...past a bash -c that only carries the command (an agent's tool call)" starter_is dash-c.sh
   check "...past the script's own subshell ( … ), its command line the script's" starter_is subshell.sh
@@ -9540,7 +9479,7 @@ t_unit_orphan() {
   local reused="{\"pid\": $$, \"start\": \"1\", \"command\": \"bash\", \"terminal\": false}"
   orphan_of() {
     mkdir -p "$d/b"; jq -n "{mode: \"headless\", idle: 0} + $1" > "$d/b/box.json"
-    bash -c 'source "$1"; D=$2; box_orphan && echo orphan || echo kept' _ "$L" "$d/b"
+    if probe box_orphan "$d/b"; then echo orphan; else echo kept; fi
   }
   check_eq "idle 0, no agent or owner, its starter gone: an orphan" orphan "$(orphan_of "{starter: $dead}")"
   check_eq "...its pid reused by another process: still an orphan" orphan "$(orphan_of "{starter: $reused}")"
@@ -9553,18 +9492,8 @@ t_unit_orphan() {
     "$(orphan_of "{starter: ($dead + {terminal: true})}")"
   check_eq "no starter found (a parent gone already), or a box.json from before: not one" "kept kept" \
     "$(orphan_of '{starter: {terminal: false}}') $(orphan_of '{}')"
-  # down --orphans: the orphans only, each named with its starter; none, said so.
-  local b=$d/boxes; mkdir -p "$b/lost" "$b/kept"
-  jq -n "{mode: \"headless\", idle: 0, created: \"1\", starter: $dead}" > "$b/lost/box.json"
-  jq -n "{mode: \"headless\", idle: 0, created: \"2\", starter: $live}" > "$b/kept/box.json"
-  dn() { bash -c 'source "$1"; BOXES=$2; shift 2; box_state() { [ -d "$D" ] && echo up || echo gone; }; kill_box() { :; }
-    peek_pid() { return 1; }; pgrep() { :; }; rm_box() { rm -rf "$D"; }; cmd_down "$@"' _ "$L" "$b" "$@" 2>&1; }
-  out=$(dn --orphans)
-  check_match "down --orphans names each orphan and what started it" "box 'lost': an orphan \(no idle limit; what started it, sleep, pid $pid, is gone\)" "$out"
-  check "...and takes it down" test ! -e "$b/lost"
-  check "...not a box whose starter runs" test -e "$b/kept/box.json"
-  check_eq "...none left: said so" "omabox: no orphan boxes" "$(dn --orphans)"
-  check_match "...takes no names" "takes no names" "$(dn --orphans kept)"
+  # (down --orphans: the orphans only, each named with its starter; none, said so: down.rs
+  # orphans_as_bash)
 }
 
 # findings 88 and 93: two agent sessions in one repo get a box each, and one's `down` leaves the
@@ -12012,7 +11941,7 @@ t_failed_up() {
   fi
   # kill_box waits for PID 1 (up to 10 s, saying so past that): a failed up returns with its box gone.
   # Its own message is in the evidence when not (#86). (This passed on the old trap too, #91:
-  # t_unit_kill_box is what guards finding 157's fix.)
+  # ready.rs kill_box_ends_pid1_and_pasta is what guards finding 157's fix.)
   check_eq "...and returns with the box dead (up said: ${out//$'\n'/ | })" dead \
     "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n) | .state')"
   # The namespace and bwrap parent can take a moment to exit after the failed command returns.
@@ -13202,27 +13131,8 @@ t_throwaway_killed() {
   kill "$tp" 2>/dev/null; wait "$tp" 2>/dev/null
 }
 
-# An up whose `omabox run` is gone (#222, finding 309): killed outright while its throwaway box was still
-# starting, the up went on to the end, holding the box's lock while the reaper's down waited. It ends the
-# box itself at its next look, and says why.
-t_unit_up_owner_gone() {
-  local out rc=0 t0=$SECONDS
-  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2/uo BOXES=$2; UP_OWNER="$$ not-its-start"
-    box_alive() { return 0; }; on_box() { return 1; }; kill_box() { return 0; }; rm_box() { echo removed; }
-    bar_settle "0,0 10x10" $((SECONDS + 15))' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1) || rc=$?
-  check_eq "an up whose run is gone stops: exit 1" 1 "$rc"
-  check_match "...said" "box 'u': its omabox run \([0-9]+\) is gone: not starting it$" "$out"
-  check_match "...the box removed" "^removed" "$out"
-  check "...at once, not at the deadline ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -le 3
-  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2/uo BOXES=$2; UP_OWNER="$$ not-its-start"
-    box_alive() { return 0; }; on_box() { return 1; }; kill_box() { return 1; }; rm_box() { echo removed; }
-    wait_hyprland' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
-  check_match "...a PID 1 that will not go: the dead box left to the reaper" "^omabox: box 'u': its omabox run \([0-9]+\) is gone: not starting it \(left, dead, to its reaper\)$" "$out"
-  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2/uo BOXES=$2; UP_OWNER="$$ $(proc_start $$)"
-    box_alive() { return 0; }; on_box() { return 1; }; rm_box() { echo removed; }
-    bar_settle "0,0 10x10" $((SECONDS + 1)); echo rc $?' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1)
-  check_eq "...its run still there: up goes on" "rc 0" "$out"
-}
+# (An up whose `omabox run` is gone, #222, finding 309: ready.rs up_stops_when_its_run_is_gone,
+# #324 wave 6-suite.)
 
 # The keyboard and pointer tools (finding 64): keys named as binds name them, input checked before any
 # of it is sent, spare keycodes X11 apps can see, and a lost box is a failure.
@@ -14110,17 +14020,8 @@ t_unit_settle_read() {
   check_match "settle_begin: a ready line split at a space too" "line \[ready 1920x1080\] err \[\]" "$out"
 }
 
-# up's waits after the bar, on a box that died meanwhile (#157, finding 216): bar_settle retried its
-# captures until READY_TIMEOUT (30 s), holding the box's lock, so the reaper's down of the dead box
-# waited that long. Here box_alive says gone and every capture fails: it must say so at once.
-t_unit_up_dies_late() {
-  local out rc=0 t0=$SECONDS
-  out=$(timeout 20 bash -c 'source "$1"; NAME=u D=$2; box_alive() { return 1; }; on_box() { return 1; }
-    bar_settle "0,0 10x10" $((SECONDS + 15))' _ "$TMP/lib/bin/omabox" "$TMP" 2>&1) || rc=$?
-  check_eq "bar_settle on a dead box: exit 1" 1 "$rc"
-  check_match "...said: died while starting" "box 'u' died while starting" "$out"
-  check "...at once, not at the deadline ($((SECONDS - t0)) s)" test $((SECONDS - t0)) -le 3
-}
+# (up's waits on a box that died meanwhile, #157, finding 216: ready.rs bar_settle_on_a_dead_box,
+# #324 wave 6-suite.)
 
 # install.sh with a temporary HOME and stubs first on PATH (sudo refuses, so it never installs a
 # package): failures stop it with a message (finding 64), and it links, never nests.
@@ -20523,7 +20424,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rust_ignored t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)

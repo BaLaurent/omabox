@@ -610,6 +610,36 @@ pub fn box_file(ctx: &Ctx, p: &std::path::Path, value: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// t_unit_lock_markers: a holder removes the lock file while a waiter waits on it, as down
+    /// does: the waiter ends up on the path's file, so a newcomer's try fails while it holds it.
+    #[test]
+    fn a_lock_removed_under_a_waiter() {
+        let d = std::env::temp_dir().join(format!("omabox-lockx-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join(".lock-x");
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let _h = lock_file(&f, Duration::from_secs(5)).unwrap();
+                std::thread::sleep(Duration::from_secs(1));
+                std::fs::remove_file(&f).unwrap();
+                std::thread::sleep(Duration::from_millis(500));
+            });
+            std::thread::sleep(Duration::from_millis(300));
+            let w = lock_file(&f, Duration::from_secs(10)).unwrap();
+            assert_eq!(
+                w.metadata().unwrap().ino(),
+                std::fs::metadata(&f).unwrap().ino(),
+                "a lock file removed under a waiter: the waiter locks the new one"
+            );
+            assert!(
+                lock_file(&f, Duration::ZERO).is_none(),
+                "...and holds it alone"
+            );
+        });
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
     #[test]
     fn labwc_line() {
         let t = b"x spawned child 12 exited with 1 y spawned child 13 terminated with signal 115\nspawned child 9 exited with -";

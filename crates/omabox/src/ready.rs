@@ -1198,6 +1198,278 @@ pub fn box_json(ctx: &Ctx, hung: bool, shell_given: &str, gone: &str) -> Vec<u8>
 mod tests {
     use super::*;
 
+    use std::sync::Mutex;
+
+    /// bash's stubs for up's waits: box_alive's answer, on_box failing (no frame), kill_box's
+    /// answer, rm_box saying it ran; box_pid and box_pasta given (kill_box's own test).
+    #[derive(Default)]
+    struct Fake {
+        alive: bool,
+        killed: bool,
+        pids: Option<(Vec<u8>, Vec<u8>)>,
+        log: Mutex<Vec<String>>,
+    }
+
+    impl BoxSys for Fake {
+        fn box_alive(&self, _: &Ctx) -> Res<bool> {
+            Ok(self.alive)
+        }
+        fn on_box(&self, _: &Ctx, _: &[Vec<u8>]) -> crate::exec::Ran {
+            crate::exec::Ran {
+                rc: 1,
+                out: Vec::new(),
+                refused: false,
+                gone_said: false,
+            }
+        }
+        fn kill_box(&self, ctx: &Ctx) -> bool {
+            if self.pids.is_some() {
+                return kill_box_with(self, ctx);
+            }
+            self.killed
+        }
+        fn rm_box(&self, _: &Ctx) {
+            self.log.lock().unwrap().push("removed".into());
+        }
+        fn box_pid(&self, d: &[u8]) -> BoxPid {
+            match &self.pids {
+                Some((one, _)) => BoxPid::Pid(one.clone()),
+                None => crate::boxes::box_pid(d),
+            }
+        }
+        fn box_pasta(&self, d: &[u8]) -> Option<Vec<u8>> {
+            match &self.pids {
+                Some((_, pasta)) => Some(pasta.clone()),
+                None => crate::boxes::box_pasta(d),
+            }
+        }
+    }
+
+    fn uctx(tag: &str) -> Ctx {
+        let b = std::env::temp_dir().join(format!("omabox-ready-{tag}-{}", std::process::id()));
+        let b = shell::bytes(&b).to_vec();
+        let mut c = Ctx::new(b"up", b.clone());
+        c.parsed();
+        c.name = b"u".to_vec();
+        c.d = cat!(b, "/uo");
+        c
+    }
+
+    fn ready(owner: Option<Owner>) -> Ready<'static> {
+        Ready {
+            owner,
+            covers: false,
+            shell_before: Vec::new(),
+            bar_at: 0,
+            before_end: &|| {},
+        }
+    }
+
+    /// t_unit_up_owner_gone (#222): an up whose `omabox run` is gone stops at once, says so and
+    /// removes the box; one whose PID 1 will not go leaves it, dead, to the reaper; one whose run is
+    /// still there goes on.
+    #[test]
+    fn up_stops_when_its_run_is_gone() {
+        let me = std::process::id().to_string().into_bytes();
+        let gone = || {
+            Some(Owner {
+                pid: me.clone(),
+                start: b"not-its-start".to_vec(),
+            })
+        };
+        let line = format!(
+            "omabox: box 'u': its omabox run ({}) is gone: not starting it",
+            std::process::id()
+        );
+        let ctx = uctx("og");
+        let f = Fake {
+            alive: true,
+            killed: true,
+            ..Fake::default()
+        };
+        let t0 = Instant::now();
+        let (r, said) = crate::exit::heard(|| {
+            bar_settle_with(
+                &f,
+                &ctx,
+                &ready(gone()),
+                b"0,0 10x10",
+                Instant::now() + Duration::from_secs(15),
+            )
+        });
+        assert_eq!(r, Err(Exit(1)), "an up whose run is gone stops: exit 1");
+        assert_eq!(said, format!("{line}\n"), "...said");
+        assert_eq!(*f.log.lock().unwrap(), ["removed"], "...the box removed");
+        assert!(
+            t0.elapsed() <= Duration::from_secs(3),
+            "...at once, not at the deadline"
+        );
+        let f = Fake {
+            alive: true,
+            killed: false,
+            ..Fake::default()
+        };
+        let (r, said) = crate::exit::heard(|| wait_hyprland_with(&f, &ctx, &ready(gone())));
+        assert_eq!(
+            (r, said),
+            (
+                Err(Exit(1)),
+                format!("{line} (left, dead, to its reaper)\n")
+            ),
+            "...a PID 1 that will not go: the dead box left to the reaper"
+        );
+        assert!(f.log.lock().unwrap().is_empty());
+        let mine = Owner {
+            pid: me.clone(),
+            start: crate::procfs::proc_start(&me).unwrap(),
+        };
+        let f = Fake {
+            alive: true,
+            ..Fake::default()
+        };
+        let r = bar_settle_with(
+            &f,
+            &ctx,
+            &ready(Some(mine)),
+            b"0,0 10x10",
+            Instant::now() + Duration::from_secs(1),
+        );
+        assert_eq!(r, Ok(()), "...its run still there: up goes on");
+    }
+
+    /// t_unit_up_dies_late (#157, finding 216): bar_settle on a box that died says so at once.
+    #[test]
+    fn bar_settle_on_a_dead_box() {
+        let ctx = uctx("dl");
+        let t0 = Instant::now();
+        let (r, said) = crate::exit::heard(|| {
+            bar_settle_with(
+                &Fake::default(),
+                &ctx,
+                &ready(None),
+                b"0,0 10x10",
+                Instant::now() + Duration::from_secs(15),
+            )
+        });
+        assert_eq!(r, Err(Exit(1)), "bar_settle on a dead box: exit 1");
+        assert!(
+            said.contains("box 'u' died while starting"),
+            "...said: died while starting: {said}"
+        );
+        assert!(
+            t0.elapsed() <= Duration::from_secs(3),
+            "...at once, not at the deadline"
+        );
+    }
+
+    /// t_unit_kill_box: kill_box runs every step, PID 1 and pasta killed, then waited for.
+    /// (#[ignore]: it starts and kills processes; test/run.sh's unit tier runs it.)
+    #[test]
+    #[ignore = "starts processes: run by test/run.sh (cargo test -- --ignored)"]
+    fn kill_box_ends_pid1_and_pasta() {
+        // (children of a shell that exits: init reaps them, as it reaps a box's)
+        let o = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "sleep 300 >/dev/null 2>&1 & a=$!; sleep 300 >/dev/null 2>&1 & echo \"$a $!\"",
+            ])
+            .output()
+            .unwrap();
+        let o = String::from_utf8(o.stdout).unwrap();
+        let (one, pasta) = o.trim().split_once(' ').unwrap();
+        let f = Fake {
+            pids: Some((one.as_bytes().to_vec(), pasta.as_bytes().to_vec())),
+            ..Fake::default()
+        };
+        let ctx = uctx("kb");
+        let alive = |p: &str| signal_ok(p.as_bytes(), 0);
+        assert!(alive(one) && alive(pasta));
+        assert!(f.kill_box(&ctx), "kill_box runs to its end");
+        assert!(!alive(one), "...PID 1 gone");
+        let end = Instant::now() + Duration::from_secs(5);
+        while alive(pasta) && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!alive(pasta), "...pasta gone");
+    }
+
+    /// t_unit_rm_tree (#264): rm_box takes the box dir and its HOME, read-only dirs and all;
+    /// sweep_homes a gone box's HOME too, never through a link; a removal that still fails is
+    /// said, with rm's first complaint.
+    #[test]
+    fn rm_tree_as_bash() {
+        let r = std::env::temp_dir().join(format!("omabox-rmt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        let r = r.to_str().unwrap().to_string();
+        let mode = |p: &str, m: u32| {
+            std::fs::set_permissions(p, std::os::unix::fs::PermissionsExt::from_mode(m)).unwrap();
+        };
+        let mk = |b: &str| {
+            let (run, home) = (
+                format!("{r}/run/omabox/{b}/run/x"),
+                format!("{r}/cache/omabox/{b}/home/locked/dest"),
+            );
+            std::fs::create_dir_all(&run).unwrap();
+            std::fs::create_dir_all(&home).unwrap();
+            std::fs::write(format!("{home}/f"), "").unwrap();
+            mode(&home, 0o555);
+            mode(&format!("{r}/cache/omabox/{b}/home/locked"), 0o555);
+            mode(&run, 0o000);
+        };
+        mk("b1");
+        mk("b2");
+        mode(&format!("{r}/run/omabox/b2/run/x"), 0o755);
+        std::fs::remove_dir_all(format!("{r}/run/omabox/b2")).unwrap(); // b2: a box that is gone, its HOME left
+        std::fs::create_dir_all(format!("{r}/outside/keep")).unwrap();
+        mode(&format!("{r}/outside/keep"), 0o555);
+        std::os::unix::fs::symlink(format!("{r}/outside"), format!("{r}/cache/omabox/b3")).unwrap();
+        let mut ctx = Ctx::new(b"down", format!("{r}/run/omabox").into_bytes());
+        ctx.name = b"b1".to_vec();
+        ctx.d = format!("{r}/run/omabox/b1").into_bytes();
+        let env = [("XDG_CACHE_HOME", Some(format!("{r}/cache")))];
+        let env: Vec<(&str, Option<&str>)> = env.iter().map(|(k, v)| (*k, v.as_deref())).collect();
+        let ((), said) = crate::exit::heard(|| {
+            shell::with_env(&env, || {
+                rm_box(&ctx);
+                sweep_homes(&ctx);
+            })
+        });
+        let left: Vec<bool> = ["run/omabox/b1", "cache/omabox/b1", "cache/omabox/b2"]
+            .iter()
+            .map(|p| std::path::Path::new(&format!("{r}/{p}")).exists())
+            .collect();
+        assert_eq!(
+            (said.as_str(), left),
+            ("", vec![false, false, false]),
+            "rm_box: the box dir and its HOME go, read-only dirs and all; sweep_homes: a gone box's too"
+        );
+        let keep = std::fs::metadata(format!("{r}/outside/keep")).unwrap();
+        assert!(
+            keep.permissions().readonly(),
+            "...a link in the cache is not followed (what it points to keeps its modes)"
+        );
+        // (rm's own complaint: HOMEs' folder not writable, so the HOME itself cannot go; not as root)
+        if crate::procfs::euid() != 0 {
+            mk("b4");
+            mode(&format!("{r}/run/omabox/b4/run/x"), 0o755);
+            std::fs::remove_dir_all(format!("{r}/run/omabox/b4")).unwrap();
+            mode(&format!("{r}/cache/omabox"), 0o555);
+            let ((), said) = crate::exit::heard(|| shell::with_env(&env, || sweep_homes(&ctx)));
+            let want = format!(
+                "omabox: could not remove all of the HOME of box 'b4', which is gone: rm: cannot remove '{r}/cache/omabox/b4': Permission denied\n"
+            );
+            assert_eq!(
+                said, want,
+                "...a removal that still fails: said, with rm's first complaint"
+            );
+            mode(&format!("{r}/cache/omabox"), 0o755);
+        }
+        let _ = std::process::Command::new("chmod")
+            .args(["-R", "u+rwX", &r])
+            .status();
+        std::fs::remove_dir_all(&r).unwrap();
+    }
+
     /// t_unit_omarchy45's intro_cover cases: an Overlay omarchy-background layer's geometry; the
     /// wallpaper alone (Background level) is no cover. jq is the recipe's dependency.
     #[test]

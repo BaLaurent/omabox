@@ -102,6 +102,9 @@ pub const NAMES: &[(&str, &str)] = &[
     ("proc_stat", "PID FIELD"),
     ("agent_alive", "D"),
     ("owner_alive", "PID START"),
+    // Who started a box (from the probe's parent up), and whether box.json makes D an orphan.
+    ("box_starter", ""),
+    ("box_orphan", "D"),
 ];
 
 /// One line a word: the probe's own usage, for a name it does not have.
@@ -512,6 +515,11 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         }
         (b"agent_alive", [d]) => yes(crate::boxes::agent_alive(d)),
         (b"owner_alive", [pid, start]) => yes(crate::ready::owner_alive(pid, start)),
+        (b"box_starter", []) => line(&crate::upspec::box_starter().ok_or(Exit(1))?),
+        (b"box_orphan", [d]) => {
+            ctx.d = d.to_vec();
+            yes(crate::ready::box_orphan(&ctx))
+        }
         (b"covers_held", [n]) => {
             ctx.name = n.to_vec();
             ctx.d = cat!(ctx.boxes, "/", n);
