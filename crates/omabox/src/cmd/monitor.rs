@@ -356,6 +356,18 @@ fn remove(ctx: &mut Ctx, o: &[u8], interactive: bool) -> Res<()> {
             ")"
         )));
     };
+    // Its screens at their new scales before it returns (#382, finding 519).
+    if interactive && !crate::mon::scales_settled(ctx, 5) {
+        say(cat!(
+            "box '",
+            n,
+            "': its screens were not at their new scales 5 s after ",
+            o,
+            " went (omabox monitor list -b ",
+            n,
+            ")"
+        ));
+    }
     monitors_record(ctx)?;
     let moved = if moved.is_empty() {
         Vec::new()

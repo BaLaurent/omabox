@@ -10137,6 +10137,19 @@ from them.
     A window that never has it is focused once and fails after 3 s, as by bash. Tests:
     t_unit_rust_parity (that case again the same both ways), t_window.
 
+519. **`monitor remove` on an interactive box returned before its screens' new scales** (2026-10-25,
+    #382; t_monitors_window's parity "monitor remove, interactive (both ways): the main window tiled
+    again", once in the suite at 3b3cf52 and 1 alone in 2, the binary's side reading WAYLAND-1 at
+    0.825 where it is 1 with no views left). The remove places the monitors (finding 260's wait
+    covers their places) and returns; Hyprland takes the main screen's new scale a while later, and
+    the main window, tiled again, resizes on the host after that. Both halves did so; bash's slower
+    return hid it. **Fix** (Rust): an interactive box's remove waits, 5 s at most, until each screen
+    is at the scale its config gives it (omabox_monitor_scales() in share/hyprland.lua: the main
+    screen 1 with no views, else each view's from its window's size, as omabox_place_monitors sets
+    them), saying so if the time runs out; a box started by an older omabox has no such function and
+    is not waited for. Bash's remove does not wait. Tests: t_monitors_window ("the main screen at
+    scale 1 as the remove returns", read at once, the binary only), mon.rs's scale_rows_read.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

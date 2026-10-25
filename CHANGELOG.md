@@ -69,6 +69,9 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **The tools omabox runs against a box (grim, hyprctl, its input tools, gdb) could make a crash
   notification on your desktop**: unlike a box's own commands, they kept your core limit. They get
   the box's 1-byte limit.
+- **`monitor remove` on an interactive box returned before its screens had their new scales**: right
+  after it, the main screen could still be at the scale it had beside the monitor (0.825 for 1). It
+  now waits for them, 5 s at most ([#382](https://github.com/diogochaves/omabox/issues/382)).
 - **`click --window` (and `--in` a window's shot) could fail with "did not take focus in 3 s"** on a
   window moved while its workspace was hidden: the window it had been over took the focus back. A
   window that had the focus and lost it at once is focused again.

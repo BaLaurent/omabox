@@ -158,6 +158,24 @@ function omabox_place_monitors()
     end
   end
 end
+-- What omabox_place_monitors sets an interactive box's screens' scales to (#382): "NAME SCALE",
+-- comma-separated, the main screen's and each view's, from their windows' sizes now; raised as an
+-- error, as omabox_monitor_layout's. omabox waits for them after a `monitor remove`. (A headless
+-- monitor's scale is Hyprland's rounding of the one asked: none here.)
+function omabox_monitor_scales()
+  local out, views, f, view = omabox_layout()
+  local rows = {}
+  for i, b in ipairs(out) do
+    local s
+    if i == 1 then
+      if interactive and b.m then s = views and f or 1 end
+    elseif views and b.m and b.l.mode:match("^%d+x%d+") then
+      s = view(b.m, b.w, b.h)
+    end
+    if s and b.name then table.insert(rows, b.name .. " " .. s) end
+  end
+  error("omabox-scales:" .. table.concat(rows, ","), 0)
+end
 -- The layout omabox lays an interactive box's windows out by (#174), as omabox_place_monitors places
 -- it: "NAME X Y W H" a monitor, the main screen as `main`, comma-separated; one with no place (none
 -- before it) left out. With MORE, a line as omabox.monitors has them, as if it were there last (a

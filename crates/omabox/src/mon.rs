@@ -624,6 +624,75 @@ pub fn monitors_place(ctx: &Ctx) -> Result<Vec<u8>, ()> {
     Ok(r.text())
 }
 
+/// An interactive box's screens at the scales its config gives them (omabox_monitor_scales: the main
+/// screen's and each view's, from their windows' sizes), SECS at most (#382, finding 519): after a
+/// `monitor remove` Hyprland takes the main screen's new scale a while after the place, and a read
+/// right after the remove still had the old one (0.825 for 1). True at once for a box whose config
+/// has no such function (started by an older omabox). False when the time ran out.
+pub fn scales_settled(ctx: &Ctx, secs: u64) -> bool {
+    let end = crate::settle::after(secs);
+    loop {
+        let r = on_box(
+            ctx,
+            &w(&[
+                b"timeout",
+                HYPR_LIMIT.as_bytes(),
+                b"hyprctl",
+                b"eval",
+                b"omabox_monitor_scales()",
+            ]),
+            false,
+            Out::Capture(None),
+            ErrTo::Out,
+        );
+        let out = shell::subst(&r.out);
+        let Some(rest) = out.strip_prefix(b"error: omabox-scales:") else {
+            return true;
+        };
+        let want = scale_rows(rest);
+        if let Ok(m) = hypr_json(ctx, &["monitors"]) {
+            let live = jq::jq(
+                &["-r", r#".[] | "\(.name) \(.scale)""#],
+                Some(&m),
+                jq::Err::Inherit,
+            )
+            .text();
+            let scale_of = |n: &[u8]| -> Option<f64> {
+                live.split(|&c| c == b'\n').find_map(|l| {
+                    let v = l.strip_prefix(n)?.strip_prefix(b" ")?;
+                    std::str::from_utf8(v).ok()?.trim().parse().ok()
+                })
+            };
+            if want
+                .iter()
+                .all(|(n, s)| scale_of(n).is_some_and(|l| (l - s).abs() <= 0.001))
+            {
+                return true;
+            }
+        }
+        if crate::settle::past(end) {
+            return false;
+        }
+        crate::trap::sleep(b"0.05");
+    }
+}
+
+/// omabox_monitor_scales()'s rows, "NAME SCALE" comma-separated: each name and its scale (a row that
+/// is not one left out).
+fn scale_rows(rest: &[u8]) -> Vec<(Vec<u8>, f64)> {
+    rest.split(|&c| c == b',' || c == b'\n')
+        .filter_map(|row| {
+            let i = row.iter().position(|&c| c == b' ')?;
+            let s = std::str::from_utf8(&row[i + 1..])
+                .ok()?
+                .trim()
+                .parse()
+                .ok()?;
+            Some((row[..i].to_vec(), s))
+        })
+        .collect()
+}
+
 /// `[ -n "$(monitors_file | grep . || true)" ]`: the box has monitors of `monitor add`'s.
 pub fn has_monitors(ctx: &Ctx) -> bool {
     !shell::grep_lines(&monitors_file(ctx)).is_empty()
@@ -662,6 +731,23 @@ pub fn set_up_locked(on: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scale_rows_read() {
+        assert_eq!(
+            scale_rows(b"WAYLAND-1 0.825,WAYLAND-2 0.825\n"),
+            vec![
+                (b"WAYLAND-1".to_vec(), 0.825),
+                (b"WAYLAND-2".to_vec(), 0.825)
+            ]
+        );
+        assert_eq!(
+            scale_rows(b"WAYLAND-1 1"),
+            vec![(b"WAYLAND-1".to_vec(), 1.0)]
+        );
+        assert!(scale_rows(b"").is_empty());
+        assert!(scale_rows(b"WAYLAND-1 x,nospace").is_empty());
+    }
 
     #[test]
     fn specs_as_bash_reads_them() {

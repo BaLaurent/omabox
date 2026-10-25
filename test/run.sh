@@ -16719,6 +16719,9 @@ t_monitors_window() {
   check "closing a monitor's window: that monitor goes" until_ok 3 mons 'map(.name) | join(" ")' "WAYLAND-1 WAYLAND-4"
   check_match "...the box stays up" " up " "$("${in[@]}" ls | grep '^wm ')"
   "${in[@]}" monitor -b wm remove WAYLAND-4 >/dev/null 2>&1
+  # (read at once: the remove waits for the screens' new scales, #382, finding 519; bash's does not)
+  [ "$CLI" = "$BASH_CLI" ] ||
+    check_eq "...the main screen at scale 1 as the remove returns" 1 "$("${in[@]}" monitor -b wm list --json | jq -r '.[] | select(.name == "WAYLAND-1") | .scale')"
   check_eq "removing the last monitor: the main window tiles again, filling the workspace" '[{"ws":"9","floating":false,"at":[12,12],"size":[3416,1416]}]' "$(boxwins)"
   check "...its screen its window's size again, at scale 1" until_ok 3 mons 'map("\(.name) \(.mode) \(.scale)") | join("|")' "WAYLAND-1 3416x1416@60 1"
   # The Rust half's parity (#324, wave 4a): an interactive box's monitor as a window on the stand-in,
