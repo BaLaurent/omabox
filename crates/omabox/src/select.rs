@@ -274,6 +274,42 @@ pub fn descends_from(target: &[u8]) -> bool {
 mod tests {
     use super::*;
 
+    /// t_unit_agent_session (finding 93): agent_proc fails when its agent's start time cannot be
+    /// read (it exited meanwhile), and is the agent, CLAUDE_PID, when it can.
+    #[test]
+    fn agent_proc_needs_a_start() {
+        let me = std::process::id().to_string();
+        let vars = [
+            ("CLAUDE_CODE_SESSION_ID", Some("t-session")),
+            ("CLAUDE_PID", Some(me.as_str())),
+            ("OMABOX_SESSION", None),
+            ("CODEX_THREAD_ID", None),
+        ];
+        let (none, mine) = shell::with_env(&vars, || {
+            (
+                agent_proc_with(|_| None),
+                agent_proc_with(|_| Some(b"77".to_vec())),
+            )
+        });
+        assert_eq!(none, None, "no start time: no agent");
+        assert_eq!(
+            mine,
+            Some((me.into_bytes(), b"77".to_vec())),
+            "...one: the agent is CLAUDE_PID"
+        );
+    }
+
+    /// t_unit_agent_session (#136): `up` never takes the session's box for its derived name (it
+    /// says so instead: up_session_note).
+    #[test]
+    fn no_session_fallback_for_up() {
+        let mut ctx = Ctx::new(b"up", b"/nonexistent/omabox".to_vec());
+        ctx.name = b"default-5cc72cdc".to_vec();
+        ctx.d = cat!(ctx.boxes, "/", ctx.name);
+        session_fallback(&mut ctx);
+        assert_eq!(ctx.name, b"default-5cc72cdc", "...not for up");
+    }
+
     #[test]
     fn names_made_tame() {
         assert_eq!(tame(b"my repo"), b"my-repo");

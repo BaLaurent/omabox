@@ -104,6 +104,7 @@ pub const NAMES: &[(&str, &str)] = &[
     ("owner_alive", "PID START"),
     // Who started a box (from the probe's parent up), and whether box.json makes D an orphan.
     ("box_starter", ""),
+    ("up_session_note", "NAME"),
     ("box_orphan", "D"),
 ];
 
@@ -515,6 +516,13 @@ pub fn run(boxes: Vec<u8>, words: &[Vec<u8>]) -> Res<()> {
         }
         (b"agent_alive", [d]) => yes(crate::boxes::agent_alive(d)),
         (b"owner_alive", [pid, start]) => yes(crate::ready::owner_alive(pid, start)),
+        (b"up_session_note", [n]) => {
+            ctx.main_cmd = b"up".to_vec();
+            ctx.name = n.to_vec();
+            ctx.d = cat!(ctx.boxes, "/", n);
+            crate::upspec::up_session_note(&ctx);
+            Ok(())
+        }
         (b"box_starter", []) => line(&crate::upspec::box_starter().ok_or(Exit(1))?),
         (b"box_orphan", [d]) => {
             ctx.d = d.to_vec();

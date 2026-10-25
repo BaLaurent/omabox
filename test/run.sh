@@ -9317,14 +9317,14 @@ t_unit_agent_session() {
   check_eq "OMABOX still names the box" shared "$(dn OMABOX=shared CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc)"
   check_eq "a short id is no session" "$P-as" "$(dn CLAUDE_CODE_SESSION_ID=abc)"
   local long; long=$TMP/$P-a-repo-with-a-name-far-longer-than-forty; mkdir -p "$long" && git -C "$long" init -q
-  local got; got=$(cd "$long" && CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc bash -c 'source "$1"; select_box ""; echo "$NAME"' _ "$TMP/lib/bin/omabox")
-  check_match "a long repo name keeps the session suffix" '^.{31}-5cc72cdc$' "$got"
+  local got; got=$(cd "$long" && env -u OMABOX -u OMABOX_SESSION CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc "$CLI" path)
+  check_match "a long repo name keeps the session suffix" '^.{31}-5cc72cdc$' "${got##*/}"
   check_match "guard exec: a session of its own" '^g[0-9a-f]{12}$' "$(env -u OMABOX_SESSION "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
   check_eq "guard exec: an OMABOX_SESSION set is kept" mine12345 "$(OMABOX_SESSION=mine12345 "$CLI" guard exec -- sh -c 'echo $OMABOX_SESSION')"
   # finding 93: the agent is Claude Code's CLAUDE_PID, the process `guard exec` became, or (Codex) the
   # nearest ancestor without its session variable; always one this command descends from.
   # (`; true`: bash would otherwise exec its last command, and the "agent" would be gone)
-  local out lib=$TMP/lib/bin/omabox
+  local out
   out=$(bash -c 'echo "me=$$"; CLAUDE_CODE_SESSION_ID=$0 CLAUDE_PID=$$ "$1" _rust probe agent_proc; true' "t-$P-session" "$PROBE")
   check_eq "Claude Code: the agent is CLAUDE_PID" "${out%%$'\n'*}" "me=$(sed -n 2p <<<"$out" | cut -d' ' -f1)"
   sleep 30 & local other=$!
@@ -9381,73 +9381,75 @@ t_unit_agent_session() {
   check "...a pid alone when no start was recorded" probe owner_alive $$ ""
   check_fails "...and none for a pid gone" probe owner_alive "$nopid" ""
   check_fails "no bare cmd_down in the reaper (it would end it when the down fails)" \
-    grep -nE '^\s*DOWN_IF_CREATED=.*cmd_down "\$NAME"\s*$' "$lib"
-  check_fails "agent_proc fails when its agent's start time cannot be read (it exited meanwhile)" \
-    env CLAUDE_CODE_SESSION_ID="t-$P-session" bash -c 'source "$1"; proc_start() { :; }; CLAUDE_PID=$$; agent_proc' _ "$lib"
+    grep -nE '^\s*DOWN_IF_CREATED=.*cmd_down "\$NAME"\s*$' "$BASH_CLI"
+  # (agent_proc fails when its agent's start time cannot be read, it exited meanwhile: select.rs
+  # agent_proc_needs_a_start)
   # A command run outside any repo (default-SESSION) while the session's box came from its repo (#136):
-  # boxes in a runtime dir of their own, "up" as the stub box_state says. In $TMP: no repo.
-  local sr=$TMP/rt-sess sid=5cc72cdc b
+  # boxes in a runtime dir of their own, up while their info.json names a stand-in for a box's PID 1 (a
+  # process in a pid namespace of its own), dead without. In $TMP: no repo. `path` says the box chosen.
+  local sr=$TMP/rt-sess sid=5cc72cdc b sb="" i
   for b in "$P-r-$sid" "$P-q-$sid" "$P-r-0000beef"; do mkdir -p "$sr/omabox/$b"; echo '{}' > "$sr/omabox/$b/box.json"; done
-  # sel UP CMD [OMABOX=] FN...: as command CMD with the boxes in UP up, run FN... after select_box ""
-  sel() {
-    local up=$1 cmd=$2; shift 2
-    (cd "$TMP" && env -u OMABOX -u OMABOX_SESSION -u CODEX_THREAD_ID XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
-      bash -c 'source "$1"; up=$2; MAIN_CMD=$3; shift 3
-        box_state() { if [[ " $up " == *" $NAME "* ]]; then echo up; else echo dead; fi; }
-        box_alive() { [ "$(box_state)" = up ]; }
-        select_box ""; eval "$*"' _ "$lib" "$up" "$cmd" "$@" 2>&1)
+  unshare -Urpf --mount-proc sleep 300 >/dev/null 2>&1 & local su=$!
+  for i in $(seq 100); do
+    sb=$(pgrep -P "$su") && [ "$(readlink "/proc/$sb/ns/pid")" != "$(readlink /proc/self/ns/pid)" ] && break
+    sb=""; sleep 0.1
+  done
+  check "the stand-in for a box's PID 1 started" test -n "$sb"
+  # se UP DIR CMD...: CMD from DIR, in this session (no OMABOX), the boxes in UP up and the others dead
+  se() {
+    local up=$1 wd=$2 b; shift 2
+    for b in "$P-r-$sid" "$P-q-$sid" "$P-r-0000beef"; do
+      if [[ " $up " == *" $b "* ]]; then echo "{\"child-pid\": $sb}" > "$sr/omabox/$b/info.json"; else rm -f "$sr/omabox/$b/info.json"; fi
+    done
+    (cd "$wd" && env -u OMABOX -u OMABOX_SESSION -u CODEX_THREAD_ID XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc "$@" 2>&1)
   }
   check_eq "no repo: this session's one box is used, said once (#136)" \
-    "omabox: note: no box 'default-$sid' (this directory is in no repo); using this session's box '$P-r-$sid', started from its repo (-b $P-r-$sid names it)"$'\n'"$P-r-$sid" \
-    "$(sel "$P-r-$sid $P-r-0000beef" wait echo '$NAME')"
-  check_eq "...once" "$P-r-$sid" "$(sel "$P-r-$sid" wait echo '$NAME' | tr -d '\n')"
+    "omabox: note: no box 'default-$sid' (this directory is in no repo); using this session's box '$P-r-$sid', started from its repo (-b $P-r-$sid names it)"$'\n'"$sr/omabox/$P-r-$sid" \
+    "$(se "$P-r-$sid $P-r-0000beef" "$TMP" "$CLI" path)"
+  check_eq "...once" "$sr/omabox/$P-r-$sid" "$(se "$P-r-$sid" "$TMP" "$CLI" path)"
   rm -f "$sr/omabox/$P-r-$sid/noted-default"
-  check_eq "...not for up" "default-$sid" "$(sel "$P-r-$sid" up echo '$NAME')"
-  check_eq "...not with OMABOX naming the box" "x" "$(sel "$P-r-$sid" wait 'OMABOX=x; select_box ""; echo $NAME' | tail -1)"
-  check_eq "...not with -b" "default-$sid" "$(sel "$P-r-$sid" wait select_box "default-$sid" \; echo '$NAME' 2>&1 | tail -1)"
-  check_eq "...nor another session's box" "default-$sid" "$(sel "$P-r-0000beef" wait echo '$NAME')"
+  # (...not for up: select.rs no_session_fallback_for_up)
+  check_eq "...not with OMABOX naming the box" "$sr/omabox/x" "$(se "$P-r-$sid" "$TMP" env OMABOX=x "$CLI" path)"
+  check_eq "...not with -b" "$sr/omabox/default-$sid" "$(se "$P-r-$sid" "$TMP" "$CLI" path -b "default-$sid")"
+  check_eq "...nor another session's box" "$sr/omabox/default-$sid" "$(se "$P-r-0000beef" "$TMP" "$CLI" path)"
   check_match "...two of the session's boxes: neither, both named" \
     "no box 'default-$sid' is up; this session's boxes are $P-(r|q)-$sid $P-(r|q)-$sid \(started from other directories\)" \
-    "$(sel "$P-r-$sid $P-q-$sid" wait need_box)"
+    "$(se "$P-r-$sid $P-q-$sid" "$TMP" "$CLI" windows)"
   check_match "in another repo: the session's box named first" \
     "no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' \(started from another directory\): -b $P-r-$sid" \
-    "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
-      bash -c 'source "$1"; want=$2; box_state() { if [ "$NAME" = "$want" ]; then echo up; else echo dead; fi; }; box_alive() { false; }; MAIN_CMD=wait; select_box ""; need_box' _ "$lib" "$P-r-$sid" 2>&1)"
+    "$(se "$P-r-$sid" "$repo" "$CLI" windows)"
   # #296: run -d there named the session's box after an `omabox up` of the derived name.
   check_eq "...run -d there: only the session's box, no up of another" \
     "omabox: no box '$P-as-$sid' is up; this session's box is '$P-r-$sid' (started from another directory): -b $P-r-$sid" \
-    "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
-      bash -c 'source "$1"; want=$2; box_state() { if [ "$NAME" = "$want" ]; then echo up; else echo dead; fi; }; box_alive() { false; }; MAIN_CMD=run; cmd_run -d -- true' _ "$lib" "$P-r-$sid" 2>&1)"
+    "$(se "$P-r-$sid" "$repo" "$CLI" run -d -- true)"
   check_eq "...none: the up it needs" "omabox: run -d needs a box that is up (omabox up $P-as-$sid)" \
-    "$(cd "$repo" && env -u OMABOX -u OMABOX_SESSION XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
-      bash -c 'source "$1"; box_state() { echo dead; }; box_alive() { false; }; MAIN_CMD=run; cmd_run -d -- true' _ "$lib" 2>&1)"
-  check_eq "up there: the session's box named, the new one still starts"     "omabox: note: this session already has box $P-r-$sid (started from another directory); -b NAME to use it"     "$(sel "$P-r-$sid" up up_session_note)"
-  check_eq "...nothing when it has none" "" "$(sel "$P-r-0000beef" up up_session_note)"
-  check_match "...a name given: as before" "no box 'nope' is up \(up: " "$(sel "$P-r-$sid" wait select_box nope \; need_box)"
-  # finding 259: `down` with no name lets select_box derive it, so the fallback above applies to it
-  # too (it passed the derived name as if given, and `omabox down` outside a repo found no box).
-  check_eq "down with no name: select_box derives it (gets none)" "got:[]" \
-    "$(sel "$P-r-$sid" down 'select_box() { echo "got:[${1-}]"; exit 0; }; cmd_down' | tail -1)"
+    "$(se "" "$repo" "$CLI" run -d -- true)"
+  check_eq "up there: the session's box named, the new one still starts" \
+    "omabox: note: this session already has box $P-r-$sid (started from another directory); -b NAME to use it" \
+    "$(se "$P-r-$sid" "$TMP" "$PROBE" _rust probe up_session_note "default-$sid")"
+  check_eq "...nothing when it has none" "" "$(se "$P-r-0000beef" "$TMP" "$PROBE" _rust probe up_session_note "default-$sid")"
+  check_match "...a name given: as before" "no box 'nope' is up \(up: " "$(se "$P-r-$sid" "$TMP" "$CLI" windows -b nope)"
   # #262: `down` in another directory (its derived name has no box) while the session's boxes are up
   # under other names: each named with where `up` ran (box.json's dir) and its down -b, and exit 1.
-  # dn UP DIR ARGS...: cmd_down ARGS from DIR with the boxes in UP up, then its status
-  dn() {
-    local up=$1 wd=$2; shift 2
-    (cd "$wd" && env -u OMABOX -u OMABOX_SESSION -u CODEX_THREAD_ID XDG_RUNTIME_DIR="$sr" CLAUDE_CODE_SESSION_ID=70178a3a-6f6c-4da8-bf69-f4935cc72cdc \
-      bash -c 'source "$1"; up=$2; MAIN_CMD=down; shift 2
-        box_state() { if [[ " $up " == *" $NAME "* ]]; then echo up; else echo dead; fi; }
-        rc=0; cmd_down "$@" || rc=$?; echo "rc=$rc"' _ "$lib" "$up" "$@" 2>&1)
-  }
+  # dn UP ARGS...: down ARGS from the repo with the boxes in UP up, then its status
+  dn() { local up=$1; shift; se "$up" "$repo" sh -c '"$0" down "$@"; echo "rc=$?"' "$CLI" "$@"; }
   jq -n --arg d "$HOME/code/proj" '{dir: $d}' > "$sr/omabox/$P-r-$sid/box.json"
   check_eq "down where no box has the derived name: the session's box named, with its down -b (#262)" \
     "omabox: no box '$P-as-$sid'; this session has '$P-r-$sid' (started in ~/code/proj): omabox down -b $P-r-$sid"$'\n'"rc=1" \
-    "$(dn "$P-r-$sid $P-r-0000beef" "$repo")"
+    "$(dn "$P-r-$sid $P-r-0000beef")"
   check_match "...two: both, each with its down (one from before dir was kept: no 'started in')" \
     "^omabox: no box '$P-as-$sid'; this session has '$P-(r|q)-$sid'[^;]*: omabox down -b $P-(r|q)-$sid; '$P-(r|q)-$sid'.*: omabox down -b $P-(r|q)-$sid"$'\n'"rc=1\$" \
-    "$(dn "$P-r-$sid $P-q-$sid" "$repo")"
-  check_match "......the old one without a dir" "'$P-q-$sid': omabox down -b $P-q-$sid" "$(dn "$P-r-$sid $P-q-$sid" "$repo")"
-  check_eq "...none of the session's up: no box, as before (exit 0)" "omabox: no box '$P-as-$sid'"$'\n'"rc=0" "$(dn "$P-r-0000beef" "$repo")"
-  check_eq "...a name given: as before" "omabox: no box 'nope'"$'\n'"rc=0" "$(dn "$P-r-$sid" "$repo" -b nope)"
+    "$(dn "$P-r-$sid $P-q-$sid")"
+  check_match "......the old one without a dir" "'$P-q-$sid': omabox down -b $P-q-$sid" "$(dn "$P-r-$sid $P-q-$sid")"
+  check_eq "...none of the session's up: no box, as before (exit 0)" "omabox: no box '$P-as-$sid'"$'\n'"rc=0" "$(dn "$P-r-0000beef")"
+  check_eq "...a name given: as before" "omabox: no box 'nope'"$'\n'"rc=0" "$(dn "$P-r-$sid" -b nope)"
+  # finding 259: `down` with no name lets select_box derive it, so the fallback above applies to it too
+  # (it passed the derived name as if given, and `omabox down` outside a repo found no box). Last: it
+  # takes the stand-in down.
+  check_match "down with no name outside a repo: the session's one box, taken down" "box '$P-r-$sid' down" \
+    "$(se "$P-r-$sid" "$TMP" "$CLI" down)"
+  check_fails "...its dir gone" test -e "$sr/omabox/$P-r-$sid"
+  kill "$su" 2>/dev/null; wait "$su" 2>/dev/null
   rm -f "$sr/omabox/.down-"*
 }
 
