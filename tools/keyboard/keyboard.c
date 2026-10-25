@@ -635,8 +635,11 @@ static void held_serve(int lfd, int ready) {
             snprintf(out, sizeof(out), "%s %s\n", up ? "not-held" : "list", names);
         }
         send(c, out, strlen(out), MSG_NOSIGNAL);
-        close(c);
+        // The run that let go of the last key keeps its connection until this holder ends (exit
+        // closes it): it reads to the end, so it returns once the holder is gone, keyboard and all
+        // (finding 512).
         if (!n && !codes) break;
+        close(c);
     }
     // Let go of whatever is still down (a signal), then of the keyboard.
     held_unlink();

@@ -10044,6 +10044,16 @@ from them.
     ("run -- pgrep -f WORD: nothing in the box has the words of run's own call", fails at 27d9613;
     "the session's leader shows its name alone"), t_keys_down_up.
 
+512. **`keys up:KEY` of the last held key returned before its holder was gone** (2026-10-24, #324,
+    the same check as finding 511). The holder answered "ok", closed the connection, then let go of
+    its virtual keyboard (30 ms for the compositor to take the last release, and a roundtrip) and
+    exited: a `pgrep` from the host right after `keys up` found it in 3 runs of 3, and a check through
+    the binary (some 25 ms, where bash's `run` took longer than the holder) found it in the suite.
+    **Fix** (tools/keyboard, both halves): the holder keeps the connection of the request that let go
+    of the last key open until it exits, and the caller reads to its end, so `keys up` returns once
+    the holder and its keyboard are gone (about 70 ms on this machine). Test: t_keys_down_up ("the
+    holder is gone with the last held key").
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
