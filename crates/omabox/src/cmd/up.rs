@@ -1000,10 +1000,16 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // second line) only for an up of that jail: a jail does not cancel the user's up.
     let mpath = ctx.in_boxes(cat!(".down-", ctx.name));
     let dmark = std::fs::read(&mpath).unwrap_or_default();
-    let (dt, djail) = down_marker(&dmark);
+    let (dline, djail) = down_marker(&dmark);
     let mine = djail.is_none_or(|j| crate::jail::in_jail() && j == crate::jail::jail_id());
-    if let (true, Some(dt), Some(t0)) = (mine, num(&dt), num(&u.t0))
-        && down_came(dt, t0, marker_us(&mpath), num(&crate::call_us()))
+    let me = UpSelf {
+        pid: i64::from(std::process::id()),
+        pidns: procfs::pidns(b"self"),
+        call_us: num(&crate::call_us()),
+        pid_max: procfs::pid_max(),
+    };
+    if let (true, Some(d), Some(t0)) = (mine, DownLine::read(&dline), num(&u.t0))
+        && down_came(&d, t0, &me, marker_us(&mpath))
     {
         return Err(ctx.die(cat!(
             "up: cancelled: omabox down ",
@@ -1045,19 +1051,69 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     Ok(true)
 }
 
-/// Whether a down whose marker says it started at tick DT came while an up started at tick T0 was
-/// starting (finding 147). Starts are clock ticks (10 ms): in a tie, the down came while the up was
-/// starting only if it ended (its marker written) after the up was called: a down over before the up
-/// began, in the same tick, is not one. Bash's `dt >= t0` took it for one, which a down from the
-/// binary (a few ms) right before an up made common (finding 506).
-fn down_came(dt: i64, t0: i64, marker_us: Option<i64>, call_us: Option<i64>) -> bool {
-    match dt.cmp(&t0) {
+/// A down marker's first line (down.rs's down_mark): its start in clock ticks, then, from a Rust
+/// down (finding 513), the pid its pid namespace made last as it wrote the marker, that namespace
+/// and its CALL_US. Bash's down writes the start alone.
+#[derive(Debug, Default, PartialEq)]
+struct DownLine {
+    dt: i64,
+    last_pid: Option<i64>,
+    pidns: Option<Vec<u8>>,
+    call_us: Option<i64>,
+}
+
+impl DownLine {
+    /// None when its start is not a number (`[[ $dt =~ ^[0-9]+$ ]]`).
+    fn read(line: &[u8]) -> Option<DownLine> {
+        let w = shell::words(line);
+        let dt = num(w.first()?)?;
+        let field = |i: usize| w.get(i).filter(|v| v.as_slice() != b"-");
+        Some(DownLine {
+            dt,
+            last_pid: field(1).and_then(|v| num(v)),
+            pidns: field(2).cloned(),
+            call_us: field(3).and_then(|v| num(v)),
+        })
+    }
+}
+
+/// This up, as down_came compares it with a down: its pid, pid namespace and CALL_US, and where its
+/// namespace's pids wrap.
+struct UpSelf {
+    pid: i64,
+    pidns: Option<Vec<u8>>,
+    call_us: Option<i64>,
+    pid_max: i64,
+}
+
+/// Whether the down whose marker is D came while an up started at tick T0 was starting (finding
+/// 147). Starts are clock ticks (10 ms): a later one came, an earlier one did not. In a tie, the
+/// down came only if it was not over when this up began (finding 506): this up's pid was made by the
+/// time the down wrote its marker, at or below the last pid made then, in the same pid namespace
+/// (pids are made in order; taken round pid_max, where they wrap, as the two are 10 ms apart at most).
+/// That is the order itself, where the times compared before were each taken a while after a
+/// process began: an up started first but slower to its first line than a whole down (a few ms) was
+/// taken for one started after it, and `up B & down B` left the box up 14 times in 15 (finding
+/// 513, #380). A down of another pid namespace (the user's, for a jailed up) is compared by the
+/// calls' times, like with like; one from bash (its start alone) by when its marker was written
+/// against this call's time; with none of them, it came (bash's `dt >= t0`).
+fn down_came(d: &DownLine, t0: i64, me: &UpSelf, marker_us: Option<i64>) -> bool {
+    match d.dt.cmp(&t0) {
         std::cmp::Ordering::Greater => true,
         std::cmp::Ordering::Less => false,
-        std::cmp::Ordering::Equal => match (marker_us, call_us) {
-            (Some(m), Some(c)) => m >= c,
-            _ => true,
-        },
+        std::cmp::Ordering::Equal => {
+            if let (Some(last), Some(dns), Some(ns)) = (d.last_pid, &d.pidns, &me.pidns)
+                && dns == ns
+            {
+                let max = me.pid_max.max(2);
+                return (last - me.pid).rem_euclid(max) < max / 2;
+            }
+            match (d.call_us, marker_us, me.call_us) {
+                (Some(dc), _, Some(c)) => dc >= c,
+                (None, Some(m), Some(c)) => m >= c,
+                _ => true,
+            }
+        }
     }
 }
 
@@ -1629,12 +1685,92 @@ mod tests {
 
     #[test]
     fn a_down_over_before_the_up_is_not_one_that_came() {
-        assert!(down_came(11, 10, None, None));
-        assert!(!down_came(9, 10, Some(5), Some(1)));
-        // (a tie: the marker written after the up was called, or with no times to tell)
-        assert!(down_came(10, 10, Some(2000), Some(1000)));
-        assert!(!down_came(10, 10, Some(999), Some(1000)));
-        assert!(down_came(10, 10, None, Some(1000)));
+        let bash = |dt| DownLine {
+            dt,
+            ..DownLine::default()
+        };
+        let me = |pid, call| UpSelf {
+            pid,
+            pidns: Some(b"pid:[1]".to_vec()),
+            call_us: call,
+            pid_max: 4_194_304,
+        };
+        assert!(down_came(&bash(11), 10, &me(500, None), None));
+        assert!(!down_came(&bash(9), 10, &me(500, Some(1)), Some(5)));
+        // (a tie, a bash down's: the marker written after the up was called, or no times to tell)
+        assert!(down_came(&bash(10), 10, &me(500, Some(1000)), Some(2000)));
+        assert!(!down_came(&bash(10), 10, &me(500, Some(1000)), Some(999)));
+        assert!(down_came(&bash(10), 10, &me(500, Some(1000)), None));
+    }
+
+    /// Finding 513 (#380): in a tie, the order the pids were made in, whatever the clocks say.
+    #[test]
+    fn a_down_still_going_when_the_up_began_came() {
+        let ours = |last| DownLine {
+            dt: 10,
+            last_pid: Some(last),
+            pidns: Some(b"pid:[1]".to_vec()),
+            call_us: Some(900),
+        };
+        let me = |pid, ns: &[u8]| UpSelf {
+            pid,
+            pidns: Some(ns.to_vec()),
+            call_us: Some(1000),
+            pid_max: 4_194_304,
+        };
+        // `up B & down B`: the up made first, slower to its first line than the whole down: it came
+        // (its call and its marker both before the up's call, which said otherwise)
+        assert!(down_came(&ours(510), 10, &me(500, b"pid:[1]"), Some(950)));
+        assert!(down_came(&ours(500), 10, &me(500, b"pid:[1]"), Some(950)));
+        // `down B; up B`: the up made after the down's marker: it did not
+        assert!(!down_came(&ours(499), 10, &me(500, b"pid:[1]"), Some(1100)));
+        // pids that wrapped between the two
+        assert!(down_came(&ours(3), 10, &me(4_194_300, b"pid:[1]"), None));
+        assert!(!down_came(&ours(4_194_300), 10, &me(3, b"pid:[1]"), None));
+        // another pid namespace's (the user's, for a jailed up): the calls' times, like with like
+        assert!(!down_came(&ours(510), 10, &me(500, b"pid:[2]"), Some(2000)));
+        let later = DownLine {
+            call_us: Some(1000),
+            ..ours(510)
+        };
+        assert!(down_came(&later, 10, &me(500, b"pid:[2]"), None));
+        // ticks still decide when they differ
+        assert!(!down_came(
+            &DownLine { dt: 9, ..ours(510) },
+            10,
+            &me(500, b"pid:[1]"),
+            None
+        ));
+    }
+
+    #[test]
+    fn down_lines() {
+        assert_eq!(
+            DownLine::read(b"123"),
+            Some(DownLine {
+                dt: 123,
+                ..DownLine::default()
+            })
+        );
+        assert_eq!(
+            DownLine::read(b"123 456 pid:[4026531836] 1792884909460285"),
+            Some(DownLine {
+                dt: 123,
+                last_pid: Some(456),
+                pidns: Some(b"pid:[4026531836]".to_vec()),
+                call_us: Some(1_792_884_909_460_285),
+            })
+        );
+        assert_eq!(
+            DownLine::read(b"123 - - 77"),
+            Some(DownLine {
+                dt: 123,
+                call_us: Some(77),
+                ..DownLine::default()
+            })
+        );
+        assert_eq!(DownLine::read(b""), None);
+        assert_eq!(DownLine::read(b"x 1"), None);
     }
 
     #[test]

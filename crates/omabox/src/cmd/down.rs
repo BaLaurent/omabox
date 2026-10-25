@@ -193,6 +193,11 @@ fn signal(pid: &[u8], sig: libc::c_int) {
 /// (finding 147). A jailed caller's names its jail on a second line: an up cancels for it only when
 /// it is that jail's (a jail's down must not cancel the user's up of a name). Written before the
 /// down lets go of the name's lock (finding 237). Not the reaper's.
+///
+/// After the start, on its line, what an up started in the same tick tells the order by (finding
+/// 513): the pid its pid namespace made last as the marker is written, that namespace, and this
+/// call's time (CALL_US), each `-` when it cannot be told. Bash's up reads a marker of one number
+/// only, so it takes these for none (a bash up is a fallback's, with a bash down).
 fn down_mark(ctx: &Ctx, cond: &DownIf) {
     if cond.created.is_none() {
         let me = std::process::id().to_string().into_bytes();
@@ -200,7 +205,18 @@ fn down_mark(ctx: &Ctx, cond: &DownIf) {
         // (a jail's never takes the place of the user's own, which cancels any up)
         let users = in_jail() && std::fs::read(&mark).is_ok_and(|m| user_marker(&m));
         if let (Some(start), false) = (crate::procfs::proc_start(&me), users) {
-            let mut v = cat!(start, "\n");
+            let last = crate::procfs::last_pid().map(|n| n.to_string().into_bytes());
+            let ns = crate::procfs::pidns(b"self").filter(|n| !n.is_empty() && !n.contains(&b' '));
+            let mut v = cat!(
+                start,
+                " ",
+                last.unwrap_or_else(|| b"-".to_vec()),
+                " ",
+                ns.unwrap_or_else(|| b"-".to_vec()),
+                " ",
+                crate::call_us(),
+                "\n"
+            );
             if in_jail() {
                 v.extend(cat!(jail_id(), "\n"));
             }

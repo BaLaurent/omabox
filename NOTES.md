@@ -10029,6 +10029,8 @@ from them.
     CALL_US): a down already over when the up began is not one that came during it. Tests:
     t_rust_parity_up (down then up at once from the binary, three times, none cancelled; three in three
     were before), up.rs's a_down_over_before_the_up_is_not_one_that_came.
+    Amended by finding 513: the tie is decided by pid order now; the mtime rule is kept for bash's
+    markers.
 
 511. **The keeper showed the caller's whole call in the box** (2026-10-24, #324, found by the suite at
     27d9613: t_keys_down_up's "the holder is gone with the last held key", failing alone too since the
@@ -10053,6 +10055,25 @@ from them.
     of the last key open until it exits, and the caller reads to its end, so `keys up` returns once
     the holder and its keyboard are gone (about 70 ms on this machine). Test: t_keys_down_up ("the
     holder is gone with the last held key").
+
+513. **`up B & down B` left the box up** (2026-10-24, #324, #380; t_race at 27d9613, "a down while its
+    up starts", 14 runs in 15 on an idle machine). Finding 506's tie rule (a down's marker in the up's
+    10 ms tick counts only when written after the up was called) compared the marker's mtime with the
+    up's CALL_US, taken at its first line: an up started through `&` reached that line 0.7-1.9 ms after
+    a whole down (about 1 ms from the binary) had written its marker, so every such down read as one
+    over before the up began. Comparing the two calls' times (#380's proposal) has the same fault: the
+    down's call came first in each of those runs too. **Fix** (Rust): the down writes, after its start,
+    the pid its pid namespace made last as it writes the marker (/proc/loadavg's last field), that
+    namespace and its CALL_US (`TICKS LASTPID pid:[NS] CALL_US`). In a tie, the up cancels when its own
+    pid was made by then (at or below LASTPID, round pid_max), in the same namespace: the order the
+    kernel made them in, whatever either process's clock read later. `down B; up B` from the binary
+    still starts the box (its up is made after the marker); a down of another pid namespace (the
+    user's, for a jailed up) is compared by the calls' times, like with like; a bash down's marker
+    (its start alone) by its mtime, as finding 506. Measured: `up B & down B` 15 cancels in 15, `down
+    B; up B` 0 in 8. **Changes**: a Rust down's marker has three more fields on its line, so bash's up
+    (OMABOX_BASH=1), which takes only a lone number, no longer cancels for one (a fallback's up with
+    the binary's down). Tests: t_race (fails at 27d9613), t_rust_parity_up (finding 506's), up.rs's
+    a_down_still_going_when_the_up_began_came and down_lines.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

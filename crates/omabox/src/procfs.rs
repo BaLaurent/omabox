@@ -120,6 +120,27 @@ pub fn pidns(pid: &[u8]) -> Option<Vec<u8>> {
         .map(|p| shell::bytes(&p).to_vec())
 }
 
+/// The pid this pid namespace (the caller's) made last: /proc/loadavg's last field, which the kernel
+/// reads from the caller's own namespace whatever /proc is mounted. Pids are made in order (until
+/// they wrap at pid_max): one at or below it was made before it was read (finding 513).
+pub fn last_pid() -> Option<i64> {
+    let s = std::fs::read("/proc/loadavg").ok()?;
+    let w = shell::words(&s);
+    let last = w.last()?;
+    if last.is_empty() || !last.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    shell::dec(last)
+}
+
+/// /proc/sys/kernel/pid_max: where pids wrap (the most a 64-bit kernel allows when it cannot be read).
+pub fn pid_max() -> i64 {
+    read(b"sys", "kernel/pid_max")
+        .and_then(|v| shell::dec(&v))
+        .filter(|&n| n > 0)
+        .unwrap_or(4_194_304)
+}
+
 /// The processes that entered the box whose PID 1 is PID from outside (finding 490): in its user
 /// namespace, not in its pid namespace. An on_box tool, the process outside that waits for a command
 /// in the box (enter.rs), and an nsenter of bash's once it is in; never this one.
