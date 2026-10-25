@@ -580,7 +580,7 @@ $OMABOX_RENDER_NODE overrides it. An interactive box renders on the GPU your des
 uses, whatever the setting.
 `omabox config protect-ports 8080,5432` keeps those host ports from every connected box, through
 any of the host's addresses (an isolated box's --allow refuses them; `default` removes them; it
-needs nft). The Rust half's alone: under OMABOX_BASH=1 it is an unknown key.
+needs nft).
 @ up setup --version
 aquamarine's fix for nested Wayland outputs (hyprwm/aquamarine#415, until the system's has it: a
 release, or a package patched with it; omabox looks for what the fix added, not the version): a

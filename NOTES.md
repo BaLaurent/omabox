@@ -10268,6 +10268,19 @@ from them.
     stale `target/release/omabox` and a user's CARGO_TARGET_DIR: build/omabox is the new build and
     the user's target dir is never made; the old install.sh fails all three checks).
 
+526. **The help and SECURITY.md still described a bash half** (2026-10-25, #324 wave 6-flip's fix
+    round). `omabox help config --long` (and `help up --long`, `help --long`) ended its
+    protect-ports paragraph with "The Rust half's alone: under OMABOX_BASH=1 it is an unknown key",
+    and SECURITY.md's S10 said "the bash half (`OMABOX_BASH=1`) starts no connected box while it is
+    set": the shipped binary has no bash half and reads no OMABOX_BASH. Both sentences are gone. The
+    oracle keeps its text (it is not maintained), so t_unit_rust_front's four help cases that show
+    the paragraph are expected differences (finding 526) and its help.txt check compares the
+    oracle's usage text with that sentence taken out. The suite's copy of the oracle also took its
+    ROOT from the suite's logical path, where the binary's is the parent of where it really is: run
+    from a checkout reached through a link, `version` and `--version` cases differed between the
+    legs. It is now `readlink -f` of the checkout (through a link, t_unit_rust_front passes; the old
+    copy failed three cases).
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

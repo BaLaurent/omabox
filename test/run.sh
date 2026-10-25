@@ -145,15 +145,18 @@ TMP=$(mktemp -d)
 # --owner` and the reaper, reach the binary, as they reached it through the hand-off before), its
 # hand-off cut (RUST= empty: every command stays in bash), and its down's match of a reaper taking
 # the binary's (`ROOT/bin/omabox _reap NAME`, no bash before it: finding 523), as it took the
-# hand-off's `ROOT/build/omabox _reap NAME` before. Never sourced but by lib below.
+# hand-off's `ROOT/build/omabox _reap NAME` before. Never sourced but by lib below. Its ROOT is the
+# checkout's real path, as the binary's is (the parent of where it really is): a checkout reached
+# through a link would otherwise give the two legs different ROOTs (finding 526).
 ORACLE_DIR=$ROOT/build/oracle/$P
 BASH_CLI=$ORACLE_DIR/bin/omabox
 if [ -f "$ORACLE" ] && [ "$INSTALLED" = 0 ]; then
   mkdir -p "$ORACLE_DIR/bin"
-  sed -e "s|^ROOT=\$(cd .*|ROOT=$(printf %q "$ROOT")|" -e 's|^RUST=\$ROOT/build/omabox$|RUST=|' \
+  oracle_root=$(printf %q "$(readlink -f "$ROOT")")
+  sed -e "s|^ROOT=\$(cd .*|ROOT=$oracle_root|" -e 's|^RUST=\$ROOT/build/omabox$|RUST=|' \
     -e 's|pgrep -f ".((/usr/bin/)?bash \$(re_quote "\$ROOT/bin/omabox")|pgrep -f "^(((/usr/bin/)?bash )?$(re_quote "$ROOT/bin/omabox")|' "$ORACLE" > "$BASH_CLI"
   chmod +x "$BASH_CLI"
-  [ "$(grep -c -e "^ROOT=$(printf %q "$ROOT")\$" -e '^RUST=$' -e 'pgrep -f ".(((/usr/bin/)?bash )?\$(re_quote' "$BASH_CLI")" = 3 ] ||
+  [ "$(grep -c -e "^ROOT=$oracle_root\$" -e '^RUST=$' -e 'pgrep -f ".(((/usr/bin/)?bash )?\$(re_quote' "$BASH_CLI")" = 3 ] ||
     { echo "the test oracle's ROOT= or RUST= line, or its reaper match, is not where the suite sets it"; exit 2; }
 fi
 pass=0 fail=0 failed=() skips=()
@@ -5593,12 +5596,18 @@ t_unit_rust_front() {
   rust_built "rust front" || return 0
   local r=$TMP/rpf c
   rm -rf "$r"; mkdir -p "$r/rt/omabox" "$r/norepo"
-  check "help.txt is bin/omabox's usage_text, byte for byte" cmp -s <(lib usage_text) "$ROOT/crates/omabox/src/help.txt"
+  # (but for the oracle's sentence that protect-ports is the Rust half's alone, unknown under
+  # OMABOX_BASH=1: the shipped binary has no bash half, finding 526)
+  local nft_bash='^needs nft\)\. The Rust half.s alone: under OMABOX_BASH=1 it is an unknown key\.$' nft_rust='^needs nft\)\.$'
+  check "help.txt is bin/omabox's usage_text, byte for byte, but for that sentence" \
+    cmp -s <(lib usage_text | sed -E "s/$nft_bash/needs nft)./") "$ROOT/crates/omabox/src/help.txt"
   rp_rt=$r/rt rp_dir=$r/norepo rp_env=() rp_snap=1 rp_prep="" rp_sed="" rp_wrap=()
   parity "help" help
+  rp_why=526 rp_bash=("out~$nft_bash") rp_rust=("out~$nft_rust")
   parity "help --long" help --long
   parity "-h" -h
   parity "--help" --help
+  rp_why=526 rp_bash=("out~$nft_bash") rp_rust=("out~$nft_rust")
   parity "--help --long" --help --long
   parity "help -h: help's own" help -h
   parity "help --help --long" help --help --long
@@ -5615,6 +5624,7 @@ t_unit_rust_front() {
   parity "help with a backslash: taken as written" help 'u\160'
   for c in $(lib eval 'echo $COMMANDS') screenshot logs list -V --version; do
     parity "help $c" help "$c"
+    case $c in up | config) rp_why=526 rp_bash=("out~$nft_bash") rp_rust=("out~$nft_rust") ;; esac
     parity "help $c --long" help "$c" --long
   done
   for c in $(lib eval 'echo $COMMANDS') screenshot logs list; do
