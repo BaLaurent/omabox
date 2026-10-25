@@ -10286,8 +10286,9 @@ from them.
     line saying how (`omabox lua` of a crash) said "went down: its Hyprland crashed (SIGSEGV)" at
     once, while the box's PID 1 still lived for a few ms (session.sh's `kill -KILL -1`, then its
     exit). A call made at once after it found the box alive and so half torn down: "went down" again
-    (from an install, every time: t_hyprland_crash's "a later call: dead, and why"), or, with its
-    processes already gone, "did not answer (hung?)" (seen from a checkout by hand). **Fix:**
+    (t_hyprland_crash's "a later call: dead, and why": every time from an install, and alone from a
+    checkout too, though two full checkout runs passed it), or, with its processes already gone,
+    "did not answer (hung?)" (seen from a checkout by hand). **Fix:**
     hypr_lost, on labwc's line, gives the box's PID 1 up to 1 s to go before it says so; the next
     call then says "is dead: its Hyprland crashed (SIGSEGV)", as ls does. Tests:
     `hypr_lost_waits_for_the_box_to_end` (said once PID 1 has gone; still said, after 1 s, for one
@@ -10300,6 +10301,17 @@ from them.
     reached Hyprland. `omabox reload` already wrote it with `cat` (the umask's mode). **Fix:** up
     writes it the same way. Tests: t_autoreload's new "the box's copy of the config is its to
     change", and its reload checks, from an install (failed before).
+
+529. **Three of the suite's checks assumed a checkout, or no OMABOX_RENDER_NODE** (2026-10-25, #324
+    wave 6-flip; the same run). (a) t_unit_gpu's "config gpu lists the GPUs on stderr" matched the
+    list's header at the start, but a run with OMABOX_RENDER_NODE set (an install's run here must
+    name the iGPU: it has no patched aquamarine for the NVIDIA card) gets the "overrides the
+    setting" note first, as it should: the check clears the variable, and a new one checks the note
+    comes first when it is set. (b) t_rust_parity's "its log has the header" read the gdb.log of a
+    parity case an install skips (no oracle): it is skipped with it there; t_gdb checks the header
+    from an install. (c) The `--installed` floor, 4255, was an estimate made before any such run:
+    it is now 3810, about 90% of the 4238 checks of the first full run with the binary (with the
+    fixes of findings 527-528; the checkout's floor is 90% of its own count too).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

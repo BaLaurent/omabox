@@ -164,9 +164,10 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # A full run's floor: a test that silently stops checking shows up here even when everything that
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
-# still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
+# still clear it: a checkout's, and an install's, which has no test oracle and skips parity's tests
+# (its full floor from its first full run with the binary, 4238 checks: finding 529).
 MIN_CHECKS=6345 MIN_UNIT=3643
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4255 MIN_UNIT=1750
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=3810 MIN_UNIT=1750
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -14086,7 +14087,9 @@ EOF
   rp_gdbw() { ob run -b "$B" -- sh -c 'pkill -TERM -x gdb; for i in $(seq 50); do pgrep -x gdb >/dev/null || exit 0; sleep 0.1; done' >/dev/null 2>&1 || true; }
   rp_prep=rp_gdbw
   parity "gdb --watch: attached (both ways)" gdb -b "$B" --watch
-  check "...its log has the header" grep -q '^== omabox gdb --watch ' "$XDG_RUNTIME_DIR/omabox/$B/home/gdb.log"
+  # (only after the case ran: an install has no oracle, so none; t_gdb checks the header there)
+  if [ -x "$BASH_CLI" ]; then check "...its log has the header" grep -q '^== omabox gdb --watch ' "$XDG_RUNTIME_DIR/omabox/$B/home/gdb.log"
+  else skip "...its log has the header" "no test oracle (an install has none)"; fi
   parity "gdb: traced already by the watcher (both ways)" gdb -b "$B" --watch
   rp_gdbw; rp_prep=""
   local ck=$TMP/rp-check; rm -rf "$ck"; mkdir -p "$ck"
@@ -18396,7 +18399,10 @@ t_unit_gpu() {
   check_match "config gpu lists the GPUs" "^GPUs \(\* = where a headless box renders now" "$list"
   check_match "...the AMD one, with what names it" $'\n  renderD128 +amdgpu +0000:0a:00.0 +gpu amd or gpu 0000:0a:00.0' "$list"
   check_match "...the NVIDIA one marked: gpu nvidia is set" $'\n\\* renderD129 +nvidia +0000:01:00.0 +gpu nvidia or gpu 0000:01:00.0' "$list"
-  check_match "...on stderr, through the CLI" "^GPUs \(\* = where a headless box renders now" "$(HOME=$f/home ob config gpu 2>&1 >/dev/null)"
+  # (OMABOX_RENDER_NODE cleared: a run that names a node, as an install's must here, gets its note first)
+  check_match "...on stderr, through the CLI" "^GPUs \(\* = where a headless box renders now" "$(HOME=$f/home OMABOX_RENDER_NODE='' ob config gpu 2>&1 >/dev/null)"
+  check_match "...after OMABOX_RENDER_NODE's note when it is set" $'^OMABOX_RENDER_NODE=/dev/dri/renderD128 overrides the setting here\nGPUs \\(\\* = ' \
+    "$(HOME=$f/home OMABOX_RENDER_NODE=/dev/dri/renderD128 ob config gpu 2>&1 >/dev/null)"
   check_eq "...stdout stays the value" nvidia "$(HOME=$f/home ob config gpu 2>/dev/null)"
   check "config gpu intel with no Intel GPU: noted (the test)" bash -c '! "$0" _rust probe gpu_usable intel "$1"' "$PROBE" "$f"
   check "...none for one that is there" probe gpu_usable amd "$f"
