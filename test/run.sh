@@ -126,9 +126,11 @@ TMP=$(mktemp -d)
 pass=0 fail=0 failed=() skips=()
 STRICT=${OMABOX_TEST_STRICT:-0}
 # A full run's floor: a test that silently stops checking shows up here even when everything that
-# did run passed. About 90% of the fewest seen (2026-10-09: 2468 checks in --installed on a VM, 2657
-# from a checkout; 1193 unit), so skips on another machine still clear it. Raise it as tests grow.
-MIN_CHECKS=2200 MIN_UNIT=1070
+# did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
+# file resets them, its message giving cargo test's count beside them), so skips on another machine
+# still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
+MIN_CHECKS=6794 MIN_UNIT=4086
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4756 MIN_UNIT=2245
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
