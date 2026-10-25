@@ -537,10 +537,16 @@ fn seed_theme(ctx: &Ctx, look: &Look, h: &[u8]) -> Res<()> {
     let Some(src) = look.src(Base::Home, d.rel()) else {
         return Err(ctx.die("up: the current theme is not on seed_home's list"));
     };
+    seed_theme_from(ctx, &src, h)
+}
+
+/// seed_theme with SRC the current theme's folder.
+fn seed_theme_from(ctx: &Ctx, src: &Src, h: &[u8]) -> Res<()> {
+    let d = Dest::of(".local/state/omarchy/current/theme");
     home_unlink(ctx, h, &d)?;
     let dst = d.on(h);
     rm_rf(&dst).map_err(|e| failed(ctx, &cat!("remove ", dst), &e))?;
-    seed_copy(ctx, &src, h, &d, &[])?;
+    seed_copy(ctx, src, h, &d, &[])?;
     let copied = std::fs::read_dir(p(&dst)).is_ok_and(|mut r| r.next().is_some());
     if !copied {
         return Err(ctx.die(cat!(
@@ -1896,6 +1902,448 @@ pub fn seed_home(ctx: &Ctx, plan: &SeedPlan, h: &[u8]) -> Res<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// t_unit_theme_dir's and t_unit_plugin_link's home_link cases (finding 241): a link in place of
+    /// what is at REL (seed_home's copy, a save's dir); a link on the way cleared, never followed.
+    #[test]
+    fn home_links_as_bash() {
+        let d = sc_tmp("hl");
+        let c = sc_cx();
+        let h = format!("{d}/home");
+        sc_mk(&format!("{h}/.config/omarchy/themes/x"));
+        sc_put(&format!("{h}/.config/omarchy/themes/x/colors.toml"), "copy");
+        sc_mk(&format!("{d}/repo/themes/x"));
+        let t = format!("{d}/repo/themes/x");
+        home_link(
+            &c,
+            h.as_bytes(),
+            &sc_dest(".config/omarchy/themes/x"),
+            t.as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_link(format!("{h}/.config/omarchy/themes/x"))
+                .unwrap()
+                .to_str(),
+            Some(t.as_str()),
+            "home_link: a link in place of the copy"
+        );
+        sc_mk(&format!("{d}/victim"));
+        sc_mk(&format!("{d}/h2"));
+        sc_ln(&format!("{d}/victim"), &format!("{d}/h2/.config"));
+        home_link(
+            &c,
+            format!("{d}/h2").as_bytes(),
+            &sc_dest(".config/omarchy/themes/x"),
+            t.as_bytes(),
+        )
+        .unwrap();
+        assert!(
+            std::path::Path::new(&format!("{d}/h2/.config")).is_dir()
+                && !sc_is_ln(&format!("{d}/h2/.config"))
+                && sc_is_ln(&format!("{d}/h2/.config/omarchy/themes/x")),
+            "...a link on the way cleared: a real dir now"
+        );
+        assert!(
+            sc_listing(&format!("{d}/victim")).is_empty(),
+            "...nothing written through it"
+        );
+        // (t_unit_plugin_link's: a save's dir at REL, then ~/.config a link to elsewhere)
+        let p = format!("{d}/repo/sub/plug");
+        sc_mk(&p);
+        sc_mk(&format!("{d}/h/.config/omarchy/plugins/x"));
+        sc_put(&format!("{d}/h/.config/omarchy/plugins/x/f"), "old");
+        let hh = format!("{d}/h");
+        home_link(
+            &c,
+            hh.as_bytes(),
+            &sc_dest(".config/omarchy/plugins/x"),
+            p.as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_link(format!("{hh}/.config/omarchy/plugins/x"))
+                .unwrap()
+                .to_str(),
+            Some(p.as_str()),
+            "home_link: a link to TARGET in place of a dir"
+        );
+        std::fs::remove_dir_all(format!("{hh}/.config")).unwrap();
+        sc_mk(&format!("{d}/out/cfg"));
+        sc_ln(&format!("{d}/out/cfg"), &format!("{hh}/.config"));
+        home_link(
+            &c,
+            hh.as_bytes(),
+            &sc_dest(".config/omarchy/plugins/y"),
+            p.as_bytes(),
+        )
+        .unwrap();
+        assert!(
+            std::path::Path::new(&format!("{hh}/.config/omarchy/plugins")).is_dir()
+                && !sc_is_ln(&format!("{hh}/.config")),
+            "...a link on the way is replaced by a dir"
+        );
+        assert!(
+            sc_listing(&format!("{d}/out/cfg")).is_empty(),
+            "...and nothing written where it led"
+        );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    // --- t_unit_seed_copy's cases (#324 wave 6-suite): seed_copy, home_unlink, seed_theme and
+    // seed_copy_in on a tempdir fixture (tar and cp: the recipe's base tools) ---
+
+    fn sc_tmp(n: &str) -> String {
+        let d = std::env::temp_dir().join(format!("omabox-{n}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        // (physical: seed_copy_in checks the path it reads)
+        std::fs::canonicalize(&d)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+    fn sc_mk(p: &str) {
+        std::fs::create_dir_all(p).unwrap();
+    }
+    fn sc_put(p: &str, t: &str) {
+        std::fs::write(p, format!("{t}\n")).unwrap();
+    }
+    fn sc_ln(target: &str, at: &str) {
+        std::os::unix::fs::symlink(target, at).unwrap();
+    }
+    fn sc_read(p: &str) -> String {
+        std::fs::read_to_string(p)
+            .unwrap_or_default()
+            .trim_end()
+            .to_string()
+    }
+    fn sc_is_ln(p: &str) -> bool {
+        std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink())
+    }
+    fn sc_there(p: &str) -> bool {
+        std::fs::symlink_metadata(p).is_ok()
+    }
+    /// `grep -rqs WORD DIR`: a file under DIR (links not followed) holding WORD.
+    fn sc_holds(dir: &str, word: &str) -> bool {
+        fn walk(d: &std::path::Path, w: &str) -> bool {
+            std::fs::read_dir(d)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|e| {
+                    let t = e.file_type().unwrap();
+                    if t.is_dir() {
+                        walk(&e.path(), w)
+                    } else if t.is_file() {
+                        std::fs::read_to_string(e.path()).is_ok_and(|c| c.contains(w))
+                    } else {
+                        false
+                    }
+                })
+        }
+        walk(std::path::Path::new(dir), word)
+    }
+    /// `find DIR -mindepth 1 -printf '%P\n' | sort`.
+    fn sc_listing(dir: &str) -> Vec<String> {
+        fn walk(root: &std::path::Path, d: &std::path::Path, out: &mut Vec<String>) {
+            for e in std::fs::read_dir(d).into_iter().flatten().flatten() {
+                let p = e.path();
+                out.push(p.strip_prefix(root).unwrap().to_str().unwrap().to_string());
+                if e.file_type().unwrap().is_dir() {
+                    walk(root, &p, out);
+                }
+            }
+        }
+        let mut v = Vec::new();
+        walk(std::path::Path::new(dir), std::path::Path::new(dir), &mut v);
+        v.sort();
+        v
+    }
+    fn sc_cx() -> Ctx {
+        let mut c = Ctx::new(b"up", b"/nonexistent".to_vec());
+        c.parsed();
+        c
+    }
+    fn sc_src(p: &str) -> Src {
+        Src::asked(p.as_bytes().to_vec())
+    }
+    fn sc_dest(r: &str) -> Dest {
+        Dest::new(r.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn seed_copies_as_bash() {
+        let s = sc_tmp("seed");
+        let c = sc_cx();
+        let h = |x: &str| format!("{s}/{x}");
+        for d in ["repo/.git", "term", "out"] {
+            sc_mk(&h(d));
+        }
+        sc_put(&h("api-keys.env"), "secret");
+        sc_put(&h("repo/.env"), "token");
+        sc_put(&h("repo/.git/config"), "url");
+        sc_put(&h("repo/colors.toml"), "colors");
+        sc_put(&h("term/foot.ini"), "conf");
+        sc_ln(&h("api-keys.env"), &h("term/keys"));
+        sc_ln(&h("repo"), &h("theme"));
+        let out = h("out");
+        seed_copy(
+            &c,
+            &sc_src(&h("theme")),
+            out.as_bytes(),
+            &sc_dest("theme"),
+            &[],
+        )
+        .unwrap();
+        seed_copy(
+            &c,
+            &sc_src(&h("term")),
+            out.as_bytes(),
+            &sc_dest("term"),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            sc_read(&h("out/theme/colors.toml")),
+            "colors",
+            "a linked dir is copied"
+        );
+        assert!(
+            !sc_there(&h("out/theme/.env")),
+            "...without its hidden files"
+        );
+        assert!(!sc_there(&h("out/theme/.git")), "...or .git");
+        assert!(sc_is_ln(&h("out/term/keys")), "a link inside stays a link");
+        assert!(
+            !sc_holds(&out, "secret"),
+            "...nothing of its target in the box HOME"
+        );
+
+        // finding 168: links where seed_home writes, never followed.
+        let o = h("host");
+        for d in ["host/cfg/x", "h2/.local/a", "h3/c", "h4/d"] {
+            sc_mk(&h(d));
+        }
+        sc_put(&h("host/file"), "host");
+        sc_ln(&format!("{o}/cfg"), &h("h2/.config"));
+        sc_ln("../../../host/cfg", &h("h2/.local/a/b"));
+        sc_ln(&format!("{o}/none"), &h("h2/leaf"));
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(h("h2/fifo"))
+                .status()
+                .unwrap()
+                .success()
+        );
+        sc_ln(&format!("{o}/file"), &h("h3/c/f"));
+        sc_ln(&format!("{o}/cfg"), &h("h4/d/term"));
+        for r in [".config/omarchy/shell.json", ".local/a/b/c", "leaf", "fifo"] {
+            home_unlink(&c, h("h2").as_bytes(), &sc_dest(r)).unwrap();
+        }
+        let left = sc_listing(&h("h2")).into_iter().any(|x| {
+            let m = std::fs::symlink_metadata(h(&format!("h2/{x}"))).unwrap();
+            m.file_type().is_symlink() || m.file_type().is_fifo()
+        });
+        assert!(!left, "home_unlink: no link or FIFO left on the paths");
+        home_unlink(&c, h("h3").as_bytes(), &sc_dest("c/f")).unwrap();
+        assert!(!sc_there(&h("h3/c/f")), "...a link at the file itself goes");
+        assert_eq!(sc_read(&h("host/file")), "host", "...its target untouched");
+        seed_copy(
+            &c,
+            &sc_src(&h("term")),
+            h("h4").as_bytes(),
+            &sc_dest("d/term"),
+            &[],
+        )
+        .unwrap();
+        sc_mk(&h("h4/e/term/x"));
+        sc_ln(&format!("{o}/file"), &h("h4/e/term/foot.ini"));
+        sc_ln("../../../../host/cfg", &h("h4/e/term/x/y"));
+        sc_mk(&h("term/x/y"));
+        sc_put(&h("term/x/y/z"), "deep");
+        seed_copy(
+            &c,
+            &sc_src(&h("term")),
+            h("h4").as_bytes(),
+            &sc_dest("e/term"),
+            &[],
+        )
+        .unwrap();
+        assert!(
+            std::path::Path::new(&h("h4/d/term/foot.ini")).is_file() && !sc_is_ln(&h("h4/d/term")),
+            "seed_copy into a linked dir: a real dir now"
+        );
+        assert!(
+            !sc_is_ln(&h("h4/e/term/foot.ini"))
+                && std::path::Path::new(&h("h4/e/term/foot.ini")).is_file()
+                && std::path::Path::new(&h("h4/e/term/x/y/z")).is_file(),
+            "...over links inside it: real files and dirs"
+        );
+        assert_eq!(
+            sc_listing(&o),
+            ["cfg", "cfg/x", "file"],
+            "...nothing written outside the HOME"
+        );
+        assert_eq!(sc_read(&h("host/file")), "host");
+
+        // finding 171: the current theme keeps the theme's links; a save's theme replaced.
+        let th = h("state/theme");
+        let cur = ".local/state/omarchy/current";
+        sc_mk(&format!("{th}/backgrounds"));
+        sc_mk(&h(&format!("h5/{cur}")));
+        sc_put(&format!("{th}/colors.toml"), "colors");
+        sc_put(&format!("{th}/backgrounds/1.jpg"), "bg");
+        sc_ln(&h("api-keys.env"), &format!("{th}/keys.toml"));
+        sc_ln(&h("none"), &format!("{th}/backgrounds/2.jpg"));
+        sc_ln(&format!("{o}/cfg"), &h(&format!("h5/{cur}/theme")));
+        assert!(
+            seed_theme_from(&c, &sc_src(&th), h("h5").as_bytes()).is_ok(),
+            "seed_theme: a theme with a link to a secret and a dangling link"
+        );
+        let t5 = h(&format!("h5/{cur}/theme"));
+        assert_eq!(
+            [
+                sc_read(&format!("{t5}/colors.toml")),
+                sc_read(&format!("{t5}/backgrounds/1.jpg"))
+            ],
+            ["colors", "bg"]
+        );
+        assert!(
+            sc_is_ln(&format!("{t5}/keys.toml")) && sc_is_ln(&format!("{t5}/backgrounds/2.jpg"))
+        );
+        assert!(
+            !sc_holds(&h("h5"), "secret"),
+            "...nothing of their targets in the box HOME"
+        );
+        assert_eq!(
+            sc_listing(&format!("{o}/cfg")),
+            ["x"],
+            "...a save's theme replaced"
+        );
+        sc_mk(&h("empty"));
+        // (...nothing to copy: up says so, "could not copy your current theme": its refusal)
+        assert!(seed_theme_from(&c, &sc_src(&h("empty")), h("h5").as_bytes()).is_err());
+
+        // finding 228: --seed's folder over links in DEST: replaced, never written through.
+        let v = h("victim");
+        let sd = h("sd");
+        for d in [
+            "victim/dir",
+            "sd/A",
+            "sd/B/d",
+            "sd/B/e",
+            "b1/home",
+            "b2/home",
+            "b3/home/.cfg/sub",
+            "b4/home",
+        ] {
+            sc_mk(&h(d));
+        }
+        sc_put(&format!("{v}/file"), "victim");
+        sc_put(&format!("{v}/dir/g"), "victim");
+        sc_ln(&format!("{v}/file"), &format!("{sd}/A/f"));
+        sc_ln(&format!("{v}/dir"), &format!("{sd}/A/d"));
+        sc_ln("../../../victim/dir", &format!("{sd}/A/e"));
+        for f in ["B/f", "B/d/g", "B/e/h"] {
+            sc_put(&format!("{sd}/{f}"), "seeded");
+        }
+        let seed_in = |b: &str, xs: &[String]| -> bool {
+            let hh = format!("{s}/{b}/home");
+            xs.iter()
+                .all(|x| seed_copy_in(&c, hh.as_bytes(), &sc_src(x), &sc_dest(".cfg")).is_ok())
+        };
+        assert!(
+            seed_in("b1", &[format!("{sd}/A"), format!("{sd}/B")]),
+            "seed: a folder over a folder's links"
+        );
+        let b1 = h("b1/home/.cfg");
+        assert_eq!(
+            [
+                sc_read(&format!("{b1}/f")),
+                sc_read(&format!("{b1}/d/g")),
+                sc_read(&format!("{b1}/e/h"))
+            ],
+            ["seeded", "seeded", "seeded"]
+        );
+        assert!(
+            !sc_is_ln(&format!("{b1}/f"))
+                && !sc_is_ln(&format!("{b1}/d"))
+                && !sc_is_ln(&format!("{b1}/e"))
+        );
+        sc_mk(&format!("{sd}/A2"));
+        sc_ln(&format!("{v}/file"), &format!("{sd}/A2/f"));
+        assert!(
+            seed_in("b2", &[format!("{sd}/B"), format!("{sd}/A2")]),
+            "seed: the other order"
+        );
+        assert!(
+            sc_is_ln(&h("b2/home/.cfg/f")),
+            "...the link in place of the file, as copied"
+        );
+        // (...a link where a dir is: refused, as cp did, "could not copy")
+        assert!(!seed_in("b4", &[format!("{sd}/B"), format!("{sd}/A")]));
+        sc_ln(&format!("{v}/file"), &h("b3/home/.cfg/f"));
+        sc_ln(&format!("{v}/dir"), &h("b3/home/.cfg/sub/d"));
+        sc_mk(&format!("{sd}/C/sub/d"));
+        sc_put(&format!("{sd}/C/sub/d/g"), "seeded");
+        std::fs::copy(format!("{sd}/B/f"), format!("{sd}/C/f")).unwrap();
+        sc_put(&h("b3/home/.cfg/kept"), "own");
+        assert!(
+            seed_in("b3", &[format!("{sd}/C")]),
+            "seed: a save's links under DEST"
+        );
+        assert_eq!(sc_listing(&v), ["dir", "dir/g", "file"]);
+        assert_eq!(
+            [
+                sc_read(&format!("{v}/file")),
+                sc_read(&format!("{v}/dir/g"))
+            ],
+            ["victim", "victim"]
+        );
+        assert_eq!(
+            [
+                sc_read(&h("b3/home/.cfg/kept")),
+                sc_read(&h("b3/home/.cfg/f"))
+            ],
+            ["own", "seeded"],
+            "...merged with what DEST had (finding 229)"
+        );
+
+        // finding 257: SRC swapped for a link out before the copy: refused, nothing copied
+        // (the refusal says "not what it was when checked").
+        for d in ["sd/D", "b5/home", "b6/home", "b7/home"] {
+            sc_mk(&h(d));
+        }
+        std::fs::remove_dir_all(format!("{sd}/D")).unwrap();
+        sc_ln(&format!("{v}/dir"), &format!("{sd}/D"));
+        assert!(
+            !seed_in("b5", &[format!("{sd}/D")]),
+            "seed: a folder swapped for a link since checked"
+        );
+        assert!(!sc_there(&h("b5/home/.cfg/g")));
+        sc_ln(&v, &format!("{sd}/P"));
+        assert!(
+            !seed_in("b6", &[format!("{sd}/P/file")]),
+            "...a file's folder swapped"
+        );
+        assert!(!sc_there(&h("b6/home/.cfg")));
+        sc_ln(&format!("{v}/file"), &format!("{sd}/E"));
+        assert!(
+            !seed_in("b7", &[format!("{sd}/E")]),
+            "...a file swapped for a link"
+        );
+        assert!(!sc_there(&h("b7/home/.cfg")));
+        assert_eq!(
+            [
+                sc_read(&format!("{v}/file")),
+                sc_read(&format!("{v}/dir/g"))
+            ],
+            ["victim", "victim"]
+        );
+        std::fs::remove_dir_all(&s).unwrap();
+    }
 
     #[test]
     fn content_check_covers_what_tar_copies() {

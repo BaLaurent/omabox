@@ -138,8 +138,8 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6711 MIN_UNIT=4005
-[ "$INSTALLED" = 0 ] || MIN_CHECKS=4658 MIN_UNIT=2150
+MIN_CHECKS=6676 MIN_UNIT=3970
+[ "$INSTALLED" = 0 ] || MIN_CHECKS=4623 MIN_UNIT=2115
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
 
@@ -1979,84 +1979,8 @@ t_unit_calibrate() {
   check "calibrate is in -b's commands (a box's size)" bash -c "'$CLI' -b '$P-nobox' calibrate --size 640x480 -o '$d/c4.png' >/dev/null 2>&1"
 }
 
-# seed_home's copies of the user's config dirs (finding 74): a link inside is kept as a link, never
-# followed (a theme linked from its repo, a link to api-keys.env); no .git, no hidden files.
-t_unit_seed_copy() {
-  local s; s=$(readlink -f "$TMP")/seed; mkdir -p "$s/repo/.git" "$s/term" "$s/out"   # (physical: seed_copy_in checks the path it reads)
-  echo secret > "$s/api-keys.env"; echo token > "$s/repo/.env"; echo url > "$s/repo/.git/config"
-  echo colors > "$s/repo/colors.toml"; echo conf > "$s/term/foot.ini"
-  ln -s "$s/api-keys.env" "$s/term/keys"; ln -s "$s/repo" "$s/theme"
-  lib seed_copy "$s/theme" "$s/out" theme
-  lib seed_copy "$s/term" "$s/out" term
-  check_eq "a linked dir is copied" colors "$(cat "$s/out/theme/colors.toml")"
-  check_fails "...without its hidden files" test -e "$s/out/theme/.env"
-  check_fails "...or .git" test -e "$s/out/theme/.git"
-  check "a link inside stays a link" test -L "$s/out/term/keys"
-  check_fails "...with nothing of its target in the box HOME" grep -rqs secret "$s/out"
-  # finding 168: a HOME from a save has the box's links where seed_home writes, which it never follows:
-  # a dir on the way (absolute or relative, to a dir or nowhere), the dir itself, or a file in it.
-  local o=$s/host; mkdir -p "$o/cfg/x" "$s/h2/.local/a" "$s/h3/c" "$s/h4/d"; echo host > "$o/file"
-  ln -s "$o/cfg" "$s/h2/.config"; ln -s ../../../host/cfg "$s/h2/.local/a/b"; ln -s "$o/none" "$s/h2/leaf"
-  mkfifo "$s/h2/fifo"; ln -s "$o/file" "$s/h3/c/f"; ln -s "$o/cfg" "$s/h4/d/term"
-  lib home_unlink "$s/h2" .config/omarchy/shell.json .local/a/b/c leaf fifo
-  check "home_unlink: no link or FIFO left on the paths" bash -c "! find '$s/h2' -type l -o -type p | grep -q ."
-  lib home_unlink "$s/h3" c/f
-  check "...a link at the file itself goes" test ! -e "$s/h3/c/f" -a ! -L "$s/h3/c/f"
-  check_eq "...its target untouched" host "$(cat "$o/file")"
-  lib seed_copy "$s/term" "$s/h4" d/term
-  mkdir -p "$s/h4/e/term/x"; ln -s "$o/file" "$s/h4/e/term/foot.ini"; ln -s ../../../../host/cfg "$s/h4/e/term/x/y"
-  mkdir -p "$s/term/x/y"; echo deep > "$s/term/x/y/z"
-  lib seed_copy "$s/term" "$s/h4" e/term
-  check "seed_copy into a linked dir: a real dir now" test -f "$s/h4/d/term/foot.ini" -a ! -L "$s/h4/d/term"
-  check "...over links inside it: real files and dirs" test -f "$s/h4/e/term/foot.ini" -a ! -L "$s/h4/e/term/foot.ini" -a -f "$s/h4/e/term/x/y/z"
-  check_eq "...nothing written outside the HOME" "cfg cfg/x file host" "$(find "$o" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$o/file")"
-  # finding 171: the current theme keeps the links of a theme the user wrote; never followed, a
-  # dangling one no failure, and a save's theme (a link to a host dir here) replaced, not merged.
-  local th=$s/state/theme cur=.local/state/omarchy/current; mkdir -p "$th/backgrounds" "$s/h5/$cur"
-  echo colors > "$th/colors.toml"; echo bg > "$th/backgrounds/1.jpg"
-  ln -s "$s/api-keys.env" "$th/keys.toml"; ln -s "$s/none" "$th/backgrounds/2.jpg"
-  ln -s "$o/cfg" "$s/h5/$cur/theme"
-  check "seed_theme: a theme with a link to a secret and a dangling link" lib seed_theme "$th" "$s/h5"
-  check_eq "...copied" "colors bg" "$(cat "$s/h5/$cur/theme/colors.toml" "$s/h5/$cur/theme/backgrounds/1.jpg" | xargs)"
-  check "...its links still links" test -L "$s/h5/$cur/theme/keys.toml" -a -L "$s/h5/$cur/theme/backgrounds/2.jpg"
-  check_fails "...nothing of their targets in the box HOME" grep -rqs secret "$s/h5"
-  check_eq "...a save's theme replaced, its link's target untouched" "x" "$(find "$o/cfg" -mindepth 1 -printf '%P\n' | xargs)"
-  mkdir -p "$s/empty"
-  check_eq "...nothing to copy: up says so" 1 "$(lib seed_theme "$s/empty" "$s/h5" 2>&1 | grep -c 'could not copy your current theme')"
-  # finding 228: up --seed's folder copy into a DEST that holds links already (an earlier --seed's, or
-  # a save's): replaced, never written through, whichever comes first; a link to a dir as well.
-  local v=$s/victim sd=$s/sd; mkdir -p "$v/dir" "$sd/A" "$sd/B/d" "$sd/B/e" "$s/b1/home" "$s/b2/home" "$s/b3/home/.cfg/sub" "$s/b4/home"
-  echo victim > "$v/file"; echo victim > "$v/dir/g"
-  ln -s "$v/file" "$sd/A/f"; ln -s "$v/dir" "$sd/A/d"; ln -s ../../../victim/dir "$sd/A/e"
-  echo seeded > "$sd/B/f"; echo seeded > "$sd/B/d/g"; echo seeded > "$sd/B/e/h"
-  # shellcheck disable=SC2329 # called below
-  seed_in() { bash -c 'source "$1"; D=$2; shift 2; for x; do seed_copy_in "$x" .cfg; done' lib "$TMP/lib/bin/omabox" "$@"; }
-  check "seed: a folder over a folder's links" seed_in "$s/b1" "$sd/A" "$sd/B"
-  check_eq "...its files, real ones" "seeded seeded seeded" "$(cat "$s/b1/home/.cfg/f" "$s/b1/home/.cfg/d/g" "$s/b1/home/.cfg/e/h" | xargs)"
-  check "...no link left where they went" test ! -L "$s/b1/home/.cfg/f" -a ! -L "$s/b1/home/.cfg/d" -a ! -L "$s/b1/home/.cfg/e"
-  mkdir -p "$sd/A2"; ln -s "$v/file" "$sd/A2/f"
-  check "seed: the other order" seed_in "$s/b2" "$sd/B" "$sd/A2"
-  check "...the link in place of the file, as copied" test -L "$s/b2/home/.cfg/f"
-  check_match "...a link where a dir is: refused, as cp did" "could not copy" "$(seed_in "$s/b4" "$sd/B" "$sd/A" 2>&1)"
-  ln -s "$v/file" "$s/b3/home/.cfg/f"; ln -s "$v/dir" "$s/b3/home/.cfg/sub/d"; mkdir -p "$sd/C/sub/d"; echo seeded > "$sd/C/sub/d/g"
-  cp "$sd/B/f" "$sd/C/f"; echo own > "$s/b3/home/.cfg/kept"
-  check "seed: a save's links under DEST" seed_in "$s/b3" "$sd/C"
-  check_eq "...nothing written outside the HOME" "dir dir/g file victim victim" "$(find "$v" -mindepth 1 -printf '%P\n' | sort | xargs) $(cat "$v/file" "$v/dir/g" | xargs)"
-  check_eq "...merged with what DEST had (finding 229)" "own seeded" "$(cat "$s/b3/home/.cfg/kept" "$s/b3/home/.cfg/f" | xargs)"
-  # finding 257: SRC (the path as `up` resolved and checked it) swapped for a link out before the
-  # copy, as a jailed caller could do with its project path: refused, nothing of the target copied.
-  mkdir -p "$sd/D" "$s/b5/home" "$s/b6/home" "$s/b7/home"; echo seeded > "$sd/D/f"
-  rm -r "$sd/D"; ln -s "$v/dir" "$sd/D"
-  check_match "seed: a folder swapped for a link since checked: refused" "not what it was when checked" "$(seed_in "$s/b5" "$sd/D" 2>&1)"
-  check "...nothing copied" test ! -e "$s/b5/home/.cfg/g"
-  ln -s "$v" "$sd/P"
-  check_match "...a file's folder swapped: refused" "not what it was when checked" "$(seed_in "$s/b6" "$sd/P/file" 2>&1)"
-  check "...nothing copied" test ! -e "$s/b6/home/.cfg"
-  ln -s "$v/file" "$sd/E"
-  check_match "...a file swapped for a link: refused" "not what it was when checked" "$(seed_in "$s/b7" "$sd/E" 2>&1)"
-  check "...nothing copied" test ! -e "$s/b7/home/.cfg"
-  check_eq "...the target untouched" "victim victim" "$(cat "$v/file" "$v/dir/g" | xargs)"
-}
+# (seed_home's copies of the user's config dirs, finding 74, and their kin, findings 168, 171, 228,
+# 229, 257: seed.rs seed_copies_as_bash, #324 wave 6-suite.)
 
 # The desk's own wallpapers (#184): seed_backgrounds copies images only, none a link, none too big, a
 # linked folder not at all, a save's link there replaced; box_background leads the box's link to the
@@ -2104,14 +2028,9 @@ t_unit_theme_dir() {
   check_fails "...not one mounted at another path" vis "$r" "$d/elsewhere/y" "$d/elsewhere"$'\t'/mnt/e
   check_fails "...nor a dir whose name only starts like the mount's" vis "$r" "$d/elsewhere-not" "$d/elsewhere"$'\t'"$d/elsewhere"
   check_fails "...nor the repo, from outside a repo" vis "$d" "$r/themes/x"
-  # home_link: a link in place of seed_home's copy; a link on the way (a save's) cleared, not followed.
-  local h=$d/home; mkdir -p "$h/.config/omarchy/themes/x"; echo copy > "$h/.config/omarchy/themes/x/colors.toml"
-  lib home_link "$h" .config/omarchy/themes/x "$r/themes/x"
-  check_eq "home_link: a link in place of the copy" "$r/themes/x" "$(readlink "$h/.config/omarchy/themes/x")"
-  mkdir -p "$d/h2"; ln -s "$d/victim" "$d/h2/.config"
-  lib home_link "$d/h2" .config/omarchy/themes/x "$r/themes/x"
-  check "...a link on the way cleared: a real dir now" test -d "$d/h2/.config" -a ! -L "$d/h2/.config" -a -L "$d/h2/.config/omarchy/themes/x"
-  check_eq "...nothing written through it" "" "$(ls -A "$d/victim")"
+  # (home_link: a link in place of seed_home's copy; a link on the way, a save's, cleared, not followed:
+  # seed.rs home_links_as_bash)
+  local h=$d/home; mkdir -p "$h/.config/omarchy/themes"
   # The note: a theme linked into the repo up runs from; from a worktree, into the main checkout.
   # (snap_note, not note: that is the suite's own, and a unit test's helper redefines it for every test
   # after it; finding 252.)
@@ -2179,14 +2098,8 @@ t_unit_plugin_link() {
   opvj() { OMABOX_JAIL=$J opv "$@"; }
   check "ai-jail: inside the jail's project" opvj / "" "$d/repo/sub/plug"
   check_fails "ai-jail: not through a link out of it" opvj / "$d/other$T$d/other" "$d/repo/out"
-  # home_link: whatever is at REL goes (a save's dir), links on the way are cleared, never followed.
-  mkdir -p "$d/h/.config/omarchy/plugins/x"; echo old > "$d/h/.config/omarchy/plugins/x/f"
-  lib home_link "$d/h" .config/omarchy/plugins/x "$d/repo/sub/plug"
-  check_eq "home_link: a link to TARGET in place of a dir" "$d/repo/sub/plug" "$(readlink "$d/h/.config/omarchy/plugins/x")"
-  rm -rf "$d/h/.config"; ln -s "$d/out/cfg" "$d/h/.config"
-  lib home_link "$d/h" .config/omarchy/plugins/y "$d/repo/sub/plug"
-  check "...a link on the way is replaced by a dir" test -d "$d/h/.config/omarchy/plugins" -a ! -L "$d/h/.config"
-  check_eq "...and nothing written where it led" "" "$(ls -A "$d/out/cfg")"
+  # (home_link: whatever is at REL goes, a save's dir; links on the way cleared, never followed:
+  # seed.rs home_links_as_bash)
   # #199: a --seed onto a --plugin's or --theme-dir's folder in the box HOME (a link seed_home makes, or
   # a plugin's mount): at or below it refused, above it only when it would write there.
   local pl=.config/omarchy/plugins/x.y th=.config/omarchy/themes/t sb=$d/sb
@@ -20713,7 +20626,7 @@ t_run_cwd() {
 
 # --- runner --------------------------------------------------------------------------------------
 
-UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_seed_copy t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rm_tree t_unit_saves
+UNIT=(t_unit_json t_unit_fd_exposed t_unit_flag_forms t_unit_exit_codes t_unit_cli_contract t_unit_tree_layer t_unit_ns_fds t_unit_rec_ff t_unit_gdb_crashes t_unit_hypr_lost t_unit_hypr_errors_note t_unit_lock_markers t_unit_home_secrets t_unit_down_jail_race t_unit_calibrate t_unit_git_dirs t_unit_box_gone t_unit_on_box_kill t_unit_monitors t_unit_agent_session t_unit_orphan t_unit_clip t_unit_keys_to_box t_unit_shot_hidden t_unit_config t_unit_shot_fit t_unit_bar_seed_note t_unit_bar_filter t_unit_wait t_unit_wait_facts t_unit_pixel t_unit_gpu t_unit_cpu t_unit_up_dies_late t_unit_up_owner_gone t_unit_settle_read t_unit_pointer t_unit_window_select t_unit_guard_exec_host t_unit_guard_omarchy_shell t_unit_live_edit t_unit_parse_mode t_unit_record t_unit_duration t_unit_deprecated t_unit_mount_rules t_unit_refusals t_unit_run_named_dead t_unit_kill_box t_unit_cli t_unit_uwsm_guard t_unit_install t_unit_host_session t_unit_guard_settings t_unit_guard_codex_merge t_unit_desk_backgrounds t_unit_theme_dir t_unit_plugin_link t_unit_shell_warnings t_unit_shell_reports t_unit_xwayland t_unit_desk_shell t_unit_no_seed t_unit_desk_fonts t_unit_version t_unit_omarchy_contract t_unit_omarchy45 t_unit_inotifywait t_unit_rust_handoff t_unit_rust_parity t_unit_rust_parity4 t_unit_rust_parity4b t_unit_rust_parity5 t_unit_rust_front t_unit_rust_jailed t_unit_rm_tree t_unit_saves
   t_unit_nvidia t_unit_aquamarine t_unit_aq_worktree t_unit_setup t_unit_no_theme t_unit_hyprland t_unit_quickshell t_unit_registry t_unit_leak_scan t_unit_evidence t_unit_jail_policy t_unit_jail_covers t_unit_jail_paths t_unit_relay t_unit_broker_units t_unit_inspect t_unit_parallel t_unit_shell_crash t_unit_which t_unit_brief t_unit_run_job t_unit_job_note t_unit_replace_others t_unit_link_out t_unit_user_unit t_unit_run_cwd_note t_unit_check)
 BOX=(t_leak_control t_rust_parity_up t_run_options t_run_stdio t_main t_window t_json t_keys_to_box t_keys_layer t_wait_facts t_click_layer t_pointer t_pixel t_burst t_changed t_shot_fit t_output t_output_nvidia t_gdb t_cpu t_wait t_replace t_dbus_user_app t_tree t_tree_layer t_agent_session t_mode_lock t_new t_keys t_peek t_peek_monitors t_guard t_special_ws t_uwsm_app t_widget t_widget_list t_widget_mark t_monitors t_monitors_nvidia t_record_layout t_record_layout_nvidia t_record_input t_record_hold t_audio t_monitors_turned t_monitors_turned_nvidia t_monitors_window t_monitors_wait t_monitors_wait_nvidia t_scale t_scale_nvidia t_no_pointer t_no_pointer_nvidia t_cursor_hw_nvidia t_throwaway t_throwaway_home t_throwaway_killed t_throwaway_dead t_isolated t_isolated_addr t_connected t_protect_ports t_jail_held t_jail_record t_jail_recipe t_ports t_isolated_no_pidfile t_up_killed t_orphan t_idle t_reap_race t_run_idle t_stock_bar t_saves
   t_clip t_systemd t_omarchy_restart t_own_processes t_config_kept t_autoreload t_keys_down_up t_held_keys t_up_again t_theme_dir t_theme t_desk_backgrounds t_plugin_check t_plugin_hosted t_desk_shell t_no_seed t_desk_fonts t_user_hypr t_plugin_link t_submap_release t_setup_prompts t_omarchy_tree t_lock t_hostile t_race t_failed_up t_hung t_shell_crash t_shell_other_crash t_shell_hung t_shell_restart_race t_shell_restart_dup t_up_aborted t_up_signals t_up_signals_window t_extensions_secret t_hyprland_dies t_hyprland_crash t_pasta_dies t_other_userns t_no_new_privs t_no_shell t_hyprland t_quickshell t_no_git_identity t_git_worktree t_up_cwd_unreadable t_stale_pid t_jail t_inspect t_which t_rust_parity t_brief t_link_out t_run_cwd t_clean t_check)
