@@ -17431,8 +17431,12 @@ t_clip() {
   check_match "with no -b: the only interactive box" "to box 'ib'$" "$("${in[@]}" "$CLI" clip 2>&1)"
   check_eq "...which has it" second "$("${inb[@]}" wl-paste -n)"
   # The Rust half's parity (#324, wave 4a): clip both ways in the stand-in (its own run of omabox,
-  # told which half by --pass), the clipboards it changed compared after each side.
-  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_snap=0 rp_sed="" rp_wrap=("$CLI" run -b "$B" --pass OMABOX_BASH --)
+  # told which half by --pass), the clipboards it changed compared after each side. (--pass only where
+  # the leg sets OMABOX_BASH: the direct leg has none, and a --pass of it there is refused, 125, which
+  # every leg got at 27d9613 while the binary's own --pass could not see it: finding 514.)
+  # shellcheck disable=SC2016 # the wrap's bash expands them
+  local rp_clw='c=$1 b=$2; shift 2; exec "$c" run -b "$b" ${OMABOX_BASH+--pass OMABOX_BASH} -- "$@"'
+  rp_rt=$XDG_RUNTIME_DIR rp_dir=/ rp_env=() rp_snap=0 rp_sed="" rp_wrap=(bash -c "$rp_clw" rp-clip "$CLI" "$B")
   rp_cl_also() { "${inb[@]}" sh -c 'wl-paste --list-types | LC_ALL=C sort | xargs; wl-paste -n | md5sum' 2>&1; "${in[@]}" sh -c 'wl-paste --list-types | LC_ALL=C sort | xargs; wl-paste -n | md5sum' 2>&1; }
   rp_cl_text() { "${in[@]}" sh -c 'printf "rp t\303\251xt\n" | wl-copy'; "${inb[@]}" wl-copy --clear; }
   rp_cl_sec() { "${in[@]}" sh -c 'printf "rp pw" | wl-copy --sensitive'; "${inb[@]}" wl-copy --clear; }
@@ -17447,7 +17451,7 @@ t_clip() {
   rp_prep=rp_cl_none; parity "clip (both ways): your clipboard empty" clip -b ib
   parity "clip --from-box (both ways): the box's empty" clip --from-box -b ib
   rp_prep=rp_cl_other; parity "clip (both ways): a type it does not take" clip -b ib
-  rp_prep=rp_cl_text rp_sed='s/pid [0-9]+/pid P/g' rp_wrap=("$CLI" run -b "$B" --pass OMABOX_BASH -- env CLAUDECODE=1)
+  rp_prep=rp_cl_text rp_sed='s/pid [0-9]+/pid P/g' rp_wrap=(bash -c "$rp_clw" rp-clip "$CLI" "$B" env CLAUDECODE=1)
   rp_why=441 rp_bash=("err~\\(CLAUDECODE set for bash, pid P\\)") rp_rust=("err~\\(CLAUDECODE set for omabox, pid P\\)")
   parity "clip (both ways): refused to an agent" clip -b ib
   rp_prep="" rp_also="" rp_sed="" rp_wrap=() rp_rt="" rp_snap=1

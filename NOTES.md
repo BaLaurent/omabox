@@ -10084,8 +10084,11 @@ from them.
     in this command's environment". t_clip's parity wraps each leg in such a `run` (the leg's
     OMABOX_BASH passed into its stand-in host), so both legs failed alike and the expected difference
     (finding 441) was not there. **Fix** (Rust): caller_env reads /proc/self/environ, the environment
-    as the call came, as bash's reads /proc/$$/environ (finding 74). Tests: t_clip, t_run_stdio ("run
-    --pass OMABOX_BASH: the caller's value", fails at 27d9613).
+    as the call came, as bash's reads /proc/$$/environ (finding 74). With that, t_clip's direct leg
+    (finding 505), which sets no OMABOX_BASH, had its --pass refused (125) while the bash leg ran: at
+    27d9613 every leg was refused alike, so its seven other parity cases compared nothing. Its wrap now
+    passes OMABOX_BASH only where the leg sets it. Tests: t_clip, t_run_stdio ("run --pass
+    OMABOX_BASH: the caller's value", fails at 27d9613).
 
 515. **Two box tests leaned on the bash front's pace** (2026-10-24, #324 wave 6-front; the suite at
     27d9613, each alone 2 in 2). With the suite calling the binary straight (finding 505), commands
