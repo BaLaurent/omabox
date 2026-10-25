@@ -18,9 +18,41 @@ use crate::select::select_box;
 use crate::shell;
 use std::time::Duration;
 
-/// keys_ensure's Lua: whether this omabox's passthrough hooks (share/passthrough.lua's VERSION) are
-/// on the host.
-const PASS_CHECK: &str = "if (omabox_pass_version or 0) < 5 then error('omabox-missing', 0) end";
+/// share/passthrough.lua's VERSION, read from the file at build time (#368: one number, never a
+/// copy that a bump leaves behind).
+const PASS_VERSION: u32 = lua_version(include_bytes!("../../../../share/passthrough.lua"));
+// (no build without it read)
+const _: () = assert!(
+    PASS_VERSION > 0,
+    "no `local VERSION = N` in share/passthrough.lua"
+);
+
+/// The N of the first `local VERSION = N` line in a Lua file (0 when there is none).
+const fn lua_version(s: &[u8]) -> u32 {
+    let k = b"\nlocal VERSION = ";
+    let mut i = 0;
+    while i + k.len() < s.len() {
+        let mut j = 0;
+        while j < k.len() && s[i + j] == k[j] {
+            j += 1;
+        }
+        if j == k.len() {
+            let (mut n, mut p) = (0u32, i + j);
+            while p < s.len() && s[p].is_ascii_digit() {
+                n = n * 10 + (s[p] - b'0') as u32;
+                p += 1;
+            }
+            return n;
+        }
+        i += 1;
+    }
+    0
+}
+
+/// keys_ensure's Lua: whether this omabox's passthrough hooks (PASS_VERSION) are on the host.
+fn pass_check() -> String {
+    format!("if (omabox_pass_version or 0) < {PASS_VERSION} then error('omabox-missing', 0) end")
+}
 
 /// What the reaper keeps of its box from the start (cmd__reap's locals).
 struct Reap {
@@ -312,7 +344,7 @@ fn keys_ensure(ctx: &Ctx, sig: Option<&[u8]>) {
             Err(_) => return,
         },
     };
-    if crate::host::host_eval_out(&sig, PASS_CHECK.as_bytes()) == b"error: omabox-missing" {
+    if crate::host::host_eval_out(&sig, pass_check().as_bytes()) == b"error: omabox-missing" {
         let _ = crate::host::install_passthrough(ctx);
     }
 }
@@ -387,5 +419,23 @@ mod tests {
         assert_eq!(poll_every(40, true, false), 10);
         assert_eq!(poll_every(7200, false, true), 2);
         assert_eq!(poll_every(0, false, false), 5);
+    }
+
+    // #368: the reaper's check is share/passthrough.lua's VERSION, whatever it is bumped to.
+    #[test]
+    fn pass_check_is_the_lua_version() {
+        let lua = include_str!("../../../../share/passthrough.lua");
+        assert!(
+            lua.contains("\nomabox_pass_version = VERSION\n"),
+            "the global the check reads is the one passthrough.lua sets"
+        );
+        assert!(
+            pass_check().starts_with(&format!(
+                "if (omabox_pass_version or 0) < {PASS_VERSION} then"
+            )),
+            "{}",
+            pass_check()
+        );
+        assert_eq!(lua_version(b"x\n"), 0);
     }
 }

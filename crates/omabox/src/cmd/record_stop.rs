@@ -215,7 +215,38 @@ fn copy_argv(file: &[u8], size: i64) -> Vec<Vec<u8>> {
 /// stat says it is a regular file, not sparse, of at most MAX bytes; never more than that size, in a
 /// time for it. Some(its size) when the cat ran to its end, None when refused (said) or cut short.
 fn box_copy(ctx: &mut Ctx, file: &[u8], max: i64, to: &std::fs::File) -> Option<i64> {
-    let (_, st) = sys_cap(
+    box_copy_with(ctx, file, max, to, |ctx, a, wr| match wr {
+        None => sys_cap(ctx, a, Some(200), Err2::Null, false).1,
+        Some(fd) => {
+            let rc = box_exec(
+                ctx,
+                a,
+                ExecOpts {
+                    sys: true,
+                    stdout: Some(fd),
+                    ..ExecOpts::default()
+                },
+            );
+            if matches!(rc, Ok(0)) {
+                b"0".to_vec()
+            } else {
+                b"1".to_vec()
+            }
+        }
+    })
+}
+
+/// box_copy with how it runs a command in the box: RUN(ctx, argv, None) is the stat, its output;
+/// RUN(ctx, argv, Some(fd)) the cat into FD, "0" when it ran to its end (a test runs both on the
+/// host: box_copy_bounds_a_fifo).
+fn box_copy_with(
+    ctx: &mut Ctx,
+    file: &[u8],
+    max: i64,
+    to: &std::fs::File,
+    mut run: impl FnMut(&mut Ctx, &[Vec<u8>], Option<std::os::fd::RawFd>) -> Vec<u8>,
+) -> Option<i64> {
+    let st = run(
         ctx,
         &w(&[
             b"/usr/bin/stat".as_slice(),
@@ -224,9 +255,7 @@ fn box_copy(ctx: &mut Ctx, file: &[u8], max: i64, to: &std::fs::File) -> Option<
             b"--",
             file,
         ]),
-        Some(200),
-        Err2::Null,
-        false,
+        None,
     );
     let size = copy_size(ctx, file, max, &st)?;
     // (`| head -c SIZE`: streamed, never held here whole; the pipe closed once SIZE came)
@@ -241,21 +270,10 @@ fn box_copy(ctx: &mut Ctx, file: &[u8], max: i64, to: &std::fs::File) -> Option<
         let _ = std::io::copy(&mut src, &mut d);
     });
     let a = copy_argv(file, size);
-    let rc = box_exec(
-        ctx,
-        &a,
-        ExecOpts {
-            sys: true,
-            stdout: Some(wr.as_raw_fd()),
-            ..ExecOpts::default()
-        },
-    );
+    let rc = run(ctx, &a, Some(wr.as_raw_fd()));
     drop(wr);
     let _ = copier.join();
-    match rc {
-        Ok(0) => Some(size),
-        _ => None,
-    }
+    (rc == b"0").then_some(size)
 }
 
 /// `stat -L -c %s FILE`.
@@ -2352,6 +2370,63 @@ mod tests {
             copy_argv(b"f", 104_857_600)[3],
             b"20",
             "...and a second more a 10 MiB"
+        );
+    }
+
+    // S7, end to end (#324 wave 6-flip: t_jail_record's live FIFO case went with lib): a file the
+    // box's stat called regular and 10 bytes, a FIFO with no writer by the time the cat opens it, is
+    // read under the time its size gives (10 s, killed a second after), never for ever: nothing
+    // copied, None, and back in that time. Stat and cat run on the host, as the box's would.
+    #[test]
+    #[ignore = "starts processes and waits 10 s: run by test/run.sh (cargo test -- --ignored)"]
+    fn box_copy_bounds_a_fifo() {
+        use std::os::fd::FromRawFd;
+        let d = std::env::temp_dir().join(format!("omabox-boxcopy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let fifo = d.join("video.mp4");
+        let c = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: mkfifo with a NUL-terminated path of ours.
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let to = std::fs::File::create(d.join("out")).unwrap();
+        let mut ctx = Ctx::new(b"record", Vec::new());
+        let mut argvs = Vec::new();
+        let t0 = std::time::Instant::now();
+        let got = box_copy_with(
+            &mut ctx,
+            fifo.as_os_str().as_bytes(),
+            100,
+            &to,
+            |_, a, fd| {
+                argvs.push(a[0].clone());
+                match fd {
+                    None => b"regular file|10|8|512\n".to_vec(),
+                    Some(fd) => {
+                        let mut cmd =
+                            std::process::Command::new(std::ffi::OsStr::from_bytes(&a[0]));
+                        cmd.args(a[1..].iter().map(|x| std::ffi::OsStr::from_bytes(x)));
+                        // SAFETY: dup of an fd this test holds open for the call.
+                        let out = unsafe { std::os::fd::OwnedFd::from_raw_fd(libc::dup(fd)) };
+                        let st = cmd.stdout(out).stdin(std::process::Stdio::null()).status();
+                        if st.is_ok_and(|s| s.success()) {
+                            b"0".to_vec()
+                        } else {
+                            b"1".to_vec()
+                        }
+                    }
+                }
+            },
+        );
+        let took = t0.elapsed();
+        let _ = std::fs::remove_dir_all(&d);
+        assert_eq!(
+            argvs,
+            [b"/usr/bin/stat".to_vec(), b"/usr/bin/timeout".to_vec()]
+        );
+        assert_eq!(got, None, "a FIFO with no writer: nothing copied");
+        assert!(
+            took >= std::time::Duration::from_secs(9) && took <= std::time::Duration::from_secs(14),
+            "...cut at its size's time (10 s), not read for ever: {took:?}"
         );
     }
 

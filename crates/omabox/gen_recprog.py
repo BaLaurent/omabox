@@ -1,10 +1,10 @@
 #!/usr/bin/python3
-# recprog.rs from bin/omabox (#324 wave 4b): record's inline programs, byte for byte, each the text
-# between its quotes there. gen_recprog.py ROOT [OUT | --list] (--list: each program and a NUL, as
-# `omabox _rust-jq --recprog` prints them; t_unit_rust_parity compares the two). Run rustfmt after.
-import re, sys
-root = sys.argv[1]
-s = open(root + '/bin/omabox').read()
+# recprog.rs from bash's omabox (#324 wave 4b): record's inline programs, byte for byte, each the
+# text between its quotes there. gen_recprog.py SCRIPT [OUT | --list]: SCRIPT is bash's omabox (the
+# suite's BASH_CLI); --list: each program and a NUL, as `omabox _rust-jq --recprog` prints them
+# (t_unit_rust_parity compares the two). Run rustfmt after.
+import os, re, sys
+s = open(sys.argv[1]).read()
 a = s.index('\ncmd_record() {'); b = s.index('\ncmd_shot() {')
 rec = s[a:b]
 out = []
@@ -56,7 +56,7 @@ if sys.argv[2:3] == ['--list']:
     for _, txt in out:
         sys.stdout.write(txt + '\0')
     sys.exit(0)
-with open(sys.argv[2] if len(sys.argv) > 2 else root + '/crates/omabox/src/recprog.rs', 'w') as f:
+with open(sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src/recprog.rs'), 'w') as f:
     f.write("//! record's programs that run as bin/omabox has them inline (#324 wave 4b): the shell its box runs,\n")
     f.write("//! awk's and jq's, byte for byte (t_unit_rust_parity's check of `_rust-jq --inline` holds them\n")
     f.write("//! to bin/omabox). Made from bin/omabox, not by hand.\n\n")

@@ -1331,6 +1331,66 @@ for i, l in enumerate(open(sys.argv[1]), 1):
 bad = list(dict.fromkeys(bad))
 print("\n".join(bad + ["%d calls" % n]))
 '
+# NS_FDS_RS DIR: finding 345 over the crate's sources in DIR (their tests left out), where it holds by
+# construction: a child enters a box only through an enter::Plan applied in exec::command (or in
+# `_enter`'s own exec, enter::main, which box_pty starts with only its fds), and command closes every fd
+# it is not given whenever the plan takes the box's pid namespace (Plan::pid_ns, CLONE_NEWPID); setns
+# only in enter.rs. As FILE:LINE: TEXT, each place that breaks it; then "N calls", the entries
+# (Entry::open) and plans (.plan) it read.
+NS_FDS_RS='
+import os, re, sys
+bad = []; n = 0; rule = pid = False
+for root, _, files in sorted(os.walk(sys.argv[1])):
+    for f in sorted(files):
+        if not f.endswith(".rs"): continue
+        p = os.path.join(root, f); rel = os.path.relpath(p, sys.argv[1]); L = open(p).read().split("\n")
+        end = next((i for i in range(len(L) - 1) if L[i] == "#[cfg(test)]" and L[i + 1].startswith("mod tests")), len(L))
+        fn = ""
+        for i in range(end):
+            t = L[i].strip()
+            m = re.match(r"(pub(\(crate\))? )?fn (\w+)", t)
+            if m: fn = m.group(3)
+            if t.startswith("//"): continue
+            n += len(re.findall(r"Entry::open\(|\.plan\(", t))
+            if re.search(r"\.apply\(&mut ", t) and (rel, fn) not in (("exec.rs", "command"), ("enter.rs", "main")):
+                bad.append("%s:%d: %s (an entry applied outside exec::command)" % (rel, i + 1, t))
+            if "libc::setns(" in t and rel != "enter.rs":
+                bad.append("%s:%d: %s (setns outside enter.rs)" % (rel, i + 1, t))
+            if rel == "exec.rs" and fn == "command" and re.search(r"let only = fds\.only \|\| fds\.enter\.is_some_and\(\|p\| p\.pid_ns\(\)\);", t): rule = True
+            if rel == "enter.rs" and fn == "pid_ns" and "self.ns & libc::CLONE_NEWPID != 0" in t: pid = True
+if not rule: bad.append("exec.rs: command does not close the fds of a child entering the pid namespace")
+if not pid: bad.append("enter.rs: Plan::pid_ns does not test CLONE_NEWPID")
+print("\n".join(bad + ["%d calls" % n]))
+'
+# ON_BOX_KILLS_RS DIR: finding 289 over the crate's sources in DIR (their tests left out). on_box,
+# on_box_io and on_box_bg (and an entry with enter::TOOL) put a tool in the box's user and mount
+# namespaces only, so a pid read from the box's /proc means a host process there: each such call in a
+# function whose string literals run kill, pkill or killall (as a word: Hyprland's window.kill and
+# killactive are not), as FILE:LINE: TEXT; then "N calls", how many it read.
+ON_BOX_KILLS_RS='
+import os, re, sys
+bad = []; n = 0
+call = re.compile(r"(?<![\w])(on_box|on_box_io|on_box_bg)\(|Entry::open\([^;]*\bTOOL\b")
+lit = re.compile(r"b?\"((?:[^\"\\]|\\.)*)\"")
+kill = re.compile(r"(?<![\w$.-])(kill|pkill|killall)(?![\w-])")
+for root, _, files in sorted(os.walk(sys.argv[1])):
+    for f in sorted(files):
+        if not f.endswith(".rs"): continue
+        p = os.path.join(root, f); rel = os.path.relpath(p, sys.argv[1]); L = open(p).read().split("\n")
+        end = next((i for i in range(len(L) - 1) if L[i] == "#[cfg(test)]" and L[i + 1].startswith("mod tests")), len(L))
+        start = 0
+        for i in range(end):
+            t = L[i].strip()
+            if re.match(r"(pub(\(crate\))? )?fn \w+", t): start = i
+            if t.startswith("//") or not call.search(t) or re.match(r"(pub(\(crate\))? )?fn ", t): continue
+            n += 1
+            j = i
+            while j < end and not L[j].startswith("}") and not (j > i and re.match(r"\s*(pub(\(crate\))? )?fn ", L[j])): j += 1
+            body = [x for x in L[start:j] if not x.strip().startswith("//")]
+            if any(kill.search(m.group(1)) for x in body for m in lit.finditer(x)):
+                bad.append("%s:%d: %s" % (rel, i + 1, t))
+print("\n".join(bad + ["%d calls" % n]))
+'
 # Finding 356: every ffmpeg and ffprobe a recording runs in the box goes through rec_ff (a time bound,
 # and once more after a timeout): ffmpeg 9.0.1 deadlocks now and then. REC_FF DIR: over the crate's
 # sources in DIR (their tests left out), each /usr/bin/ffmpeg or ffprobe whose argv neither is given
@@ -1387,7 +1447,19 @@ while True:
             if "fdprobe-" in l: seen.write("%s %s -> %s\n" % (p, f, l))
 '
 t_unit_ns_fds() {
-  local out n
+  local out n t
+  # The binary's (#324 wave 6-flip): by construction, read over the crate.
+  out=$(python3 -c "$NS_FDS_RS" "$ROOT/crates/omabox/src")
+  n=$(tail -n 1 <<<"$out"); n=${n%% *}
+  check_eq "every child entering a box's pid namespace keeps only the fds it is given, in the binary (finding 345)" "" "$(sed '$d' <<<"$out")"
+  check "...the check read its entries ($n)" test "$n" -ge 8
+  # The check itself, on a copy: an entry applied elsewhere, and command's rule taken out, found.
+  t=$TMP/nsfds-rs; rm -rf "$t"; cp -r "$ROOT/crates/omabox/src" "$t"
+  printf 'fn planted(c: &mut Command, p: Plan) {\n    p.apply(&mut c);\n}\n' > "$t/planted.rs"
+  sed -i 's/let only = fds.only || fds.enter.is_some_and(|p| p.pid_ns());/let only = fds.only;/' "$t/exec.rs"
+  check_eq "...on a copy: an entry applied outside command, and command's rule gone, both found" \
+    "planted.rs exec.rs" "$(python3 -c "$NS_FDS_RS" "$t" | sed '$d' | cut -d: -f1 | paste -sd' ')"
+  rm -rf "$t"
   out=$(python3 -c "$NS_FDS" "$BASH_CLI")
   n=$(tail -n 1 <<<"$out"); n=${n%% *}
   check_eq "every call into the box's pid namespace runs through fds_only (finding 345)" "" "$(sed '$d' <<<"$out")"
@@ -1478,6 +1550,35 @@ print("%d calls" % calls)
 on_box_kills() { python3 -c "$ON_BOX_KILLS" "$@"; }
 t_unit_on_box_kill() {
   local out calls base
+  # The binary's (#324 wave 6-flip): on_box and its kin over the crate.
+  out=$(python3 -c "$ON_BOX_KILLS_RS" "$ROOT/crates/omabox/src")
+  calls=${out##*$'\n'}; out=${out%"$calls"}
+  check_match "the crate's on_box calls read (else it would pass on nothing)" '^([4-9][0-9]|[1-9][0-9]{2,}) calls$' "$calls"
+  check_eq "no on_box call of the binary signals: a box's pid there is the host's (finding 289, #218)" "" "$out"
+  local t=$TMP/obk-rs; rm -rf "$t"; mkdir -p "$t"
+  cat > "$t/planted.rs" <<'PLANTED'
+fn a(ctx: &Ctx) {
+    let args = w(&[b"/usr/bin/pkill".as_slice(), b"-f", b"shell"]);
+    on_box(ctx, &args, false, Out::Null, ErrTo::Null);
+}
+fn b(ctx: &Ctx) {
+    on_box(ctx, &w(&[b"sh", b"-c", b"[ -z \"$p\" ] || kill -TERM \"$p\""]), false, Out::Null, ErrTo::Null);
+}
+fn c(ctx: &Ctx) {
+    on_box(ctx, &w(&[b"hyprctl", b"dispatch", b"hl.dsp.window.kill()"]), false, Out::Null, ErrTo::Null);
+}
+fn d(ctx: &mut Ctx) {
+    box_exec(ctx, &w(&[b"/usr/bin/kill", b"5"]), ExecOpts::default());
+}
+fn e(ctx: &Ctx) {
+    // on_box(ctx, &w(&[b"kill"]))
+    let r = on_box(ctx, &w(&[b"/usr/bin/true"]), false, Out::Null, ErrTo::Null);
+    unsafe { libc::kill(5, 9) };
+}
+PLANTED
+  check_eq "...on planted calls: a kill through on_box by a variable and in a script, found; window.kill, box_exec, a comment and libc::kill not" \
+    "planted.rs:3 planted.rs:6 4 calls" "$(python3 -c "$ON_BOX_KILLS_RS" "$t" | sed -E 's/^([^:]*:[0-9]+):.*/\1/' | paste -sd' ')"
+  rm -rf "$t"
   out=$(on_box_kills "$ROOT/bin/omabox" "$ROOT/share" 2>&1)
   calls=${out##*$'\n'}; out=${out%"$calls"}
   check_match "on_box_kills read bin/omabox's calls (else it would pass on nothing)" '^([6-9][0-9]|[1-9][0-9]{2,}) calls$' "$calls"
@@ -3204,17 +3305,17 @@ t_unit_rust_parity() {
   for v in LAYER_SPAN_JQ WIN_JQ WIN_SEL_JQ WIN_DESC_JQ DESK_FACTS_JQ DESK_TARGET_JQ LAYER_LIST_JQ JQ_MON CLIP_BOX_COPY CLIP_BOX_TYPES AGENT_MARKS; do
     check_eq "the Rust half's $v is bash's" "$(lib eval "printf %s \"\$$v\"")" "$("$ROOT/build/omabox" _rust-jq "$v")"
   done
-  # Its programs that are inline in bash's functions: each in bin/omabox as it is (a path, .[0] and
-  # length aside).
-  local script p missing="" n=0; script=$(cat "$ROOT/bin/omabox")
+  # Its programs that are inline in bash's functions: each in bash's omabox (BASH_CLI) as it is (a
+  # path, .[0] and length aside).
+  local script p missing="" n=0; script=$(cat "$BASH_CLI")
   while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"$p"* ]] || missing+="[$p] "; done < <("$ROOT/build/omabox" _rust-jq --inline)
-  check_eq "the Rust half's $n inline jq programs are in bin/omabox, byte for byte" "" "$missing"
-  # record's (recprog.rs, wave 4b): each as bin/omabox has it between its quotes, and what
-  # gen_recprog.py takes out of bin/omabox now.
+  check_eq "the Rust half's $n inline jq programs are in bash's omabox, byte for byte" "" "$missing"
+  # record's (recprog.rs, wave 4b): each as bash's omabox has it between its quotes, and what
+  # gen_recprog.py takes out of it now.
   n=0 missing=""
   while IFS= read -r -d '' p; do n=$((n + 1)); [[ $script == *"'$p'"* ]] || missing+="[$p] "; done < <("$ROOT/build/omabox" _rust-jq --recprog)
-  check_eq "record's $n programs are in bin/omabox, quoted as they are there" "" "$missing"
-  check "...and recprog.rs is what gen_recprog.py takes out of bin/omabox" cmp -s <("$ROOT/build/omabox" _rust-jq --recprog) <(python3 -I "$ROOT/crates/omabox/gen_recprog.py" "$ROOT" --list)
+  check_eq "record's $n programs are in bash's omabox, quoted as they are there" "" "$missing"
+  check "...and recprog.rs is what gen_recprog.py takes out of bash's omabox" cmp -s <("$ROOT/build/omabox" _rust-jq --recprog) <(python3 -I "$ROOT/crates/omabox/gen_recprog.py" "$BASH_CLI" --list)
   rp_w3() {
     rp_w2
     local d=$r/rt/omabox c
@@ -12061,13 +12162,14 @@ aq_symbol_checks() {
 # /sys/class/drm and DIR's library over the system's (its file: the decision is by the symbol, the
 # version said is the system's), with a scratch HOME and runtime dir. Refused: before its lock (no
 # lock file, nothing made); let through: as far as its lock, where a down marker from the future
-# cancels it (the lock taken, no box).
+# cancels it (the lock taken, no box). The marker is there for a refusal too: an up that should have
+# refused and did not stops at its lock, never starting a box on the fake GPU.
 aq_up_gate() {
   local d=$1 dir=$2 so=$3 refused=$4 rt=$1/up-$2 out
   [ -e "/usr/lib/$so" ] || { skip "...up itself on the $dir system's aquamarine" "no /usr/lib/$so here"; return; }
   unshare -r -m true 2>/dev/null || { skip "...up itself on the $dir system's aquamarine" "no user namespaces here"; return; }
   mkdir -p "$rt/run/omabox" "$d/up-home/.local/state/omarchy/current/theme"; chmod 700 "$rt/run"
-  [ "$refused" = 1 ] || echo 99999999999 > "$rt/run/omabox/.down-$P-aqs"
+  echo 99999999999 > "$rt/run/omabox/.down-$P-aqs"
   # shellcheck disable=SC2016 # expanded by the namespace's shell
   out=$(unshare -r -m bash -c '
     gt=$1/gt; mount --bind "$gt/dev/dri" /dev/dri && mount --bind "$gt/sys/class/drm" /sys/class/drm &&

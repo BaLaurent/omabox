@@ -147,6 +147,12 @@ impl Plan {
         self
     }
 
+    /// Whether it enters the box's pid namespace, where any box process could open the child's fds
+    /// again through /proc/PID/fd: exec::command then closes every fd it is not given (finding 345).
+    pub fn pid_ns(&self) -> bool {
+        self.ns & libc::CLONE_NEWPID != 0
+    }
+
     /// On C, as the first of its own pre_exec steps (before fds_only closes the pidfd).
     pub fn apply(self, c: &mut Command) {
         // SAFETY: enter makes only async-signal-safe calls on values copied into the closure.

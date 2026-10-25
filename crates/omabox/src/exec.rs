@@ -208,10 +208,13 @@ pub fn background(c: &mut Command) {
 pub fn command(argv: &[Vec<u8>], fds: Fds) -> Command {
     let mut c = crate::sig::command(OsStr::from_bytes(argv.first().map_or(&b""[..], |a| a)));
     c.args(argv.iter().skip(1).map(|a| OsStr::from_bytes(a)));
+    // Into the box's pid namespace, only the fds it is given, whatever the caller asked (finding
+    // 345: a box process could open the others again through /proc/PID/fd; t_unit_ns_fds).
+    let only = fds.only || fds.enter.is_some_and(|p| p.pid_ns());
     if let Some(p) = fds.enter {
         p.apply(&mut c);
     }
-    let open = if fds.only { open_fds() } else { Vec::new() };
+    let open = if only { open_fds() } else { Vec::new() };
     let nocore = fds.nocore && !core_hard_zero();
     // SAFETY: the closure only makes async-signal-safe calls (dup2, close, fcntl, signal,
     // getrlimit, setrlimit) on memory it owns, between fork and exec.

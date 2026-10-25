@@ -10162,6 +10162,23 @@ from them.
     matched whole, as bash does. Tests: check.rs new_holes_as_bash (a hole overlapping the
     baseline's is not new; against a baseline from before holes all are).
 
+521. **Three of the suite's checks read bash's text only, and the binary's side was unchecked**
+    (2026-10-25, #324 wave 6-flip, from the review of wave 6-suite; #368). Finding 345's fds scan and
+    finding 289's on_box kill scan read bin/omabox; the binary had no equivalent, and after the flip
+    they would read a test-only copy. The reaper's passthrough check (`< 5`, reap.rs) was tied to
+    nothing: a bump of share/passthrough.lua's VERSION would have left it behind. And t_jail_record's
+    live case of a box file swapped for a FIFO went with the suite's `lib`, while SECURITY.md's S7
+    still named it. **Fix:** finding 345 holds by construction in the binary: exec.rs's `command`
+    closes every fd a child is not given whenever its entry takes the box's pid namespace
+    (`Plan::pid_ns`), whatever the caller asked (every caller already did: no behaviour changes), and
+    t_unit_ns_fds' crate scan holds that entries are applied only there and setns only in enter.rs.
+    t_unit_on_box_kill scans the crate's on_box, on_box_io, on_box_bg and TOOL entries for a kill,
+    pkill or killall in their function's strings. reap.rs reads the version from passthrough.lua at
+    build time (`include_bytes!`; Closes #368). record_stop.rs's box_copy takes how it runs its stat
+    and cat (`box_copy_with`), and an `#[ignore]` test runs both on the host against a FIFO with no
+    writer: back in its 10 s, nothing copied. The suite also hardened aq_up_gate: its down marker is
+    there for a refusal too, so an up that should have refused stops at its lock.
+
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.
