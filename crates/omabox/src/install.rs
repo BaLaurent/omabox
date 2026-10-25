@@ -489,6 +489,12 @@ pub fn aq_resolve(ctx: &Ctx, soname: &[u8]) -> Option<Aq> {
     aq_resolve_env(ctx, soname, &shell::env_or_empty("OMABOX_AQUAMARINE"))
 }
 
+/// aq_pick as OMABOX_AQUAMARINE=system gives it, with SYS the system's lib dir: the suite's probe of a
+/// stand-in system aquamarine (`_rust probe aq_pick`).
+pub fn aq_pick_system(ctx: &Ctx, soname: &[u8], sys: &[u8]) -> Option<Aq> {
+    aq_pick_env(ctx, soname, sys, &[], b"system")
+}
+
 /// aq_resolve with ENV as OMABOX_AQUAMARINE.
 pub fn aq_resolve_env(ctx: &Ctx, soname: &[u8], env: &[u8]) -> Option<Aq> {
     let root = crate::paths::root();

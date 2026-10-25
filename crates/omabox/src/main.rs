@@ -35,6 +35,7 @@ mod net;
 mod num;
 mod paths;
 mod plugins;
+mod probe;
 mod procfs;
 mod ptr;
 mod ready;
@@ -201,6 +202,14 @@ fn main() -> ExitCode {
     }
     match cmd.to_str() {
         // The suite's proof that the hand-off reaches this binary, and with what.
+        // The suite's read-only probe of the helpers it once sourced from bin/omabox (probe.rs).
+        Some("_rust") if rest.first().is_some_and(|a| a == "probe") => {
+            let words: Vec<Vec<u8>> = rest.into_iter().skip(1).map(OsString::into_vec).collect();
+            match probe::run(cat!(runtime, "/omabox"), &words) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(exit::Exit(rc)) => ExitCode::from(rc),
+            }
+        }
         Some("_rust") => {
             let words: Vec<String> = rest
                 .iter()

@@ -98,6 +98,9 @@ if [ "${1:-}" = --installed ]; then
     cp "$t" "$inst/tree/${t#"$ROOT"/}"
   done
   chmod -R a-w "$inst/tree"
+  # The suite's probe (#324 wave 6-suite): the checkout's binary, outside the tree, so the install
+  # keeps every command in bash (it has no build/omabox) while the suite reads its helpers.
+  mkdir -p "$inst/probe/bin"; cp "$ROOT/build/omabox" "$inst/probe/bin/omabox" || exit 2
   # shellcheck disable=SC2016 # expanded by the namespace's shell
   unshare -r -m bash -c '
     set -e; i=$1; shift
@@ -105,7 +108,7 @@ if [ "${1:-}" = --installed ]; then
     mkdir /usr/lib/omabox; mount --bind "$i/tree" /usr/lib/omabox; mount -o remount,bind,ro /usr/lib/omabox
     mount -t overlay overlay -o "lowerdir=/usr/bin,upperdir=$i/up/bin,workdir=$i/work/bin" /usr/bin
     ln -s ../lib/omabox/bin/omabox /usr/bin/omabox
-    exec unshare -U --map-user="$1" --map-group="$2" env OMABOX_TEST_INSTALLED=1 /usr/lib/omabox/test/run.sh "${@:3}"
+    exec unshare -U --map-user="$1" --map-group="$2" env OMABOX_TEST_INSTALLED=1 OMABOX_TEST_PROBE="$i/probe/bin/omabox" /usr/lib/omabox/test/run.sh "${@:3}"
   ' _ "$inst" "$(id -u)" "$(id -g)" "$@"
   exit $?
 fi
@@ -120,6 +123,12 @@ INSTALLED=0; [ -w "$ROOT" ] || INSTALLED=1
 BASH_CLI=$ROOT/bin/omabox
 CLI=$ROOT/build/omabox
 [ "$INSTALLED" = 0 ] || CLI=$BASH_CLI
+# probe NAME ARGS: the Rust helper NAME's answer (`_rust probe`, read-only, its list in probe.rs), what
+# the suite's startup and box tests once sourced bin/omabox for. --installed's binary sits outside its
+# tree (OMABOX_TEST_PROBE).
+PROBE=$ROOT/build/omabox
+[ "$INSTALLED" = 0 ] || PROBE=${OMABOX_TEST_PROBE:-$PROBE}
+probe() { "$PROBE" _rust probe "$@"; }
 P=t$$                      # box name prefix
 export OMABOX_SUITE=$P     # marks what the suite starts on the host, for the leak detector
 TMP=$(mktemp -d)
@@ -129,7 +138,7 @@ STRICT=${OMABOX_TEST_STRICT:-0}
 # did run passed. About 90% of the counts (#324 wave 6-suite: each step that moves checks out of this
 # file resets them, its message giving cargo test's count beside them), so skips on another machine
 # still clear it: a checkout's, and an install's, which has no binary yet and skips parity's tests.
-MIN_CHECKS=6794 MIN_UNIT=4086
+MIN_CHECKS=6795 MIN_UNIT=4086
 [ "$INSTALLED" = 0 ] || MIN_CHECKS=4756 MIN_UNIT=2245
 EVID=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/test/$(date +%Y%m%d-%H%M%S)-$P
 SERVERS=()                 # host-side test servers, stopped on exit
@@ -6207,6 +6216,8 @@ t_unit_rust_front() {
     parity "broker: shot --help: the front's help first" shot --help
     # (every internal word refused through the broker, whatever the half has)
     for c in _reap _rust _rust-jq _rust-opts _rust-jail _ptr-release _enter; do parity "broker: $c refused" "$c" x; done
+    # (the suite's probe: read-only, but internal all the same: never a jailed agent's)
+    parity "broker: _rust probe refused" _rust probe host_session
     # (no state: the throwaway's name holds a pid)
     rp_snap=0 parity "broker: run from a jail with no box: run's 125" run -- true
     # (protect-ports: bash's broker knew no such key; the binary's names why it refuses it)
@@ -12839,14 +12850,14 @@ t_unit_aq_worktree() {
 # follows. On real libraries: omabox's build (0.15.1@7bb8bdf4 and its patches) and the stock 0.15.0.
 aq_symbol_checks() {
   local d=$1/sym so out real="" c common
-  so=$(lib hypr_aq_soname) || { no "the soname Hyprland links"; return; }
+  so=$(probe hypr_aq_soname) || { no "the soname Hyprland links"; return; }
   mkdir -p "$d/stub" "$d/patched" "$d/stock" "$d/home/.local/state/omarchy/current/theme" "$d/boxes" \
     "$d/dri" "$d/drm/renderD129" "$d/pci/0000:01:00.0" "$d/drivers/nvidia"
   # sys DIR: which aquamarine boxes run when DIR is the system's (no private build).
-  sys() { OMABOX_AQUAMARINE=system lib eval "AQ_SYSDIR='$1'; aq_resolve '$so' && echo \"\$AQ_KIND|\$AQ_VER|\$AQ_FIXED|\$(aq_desc)\"" 2>&1; }
+  sys() { probe aq_pick "$so" "$1" 2>&1; }
   # A library of the stock version exporting #415's CWaylandOutput::applyConfigure, and nothing else.
   if command -v cc >/dev/null; then
-    printf 'void f(void) __asm__("%s");\nvoid f(void) {}\n' "$(lib eval 'echo $AQ_FIX_SYMBOL')" > "$d/fix.c"
+    printf 'void f(void) __asm__("%s");\nvoid f(void) {}\n' "$(probe aq_const AQ_FIX_SYMBOL)" > "$d/fix.c"
     cc -shared -fPIC -Wl,-soname,"$so" -o "$d/stub/libaquamarine.so.0.15.0" "$d/fix.c"
     ln -s libaquamarine.so.0.15.0 "$d/stub/$so"
     check_match "a system 0.15.0 exporting #415's applyConfigure: fixed, said patched" \
@@ -12862,7 +12873,7 @@ aq_symbol_checks() {
     [ -n "$c" ] && [ -e "$c" ] && { real=$(readlink -f "$c"); break; }
   done
   if [ -n "$real" ]; then
-    check "omabox's build ($real) exports #415's symbol" lib aq_has_fix "$real"
+    check "omabox's build ($real) exports #415's symbol" probe aq_has_fix "$real"
     # As the system's, under the stock version's name: the version says unfixed, the symbol fixed.
     cp "$real" "$d/patched/libaquamarine.so.0.15.0"; ln -s libaquamarine.so.0.15.0 "$d/patched/$so"
     check_match "...as the system's 0.15.0 (a patched package): fixed, not by its version" "^system\|0\.15\.0\|1\|" "$(sys "$d/patched")"
@@ -12876,10 +12887,10 @@ aq_symbol_checks() {
   if [ -e "/usr/lib/$so" ]; then
     sysv=$(readlink -f "/usr/lib/$so"); sysv=${sysv##*.so.}
     cp "$(readlink -f "/usr/lib/$so")" "$d/stock/libaquamarine.so.$sysv"; ln -s "libaquamarine.so.$sysv" "$d/stock/$so"
-    if lib aq_ver_fixed "$sysv"; then
+    if probe aq_ver_fixed "$sysv"; then
       note "the system's aquamarine is $sysv: time for UPSTREAM.md's drop list"
-      check_match "the system's $sysv, a release after $(lib eval 'echo $AQ_FIXED_AFTER'): fixed by its version" "^system\|[^|]*\|1\|" "$(sys "$d/stock")"
-    elif lib aq_has_fix "/usr/lib/$so"; then
+      check_match "the system's $sysv, a release after $(probe aq_const AQ_FIXED_AFTER): fixed by its version" "^system\|[^|]*\|1\|" "$(sys "$d/stock")"
+    elif probe aq_has_fix "/usr/lib/$so"; then
       note "the system's aquamarine $sysv exports #415's symbol (a patched package): time for UPSTREAM.md's drop list"
       check_match "the system's $sysv, patched with #415: fixed, said patched" "^system\|[^|]*\|1\|.*patched with the fix" "$(sys "$d/stock")"
     else
@@ -12935,7 +12946,7 @@ aq_setup_checks() {
   check_match "...as far as the clone (the stub git), into the scratch cache" \
     "^git clone -q https://github.com/hyprwm/aquamarine $cache/omabox-aquamarine$" "$(cat "$tools/log")"
   # A build of this omabox's (AQ_BUILD) in the data dir: the only no-op, and --force builds all the same.
-  build=$(lib eval 'echo $AQ_BUILD')
+  build=$(probe aq_const AQ_BUILD)
   mkdir -p "$data/omabox/aquamarine/lib"
   cp "$d/stub/libaquamarine.so.0.15.0" "$data/omabox/aquamarine/lib/libaquamarine.so.0.15.1"
   ln -s libaquamarine.so.0.15.1 "$data/omabox/aquamarine/lib/$so"
@@ -12978,7 +12989,7 @@ t_unit_hyprland() {
     # A build against another aquamarine: a stub library with another soname, and a program linking it.
     echo 'int aq(void) { return 0; }' > "$d/aq.c"; echo 'int aq(void); int main(void) { return aq(); }' > "$d/m.c"
     mkdir -p "$d/aq99" "$d/aq14" "$d/b99" "$d/b14"
-    local so; so=$(lib hypr_aq_soname)
+    local so; so=$(probe hypr_aq_soname)
     cc -shared -fPIC -Wl,-soname,libaquamarine.so.99 -o "$d/aq99/libaquamarine.so" "$d/aq.c" &&
       cc -o "$d/b99/Hyprland" "$d/m.c" -L"$d/aq99" -laquamarine
     check_match "a build against another libaquamarine soname is refused, saying which" \
@@ -15715,8 +15726,8 @@ t_widget_list() {
 # gpu_node other|nvidia: the first render node not on the nvidia driver, or the first on it.
 gpu_node() {
   local n d
-  for n in $(lib render_nodes); do
-    d=$(lib render_driver "$n")
+  for n in $(probe render_nodes); do
+    d=$(probe render_driver "$n")
     if [ "$1" = nvidia ]; then [ "$d" != nvidia ] || { echo "$n"; return; }
     else [ "$d" = nvidia ] || { echo "$n"; return; }; fi
   done
@@ -15877,7 +15888,7 @@ scale_on() {
   check_match "up of it at another scale: refused, said" "--size 1280x720@60,scale=2 \(it is 1280x720@60\)" "$(ob up "$B" --size 1280x720,scale=2 2>&1)"
   # A down while it records takes its wf-recorder too: it runs in the box's pid namespace.
   if command -v wf-recorder >/dev/null && command -v ffmpeg >/dev/null && ob record -b "$B" start -o "$TMP/$B-down.mp4" >/dev/null 2>&1; then
-    local wp="" p; for p in $(lib eval "NAME='$B'; D='$(ob path -b "$B")'; box_pids"); do
+    local wp="" p; for p in $(probe box_pids "$B"); do
       [ "$(cat "/proc/$p/comm" 2>/dev/null)" != wf-recorder ] || wp=$p; done
     check "a recording's wf-recorder is in the box's pid namespace" test -n "$wp"
     ob down "$B" >/dev/null 2>&1 || true
@@ -16147,10 +16158,10 @@ record_input_on() {
     ri_frame "$v1" "$(awk -v m="$m2" 'BEGIN { printf "%.3f", m / 1000 }')" "$fa"
     ri_frame "$v1" "$(awk -v m="$m1" 'BEGIN { printf "%.3f", (m > 150 ? m - 150 : 0) / 1000 }')" "$fb"
     printf '%s\n' "1000 2000 text abc" "1000 2000 secret 7" > "$TMP/$B-ri"
-    lib record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
+    probe record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
     ffmpeg -v error -y -loop 1 -i "$fb" -vf "ass=$ass" -ss 0.5 -frames:v 1 -update 1 "$ref" 2>/dev/null
     printf '%s\n' "1000 2000 text abc sesame7" > "$TMP/$B-ri"
-    lib record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
+    probe record_overlay "$TMP/$B-ri" "" 0 0 0 2 2560 1440 5000 1 0 > "$ass"
     ffmpeg -v error -y -loop 1 -i "$fb" -vf "ass=$ass" -ss 0.5 -frames:v 1 -update 1 "$bad" 2>/dev/null
     good=$(magick "$fa" "$ref" -crop "$crop" +repage -fuzz 12% -metric AE -compare -format '%[distortion]' info: 2>&1)
     wrong=$(magick "$fa" "$bad" -crop "$crop" +repage -fuzz 12% -metric AE -compare -format '%[distortion]' info: 2>&1)
@@ -16771,14 +16782,14 @@ GUARDED=(env WAYLAND_DISPLAY=omabox-guard HYPRLAND_INSTANCE_SIGNATURE=omabox-gua
   BROWSER="$ROOT/share/guard/xdg-open" GH_BROWSER="$ROOT/share/guard/xdg-open" PATH="$ROOT/share/guard:$PATH")
 t_unit_host_session() {
   check_fails "hyprctl under the guard fails" "${GUARDED[@]}" hyprctl -j version
-  local found; found=$("${GUARDED[@]}" bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
+  local found; found=$("${GUARDED[@]}" "$PROBE" _rust probe host_session); found=${found%% *}
   check "under the guard omabox finds a live session ($found)" env HYPRLAND_INSTANCE_SIGNATURE="$found" hyprctl -j version
   check "and reaches it (read-only hyprctl)" "${GUARDED[@]}" bash -c 'source "$1"; host_hyprctl -j version' _ "$TMP/lib/bin/omabox"
   check_eq "--size host under the guard is the same monitor" "$(lib parse_mode host)" "$("${GUARDED[@]}" bash -c 'source "$1"; parse_mode host' _ "$TMP/lib/bin/omabox")"
   local rt=$TMP/rt n
   fake() { mkdir -p "$rt/hypr/$1"; printf '%s\n%s\n' $$ "$2" > "$rt/hypr/$1/hyprland.lock"; }
   sock() { python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$1"; }
-  hs() { XDG_RUNTIME_DIR=$rt "$@" bash -c 'source "$1"; host_session; echo "$HOST_SIG $HOST_WL"' _ "$TMP/lib/bin/omabox" 2>&1; }
+  hs() { XDG_RUNTIME_DIR=$rt "$@" "$PROBE" _rust probe host_session 2>&1; }
   mkdir -p "$rt"
   check_match "no session: says so" "no Hyprland session" "$(hs "${GUARDED[@]}")"
   fake a_1_1 wayland-8
@@ -17105,7 +17116,7 @@ t_unit_guard_exec_host() {
   fi
   # The session omabox finds, not $HYPRLAND_INSTANCE_SIGNATURE: under the guard (an agent running the
   # suite) that is the guard's.
-  local sig want; sig=$(bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
+  local sig want; sig=$(probe host_session); sig=${sig%% *}
   want=$(hyprctl -j instances | jq -r --arg s "$sig" '.[] | select(.instance == $s) | .wl_socket')
   check_eq "host from a guarded shell: the real Wayland display" "$want" "$("${GUARDED[@]}" "$CLI" host -- sh -c 'echo $WAYLAND_DISPLAY' 2>/dev/null)"
   check "host: and hyprctl reaches it (read-only)" "${GUARDED[@]}" "$CLI" host -- hyprctl -j version
@@ -18926,7 +18937,7 @@ output_on() {
   # nothing said.
   if ! command -v eglinfo >/dev/null; then skip "apps' renderer said" "no eglinfo (mesa-utils) here"
   else
-    check_eq "up on $(lib render_driver "$n"): nothing said of its apps' renderer" "" "$(grep 'in software' <<<"$out")"
+    check_eq "up on $(probe render_driver "$n"): nothing said of its apps' renderer" "" "$(grep 'in software' <<<"$out")"
     check_eq "...ls --json: client_render on the GPU" false "$("$CLI" ls --json | jq -r --arg b "$B" '.[] | select(.name == $b) | .client_render.software')"
     check_eq "...no apps line in ls" "" "$("$CLI" ls | awk -v b="$B" '$1 == b { on = 1; next } /^[^ ]/ { on = 0 } on && /apps:/')"
   fi
@@ -19329,12 +19340,12 @@ t_unit_gpu() {
   check_eq "...nor for no record" "" "$(lib soft_note "" nvidia "")"
   # up's probe, box_exec stubbed: the record kept and said; without eglinfo neither.
   local pb=$TMP/probe; mkdir -p "$pb"
-  probe() { jq -n '{render: {driver: "nvidia"}}' > "$pb/box.json"
+  upprobe() { jq -n '{render: {driver: "nvidia"}}' > "$pb/box.json"
     lib eval "D='$pb' NAME=pb; other_gpu() { echo 'renderD128 amdgpu'; }; box_exec() { $1; }; client_render_check" 2>&1; }
-  local pout; pout=$(probe "printf '%s\n' '$eg_nv'")
+  local pout; pout=$(upprobe "printf '%s\n' '$eg_nv'")
   check_match "client_render_check on llvmpipe: said once" "^omabox: box 'pb': its apps render on llvmpipe, in software" "$pout"
   check_eq "...kept in box.json" "$soft" "$(jq -c .client_render "$pb/box.json")"
-  pout=$(probe "return 127")
+  pout=$(upprobe "return 127")
   check_eq "...no eglinfo (127): nothing said" "" "$pout"
   check_eq "...nothing kept" null "$(jq -c .client_render "$pb/box.json")"
   # ls: an apps line for a box on software only.
@@ -20038,13 +20049,13 @@ wf_snap() {
     monitors: [{id: 0, activeWorkspace: {id: 1}, specialWorkspace: {id: 0}}]} | ${1:-.}"
 }
 # wf_line JQ_AFTER [JQ_BEFORE]: the facts' line from the base (or JQ_BEFORE's) snapshot to JQ_AFTER's.
-wf_line() { lib desk_facts "$(wf_snap "${2:-.}")" "$(wf_snap "$1")" | jq -r .line; }
+wf_line() { probe desk_facts "$(wf_snap "${2:-.}")" "$(wf_snap "$1")" | jq -r .line; }
 t_unit_wait_facts() {
   local zen='{address: "0xb", mapped: true, hidden: false, class: "zenity", title: "Save as", pid: 41, workspace: {id: 1, name: "1"},
     at: [960, 0], size: [960, 1080], floating: false, fullscreen: 0}'
   local zact='.active = {address: "0xb", class: "zenity", title: "Save as", workspace: {id: 1, name: "1"}}'
   check_eq "nothing changed: no words" "" "$(wf_line .)"
-  check_eq "...and changes is []" "[]" "$(lib desk_facts "$(wf_snap)" "$(wf_snap)" | jq -c .changes)"
+  check_eq "...and changes is []" "[]" "$(probe desk_facts "$(wf_snap)" "$(wf_snap)" | jq -c .changes)"
   check_eq "a window opened and focused: one fact (its focus folded in)" 'window opened, focused: zenity "Save as"' \
     "$(wf_line ".clients += [$zen] | $zact")"
   check_eq "...its changes: the window (focused) and the focus, from foot to zenity" \
@@ -20786,8 +20797,10 @@ default_jobs() {
 }
 SLOW=(t_check t_agent_session t_widget t_widget_list t_run_idle t_guard t_peek t_peek_monitors t_reap_race t_wait t_pointer t_clip t_replace t_idle)
 
-# The host's session through the CLI's own lookup, so the suite runs from a guarded shell too.
-hostctl() { lib host_hyprctl "$@"; }
+# The host's session through the CLI's own lookup (HOST_SIG, main's: probe host_session), so the suite
+# runs from a guarded shell too. hyprctl itself: the CLI's host_hyprctl is not a probe (it would pass a
+# dispatch on to the real desktop). None found: fails, never a hyprctl left to pick a session.
+hostctl() { [ -n "${HOST_SIG:-}" ] || return 1; HYPRLAND_INSTANCE_SIGNATURE=$HOST_SIG hyprctl "$@"; }
 
 # What this run ran on, for comparing a failure with a run that passed: the checkout, the stack a box
 # is made of (the Hyprland binary boxes start and the host's running one can differ after an upgrade),
@@ -20798,7 +20811,7 @@ provenance() {
   [ -z "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ] || dirty=+dirty
   so=$(ldd "$(command -v Hyprland)" 2>/dev/null | awk '/libaquamarine/ {print $1; exit}')
   aq=$(readlink -f "$ROOT/build/prefix/lib/$so" 2>/dev/null); aq=${aq##*.so.}
-  rn=$(lib render_node 2>/dev/null); drv=$(readlink -f "/sys/class/drm/${rn##*/}/device/driver" 2>/dev/null)
+  rn=$(probe render_node 2>/dev/null); drv=$(readlink -f "/sys/class/drm/${rn##*/}/device/driver" 2>/dev/null)
   printf 'omabox %s %s%s, Hyprland %s (host session %s), aquamarine %s (system %s), quickshell %s, labwc %s, bwrap %s, %s (%s), kernel %s\n' \
     "$(cat "$ROOT/VERSION")" "$sha" "$dirty" "$(Hyprland --version 2>/dev/null | awk 'NR == 1 {print $2}')" \
     "$(hostctl -j version | jq -r '.tag // "?"')" "${aq:-?}" "$(pkg-config --modversion aquamarine 2>/dev/null || echo ?)" \
@@ -20954,8 +20967,10 @@ main() {
     tests=("${_sel[@]}")
   fi
 
-  hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
   if [ "$INSTALLED" = 1 ]; then tools_ready installed; else tools_ready; fi || exit 2
+  # The host's session, as omabox finds it (the probe is the build tools_ready made).
+  HOST_SIG=$(probe host_session 2>/dev/null) && HOST_SIG=${HOST_SIG%% *}
+  hostctl -j version >/dev/null 2>&1 || { echo "run from the Hyprland session (read-only hyprctl)"; exit 2; }
   ws0=$(hostctl -j activeworkspace | jq .id) win0=$(hostctl -j activewindow | jq -r '.address // ""')
   # omabox's workspace coming up is a leak (from #13's watch), unless you were on it already.
   # (A special one, special:NAME, is shown over the focused monitor's workspace.)
@@ -20967,8 +20982,7 @@ main() {
   provenance > "$EVID/provenance"
   echo "provenance: $(cat "$EVID/provenance")"
   # The host's event socket, listened to for the whole run (finding 80).
-  local _sig; _sig=$(bash -c 'source "$1"; host_session; echo "$HOST_SIG"' _ "$TMP/lib/bin/omabox")
-  HYPRLAND_INSTANCE_SIGNATURE=$_sig python3 -c "$WATCHER" "$XDG_RUNTIME_DIR/hypr/$_sig/.socket2.sock" $$ >> "$EVID/host-events.log" 2>&1 &
+  HYPRLAND_INSTANCE_SIGNATURE=$HOST_SIG python3 -c "$WATCHER" "$XDG_RUNTIME_DIR/hypr/$HOST_SIG/.socket2.sock" $$ >> "$EVID/host-events.log" 2>&1 &
   WATCH_PID=$!
   until_ok 5 grep -q ' == watching$' "$EVID/host-events.log" || { echo "cannot listen to the host's events: $(cat "$EVID/host-events.log")"; exit 2; }
 

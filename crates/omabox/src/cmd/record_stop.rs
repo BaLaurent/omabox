@@ -1322,7 +1322,7 @@ fn write_in_box(ctx: &mut Ctx, script: &str, sh: &str, path: &str, fd: OwnedFd) 
 /// record_overlay: the ASS script drawing peek's marks at the times the input happened (bin/omabox's
 /// awk, verbatim, in C.UTF-8). None when awk fails.
 #[allow(clippy::too_many_arguments)]
-fn record_overlay(
+pub fn record_overlay(
     input: &[u8],
     marks: &[u8],
     first: &[u8],
