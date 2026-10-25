@@ -189,26 +189,16 @@ pub const LAYER_LIST_JQ: &str = layer_list_jq!();
 /// A monitor's logical size, turned with its transform (finding 311).
 pub const JQ_MON: &str = jq_mon!();
 
-/// A program by its bash name, for the suite's check that these are bash's.
+/// A program by its name, for `_rust-jq NAME`: the suite runs LAYER_SPAN_JQ's spans with a jq of
+/// its own (t_unit_window_select).
 pub fn by_name(n: &str) -> Option<&'static str> {
-    Some(match n {
-        "LAYER_SPAN_JQ" => LAYER_SPAN_JQ,
-        "WIN_JQ" => WIN_JQ,
-        "WIN_SEL_JQ" => WIN_SEL_JQ,
-        "WIN_DESC_JQ" => WIN_DESC_JQ,
-        "DESK_FACTS_JQ" => DESK_FACTS_JQ,
-        "DESK_TARGET_JQ" => DESK_TARGET_JQ,
-        "LAYER_LIST_JQ" => LAYER_LIST_JQ,
-        "JQ_MON" => JQ_MON,
-        "CLIP_BOX_COPY" => CLIP_BOX_COPY,
-        "CLIP_BOX_TYPES" => CLIP_BOX_TYPES,
-        "AGENT_MARKS" => AGENT_MARKS,
-        _ => return None,
-    })
+    match n {
+        "LAYER_SPAN_JQ" => Some(LAYER_SPAN_JQ),
+        _ => None,
+    }
 }
 
-/// Inline programs of bin/omabox's functions, byte for byte (the suite checks each is in the
-/// script as it is).
+/// Inline programs of bash's omabox's functions, as they were there (#324).
 /// win_lines: a window a line.
 pub const WIN_LINES_JQ: &str = r#"if length == 0 then "  (none)" else .[] | "  \(.address)  \(.class)  \(.title | tojson)  workspace \(.workspace)" end"#;
 /// win_desc: `0x... class "title"`.
@@ -428,7 +418,7 @@ pub const CALIB_FIT_AWK: &str = r#"
     printf "fit %.3f %.3f %.3f %d %s %d %s\n", s, sx, sy, N, w >= h ? N "x" S : S "x" N, m + 0.5, worst
   }"#;
 
-// --- wave 4a: monitor, output, mode, gpu, cpu, audio, ports, clip (verbatim from bin/omabox) ---
+// --- wave 4a: monitor, output, mode, gpu, cpu, audio, ports, clip (as bash's omabox had them) ---
 /// parse_mode host: the user's focused monitor's mode.
 pub const HOST_MODE_JQ: &str = r#"map(select(.focused)) | .[0] // empty |
       "\(.width)x\(.height)@\(.refreshRate * 100 | round / 100)""#;
@@ -763,30 +753,9 @@ pub const CLIP_BOX_COPY: &str = r#"e=$(/usr/bin/mktemp) || exit 1
 pub const CLIP_BOX_TYPES: &str = r#"o=$(/usr/bin/timeout 10 /usr/bin/wl-paste --list-types 2>&1) && { printf "%s\n" "$o"; exit 0; }
 case $o in *"Nothing is copied"*) exit 3 ;; esac; exit 1"#;
 
-/// placed_as: the main screen's name (after main_screen).
-pub const PLACED_MAIN_JQ: &str = r#" | .name // empty"#;
-/// output_drop: the main screen's name (after main_screen).
-pub const DROP_MAIN_JQ: &str = r#".name // empty"#;
-/// desk_windows: the known monitors' addresses.
-pub const DESK_KNOWN_JQ: &str = r#"select(. != "") | split(" ")[1]"#;
-/// desk_prune: the monitors' names as an ERE's alternatives.
-pub const NAMES_RE_JQ: &str = r#"map(.name) | join("|")"#;
-/// desk_relay: the host's border size.
-pub const BW_JQ: &str = r#".int // empty"#;
-/// desk_relay: the host monitor's sides (after JQ_MON).
-pub const LW_FLOOR_JQ: &str = r#"lw | floor"#;
-pub const LH_FLOOR_JQ: &str = r#"lh | floor"#;
 /// monitor add: the box's aquamarine, which must have +appid (finding 429).
 pub const AQ_VERSION_JQ: &str = r#".aquamarine.version // "?""#;
-/// gpu release: a box's GPU, "DRIVER SLOT".
-pub const RENDER_PAIR_JQ: &str = r#".render | "\(.driver) \(.pci)""#;
-/// audio's words (bash's program has the quotes around the box's name as '"'"'): its parts.
-pub const AUDIO_SAY_A: &str = r#"if .sound then
-      "sound for \(.sound_s)s of \(.seconds)s: peak \(.peak_db) dBFS, RMS \(.rms_db) dBFS while it sounded; at "
-      + ([.spans[:10][] | "\(.[0])-\(.[1])s"] | join(", ")) + (if (.spans | length) > 10 then ", ..." else "" end)
-    else "silence for \(.seconds)s: nothing played to the speaker of box "#;
-pub const AUDIO_SAY_B: &str = r#"\(.box)"#;
-pub const AUDIO_SAY_C: &str = r#"" end"#;
+/// audio's words (bash's program had the quotes around the box's name as '"'"').
 pub const AUDIO_SAY_JQ: &str = concat!(
     r#"if .sound then
       "sound for \(.sound_s)s of \(.seconds)s: peak \(.peak_db) dBFS, RMS \(.rms_db) dBFS while it sounded; at "
@@ -799,124 +768,3 @@ pub const AUDIO_SAY_JQ: &str = concat!(
 );
 /// agent_caller (AGENT_MARKS): what gives an agent's process away, in its environment.
 pub const AGENT_MARKS: &str = r#"^(CLAUDECODE|CLAUDE_CODE_SESSION_ID|CLAUDE_PID|CODEX_THREAD_ID|CODEX_SANDBOX|OPENCODE|AI_AGENT|OMABOX_AGENT_PID)=|^OMABOX_SESSION=.|^(WAYLAND_DISPLAY|HYPRLAND_INSTANCE_SIGNATURE)=omabox-guard$|^PATH=([^:]*:)*[^:]*/share/guard/?(:|$)"#;
-
-/// Every inline program (and the awk ones), for `_rust-jq --inline` (the rest are a path, .kind, .[0], length).
-pub const INLINE: [&str; 105] = [
-    HOST_MODE_JQ,
-    MAIN_SCALE_JQ,
-    MONITORS_RECORD_JQ,
-    PLACED_ROWS_AWK,
-    PLACED_AS_JQ,
-    PLACE_MOVED_JQ,
-    MODE_JSON_JQ,
-    MODE_RECORD_JQ,
-    OUTPUT_LEFT_JQ,
-    DROP_REC_JQ,
-    MON_NAMES_NOFB_JQ,
-    ANY_NAME_JQ,
-    BACK_LINE_JQ,
-    LIST_DROPPED_JQ,
-    LIST_JSON_JQ,
-    LIST_TABLE_JQ,
-    ADD_LINE_JQ,
-    CLASS_ADDR_JQ,
-    ANY_ADDR_JQ,
-    DESK_MAIN_JQ,
-    WIN_MONITOR_JQ,
-    MON_BY_ID_JQ,
-    MON_FOCUSED_JQ,
-    GAPS_JQ,
-    DESK_AREA_JQ,
-    DESK_PCT_AWK,
-    WIN_FLOATING_JQ,
-    WH_JQ,
-    DESK_PICTURE_AWK,
-    MON_LINE_JQ,
-    COST_AQ_JQ,
-    RENDER_LINE_JQ,
-    COST_APPS_JQ,
-    GPU_SNAP_AWK,
-    GPU_DIFF_AWK,
-    NV_SECS_AWK,
-    GPU_JSON_JQ,
-    PMON_AWK,
-    GPU_ROWS_AWK,
-    CPU_PID_AWK,
-    CPU_REPORT_AWK,
-    CPU_JSON_JQ,
-    CPU_TABLE_AWK,
-    AUDIO_AWK,
-    TCP_LISTENERS_AWK,
-    PORTS_JSON_JQ,
-    PLACED_MAIN_JQ,
-    DROP_MAIN_JQ,
-    DESK_KNOWN_JQ,
-    NAMES_RE_JQ,
-    BW_JQ,
-    LW_FLOOR_JQ,
-    LH_FLOOR_JQ,
-    AQ_VERSION_JQ,
-    RENDER_PAIR_JQ,
-    AUDIO_SAY_A,
-    AUDIO_SAY_B,
-    AUDIO_SAY_C,
-    CALIB_MARKS_AWK,
-    CALIB_FIT_AWK,
-    ZERO_NOTE_JQ,
-    SHOT_SAID_JQ,
-    SHOT_MON_JQ,
-    MON_NAMES_JQ,
-    MON_NAMED_JQ,
-    SHOT_SCALE_JQ,
-    WIN_STATE_JQ,
-    WIN_AT2_JQ,
-    CALIB_SIZE_JQ,
-    CALIB_JSON_JQ,
-    WIN_BLOCKED_JQ,
-    WIN_LAYER_JQ,
-    WIN_INSIDE_JQ,
-    WIN_AT_JQ,
-    ACTIVE_ADDR_JQ,
-    LAYER_BIG_JQ,
-    WIN_LINES_JQ,
-    WIN_DESC_ONE_JQ,
-    LAYER_AT_JQ,
-    WIN_FOCUSED_JQ,
-    WIN_PRESENT_JQ,
-    POLL_JSON_JQ,
-    CURSOR_JQ,
-    SETTLE_JSON_JQ,
-    SNAP_JQ,
-    WINDOWS_JSON_JQ,
-    WINDOWS_TABLE_JQ,
-    WINDOWS_LAYERS_JQ,
-    LAYER_HITS_JQ,
-    LAYER_LINES_JQ,
-    LAYER_DESC_JQ,
-    LAYER_FIELDS_JQ,
-    LAYER_TIED_JQ,
-    LAYER_KB_JQ,
-    TREE_TWINS_JQ,
-    EXTENT_JQ,
-    MAIN_SCREEN_I_JQ,
-    MAIN_SCREEN_H_JQ,
-    BOX_SCREEN_JQ,
-    WIN_SCALE_JQ,
-    BY_ADDRESS_JQ,
-    PIXEL_OFF_JQ,
-    WIN_REGION_JQ,
-    WIN_SIZE_JQ,
-    WIN_SIZE2_JQ,
-];
-
-/// Wave 4b's inline programs (gdb, check, record), for `_rust-jq --inline` too.
-pub const INLINE_4B: &[&str] = &[
-    crate::cmd::gdb::GDB_LOG_SH,
-    crate::cmd::gdb::GDB_RUN_SH,
-    crate::cmd::check::CHK_JQ,
-    crate::cmd::check::CHK_DIFF_JQ,
-    crate::cmd::check::CHK_RUN_JQ,
-    crate::cmd::check::CHK_POINT_JQ,
-    crate::cmd::check::CHK_ENV_JQ,
-    crate::cmd::check::CHK_SETUP_JQ,
-];

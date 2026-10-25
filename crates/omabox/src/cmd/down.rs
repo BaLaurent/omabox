@@ -20,9 +20,6 @@ const STARTER_JQ: &str = r#".starter | "\(.command), pid \(.pid)""#;
 const SUBMAP_LUA: &str =
     r#"if hl.get_current_submap() == "omabox" then hl.dispatch(hl.dsp.submap("reset")) end"#;
 
-/// The programs here as bin/omabox has them (`_rust-jq --inline`).
-pub const JQ_INLINE: &[&str] = &[STARTER_JQ, SUBMAP_LUA];
-
 /// A reaper's down (bash's DOWN_IF_CREATED, DOWN_IF_AGENT_GONE): only the box it decided on, created
 /// then, and, when it decided on an agent that exited, only while no agent of its session took it
 /// over (take_over). The reaper's down says nothing while it waits, and leaves no `.down-` marker.

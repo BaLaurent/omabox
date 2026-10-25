@@ -30,9 +30,6 @@ pub const COMMANDS_JQ: &str = ".hooks.SessionStart[]?.hooks[]? | select(ours) | 
 /// guard_codex's TOML editing, run by the system's python (#152): verbatim from bin/omabox.
 pub const CODEX_PY: &str = include_str!("guard_codex.py");
 
-/// The jq programs and python here, each in bin/omabox as it is (the suite checks).
-pub const JQ_INLINE: &[&str] = &[GUARD_JQ, STATE_JQ, ON_JQ, COMMANDS_JQ, CODEX_PY];
-
 /// The guard's paths and texts for the omabox at ROOT.
 pub struct Guard {
     pub root: Vec<u8>,

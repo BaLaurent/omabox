@@ -193,7 +193,7 @@ fn main() -> ExitCode {
             }
             None => ExitCode::from(1),
         },
-        // The suite's check that the broker reads a jail as bash does (broker_side::probe).
+        // The suite's reads of a jail, as the broker reads them (broker_side::probe).
         Some("_rust-jail") => {
             let words: Vec<Vec<u8>> = rest.into_iter().map(OsString::into_vec).collect();
             ExitCode::from(broker_side::probe(&words))
@@ -203,32 +203,7 @@ fn main() -> ExitCode {
             let words: Vec<Vec<u8>> = rest.into_iter().map(OsString::into_vec).collect();
             ExitCode::from(ptr::release_main(&words))
         }
-        // The programs omabox runs (jq's, awk's, record's shell), each as it was quoted in bash's
-        // omabox: what the suite compared with it until the oracle went (#324 wave 6b-end).
-        Some("_rust-jq") if rest.first().is_some_and(|a| a == "--recprog") => {
-            for p in recprog::ALL {
-                print!("{p}\0");
-            }
-            ExitCode::SUCCESS
-        }
-        Some("_rust-jq") if rest.first().is_some_and(|a| a == "--inline") => {
-            for p in jqprog::INLINE
-                .iter()
-                .chain(jqprog::INLINE_4B)
-                .chain(recprog::ALL)
-                .chain(install::JQ_INLINE)
-                .chain(plugins::JQ_INLINE)
-                .chain(ready::JQ_INLINE)
-                .chain(shelljson::JQ_INLINE)
-                .chain(cmd::ls::JQ_INLINE)
-                .chain(cmd::down::JQ_INLINE)
-                .chain(cmd::brief::JQ_INLINE)
-                .chain(guard::JQ_INLINE)
-            {
-                print!("{p}\0");
-            }
-            ExitCode::SUCCESS
-        }
+        // A jq program by its name (jqprog::by_name), for the suite to run with jq of its own.
         Some("_rust-jq") => match rest
             .first()
             .and_then(|n| jqprog::by_name(&n.to_string_lossy()))

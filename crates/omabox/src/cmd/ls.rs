@@ -13,16 +13,12 @@ use crate::mon::size_text;
 use crate::select::select_box;
 use crate::shell;
 
-/// ls's per-box programs on box.json, each as it stands in bin/omabox.
+/// ls's per-box programs on box.json, each as bash's omabox had it.
 const MONITORS_JQ: &str = ".monitors // [] | length";
 const PLUGINS_JQ: &str = r#".plugins | join(",")"#;
 const ADDRS_JQ: &str = r#".addrs // [] | join(" ")"#;
 const RENDER_JQ: &str = ".render // empty | select($many or .fallback)";
 const SOFT_APPS_JQ: &str = r#".client_render // empty | select(.software == true) | "  apps: \(.renderer | sub(" \\(.*"; "")), in software (cost measured here is software rendering'"'"'s)""#;
-
-/// The programs here as bin/omabox has them (`_rust-jq --inline`): SOFT_APPS_JQ as its shell
-/// quoting writes it, run with that quoting undone.
-pub const JQ_INLINE: &[&str] = &[MONITORS_JQ, PLUGINS_JQ, ADDRS_JQ, RENDER_JQ, SOFT_APPS_JQ];
 
 /// What hung_boxes found of each box up: its Hyprland not answering within 1 s (#125, finding
 /// 182), its shell hung (shell_hung, #209), or its Hyprland gone (crashed, exited, going: finding

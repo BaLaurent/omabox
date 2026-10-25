@@ -24,8 +24,6 @@ pub const WINDOWS_JQ: &str = r#". as $all
           + (if .active then ", active" else "" end)),
         (if length > 6 then "  and \(length - 6) more: omabox -b \($b) windows" else empty end) end"#;
 
-pub const JQ_INLINE: &[&str] = &[WINDOWS_JQ];
-
 /// The first line's program, as bash expands its double-quoted one around main_screen's.
 fn first_jq(main: &str) -> String {
     format!(

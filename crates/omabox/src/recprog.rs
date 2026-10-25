@@ -250,34 +250,3 @@ pub const OVERLAY_AWK: &str = r###"
       # Marks at the top, each until the next.
       for (i = 1; i <= nm; i++) plate(mt[i], i < nm ? mt[i + 1] : dur, AX + AW / 2, AY + 20 * k, 8, mx[i], "", 0, 0) }"###;
 pub const SHEET_JQ: &str = r###".streams[0] | "\(.nb_read_packets) \(.r_frame_rate | sub("/"; " ")) \(.width) \(.height)""###;
-
-/// All of them, for `_rust-jq --inline`.
-pub const ALL: &[&str] = &[
-    RUNNING_SH,
-    START_SH,
-    ALIVE_SH,
-    TAILS_SH,
-    AUDIO_SH,
-    AUDIO_WAIT_SH,
-    AUDIO_END_SH,
-    AUDIO_START_SED,
-    FIRSTS_SH,
-    HOLD_SH,
-    STILL_SH,
-    WRITE_SH,
-    SHEETDIR_SH,
-    BYTES_H_AWK,
-    LAYOUT_JQ,
-    GEO_MIN_JQ,
-    GEO_K_AWK,
-    GEO_MAIN_AWK,
-    GEO_ONE_JQ,
-    STATUS_JQ,
-    MARKS_AWK,
-    VTT_AWK,
-    CUT_INPUT_AWK,
-    CUT_MARKS_AWK,
-    CUT_AWK,
-    OVERLAY_AWK,
-    SHEET_JQ,
-];

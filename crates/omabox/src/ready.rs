@@ -58,23 +58,6 @@ const BOX_JSON_JQ: &str = r#"{name: $name, mode, size, scale: (.scale // 1), cre
 /// box_json's answer for a box.json jq cannot read.
 const BOX_JSON_BARE_JQ: &str = "{name: $name, state: $state, hung: false, plugins: [], peeking: false, keys_to_box: false, orphan: false}";
 
-/// The jq (and awk and sh) programs here, each as it stands in bin/omabox (`_rust-jq --inline`).
-pub const JQ_INLINE: &[&str] = &[
-    TRAY_JQ,
-    INTRO_COVER_JQ,
-    ADOPT_JQ,
-    ADOPT_SH,
-    MORE_SCREENS_JQ,
-    EGL_AWK,
-    EGL_JQ,
-    CLIENT_RENDER_JQ,
-    RENDER_DRIVER_JQ,
-    SOFT_JQ,
-    ORPHAN_JQ,
-    BOX_JSON_JQ,
-    BOX_JSON_BARE_JQ,
-];
-
 /// UP_OWNER: a throwaway box's `omabox run` (`up --owner`), its pid and start time as box.json has
 /// them (an empty start: a box.json from before owner_start, the pid alone to go by).
 pub struct Owner {

@@ -1,6 +1,5 @@
 //! The box shell's shell.json, made from the user's or Omarchy's (#324 wave 5a): shell_json_filter,
-//! place_plugin, center_split. jq runs each program as bin/omabox writes it, byte for byte
-//! (JQ_INLINE: the suite checks each is there).
+//! place_plugin, center_split. jq runs each program as bash's omabox wrote it (#324).
 
 use crate::cat;
 use crate::jq::{self, Args, Ran};
@@ -72,20 +71,6 @@ const PLACE_JQ: &str = r#"
 /// workspace_widgets': a bar widget whose manifest says "workspace".
 const WS_JQ: &str = r#"select(.barWidget and ([.name, .description, .barWidget.displayName?, .barWidget.description?,
           (.barWidget.aliases? // [])[]?] | map(strings) | any(test("workspace"; "i")))) | .id | strings"#;
-
-/// Every jq program this module runs, as it stands in bin/omabox (the suite's verbatim check).
-pub const JQ_INLINE: &[&str] = &[
-    center_split_jq!(),
-    FILTER_JQ,
-    DESK_JQ,
-    CLEAN_CLOCK_JQ,
-    PLACE_JQ,
-    WS_JQ,
-    "unique",
-    ".kinds // []",
-    ".barWidget.defaultSection // \"\"",
-    ".bar // null",
-];
 
 fn tf(b: bool) -> &'static str {
     if b { "true" } else { "false" }

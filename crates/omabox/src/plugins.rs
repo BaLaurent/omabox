@@ -15,7 +15,7 @@ use std::os::unix::ffi::OsStrExt;
 
 /// A manifest's id.
 const ID_JQ: &str = ".id // empty";
-/// plugin_check's programs, each as bin/omabox has it.
+/// plugin_check's programs, each as bash's omabox had it.
 const IDS_JQ: &str = ".plugins[]?";
 const DESK_IDS_JQ: &str = r#".desk_shell.plugins // [] | join(" ")"#;
 const SHELL_JQ: &str = ".shell | tostring";
@@ -30,22 +30,6 @@ const HOST_JQ: &str = r#"[(.plugins // [])[] | select(.id != $id and (.id as $p 
 const STATUS_JQ: &str = r#".[$i] = ({state: $s} + (if $h != "" then {host: $h} else {} end) + (if $c != "" then {commit: $c} else {} end) + (if $w != "" then {log: $w} else {} end)
         + (if $v != "" then {validate: $v} else {} end))"#;
 const PLUGIN_STATUS_JQ: &str = ".plugin_status = $s";
-
-/// The jq programs here, each as it stands in bin/omabox (`_rust-jq --inline`).
-pub const JQ_INLINE: &[&str] = &[
-    ID_JQ,
-    IDS_JQ,
-    DESK_IDS_JQ,
-    SHELL_JQ,
-    LISTED_JQ,
-    DIR_JQ,
-    KINDS_JQ,
-    HAS_JQ,
-    ENABLED_JQ,
-    HOST_JQ,
-    STATUS_JQ,
-    PLUGIN_STATUS_JQ,
-];
 
 /// A plugin a box mounts: its manifest's id and its dir, resolved (bash's "id<TAB>dir").
 #[derive(Clone, Debug, PartialEq, Eq)]

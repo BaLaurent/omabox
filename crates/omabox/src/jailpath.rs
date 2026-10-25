@@ -338,7 +338,7 @@ fn cover_in(pol: &Value, src: &[u8], dest: &[u8]) -> Option<Covers> {
     Some(c)
 }
 
-/// The walk jail_verify runs, as bin/omabox has it (python, read from stdin).
+/// The walk jail_verify runs, as bash's omabox had it (python, read from stdin).
 pub const JAIL_VERIFY_PY: &str = include_str!("jail_verify.py");
 
 /// jail_verify D BOXPID SRC... (#210): whether the box (its PID 1 held) hides everything the jail
