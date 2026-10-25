@@ -9,8 +9,7 @@ add to the ones here).
 Read first: `NOTES.md`: architecture, reproduce steps, what was verified, findings, dead ends,
 open gaps. `bin/omabox` is the CLI: a tracked link to `build/omabox`, the binary built from `crates/omabox` (Rust, #324)
 by `install.sh` and the suite (run `bin/omabox` or `build/omabox`, never cargo's `target/`: the binary finds its checkout
-from where it is); bash's omabox as it was at the switch is `test/oracle/omabox.bash`, the suite's parity oracle until
-wave 6b ends (not maintained, never shipped); `share/` runs inside the box, `tools/` holds the C helpers (pointer,
+from where it is); `share/` runs inside the box, `tools/` holds the C helpers (pointer,
 keyboard, wlfd, peek, still, relay, events), `install.sh` sets a machine up, `skill/` is the agent skill (linked for Claude
 Code, Codex, OpenCode, pi and Hermes), `skill-feedback/` the opt-in `omabox-feedback` skill (`omabox setup --feedback-skill`), `plugin/` is the bar widget, `test/run.sh` is the regression
 suite (run it in full before each commit; box tests run in parallel, `-j 1` one at a time to pin a

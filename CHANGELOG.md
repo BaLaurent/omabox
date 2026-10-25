@@ -149,8 +149,7 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **`omabox config` has a sixth key, `protect-ports`**: listed after `shot-fit` (`protect-ports=`
   when none is set), in `--json` as `protect_ports`, and named among the keys when one is unknown.
   A bad value of it in the file is said as `up` says it and shown, not ignored. Scripts that read
-  `omabox config` line by line or its `--json` keys: expect the new one. `OMABOX_BASH=1 config` does
-  not know it.
+  `omabox config` line by line or its `--json` keys: expect the new one.
 - **`host` and `guard exec` say a command they cannot run in omabox's words**: "omabox: host: cannot
   run CMD: not found in PATH" (or "no such file", "permission denied"), where the bash omabox printed
   "bin/omabox: line N: exec: CMD: not found". Exit codes unchanged (127, 126).

@@ -8821,7 +8821,8 @@ from them.
 
 425. **The CLI's Rust half, and how a command gets there** (2026-10-21, #324; **amended
     2026-10-25: the hand-off below is gone, finding 523**: `bin/omabox` is now the binary, through a
-    link to `build/omabox`, and bash's omabox is the suite's oracle only). The port is wave by
+    link to `build/omabox`; **amended again the same day: the port is complete, finding 531**: bash's
+    omabox, kept until then as the suite's oracle, is gone, and nothing below runs any more). The port is wave by
     wave, the suite the spec. `bin/omabox` stays the entry point (setup's links, the box's view of the
     repo, ai-jail's maps all name it): its `main` hands a command in `RUST_CMDS` to
     `build/bin/omabox` (crates/omabox, built by install.sh and the suite with cargo) right before its
@@ -10339,6 +10340,46 @@ from them.
     'int_as_bash\|sig::subst\|fn subst' crates/` finds nothing, and clip.rs says `bash` only in a
     comment. A host child's `SHLVL` and `_` (Q4: not contract) have their CHANGELOG line (finding
     504).
+
+531. **6b-end: the port is complete, and bash's omabox is gone** (2026-10-25, #324 wave 6b-end;
+    the design's D5 and Q2). Until now the suite kept bash's omabox as it was at the switch
+    (`test/oracle/omabox.bash`, 16,086 lines, export-ignored) and compared the binary with it,
+    case by case. That ends here, in three steps:
+    - First the live box's parity, whose checks no box test made, became plain assertions
+      (`cx_case`: the case's fixture as parity had it, then what it must give, FIELD=TEXT, FIELD~ERE
+      or FIELD!~ERE over rc, out, err and state). t_rust_parity is t_cli_box (170 cases, each kept);
+      t_rust_parity_up is t_cli_up (31); t_ports' two and t_audio's two are stated, the rest of
+      t_audio's, t_clip's 8 and t_monitors_window's 4 were their tests' own checks already (one table
+      check added there; the agent refusal now names omabox's comm). t_cli_box's monitor cases
+      follow the box's screen and first monitor (HEADLESS-2/3 headless, WAYLAND-1/2 on NVIDIA), so
+      `monitor remove` and `output drop` act on both, where they were refusals on NVIDIA; checked on
+      both render nodes. Found doing it: t_rust_parity_up's `saves rm` made its save in the user's
+      real data dir and compared two refusals (it removes its own now), and `check point -g
+      "010,010 400x300"` writes `of region 010,010` in its .point as typed, where shot writes regions
+      as read (finding 448): left as it is, not a 6b decision.
+    - Then the oracle went: the file and its .gitattributes line, its copy into build/oracle with
+      the ROOT, RUST= and reaper edits, BASH_CLI and obb, `lib` (which sourced it) and its sed copy,
+      parity() with its bash leg, rp_differs and the expected differences, rust_built, RP_IN_BOX,
+      the crate's six #[ignore] tests that read it (each module's inline jq "as bash's",
+      jail_verify.py's), gen_recprog.py (recprog.rs is now kept by hand) and t_unit_jail_policy's and
+      t_unit_setup's bash halves (each now the binary's answer alone). `_rust-jq --inline` and
+      `--recprog` stay, internal, with no reader now; `_rust-opts` is t_unit_cli_opts'.
+    - Then the unit tier's parity tests retired (Q2): t_unit_rust_parity, _parity5, _parity4b and
+      _front deleted, some 1,400 cases that each compared a call with bash's; what they held rests
+      on each command's own unit and box tests and the crate's #[test]s, which waves 2-6 moved off
+      `lib`. Kept, single-sided, where nothing else held the property: t_unit_jailed_caller (was
+      t_unit_rust_jailed: every relayed call stated, a value on --env-fd and never on the relay's
+      command line, finding 503; S9), t_unit_broker_side (the front's A3 block: what a jailed caller
+      is let through or refused, every `_` word refused, finding 502; S9), t_unit_monitor_add_window
+      (parity4's stand-ins and its monitor-add cases under signals, findings 429, 437, 453, gpu's
+      and cpu's temporary dir under a signal; its other ~200 cases go), t_unit_cli_opts (args.rs's
+      table checked against each command's help, where it was checked against bash's CMD_OPTS;
+      help.txt's @ lines never shown) and t_unit_bash_changes (finding 530).
+    The unit tier goes from 4,061 checks in 29 min 19 s (the four parity tests 27 min of it) to
+    2,187 in 3 min 20 s (--installed: 2,127, the same 10 failures as before, #381 and #337); floors
+    reset to about 90%: 1960 unit and 4660 full (an estimate from the last full count, 7055, less
+    the cases that went), --installed 1910 and 4190. cargo test: 257 and 15 ignored (+3 #[test]s
+    in 6b and here, -6 #[ignore]d that read the oracle). The full suite was not run here.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
