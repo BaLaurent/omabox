@@ -70,8 +70,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   notification on your desktop**: unlike a box's own commands, they kept your core limit. They get
   the box's 1-byte limit.
 - **`click --window` (and `--in` a window's shot) could fail with "did not take focus in 3 s"** on a
-  window moved while its workspace was hidden: the window it had been over took the focus back. The
-  window is focused again while another one has it.
+  window moved while its workspace was hidden: the window it had been over took the focus back. A
+  window that had the focus and lost it at once is focused again.
 - **`keys up:KEY` of the last key held returned while the key holder was still letting go**: its
   virtual keyboard stayed on the box's seat, and the holder in the box's process list, for some
   30 ms more. It now returns once the holder has ended.

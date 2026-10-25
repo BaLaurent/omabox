@@ -10114,6 +10114,7 @@ from them.
     were drawn, C not yet drawn at its new place. **Fix** (Rust): while another window is active,
     win_raise focuses its window again, a quarter second apart, within its 3 s; by then the pointer is
     over it and the focus stays. Bash's win_raise focuses once. Tests: t_window (2 in 2 after).
+    Amended by finding 518: only a focus it had and lost is given again.
 
 517. **t_monitors_turned_nvidia compared a burst with a shot while the screen still changed**
     (2026-10-24, #324; "shot --burst --no-pointer: a frame is the shot's image", alone 2 in 2 at
@@ -10122,6 +10123,19 @@ from them.
     frame by more (AE 1432): the tail of a fade, the clicks just before having moved the focus between
     terminals there. The comparison wants a still screen and did not wait for one; the bash front's
     pace had let the fade end. The test waits for the screen to be still before its bursts.
+
+518. **Finding 516's win_raise focused any window again for 3 s** (2026-10-25, #324; the suite at
+    e37f275: t_unit_rust_parity's "keys --window: a window that does not take focus (3 s)", whose
+    stand-in Hyprland never makes it active, saw four focus dispatches from the binary where bash sends
+    one). The loop gave the focus again whenever another window was active, so a window that never
+    takes the focus was asked over and over, and a focus change it had not made (an app's, the user's)
+    would have been undone while it waited. **Fix** (Rust): it is focused again only when it had the
+    focus and lost it, as Hyprland's history says (its focusHistoryID is 1: the window focused just
+    before the active one), a quarter second after the last focus, until the 3 s are up; once it is
+    active win_raise returns. One focus again 8 ms after the steal was not enough (t_window lost it
+    again 2 runs in 4: `activewindow>>foot,C`, `foot,A` twice); a quarter second on it stays (5 in 5).
+    A window that never has it is focused once and fails after 3 s, as by bash. Tests:
+    t_unit_rust_parity (that case again the same both ways), t_window.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

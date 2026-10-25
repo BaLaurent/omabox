@@ -168,11 +168,13 @@ fn address(ctx: &Ctx, w: &[u8]) -> Res<Vec<u8>> {
 
 /// win_raise WINDOW: focused as a user would focus it (its workspace to the screen, a group's tab to
 /// the front, a floating one raised; a tiled one stays under the floats), until it is the active
-/// window, 3 s at most. Focused again while another window has it: Hyprland warps the pointer to a
-/// window it focuses on another workspace, and its follow-the-mouse focus, a moment on, takes the
-/// window under that point by where windows are drawn, so one moved while its workspace was hidden,
-/// not yet drawn there, lost the focus to the window it had been over (t_window's click --in after a
-/// move, finding 516). The pointer is where the window is by then: the second focus stays.
+/// window, 3 s at most. Focused again if it had the focus and lost it at once: Hyprland warps the
+/// pointer to a window it focuses on another workspace, and its follow-the-mouse focus, a moment on,
+/// takes the window under that point by where windows are drawn, so one moved while its workspace
+/// was hidden, not yet drawn there, lost the focus to the window it had been over (t_window's click
+/// --in after a move, finding 516). Focused again a quarter second on, the window is drawn where
+/// the pointer is, and the focus stays. Only for a focus it had and lost (finding 518): a window
+/// that never takes the focus is focused once, as by bash, and none once it has it (it returns then).
 pub fn win_raise(ctx: &Ctx, w: &[u8]) -> Res<()> {
     let addr = address(ctx, w)?;
     // (audit E12: which window, and the way round: --no-raise acts on it where it is)
@@ -228,12 +230,27 @@ pub fn win_raise(ctx: &Ctx, w: &[u8]) -> Res<()> {
     };
     focus()?;
     let deadline = after(3);
-    let mut again = std::time::Instant::now() + std::time::Duration::from_millis(250);
+    let gap = std::time::Duration::from_millis(250);
+    let mut next = std::time::Instant::now() + gap;
     loop {
         let a = strip_nl(&hypr_json(ctx, &["activewindow"])?);
         let active = jq_r(crate::jqprog::ACTIVE_ADDR_JQ, &a);
         if active == addr {
             return Ok(());
+        }
+        // Had it and lost it: the window focused just before the one that has it now (Hyprland's
+        // focusHistoryID 1). A quarter second on, so the window is drawn where it is.
+        if !active.is_empty() && std::time::Instant::now() >= next {
+            let c = hypr_json(ctx, &["clients"])?;
+            let prog = format!(
+                r#"[.[] | select(.address == "{}") | .focusHistoryID] | .[0] // empty"#,
+                String::from_utf8_lossy(&addr)
+            );
+            if jq_r(&prog, &c) == b"1" {
+                focus()?;
+                next = std::time::Instant::now() + gap;
+                continue;
+            }
         }
         if past(deadline) {
             return Err(ctx.die(cat!(
@@ -244,11 +261,6 @@ pub fn win_raise(ctx: &Ctx, w: &[u8]) -> Res<()> {
                 way,
                 ")"
             )));
-        }
-        // (another window took it, not a layer or nothing: focused again, a quarter second apart)
-        if !active.is_empty() && std::time::Instant::now() >= again {
-            focus()?;
-            again = std::time::Instant::now() + std::time::Duration::from_millis(250);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
