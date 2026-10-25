@@ -1010,7 +1010,13 @@ pub fn client_render_check(ctx: &mut Ctx) -> Res<()> {
     let out = box_exec_out(ctx, &argv, true, Some(65_536))
         .map(|(_, o)| o)
         .unwrap_or_default();
-    let rec = egl_render(&shell::subst(&out));
+    client_render_from(ctx, &out, None)
+}
+
+/// client_render_check on eglinfo's output OUT (empty: none ran), OTHER as soft_note takes it: a
+/// #[test] gives both, where the suite stubbed box_exec and other_gpu.
+fn client_render_from(ctx: &Ctx, out: &[u8], other: Option<&[u8]>) -> Res<()> {
+    let rec = egl_render(&shell::subst(out));
     if rec.is_empty() {
         return Ok(());
     }
@@ -1031,7 +1037,7 @@ pub fn client_render_check(ctx: &mut Ctx) -> Res<()> {
         .arg(shell::bytes(&bj))
         .run_file(jq::Err::Inherit)
         .text();
-    let note = soft_note(&rec, &driver, None);
+    let note = soft_note(&rec, &driver, other);
     if !note.is_empty() {
         say(cat!("box '", ctx.name, "': ", note));
     }
@@ -1039,7 +1045,7 @@ pub fn client_render_check(ctx: &mut Ctx) -> Res<()> {
 }
 
 /// egl_render: eglinfo's output as client_render's record, or empty when it names no renderer.
-fn egl_render(out: &[u8]) -> Vec<u8> {
+pub fn egl_render(out: &[u8]) -> Vec<u8> {
     let r = jq::awk(&[EGL_AWK], Some(out), jq::Err::Null).text();
     if r.is_empty() {
         return Vec::new();
@@ -1053,7 +1059,7 @@ fn egl_render(out: &[u8]) -> Vec<u8> {
 
 /// soft_note RECORD DRIVER [OTHER]: what up says once when RECORD is software, empty else. DRIVER:
 /// the box's GPU's ("" for an interactive box); OTHER as other_gpu gives it, looked up when None.
-fn soft_note(rec: &[u8], driver: &[u8], other: Option<&[u8]>) -> Vec<u8> {
+pub fn soft_note(rec: &[u8], driver: &[u8], other: Option<&[u8]>) -> Vec<u8> {
     let r = jq::jq(&["-r", SOFT_JQ], Some(rec), jq::Err::Null);
     let r = if r.ok() { r.text() } else { Vec::new() };
     if r.is_empty() {

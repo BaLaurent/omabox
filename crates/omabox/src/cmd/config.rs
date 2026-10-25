@@ -5,7 +5,7 @@
 use crate::args::{unknown_opt, unknown_word};
 use crate::cat;
 use crate::conf::{self, KEYS};
-use crate::exit::{Ctx, Res, muted, out, say};
+use crate::exit::{Ctx, Res, out, say};
 use crate::install::{AQ_HOWTO, aq_resolve, hypr_aq_soname};
 use crate::json;
 use crate::render;
@@ -100,12 +100,7 @@ fn set(ctx: &Ctx, key: &[u8], given: &[u8], value: Vec<u8>) -> Res<()> {
     if key == b"workspace" {
         crate::cmd::peek::ws_note(&v);
     }
-    if key == b"gpu"
-        && v != b"auto"
-        && !render::render_nodes()
-            .iter()
-            .any(|n| crate::gpu::gpu_is(n.as_bytes(), &v))
-    {
+    if key == b"gpu" && v != b"auto" && !render::gpu_usable_in(&v, b"/") {
         say(cat!(
             "note: no usable GPU here is ",
             v,
@@ -181,19 +176,8 @@ fn json_line(ctx: &Ctx) -> String {
             Value::String(String::from_utf8_lossy(&conf::get(k.as_bytes())).into_owned()),
         );
     }
-    let avail = !muted(|| {
-        hypr_aq_soname(ctx)
-            .ok()
-            .and_then(|w| aq_resolve(ctx, &w))
-            .is_some_and(|a| !a.fixed)
-    });
-    let now = muted(|| render::render_node_with(ctx, Vec::new()))
-        .map(|n| crate::gpu::render_slot(n.as_bytes()))
-        .unwrap_or_default();
-    let auto = render::render_nodes()
-        .first()
-        .map(|n| crate::gpu::render_slot(n.as_bytes()))
-        .unwrap_or_default();
+    let avail = crate::install::confirm_close_available_in(ctx, &crate::paths::root(), b"/");
+    let (auto, now) = render::gpu_auto_now_in(ctx, b"/");
     let slot = |v: Vec<u8>| {
         if v.is_empty() {
             Value::Null

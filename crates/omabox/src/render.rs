@@ -10,11 +10,14 @@
 
 use crate::cat;
 use crate::exit::{Ctx, Res, say};
-use crate::gpu::{conf_gpu, gpu_is, gpu_kind, render_driver, render_slot};
+use crate::gpu::{at, conf_gpu, gpu_is_in, gpu_kind, render_driver_in, render_slot_in};
 use crate::shell;
 use std::os::unix::ffi::OsStrExt;
 
-/// Where render nodes and their devices are (bash's DRI, SYSDRM, SYSPCI).
+/// Where render nodes and their devices are (bash's DRI, SYSDRM, SYSPCI). The helpers that read them
+/// have `_in` forms that take a ROOT they are under: "/" (what the binary always gives), or a
+/// stand-in tree's for the unit tests (#324 wave 6-suite). A render node keeps its own path, the
+/// box's; only the reads are under ROOT.
 pub const DRI: &str = "/dev/dri";
 pub const SYSDRM: &str = "/sys/class/drm";
 pub const SYSPCI: &str = "/sys/bus/pci/devices";
@@ -33,11 +36,15 @@ impl RenderNode {
     }
     /// Its driver (render_driver).
     pub fn driver(&self) -> Vec<u8> {
-        render_driver(&self.0)
+        render_driver_in(&self.0, b"/")
+    }
+    /// Its driver, SYSDRM under ROOT.
+    pub fn driver_in(&self, root: &[u8]) -> Vec<u8> {
+        render_driver_in(&self.0, root)
     }
     /// Its GPU's PCI slot (render_slot).
     pub fn slot(&self) -> Vec<u8> {
-        render_slot(&self.0)
+        render_slot_in(&self.0, b"/")
     }
     /// The GPU is NVIDIA's (its driver is nvidia).
     pub fn is_nvidia(&self) -> bool {
@@ -121,14 +128,16 @@ fn access(p: &[u8], mode: libc::c_int) -> bool {
     })
 }
 
-/// `[ -r P ] && [ -w P ]`.
-fn rw(p: &[u8]) -> bool {
-    access(p, libc::R_OK) && access(p, libc::W_OK)
+/// `[ -r P ] && [ -w P ]`, P under ROOT.
+fn rw(root: &[u8], p: &[u8]) -> bool {
+    let p = at(root, p);
+    access(&p, libc::R_OK) && access(&p, libc::W_OK)
 }
 
-/// `for n in "$DRI"/renderD*`: the render nodes' paths, in byte order (finding 446).
-fn render_globbed() -> Vec<Vec<u8>> {
-    let Ok(rd) = std::fs::read_dir(DRI) else {
+/// `for n in "$DRI"/renderD*`: the render nodes' paths, in byte order (finding 446); DRI under ROOT,
+/// the paths as the system names them.
+fn render_globbed(root: &[u8]) -> Vec<Vec<u8>> {
+    let Ok(rd) = std::fs::read_dir(shell::path(&at(root, DRI.as_bytes()))) else {
         return Vec::new();
     };
     let mut v: Vec<Vec<u8>> = rd
@@ -156,21 +165,26 @@ pub fn render_node(ctx: &Ctx) -> Res<RenderNode> {
 
 /// render_node with OMABOX_RENDER_NODE as N (`OMABOX_RENDER_NODE="" render_node`: the setting's).
 pub fn render_node_with(ctx: &Ctx, n: Vec<u8>) -> Res<RenderNode> {
+    render_node_in(ctx, n, b"/")
+}
+
+/// render_node_with, the devices under ROOT.
+pub fn render_node_in(ctx: &Ctx, n: Vec<u8>, root: &[u8]) -> Res<RenderNode> {
     let mut n = n;
     if n.is_empty() {
         let want = conf_want();
         let mut fell = false;
         if want != b"auto" {
-            n = render_globbed()
+            n = render_globbed(root)
                 .into_iter()
-                .find(|x| rw(x) && gpu_is(x, &want))
+                .find(|x| rw(root, x) && gpu_is_in(x, &want, root))
                 .unwrap_or_default();
             fell = n.is_empty();
         }
         if n.is_empty() {
-            n = render_globbed()
+            n = render_globbed(root)
                 .into_iter()
-                .find(|x| rw(x))
+                .find(|x| rw(root, x))
                 .unwrap_or_default();
         }
         if fell && !n.is_empty() {
@@ -179,11 +193,11 @@ pub fn render_node_with(ctx: &Ctx, n: Vec<u8>) -> Res<RenderNode> {
                 "gpu ",
                 want,
                 " (omabox config gpu): none usable here (",
-                gpu_why_not(&want),
+                gpu_why_not_in(&want, root),
                 "), so the first GPU: ",
-                render_driver(&n),
+                render_driver_in(&n, root),
                 " ",
-                render_slot(&n),
+                render_slot_in(&n, root),
                 " (",
                 node,
                 ")"
@@ -191,7 +205,7 @@ pub fn render_node_with(ctx: &Ctx, n: Vec<u8>) -> Res<RenderNode> {
         }
     }
     match RenderNode::new(&n) {
-        Some(r) if rw(&n) => Ok(r),
+        Some(r) if rw(root, &n) => Ok(r),
         _ => Err(ctx.die(cat!(
             "no usable GPU render node (",
             DRI,
@@ -203,9 +217,14 @@ pub fn render_node_with(ctx: &Ctx, n: Vec<u8>) -> Res<RenderNode> {
 /// render_nodes: every usable render node, for an interactive box, whose Hyprland renders on the GPU
 /// the desktop's compositor names, not necessarily render_node's (finding 95). Render nodes only.
 pub fn render_nodes() -> Vec<RenderNode> {
-    render_globbed()
+    render_nodes_in(b"/")
+}
+
+/// render_nodes, the devices under ROOT.
+pub fn render_nodes_in(root: &[u8]) -> Vec<RenderNode> {
+    render_globbed(root)
         .into_iter()
-        .filter(|n| rw(n))
+        .filter(|n| rw(root, n))
         .filter_map(|n| RenderNode::new(&n))
         .collect()
 }
@@ -213,11 +232,36 @@ pub fn render_nodes() -> Vec<RenderNode> {
 /// render_fallback N: the `gpu` setting names a GPU and N is not it, and OMABOX_RENDER_NODE did not
 /// choose.
 pub fn render_fallback(n: &RenderNode) -> bool {
+    render_fallback_in(n, b"/")
+}
+
+/// render_fallback, the devices under ROOT.
+pub fn render_fallback_in(n: &RenderNode, root: &[u8]) -> bool {
     if !shell::env_or_empty("OMABOX_RENDER_NODE").is_empty() {
         return false;
     }
     let want = conf_want();
-    want != b"auto" && !gpu_is(n.as_bytes(), &want)
+    want != b"auto" && !gpu_is_in(n.as_bytes(), &want, root)
+}
+
+/// The `gpu` setting's note test (config gpu VALUE): a usable render node is the GPU WANT names.
+pub fn gpu_usable_in(want: &[u8], root: &[u8]) -> bool {
+    render_nodes_in(root)
+        .iter()
+        .any(|n| gpu_is_in(n.as_bytes(), want, root))
+}
+
+/// config --json's gpu_auto and gpu_now: the slots of the first usable GPU and of the one a headless
+/// box renders on now (render_node's choice without OMABOX_RENDER_NODE), empty for none.
+pub fn gpu_auto_now_in(ctx: &Ctx, root: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let now = crate::exit::muted(|| render_node_in(ctx, Vec::new(), root))
+        .map(|n| render_slot_in(n.as_bytes(), root))
+        .unwrap_or_default();
+    let auto = render_nodes_in(root)
+        .first()
+        .map(|n| render_slot_in(n.as_bytes(), root))
+        .unwrap_or_default();
+    (auto, now)
 }
 
 /// pci_driver DEV: the driver a PCI device (its dir in SYSPCI) is bound to, or nothing.
@@ -254,31 +298,31 @@ fn pci_kind(dev: &[u8]) -> Vec<u8> {
 }
 
 /// slot_node SLOT: the render node of the GPU at PCI SLOT, or nothing.
-fn slot_node(slot: &[u8]) -> Vec<u8> {
-    render_globbed()
+fn slot_node(slot: &[u8], root: &[u8]) -> Vec<u8> {
+    render_globbed(root)
         .into_iter()
-        .find(|n| shell::path(n).exists() && render_slot(n) == slot)
+        .find(|n| shell::path(&at(root, n)).exists() && render_slot_in(n, root) == slot)
         .unwrap_or_default()
 }
 
 /// pci_why DEV: why a box cannot render on the GPU at DEV, or nothing when it can.
-fn pci_why(dev: &[u8]) -> Vec<u8> {
+fn pci_why(dev: &[u8], root: &[u8]) -> Vec<u8> {
     let drv = pci_driver(dev);
-    let node = slot_node(&shell::basename(dev));
+    let node = slot_node(&shell::basename(dev), root);
     if drv.is_empty() {
         b"no driver".to_vec()
     } else if node.is_empty() {
         cat!("bound to ", drv)
-    } else if !rw(&node) {
+    } else if !rw(root, &node) {
         cat!("no access to ", node)
     } else {
         Vec::new()
     }
 }
 
-/// The PCI devices' dirs (`"$SYSPCI"/*`), in byte order.
-fn pci_devs() -> Vec<Vec<u8>> {
-    let mut devs: Vec<Vec<u8>> = std::fs::read_dir(SYSPCI)
+/// The PCI devices' names (`"$SYSPCI"/*`), in byte order; SYSPCI under ROOT.
+fn pci_devs(root: &[u8]) -> Vec<Vec<u8>> {
+    let mut devs: Vec<Vec<u8>> = std::fs::read_dir(shell::path(&at(root, SYSPCI.as_bytes())))
         .map(|rd| {
             rd.flatten()
                 .map(|e| std::os::unix::ffi::OsStringExt::into_vec(e.file_name()))
@@ -316,22 +360,27 @@ fn lspci_name(slot: &[u8]) -> Vec<u8> {
 /// one's slot, driver, kind, name, render node and whether a box can render on it, with why not.
 /// From the bus, not /dev/dri, so a GPU handed to a VM (vfio-pci) is listed too.
 pub fn gpu_json() -> serde_json::Value {
+    gpu_json_in(b"/")
+}
+
+/// gpu_json, the devices under ROOT.
+pub fn gpu_json_in(root: &[u8]) -> serde_json::Value {
     use serde_json::{Map, Value};
     let s = |v: &[u8]| Value::String(String::from_utf8_lossy(v).into_owned());
     let or_null = |v: &[u8]| if v.is_empty() { Value::Null } else { s(v) };
     let mut all = Vec::new();
-    for slot in pci_devs() {
-        let dev = cat!(SYSPCI, "/", slot);
+    for slot in pci_devs(root) {
+        let dev = at(root, &cat!(SYSPCI, "/", slot));
         if !read_subst(&cat!(dev, "/class")).starts_with(b"0x03") {
             continue;
         }
-        let why = pci_why(&dev);
+        let why = pci_why(&dev, root);
         let mut m = Map::new();
         m.insert("pci".into(), s(&slot));
         m.insert("driver".into(), s(&pci_driver(&dev)));
         m.insert("kind".into(), or_null(&pci_kind(&dev)));
         m.insert("name".into(), s(&lspci_name(&slot)));
-        m.insert("node".into(), or_null(&slot_node(&slot)));
+        m.insert("node".into(), or_null(&slot_node(&slot, root)));
         m.insert("available".into(), Value::Bool(why.is_empty()));
         if !why.is_empty() {
             m.insert("why".into(), s(&why));
@@ -345,9 +394,15 @@ pub fn gpu_json() -> serde_json::Value {
 /// that name it, and `*` on the one a headless box would render on now (render_node's choice, said
 /// without its note).
 pub fn gpu_list(ctx: &Ctx) -> Vec<u8> {
-    let usen = crate::exit::muted(|| render_node(ctx))
-        .map(|n| n.as_bytes().to_vec())
-        .unwrap_or_default();
+    gpu_list_in(ctx, b"/")
+}
+
+/// gpu_list, the devices under ROOT.
+pub fn gpu_list_in(ctx: &Ctx, root: &[u8]) -> Vec<u8> {
+    let usen =
+        crate::exit::muted(|| render_node_in(ctx, shell::env_or_empty("OMABOX_RENDER_NODE"), root))
+            .map(|n| n.as_bytes().to_vec())
+            .unwrap_or_default();
     let mut o = Vec::new();
     let env = shell::env_or_empty("OMABOX_RENDER_NODE");
     if !env.is_empty() {
@@ -367,12 +422,12 @@ pub fn gpu_list(ctx: &Ctx) -> Vec<u8> {
         }
         v
     };
-    for n in render_globbed() {
-        if !shell::path(&n).exists() {
+    for n in render_globbed(root) {
+        if !shell::path(&at(root, &n)).exists() {
             continue;
         }
-        let d = render_driver(&n);
-        let slot = render_slot(&n);
+        let d = render_driver_in(&n, root);
+        let slot = render_slot_in(&n, root);
         let k = gpu_kind(&d);
         let mark: &[u8] = if n == usen { b"*" } else { b" " };
         let node = n.rsplit(|&c| c == b'/').next().unwrap_or_default();
@@ -381,7 +436,7 @@ pub fn gpu_list(ctx: &Ctx) -> Vec<u8> {
         } else {
             cat!("gpu ", k, " or gpu ", slot)
         };
-        let usable: &[u8] = if rw(&n) {
+        let usable: &[u8] = if rw(root, &n) {
             b""
         } else {
             b" (not usable: no access)"
@@ -406,9 +461,14 @@ pub fn gpu_list(ctx: &Ctx) -> Vec<u8> {
 /// gpu_why_not WANT: why no usable GPU is the one WANT names (a kind or a slot), each such GPU with
 /// its reason ("0000:01:00.0: bound to vfio-pci"), or that there is none.
 pub fn gpu_why_not(want: &[u8]) -> Vec<u8> {
+    gpu_why_not_in(want, b"/")
+}
+
+/// gpu_why_not, the devices under ROOT.
+pub fn gpu_why_not_in(want: &[u8], root: &[u8]) -> Vec<u8> {
     let mut why: Vec<u8> = Vec::new();
-    for name in pci_devs() {
-        let dev = cat!(SYSPCI, "/", name);
+    for name in pci_devs(root) {
+        let dev = at(root, &cat!(SYSPCI, "/", name));
         if !read_subst(&cat!(dev, "/class")).starts_with(b"0x03") {
             continue;
         }
@@ -419,7 +479,7 @@ pub fn gpu_why_not(want: &[u8]) -> Vec<u8> {
         if !ok {
             continue;
         }
-        let w = pci_why(&dev);
+        let w = pci_why(&dev, root);
         if !why.is_empty() {
             why.extend_from_slice(b"; ");
         }
@@ -461,6 +521,32 @@ pub fn nvidia_device(ctx: &Ctx, render: &RenderNode, create: bool) -> Res<Nvidia
 /// is asked once for each missing one, unless CREATE is false. /dev/nvidiactl is minor 255: `-c MINOR`
 /// makes only /dev/nvidiaMINOR (finding 254).
 pub fn nvidia_node(ctx: &Ctx, slot: &[u8], create: bool, proc: &[u8], dev: &[u8]) -> Res<Vec<u8>> {
+    let run = |m: &[u8]| {
+        let mut c = crate::sig::command("nvidia-modprobe");
+        c.arg("-c")
+            .arg(shell::path(m))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = crate::sig::run_status(c);
+    };
+    let helper: Option<&Helper> =
+        crate::exec::executable_on_path(b"nvidia-modprobe").then_some(&run);
+    nvidia_node_with(ctx, slot, create, proc, dev, helper)
+}
+
+/// `nvidia-modprobe -c MINOR`, as nvidia_node_with is given it.
+pub type Helper<'a> = dyn Fn(&[u8]) + 'a;
+
+/// nvidia_node with HELPER as `nvidia-modprobe -c MINOR` (None: not on PATH), so a #[test] can be
+/// the helper, never the real one, which is setuid root and makes /dev nodes.
+pub fn nvidia_node_with(
+    ctx: &Ctx,
+    slot: &[u8],
+    create: bool,
+    proc: &[u8],
+    dev: &[u8],
+    helper: Option<&Helper>,
+) -> Res<Vec<u8>> {
     let info = cat!(proc, "/gpus/", slot, "/information");
     let text = match std::fs::read(shell::path(&info)) {
         Ok(t) if access(&info, libc::R_OK) => t,
@@ -471,14 +557,9 @@ pub fn nvidia_node(ctx: &Ctx, slot: &[u8], create: bool, proc: &[u8], dev: &[u8]
         return Err(ctx.die(cat!("NVIDIA GPU ", slot, ": no device minor in ", info)));
     }
     let mut miss = nvidia_missing(dev, &minor);
-    if create && !miss.is_empty() && crate::exec::executable_on_path(b"nvidia-modprobe") {
+    if let Some(run) = helper.filter(|_| create && !miss.is_empty()) {
         for m in &miss {
-            let mut c = crate::sig::command("nvidia-modprobe");
-            c.arg("-c")
-                .arg(shell::path(m))
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-            let _ = crate::sig::run_status(c);
+            run(m);
         }
         miss = nvidia_missing(dev, &minor);
     }
@@ -549,7 +630,7 @@ pub fn nvidia_card(render: &RenderNode) -> Option<Vec<u8>> {
 
 /// nvidia_card RENDER SYS (SYS stands in for /sys/class/drm in the unit tests). The glob's names in
 /// byte order (finding 446).
-fn nvidia_card_in(render: &[u8], sys: &[u8]) -> Option<Vec<u8>> {
+pub fn nvidia_card_in(render: &[u8], sys: &[u8]) -> Option<Vec<u8>> {
     let node = render.rsplit(|&c| c == b'/').next().unwrap_or_default();
     let dir = cat!(sys, "/", node, "/device/drm");
     shell::glob(&shell::path(&dir), false)

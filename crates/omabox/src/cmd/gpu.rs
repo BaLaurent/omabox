@@ -111,17 +111,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
         }
         let _ = std::fs::write(shell::path(&at("pids")), &pids);
         let pmon = std::fs::read(shell::path(&at("pmon"))).unwrap_or_default();
-        jq::tool(
-            "awk",
-            &[
-                b"-v".to_vec(),
-                cat!("pidcomm=", at("pids")),
-                crate::jqprog::PMON_AWK.as_bytes().to_vec(),
-            ],
-            Some(&pmon),
-            jq::Err::Inherit,
-        )
-        .out
+        pmon_figures(&at("pids"), &pmon)
     } else {
         let t0 = crate::settle::mono_ns();
         let a = snap(ctx);
@@ -270,9 +260,25 @@ fn fd_links(p: &[u8]) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// pmon_figures PIDS: NVIDIA's per-process samples (nvidia-smi pmon's output) as gpu's figures, the
+/// box's processes only (PIDS: "PID COMM" lines; finding 295).
+pub fn pmon_figures(pids: &[u8], pmon: &[u8]) -> Vec<u8> {
+    jq::tool(
+        "awk",
+        &[
+            b"-v".to_vec(),
+            cat!("pidcomm=", pids),
+            crate::jqprog::PMON_AWK.as_bytes().to_vec(),
+        ],
+        Some(pmon),
+        jq::Err::Inherit,
+    )
+    .out
+}
+
 /// gpu_rows: gpu's rows from its figures ("proc NAME %" lines), most first; none is "(no GPU
 /// time)", not a failure (finding 298). A process whose comm is `engine` is a process (finding 176).
-fn gpu_rows(r: &[u8]) -> Res<()> {
+pub fn gpu_rows(r: &[u8]) -> Res<()> {
     let procs: Vec<u8> = r
         .split_inclusive(|&c| c == b'\n')
         .filter(|l| l.starts_with(b"proc "))

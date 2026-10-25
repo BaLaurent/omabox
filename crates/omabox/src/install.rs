@@ -25,7 +25,7 @@ pub const AQ_HOWTO: &str = "omabox setup --aquamarine builds it for you (a minut
 pub const AQ_FIX_SYMBOL: &str = "_ZN10Aquamarine14CWaylandOutput14applyConfigureEv";
 /// The release after this one comes from a main that has #415.
 pub const AQ_FIXED_AFTER: &str = "0.15.1";
-/// Where the system's aquamarine is.
+/// Where the system's aquamarine is (under a ROOT in aq_resolve_in: "/", or a unit test's tree).
 pub const AQ_SYSDIR: &str = "/usr/lib";
 /// The box's Qt (the system's: a box has /usr).
 pub const QT_CORE: &str = "/usr/lib/libQt6Core.so.6";
@@ -495,19 +495,99 @@ pub fn aq_pick_system(ctx: &Ctx, soname: &[u8], sys: &[u8]) -> Option<Aq> {
     aq_pick_env(ctx, soname, sys, &[], b"system")
 }
 
+/// config --json's confirm_close_available: false only when the aquamarine boxes would use (from
+/// checkout CO, the system's under ROOT) lacks the fix; quiet.
+pub fn confirm_close_available_in(ctx: &Ctx, co: &[u8], root: &[u8]) -> bool {
+    let env = shell::env_or_empty("OMABOX_AQUAMARINE");
+    !muted(|| {
+        hypr_aq_soname(ctx)
+            .ok()
+            .and_then(|w| aq_resolve_in(ctx, &w, &env, co, root))
+            .is_some_and(|a| !a.fixed)
+    })
+}
+
+/// What `up` refuses without aquamarine's fix on a headless box (finding 125): one on an NVIDIA
+/// render node, naming the other GPUs it could render on. RENDER's driver and the render nodes read
+/// under ROOT ("/", or a unit test's tree).
+pub fn nvidia_needs_fix_in(ctx: &Ctx, aq: &Aq, render: &RenderNode, root: &[u8]) -> Res<()> {
+    if aq.fixed || render.driver_in(root) != b"nvidia" {
+        return Ok(());
+    }
+    let mut others = Vec::new();
+    for n in crate::render::render_nodes_in(root) {
+        let d = n.driver_in(root);
+        if d != b"nvidia" {
+            others.extend_from_slice(&cat!(" ", n.as_bytes(), " (", d, ")"));
+        }
+    }
+    let tail = if others.is_empty() {
+        Vec::new()
+    } else {
+        cat!(
+            "; or render on another GPU (omabox config gpu amd, intel or a slot; or OMABOX_RENDER_NODE):",
+            others
+        )
+    };
+    Err(ctx.die(cat!(
+        "a headless box on NVIDIA (",
+        render.as_bytes(),
+        ") needs ",
+        aq.lacks(),
+        ": ",
+        AQ_HOWTO,
+        tail
+    )))
+}
+
+/// Whether `setup --aquamarine` builds over AQ, what boxes use now, and what it says first: never
+/// over this omabox's build (AQ_BUILD) unless FORCE; a system aquamarine with the fix still lacks
+/// omabox's own patches (#186, finding 247), said.
+pub fn aq_build_needed(aq: &Aq, force: bool) -> bool {
+    let ver_build = aq
+        .ver
+        .iter()
+        .position(|&c| c == b'@')
+        .map_or(aq.ver.as_slice(), |i| &aq.ver[i + 1..]);
+    if !force && aq.kind == b"private" && ver_build == AQ_BUILD.as_bytes() {
+        say(cat!(
+            "boxes use ",
+            aq.desc(),
+            ", this omabox's build: nothing to build"
+        ));
+        return false;
+    }
+    if aq.kind == b"system" && aq.fixed {
+        say(cat!(
+            "boxes use ",
+            aq.desc(),
+            ", which has the fix for nested Wayland outputs but not omabox's own (",
+            AQ_OWN,
+            ")"
+        ));
+    }
+    true
+}
+
 /// aq_resolve with ENV as OMABOX_AQUAMARINE.
 pub fn aq_resolve_env(ctx: &Ctx, soname: &[u8], env: &[u8]) -> Option<Aq> {
-    let root = crate::paths::root();
-    let main = aq_main_lib(&root).unwrap_or_default();
-    let mut dirs = vec![cat!(root, "/build/prefix/lib")];
+    aq_resolve_in(ctx, soname, env, &crate::paths::root(), b"/")
+}
+
+/// aq_resolve_env for a box from checkout CO (bash's ROOT), the system's dirs (AQ_SYSDIR, a box's
+/// /opt/omabox) under ROOT: "/", or a unit test's stand-in tree.
+pub fn aq_resolve_in(ctx: &Ctx, soname: &[u8], env: &[u8], co: &[u8], root: &[u8]) -> Option<Aq> {
+    use crate::gpu::at;
+    let main = aq_main_lib(co).unwrap_or_default();
+    let mut dirs = vec![cat!(co, "/build/prefix/lib")];
     if !main.is_empty() {
         dirs.push(main.clone());
     }
     dirs.push(cat!(crate::paths::aq_user(), "/lib"));
-    if shell::path(b"/opt/omabox/share/session.sh").is_file() {
-        dirs.push(b"/opt/omabox/lib".to_vec());
+    if shell::path(&at(root, b"/opt/omabox/share/session.sh")).is_file() {
+        dirs.push(at(root, b"/opt/omabox/lib"));
     }
-    let mut aq = aq_pick_env(ctx, soname, AQ_SYSDIR.as_bytes(), &dirs, env)?;
+    let mut aq = aq_pick_env(ctx, soname, &at(root, AQ_SYSDIR.as_bytes()), &dirs, env)?;
     if aq.kind == b"private" && !main.is_empty() && aq.lib == main {
         aq.main = main.strip_suffix(b"/lib").unwrap_or(&main).to_vec();
     }

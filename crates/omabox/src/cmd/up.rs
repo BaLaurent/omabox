@@ -933,31 +933,8 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     // What needs aquamarine's fix (finding 125): a headless box on an NVIDIA render node and
     // confirm-close asked for on `up` (from the settings it is turned off for the box, below).
     if !u.aq.fixed {
-        if !u.interactive && render.driver() == b"nvidia" {
-            let mut others = Vec::new();
-            for n in render::render_nodes() {
-                let d = n.driver();
-                if d != b"nvidia" {
-                    others.extend_from_slice(&cat!(" ", n.as_bytes(), " (", d, ")"));
-                }
-            }
-            let tail = if others.is_empty() {
-                Vec::new()
-            } else {
-                cat!(
-                    "; or render on another GPU (omabox config gpu amd, intel or a slot; or OMABOX_RENDER_NODE):",
-                    others
-                )
-            };
-            return Err(ctx.die(cat!(
-                "a headless box on NVIDIA (",
-                render.as_bytes(),
-                ") needs ",
-                u.aq.lacks(),
-                ": ",
-                install::AQ_HOWTO,
-                tail
-            )));
+        if !u.interactive {
+            install::nvidia_needs_fix_in(ctx, &u.aq, &render, b"/")?;
         }
         if u.confirm_from != "config" && u.confirm == b"on" {
             return Err(ctx.die(cat!(

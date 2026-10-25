@@ -598,27 +598,8 @@ impl Setup {
     fn aquamarine(&self, ctx: &Ctx, force: bool) -> Res<()> {
         let want = hypr_aq_soname(ctx)?;
         let aq = aq_resolve_env(ctx, &want, b"").ok_or(Exit(1))?;
-        let ver_build = aq
-            .ver
-            .iter()
-            .position(|&c| c == b'@')
-            .map_or(aq.ver.as_slice(), |i| &aq.ver[i + 1..]);
-        if !force && aq.kind == b"private" && ver_build == AQ_BUILD.as_bytes() {
-            say(cat!(
-                "boxes use ",
-                aq.desc(),
-                ", this omabox's build: nothing to build"
-            ));
+        if !crate::install::aq_build_needed(&aq, force) {
             return Ok(());
-        }
-        if aq.kind == b"system" && aq.fixed {
-            say(cat!(
-                "boxes use ",
-                aq.desc(),
-                ", which has the fix for nested Wayland outputs but not omabox's own (",
-                AQ_OWN,
-                ")"
-            ));
         }
         let missing: Vec<&str> = [
             "git",
@@ -801,7 +782,7 @@ impl Setup {
 /// aq_note: what the boxes' aquamarine lacks that `omabox setup --aquamarine` builds: #415, and
 /// omabox's own patches, which only this omabox's build has (finding 247). Nothing for a current
 /// build.
-fn aq_note(aq: &Aq) -> Res<()> {
+pub fn aq_note(aq: &Aq) -> Res<()> {
     if aq.kind == b"private" {
         // Built by an older omabox (finding 132): it lacks a patch omabox carries now.
         let b = aq

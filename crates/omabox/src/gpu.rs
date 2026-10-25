@@ -10,19 +10,36 @@ use crate::shell;
 
 /// `basename "$(readlink -f "$SYSDRM/${N##*/}/device/driver")"`.
 pub fn render_driver(n: &[u8]) -> Vec<u8> {
-    sys_base(n, "/device/driver")
+    render_driver_in(n, b"/")
+}
+
+/// render_driver with SYSDRM under ROOT (a stand-in tree's root; "/" the system's own).
+pub fn render_driver_in(n: &[u8], root: &[u8]) -> Vec<u8> {
+    sys_base(n, "/device/driver", root)
 }
 
 /// `basename "$(readlink -f "$SYSDRM/${N##*/}/device")"`: the PCI slot of a render node's GPU.
 pub fn render_slot(n: &[u8]) -> Vec<u8> {
-    sys_base(n, "/device")
+    render_slot_in(n, b"/")
 }
 
-fn sys_base(n: &[u8], rel: &str) -> Vec<u8> {
+/// render_slot with SYSDRM under ROOT.
+pub fn render_slot_in(n: &[u8], root: &[u8]) -> Vec<u8> {
+    sys_base(n, "/device", root)
+}
+
+fn sys_base(n: &[u8], rel: &str, root: &[u8]) -> Vec<u8> {
     let node = n.rsplit(|&c| c == b'/').next().unwrap_or_default();
-    crate::repo::readlink_f(&cat!("/sys/class/drm/", node, rel))
+    crate::repo::readlink_f(&at(root, &cat!(crate::render::SYSDRM, "/", node, rel)))
         .map(|p| shell::basename(&p))
         .unwrap_or_default()
+}
+
+/// P (an absolute path) under ROOT: a stand-in tree's (the unit tests'), or P itself for "/", the
+/// system's own, which is what everything but a test gives.
+pub fn at(root: &[u8], p: &[u8]) -> Vec<u8> {
+    let r = root.strip_suffix(b"/").unwrap_or(root);
+    if r.is_empty() { p.to_vec() } else { cat!(r, p) }
 }
 
 /// gpu_kind DRIVER: nvidia, amd, intel, or nothing.
@@ -37,11 +54,16 @@ pub fn gpu_kind(d: &[u8]) -> &'static [u8] {
 
 /// gpu_is NODE WANT: render node NODE is the GPU WANT names (a kind, by its driver, or a slot).
 pub fn gpu_is(n: &[u8], want: &[u8]) -> bool {
+    gpu_is_in(n, want, b"/")
+}
+
+/// gpu_is with SYSDRM under ROOT.
+pub fn gpu_is_in(n: &[u8], want: &[u8], root: &[u8]) -> bool {
     match want {
-        b"nvidia" => matches!(render_driver(n).as_slice(), b"nvidia" | b"nouveau"),
-        b"amd" => matches!(render_driver(n).as_slice(), b"amdgpu" | b"radeon"),
-        b"intel" => matches!(render_driver(n).as_slice(), b"i915" | b"xe"),
-        _ => render_slot(n) == want,
+        b"nvidia" => matches!(render_driver_in(n, root).as_slice(), b"nvidia" | b"nouveau"),
+        b"amd" => matches!(render_driver_in(n, root).as_slice(), b"amdgpu" | b"radeon"),
+        b"intel" => matches!(render_driver_in(n, root).as_slice(), b"i915" | b"xe"),
+        _ => render_slot_in(n, root) == want,
     }
 }
 
@@ -155,6 +177,9 @@ mod tests {
         assert_eq!(conf_gpu(b"0000:03:00.0"), Some(b"0000:03:00.0".to_vec()));
         assert_eq!(conf_gpu(b"03:00.8"), None);
         assert_eq!(conf_gpu(b"x"), None);
+        assert_eq!(at(b"/", b"/dev/dri"), b"/dev/dri");
+        assert_eq!(at(b"/t/r/", b"/dev/dri"), b"/t/r/dev/dri");
+        assert_eq!(at(b"/t/r", b"/sys"), b"/t/r/sys");
         assert_eq!(gpu_kind(b"xe"), b"intel");
         assert_eq!(gpu_kind(b"vfio-pci"), b"");
     }
