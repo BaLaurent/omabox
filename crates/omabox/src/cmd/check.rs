@@ -593,9 +593,9 @@ fn check_new_holes(base: &[u8], new: &[u8]) -> Vec<Vec<u8>> {
             continue;
         };
         let (nx, ny, nw, nhh) = (ai(&nx), ai(&ny), ai(&nw), ai(&nh_));
-        // (`for b in ${old[@]}`: unquoted, each split at blanks)
-        for b in old.iter().flat_map(|o| shell::words(o)) {
-            let Some([bx, by, bw, bh]) = region_of(&b) else {
+        // (`for b in ${old[@]+"${old[@]}"}`: each baseline hole whole)
+        for b in &old {
+            let Some([bx, by, bw, bh]) = region_of(b) else {
                 continue;
             };
             let (bx, by, bw, bh) = (ai(&bx), ai(&by), ai(&bw), ai(&bh));
@@ -3211,6 +3211,48 @@ mod tests {
         assert_eq!(t(b"\x7fELF"), None);
         let longer = cat!("#!/", [b'a'; 130].as_slice(), "\n");
         assert_eq!(t(&longer).map(|v| v.len()), Some(131));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A scratch dir of this test's own, empty.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("omabox-check-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn pb(p: &std::path::Path) -> Vec<u8> {
+        shell::bytes(p).to_vec()
+    }
+
+    fn write(p: &std::path::Path, data: &str) {
+        std::fs::write(p, data).unwrap();
+    }
+
+    // check_new_holes BASE NEW (t_unit_check's two cases).
+    #[test]
+    fn new_holes_as_bash() {
+        let d = scratch("nh");
+        write(
+            &d.join("hb.point"),
+            "of screen\nholes checked\nhole 10,10 5x5 25\n",
+        );
+        write(
+            &d.join("hn.point"),
+            "of screen\nholes checked\nhole 12,12 5x5 25\nhole 100,100 5x5 25\n",
+        );
+        write(&d.join("a.json"), "[{\"depth\":0}]");
+        assert_eq!(
+            check_new_holes(&pb(&d.join("hb.point")), &pb(&d.join("hn.point"))),
+            vec![b"100,100 5x5 25".to_vec()],
+            "new holes: those the baseline has none overlapping"
+        );
+        assert_eq!(
+            check_new_holes(&pb(&d.join("a.json")), &pb(&d.join("hn.point"))),
+            vec![b"12,12 5x5 25".to_vec(), b"100,100 5x5 25".to_vec()],
+            "...a baseline from before holes: all of them"
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 
