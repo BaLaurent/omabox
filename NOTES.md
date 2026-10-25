@@ -10363,23 +10363,94 @@ from them.
       the crate's six #[ignore] tests that read it (each module's inline jq "as bash's",
       jail_verify.py's), gen_recprog.py (recprog.rs is now kept by hand) and t_unit_jail_policy's and
       t_unit_setup's bash halves (each now the binary's answer alone). `_rust-jq --inline` and
-      `--recprog` stay, internal, with no reader now; `_rust-opts` is t_unit_cli_opts'.
+      `--recprog` stayed, internal, with no reader (gone in finding 532); `_rust-opts` is
+      t_unit_cli_opts'.
     - Then the unit tier's parity tests retired (Q2): t_unit_rust_parity, _parity5, _parity4b and
       _front deleted, some 1,400 cases that each compared a call with bash's; what they held rests
       on each command's own unit and box tests and the crate's #[test]s, which waves 2-6 moved off
-      `lib`. Kept, single-sided, where nothing else held the property: t_unit_jailed_caller (was
-      t_unit_rust_jailed: every relayed call stated, a value on --env-fd and never on the relay's
-      command line, finding 503; S9), t_unit_broker_side (the front's A3 block: what a jailed caller
-      is let through or refused, every `_` word refused, finding 502; S9), t_unit_monitor_add_window
-      (parity4's stand-ins and its monitor-add cases under signals, findings 429, 437, 453, gpu's
-      and cpu's temporary dir under a signal; its other ~200 cases go), t_unit_cli_opts (args.rs's
-      table checked against each command's help, where it was checked against bash's CMD_OPTS;
-      help.txt's @ lines never shown) and t_unit_bash_changes (finding 530).
+      `lib`, but for some cases that held a property alone, found by a review after it and put back
+      single-sided in finding 532. Kept, single-sided, where nothing else held the property:
+      t_unit_jailed_caller (was t_unit_rust_jailed: every relayed call stated, a value on --env-fd
+      and never on the relay's command line, finding 503; S9), t_unit_broker_side (the front's A3
+      block: what a jailed caller is let through or refused, every `_` word refused, finding 502;
+      S9), t_unit_monitor_add_window (parity4's stand-ins and its cases of an interactive box's
+      monitor add: under signals at each step, a slow, late, refusing or busy box, two at once,
+      findings 429, 437, 453; gpu's and cpu's temporary dir under a signal, and an INT to omabox
+      alone, finding 454; its other ~200 cases went, among them the add's refusals and rollbacks and
+      mode's, which finding 532 puts back), t_unit_cli_opts (args.rs's table checked against each
+      command's help, where it was checked against bash's CMD_OPTS; help.txt's @ lines never shown)
+      and t_unit_bash_changes (finding 530).
     The unit tier goes from 4,061 checks in 29 min 19 s (the four parity tests 27 min of it) to
     2,187 in 3 min 20 s (--installed: 2,127, the same 10 failures as before, #381 and #337); floors
     reset to about 90%: 1960 unit and 4660 full (an estimate from the last full count, 7055, less
     the cases that went), --installed 1910 and 4190. cargo test: 257 and 15 ignored (+3 #[test]s
     in 6b and here, -6 #[ignore]d that read the oracle). The full suite was not run here.
+
+532. **6b-end: what the retired parity held alone, put back single-sided** (2026-10-25, #324 wave
+    6b-end). A review of finding 531's deletion found cases of the four unit parity tests that held
+    a property nothing else did, under the claim that each was held elsewhere. Each is back as an
+    assertion on the binary alone (`cx_case` with its rc, out, err and state, or a plain check),
+    in a test named for what it holds, on the stand-ins it needs; the bash leg and the oracle stay
+    gone:
+    - t_unit_signal_cleanup (new; wave 3b's stand-in desktop as `sd_start`, shared): a group INT,
+      QUIT or a TERM while click --mod holds its keys: the keyboard tool lets go as its stdin
+      closes, no signal reaching it (it writes "kb signalled" if one does); drag --shot's pointer
+      tool lets go of the button on a group INT; shot --no-pointer under a group INT, TERM, HUP and
+      a group QUIT (ignored: the shot goes on) during the capture, a TERM while the pointer is
+      hidden, while it is given back (143 once it is) and during a foreground child after the hold:
+      the pointer shown again, its record gone; INT, QUIT and HUP that came ignored (nohup, a
+      script's `&`) stay ignored, for omabox and what it runs (the --after action's keyboard tool
+      too); SIGPIPE as it came is what the box's tools get; and record sheet under a TERM to omabox
+      alone while ffmpeg takes the frames: 143, no sheet, no `.record-*` left (on wave 4b's
+      recording stand-ins, cut to ffprobe and ffmpeg).
+    - t_unit_capture_errors (new, the same desktop): pixel's words for grim's image short, past its
+      end and not a PPM it reads (findings 441, 442), its frame never left in TMPDIR, a TERM
+      included (443); a relative OMABOX_STILL_DUMP refused with nothing in TMPDIR (426); an empty
+      image taken twice (#217); shot's record it cannot write (`cannot write .../shots.tsv: Is a
+      directory`, 1) and -o past a folder it cannot look into (442); --burst's failed frame from
+      the tool or a grim a frame, and a --changed whose box stops answering, leave no temp file
+      (427). Every case: nothing left in TMPDIR.
+    - t_unit_monitor_add_window: monitor add refused for an interactive box whose aquamarine lacks
+      +appid (a system one, an older build) or that an older `up` started (no
+      run/omabox.appid-files), nothing asked of the host or the box (finding 429), remove not
+      refused; the add's rollbacks (Hyprland does not make it: the record put back; placing fails:
+      removed, the record as it was; never at its mode in 5 s: said, left as made) and mode's
+      (Hyprland refuses, never takes it in 5 s: box.json not given the size; placing fails: given
+      it, said; NVIDIA: labwc's output first, not resized: refused before Hyprland is asked, no
+      parent display; the box gone while mode waited for its lock: box.json not given the size).
+      Its two group-TERM cases that pinned state alone now pin 143 too (the only cx_case wants
+      without an rc; t_cli_box's two take `rc~`).
+    - t_unit_jailed_caller: "record stop: the video, its marks and captions placed" and "alone:
+      record stop" asserted 1 and "the broker named no file to write" under labels promising the
+      files: the stand-in broker answered status --file with its whole log unless the caller's
+      PATH named rj-status-only, and the stand-in relay wrote nothing to the fds. Now the jailed
+      case has rj-status-only, the alone relay writes what a broker would to each --to-fd,
+      --marks-fd and --vtt-fd, and both see the three files placed by name, by content, no
+      temporary file left; "alone: record sheet VIDEO" likewise places its sheet.
+    - t_unit_bash_changes: `ls` (--json and the table) in byte order under C and en_US.UTF-8, as
+      finding 530 said it was held (only `saves` was); with no en_US.UTF-8 on the system a skip
+      line says so.
+    Each was made to fail by breaking the code it holds, then the code put back: the bg tools'
+    SIGINT ignore (exec.rs), sig::catch's keep-ignored, the SIGPIPE re-ignore, ptr's TERM catch,
+    record sheet's TERM, pixel's frame trap, the burst error file's removal, a temp file before
+    OMABOX_STILL_DUMP's refusal, #217's second capture, monitor add's two gates, its record put
+    back and its remove, mode's labwc refusal and its box-gone check, relay_record's placing, and
+    the byte-order sort (each restored case failed but one: "TERM while the pointer is given back"
+    passes now and then without ptr's TERM catch, the release done before TERM's default end).
+    Gone with it: `_rust-jq --inline` and `--recprog`, jqprog::INLINE and INLINE_4B, recprog::ALL
+    and each module's JQ_INLINE but install.rs's (which it indexes), and eleven jq programs they
+    alone named (the oracle's leftovers: PLACED_MAIN_JQ, DROP_MAIN_JQ, DESK_KNOWN_JQ, NAMES_RE_JQ,
+    BW_JQ, LW_FLOOR_JQ, LH_FLOOR_JQ, RENDER_PAIR_JQ, AUDIO_SAY_A/B/C); `_rust-jq NAME` stays for
+    the one name the suite runs, LAYER_SPAN_JQ (t_unit_window_select), and the comments that said
+    "as it stands in bin/omabox" or "the suite checks" say bash's omabox had them.
+    Found doing it, not fixed (as bash's omabox did, the parity cases compared that state equal): a
+    shot or drag --shot cut short by INT, TERM or HUP during its capture leaves OUT.part (empty) in
+    the output folder and grim's error file in TMPDIR: capture() registers no trap for either.
+    The unit tier (its tests one at a time): 2,276 checks in 4 min 21 s, from 2,187 in 3 min 20 s
+    (both timed here, the same machine): t_unit_signal_cleanup 42 s, t_unit_capture_errors 6 s,
+    t_unit_monitor_add_window 143 s to 156 s (its three 5 s waits). Floors reset to about 90%: unit
+    2040, full 4740 (531's estimate plus the checks added), --installed 1990 and 4270. cargo test:
+    257 and 15 ignored, unchanged. No box test was touched.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
