@@ -146,8 +146,8 @@ o=${OMABOX_OMARCHY:-/usr/share/omarchy}
 # shellcheck source=/dev/null
 [ -r "$o/default/uwsm/default" ] && . "$o/default/uwsm/default"
 export TERMINAL=${TERMINAL:-xdg-terminal-exec} EDITOR=${EDITOR:-omarchy-launch-editor --inline}
-# `up --desktop plain` (#247): nothing of Omarchy's runs below (its tree is hidden in the box).
-plain=0; [ "${OMABOX_DESKTOP:-omarchy}" != plain ] || { plain=1; export EDITOR=nvim; }
+# `up --desktop plain` or `desk` (#247, #321): nothing of Omarchy's runs below (its tree is hidden).
+plain=0; [ "${OMABOX_DESKTOP:-omarchy}" = omarchy ] || { plain=1; export EDITOR=nvim; }
 
 # `up --theme NAME` (finding 245): the box's theme is NAME, not the desktop's, set as Omarchy sets one
 # (its themes overlaid with the user's, its templates, the first background) before Hyprland and the

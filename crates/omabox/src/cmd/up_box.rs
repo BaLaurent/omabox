@@ -470,7 +470,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
                 &u.net,
                 &u.clean_lang,
                 &u.clean_zone,
-                u.desktop == b"plain"
+                !u.desktop.is_empty()
             )
         ));
     }
@@ -1047,7 +1047,7 @@ fn bwrap_args(
     b.sys_ro("/usr").map_err(refused)?;
     // --desktop plain (#247): the box sees no Omarchy tree, as on a machine without Omarchy, so
     // nothing of it can load by accident (a require, a stand-in, a seeded file pointing there).
-    if u.desktop == b"plain" && std::path::Path::new("/usr/share/omarchy").is_dir() {
+    if !u.desktop.is_empty() && std::path::Path::new("/usr/share/omarchy").is_dir() {
         b.words(&[b"--tmpfs", b"/usr/share/omarchy"]);
     }
     b.words(&[

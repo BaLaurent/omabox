@@ -434,11 +434,12 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
                 optarg(ctx, a, v)?;
                 match val.as_slice() {
                     b"omarchy" => u.desktop.clear(),
-                    b"plain" => u.desktop = val,
+                    b"plain" | b"desk" => u.desktop = val,
                     _ => {
-                        return Err(
-                            ctx.usage_die(cat!("up: --desktop is omarchy or plain, got ", val))
-                        );
+                        return Err(ctx.usage_die(cat!(
+                            "up: --desktop is omarchy, plain or desk, got ",
+                            val
+                        )));
                     }
                 }
             }
@@ -535,7 +536,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     if !u.shell_cmd.is_empty() && !u.shell {
         return Err(ctx.usage_die("up: --shell runs a shell, and --no-shell starts none"));
     }
-    if u.desktop == b"plain" {
+    if !u.desktop.is_empty() {
         for (opt, given) in [
             ("--plugin", !u.plugin_args.is_empty()),
             ("--theme", !u.theme.is_empty()),
@@ -548,7 +549,7 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 return Err(ctx.usage_die(cat!(
                     "up: ",
                     opt,
-                    " needs Omarchy, and --desktop plain has none of it"
+                    " needs Omarchy, and --desktop plain or desk has none of it"
                 )));
             }
         }
@@ -566,10 +567,10 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
             ));
         }
         // (a plain box has no bar or theme of Omarchy's: the rest of --clean is generic, #247)
-        if !u.clean_has("bar") && u.desktop != b"plain" {
+        if !u.clean_has("bar") && u.desktop.is_empty() {
             u.stock_bar = true;
         }
-        if u.theme.is_empty() && u.desktop != b"plain" {
+        if u.theme.is_empty() && u.desktop.is_empty() {
             u.theme = upspec::CLEAN_THEME.as_bytes().to_vec();
         }
         if !u.clean_has("pointer") {

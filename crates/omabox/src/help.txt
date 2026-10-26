@@ -15,7 +15,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
-            [--desktop omarchy|plain] [--shell CMD]      plain: nothing of Omarchy's; CMD: the box's shell (dms run)
+            [--desktop omarchy|plain|desk] [--shell CMD]   plain: no Omarchy; desk: your hypr config; CMD: the shell
             [--workspace WS] [--confirm-close | --no-confirm-close]      (interactive)
             [--new]                                      start it under a free name, box-1, box-2, ... (printed)
             [--json]                                     the box as ls --json lists it, on stdout
@@ -227,7 +227,10 @@ shell.toml [bar]"). Plugins are placed as without it.
 --no-shell: Hyprland only, no Omarchy shell (faster; no bar, tray or notifications).
 --desktop plain (#247): the box's Hyprland runs omabox's own small config (share/plain.lua: Hyprland's
   defaults, a terminal on SUPER+RETURN, SUPER+W closes) and sees no /usr/share/omarchy, as on a machine
-  without Omarchy. No shell unless --shell names one; --plugin, --theme, --theme-dir, --stock-bar,
+  without Omarchy. desk (#321, a first cut): the box HOME's ~/.config/hypr/hyprland.lua instead, as
+  your desktop loads it, after share/desk.lua's autostart policy (no systemd session, idle, lock or
+  system-bus applets; each decision in ~/autostart.log); seed the config with --seed. No shell unless
+  --shell names one; --plugin, --theme, --theme-dir, --stock-bar,
   --desk-shell and --omarchy need Omarchy and are refused. omarchy (the default) is the
   Omarchy desktop.
 --shell CMD (#247): the box's shell is CMD, run by sh in the box's session (log ~/shell.log), not

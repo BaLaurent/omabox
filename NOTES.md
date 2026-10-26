@@ -10506,6 +10506,22 @@ from them.
     box's files are theirs). `up` says "as user@omabox". `--clean` under `--desktop plain` sets what is
     generic (locale and UTC, no pointer, isolated network, animations off, none of the user's fonts,
     identity) and not the stock bar or CLEAN_THEME, whose theme-set needs Omarchy's tree.
+536. **`--desktop desk`, a first cut: the user's own Hyprland config in a box** (2026-10-26, #321; the
+    HOME-path and desk spikes, both on #321). share/desk.lua puts ~/.config/hypr on package.path,
+    wraps hl.exec_cmd, os.execute and io.popen with an autostart policy (drop systemctl --user,
+    uwsm, dbus-update-activation-environment --systemd, hypridle, swayidle, hyprlock, polkit and
+    system-bus applets, and --shell's own command; run the rest; ~/autostart.log), leaves binds
+    alone, then pcall-dofiles the HOME's hyprland.lua (plain.lua when none); a global guard keeps a
+    reload from wrapping twice (verified: hl is a plain table, its functions replaceable). desk is
+    treated as plain for Omarchy's refusals and the hidden tree. Checked by hand: DMS's own
+    `dms setup headless --compositor hyprland` config (118 binds, DMS through systemd), seeded with
+    --seed, DMS as --shell: binds, look and input loaded, no config errors, its two systemd lines
+    dropped, the user's SUPER+space opened DMS's launcher, reload clean. The HOME-path spike: a
+    shell's saved absolute paths (DMS's wallpaper) need the box HOME at the user's real path; at
+    /home/sbx they break. The spikes reached it with a nested user and mount namespace around the
+    shell; omabox itself still puts HOME at /home/sbx (53 literals to move into one box_home()).
+    Not done: the desk's real config copied in (here --seed), the shell found from the config, the
+    generic idle hold, suite cases, a CHANGELOG line (it ships when that is done).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

@@ -1,8 +1,9 @@
 -- omabox nested Hyprland: real Omarchy defaults, minus Omarchy's session autostart; or, with `up
 -- --desktop plain` (#247), omabox's own small config (plain.lua) and nothing of Omarchy's.
 -- Settings come from the environment `omabox up` sets: OMABOX_SIZE (WxH@HZ), OMABOX_INTERACTIVE, OMABOX_XWAYLAND,
--- OMABOX_AUTORELOAD, OMABOX_DESKTOP (omarchy or plain).
-if os.getenv("OMABOX_DESKTOP") ~= "plain" then
+-- OMABOX_AUTORELOAD, OMABOX_DESKTOP (omarchy, plain or desk).
+local desktop = os.getenv("OMABOX_DESKTOP") or "omarchy"
+if desktop == "omarchy" then
   dofile((os.getenv("OMARCHY_PATH") or "/usr/share/omarchy") .. "/default/hypr/bootstrap.lua")
   package.loaded["default.hypr.autostart"] = true -- skip: systemd/dbus env import, first-run, monitor-watch, udiskie
   require("default.hypr.omarchy")
@@ -43,7 +44,8 @@ if os.getenv("OMABOX_DESKTOP") ~= "plain" then
   -- flags and workspace layouts from ~/.local/state, so Omarchy's toggles work in a box.
   require("default.hypr.toggles")
 else
-  dofile("/opt/omabox/share/plain.lua")
+  -- desk (#321): the user's own config, through desk.lua's autostart policy.
+  dofile("/opt/omabox/share/" .. (desktop == "desk" and "desk" or "plain") .. ".lua")
   -- The stand-ins first, as on every other box PATH (finding 149).
   hl.env("PATH", "/opt/omabox/share/bin:" .. (os.getenv("PATH") or "/usr/bin"))
 end
