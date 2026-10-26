@@ -1765,7 +1765,7 @@ fn check_run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             b"--size" | b"--plugin" | b"--net" | b"--allow" | b"--addr" | b"--from"
             | b"--hyprland" | b"--quickshell" | b"--omarchy" | b"--seed" | b"--no-seed"
             | b"--monitor" | b"--theme-dir" | b"--theme" | b"--keep" | b"--env" | b"--overlay"
-            | b"--ro-bind" => {
+            | b"--ro-bind" | b"--desktop" | b"--shell" => {
                 optarg(ctx, x, v)?;
                 upopts.push(x.clone());
                 upopts.push(args[i + 1].clone());

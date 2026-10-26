@@ -697,6 +697,10 @@ fn box_json(
     o.insert("xwayland".into(), Value::Bool(u.xwayland));
     o.insert("autoreload".into(), Value::Bool(u.autoreload));
     o.insert("shell".into(), Value::Bool(u.shell));
+    o.insert("desktop".into(), s(&or_omarchy(&u.desktop)));
+    if !u.shell_cmd.is_empty() {
+        o.insert("shell_cmd".into(), s(&u.shell_cmd));
+    }
     let ov = if u.omarchy.is_empty() {
         install::omarchy_version()
     } else {
@@ -1019,6 +1023,11 @@ fn bwrap_args(
         &hostname(),
     ]);
     b.sys_ro("/usr").map_err(refused)?;
+    // --desktop plain (#247): the box sees no Omarchy tree, as on a machine without Omarchy, so
+    // nothing of it can load by accident (a require, a stand-in, a seeded file pointing there).
+    if u.desktop == b"plain" && std::path::Path::new("/usr/share/omarchy").is_dir() {
+        b.words(&[b"--tmpfs", b"/usr/share/omarchy"]);
+    }
     b.words(&[
         b"--symlink",
         b"usr/bin",
@@ -1199,6 +1208,8 @@ fn bwrap_args(
         (b"OMABOX_SYSTEMD", bit(u.systemd).to_vec()),
         (b"OMABOX_AUDIO", bit(u.audio).to_vec()),
         (b"OMABOX_SHELL", bit(u.shell).to_vec()),
+        (b"OMABOX_SHELL_CMD", u.shell_cmd.clone()),
+        (b"OMABOX_DESKTOP", or_omarchy(&u.desktop)),
         (b"OMABOX_OMARCHY_VERSION", install::omarchy_version()),
         (b"OMABOX_BOX", ctx.name.clone()),
     ] {
@@ -1613,6 +1624,15 @@ fn mount_points(info: &[u8]) -> Vec<Vec<u8>> {
         out.push(v);
     }
     out
+}
+
+/// The box's desktop as box.json and OMABOX_DESKTOP say it (#247): `omarchy` when none was asked.
+fn or_omarchy(desktop: &[u8]) -> Vec<u8> {
+    if desktop.is_empty() {
+        b"omarchy".to_vec()
+    } else {
+        desktop.to_vec()
+    }
 }
 
 #[cfg(test)]

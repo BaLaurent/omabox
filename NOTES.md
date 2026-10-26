@@ -10471,6 +10471,31 @@ from them.
     name gone from ls, no dir, no reaper, after each signal at each step), t_theme (a failing up
     keeps its dir), t_unit_signal_cleanup (shot under a group INT, TERM and HUP during the capture:
     no OUT.part, no TMPDIR file), trap.rs `a_signals_undo_waits_for_made`.
+534. **A box without Omarchy, and a shell of the user's: `up --desktop plain`, `up --shell CMD`**
+    (2026-10-26, #247, #321; L1 of the tier-3 plan, `.local/research/2026-10-21-landscape/`).
+    share/hyprland.lua's Omarchy half (bootstrap, defaults, the HOME's hypr modules, its PATH,
+    toggles) runs only on an Omarchy box; a plain one dofiles share/plain.lua (Hyprland's defaults,
+    a terminal on SUPER+RETURN, SUPER+W) and keeps everything omabox sets after. A plain box gets a
+    tmpfs over /usr/share/omarchy, so it sees no Omarchy tree, as on a machine without one (Omarchy's
+    `omarchy-*` in /usr/bin stay on this machine's, inert). session.sh skips
+    omarchy-theme-set-gnome, Omarchy's EDITOR and the per-monitor workspaces file there. `--shell
+    CMD` (any desktop): share/shell.sh stops the last start's process tree (TERM, KILL after 5 s)
+    and execs `sh -c CMD` with the pid, mark and token files restart-shell reads; `up` and
+    restart-shell (wait_ready) take the shell as ready once any layer is drawn, with the usual crash
+    check, and skip Omarchy's bar, tray and intro waits. box.json has `desktop` and `shell_cmd`. Two
+    bugs any non-Omarchy config met, fixed for every box: (1) `keys` could build no keymap (kb_tool
+    passed Hyprland's `[[EMPTY]]` for an unset kb_variant, kb_model or kb_options to the keyboard
+    tool); (2) the parent labwc's XDG_CURRENT_DESKTOP (`labwc:wlroots`, which Hyprland warns about on
+    screen and shells read) reached the box's Hyprland: start-hyprland.sh unsets it (Omarchy's
+    config had set it back). LABWC_PID stays: mon.rs's `labwc --reconfigure` finds labwc by it, and
+    unsetting it too failed every NVIDIA `monitor add` (the full suite caught it). Checked by hand in boxes (no suite cases yet): a
+    plain box (/usr/share/omarchy empty, 2 binds, no config errors, `keys` opens foot); DMS
+    (`--shell 'dms run'`) up in 3.9 s, its bar, dash, launcher and control center driven by
+    click/ipc; restart-shell brings its bar back; a shell exiting at once fails up ("the shell
+    exited while starting", the box `dead` with its log, as for Omarchy's); the refusals. Still
+    Omarchy's under plain: seed_home's Omarchy half (theme, shell.json, plugins into the HOME,
+    unused there, and up still says "seeded the bar"); `--clean`'s generic parts (locale, pointer)
+    are refused with it; a shell shows the user's login name (the passwd entry).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

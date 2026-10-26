@@ -146,6 +146,8 @@ o=${OMABOX_OMARCHY:-/usr/share/omarchy}
 # shellcheck source=/dev/null
 [ -r "$o/default/uwsm/default" ] && . "$o/default/uwsm/default"
 export TERMINAL=${TERMINAL:-xdg-terminal-exec} EDITOR=${EDITOR:-omarchy-launch-editor --inline}
+# `up --desktop plain` (#247): nothing of Omarchy's runs below (its tree is hidden in the box).
+plain=0; [ "${OMABOX_DESKTOP:-omarchy}" != plain ] || { plain=1; export EDITOR=nvim; }
 
 # `up --theme NAME` (finding 245): the box's theme is NAME, not the desktop's, set as Omarchy sets one
 # (its themes overlaid with the user's, its templates, the first background) before Hyprland and the
@@ -167,7 +169,7 @@ fi
 # The theme's light or dark mode in the box's dconf, as `omarchy-theme-set` leaves it on the host
 # (finding 148): a fresh dconf says "no preference", so portal dialogs, GTK, libadwaita and Qt apps
 # came out light under a dark theme. In the background: the session does not wait for dconf.
-command -v omarchy-theme-set-gnome >/dev/null &&
+[ "$plain" = 0 ] && command -v omarchy-theme-set-gnome >/dev/null &&
   { without_host_fd omarchy-theme-set-gnome > "$HOME/theme-gnome.log" 2>&1 & }
 
 # Omarchy 4.5's per-monitor workspaces (#292, finding 416): each monitor owns a block of ten (1-10,
@@ -180,8 +182,10 @@ command -v omarchy-theme-set-gnome >/dev/null &&
 # start (a save's, `up --from`, is its box's from before); the merged list Omarchy clears itself.
 mw_main=HEADLESS-2
 [ "${OMABOX_INTERACTIVE:-0}" != 1 ] && [ "${OMABOX_WAYLAND_SCREEN:-0}" != 1 ] || mw_main=WAYLAND-1
-mkdir -p "$HOME/.local/state/omarchy" && rm -f -- "$HOME/.local/state/omarchy/monitor-workspaces" &&
-  printf '0\t%s\t%s\n0\t\tFALLBACK\n' "$mw_main" "$mw_main" > "$HOME/.local/state/omarchy/monitor-workspaces"
+if [ "$plain" = 0 ]; then
+  mkdir -p "$HOME/.local/state/omarchy" && rm -f -- "$HOME/.local/state/omarchy/monitor-workspaces" &&
+    printf '0\t%s\t%s\n0\t\tFALLBACK\n' "$mw_main" "$mw_main" > "$HOME/.local/state/omarchy/monitor-workspaces"
+fi
 
 # `up --hyprland PATH` (finding 116): which build runs, in box.log (this script's stderr), as that
 # build says once it is up: the first line of `hyprctl version` (version, commit, dirty or clean).

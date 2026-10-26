@@ -478,6 +478,9 @@ fn wait_hyprland_with<S: BoxSys + ?Sized>(sys: &S, ctx: &Ctx, r: &Ready) -> Res<
     Ok(())
 }
 
+/// Any layer at all in `hyprctl -j layers`' answer: a shell of the user's has drawn (#247).
+const ANY_LAYER_JQ: &str = r#"[.. | objects | select(has("namespace"))] | length > 0"#;
+
 /// `on_box hyprctl -j layers [2>/dev/null]`: the box's layers, as hyprctl answered (or nothing).
 fn layers(ctx: &Ctx, err: ErrTo) -> crate::exec::Ran {
     on_box(
@@ -582,6 +585,36 @@ pub fn wait_ready(ctx: &mut Ctx, r: &mut Ready, want_shell: bool) -> Res<()> {
         }
     }
     if !want_shell {
+        return Ok(());
+    }
+    // A shell of the user's (`up --shell CMD`, #247): ready once it has drawn a layer, whatever its
+    // namespaces; Omarchy's bar, tray and boot-intro waits are not its.
+    if !meta(&ctx.d, "shell_cmd").0.is_empty() {
+        loop {
+            let l = layers(ctx, ErrTo::Null);
+            if Args::new(&["-e", ANY_LAYER_JQ])
+                .run(Some(&l.out), jq::Err::Null)
+                .ok()
+            {
+                break;
+            }
+            starting_ok(ctx, r)?;
+            if let Some(how) = shell_crash(ctx, r, shell_pid(ctx).as_deref()) {
+                let m = shell_crash_text(ctx, "while", &how);
+                return Err(ctx.die(m.strip_prefix(b"warning: ").unwrap_or(&m)));
+            }
+            if past(deadline) {
+                return Err(ctx.die(cat!(
+                    "shell not ready after ",
+                    t.to_string(),
+                    "s (no layer drawn); see ",
+                    ctx.d,
+                    "/home/shell.log"
+                )));
+            }
+            poll();
+        }
+        r.bar_at = mono_ms();
         return Ok(());
     }
     // The bar on screen; only wait for the tray watcher when the user's layout has a tray.

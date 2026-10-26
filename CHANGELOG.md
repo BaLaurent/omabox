@@ -16,6 +16,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   it); `omabox config` lists it, `--json` as `protect_ports`
   ([#355](https://github.com/diogochaves/omabox/issues/355)).
 
+- **A box without Omarchy: `omabox up --desktop plain`**. The box's Hyprland runs omabox's own small
+  config instead of Omarchy's and sees no Omarchy tree, for anyone on Hyprland 0.56+ who is not on
+  Omarchy (a Hyprland plugin, a compositor change, a shell). No shell unless `--shell` names one;
+  `--plugin`, `--theme`, `--theme-dir`, `--stock-bar`, `--desk-shell`, `--clean` and `--omarchy`
+  need Omarchy and are refused with it ([#247](https://github.com/diogochaves/omabox/issues/247)).
+- **Your shell in a box: `omabox up --shell CMD`**, on either desktop: the box's shell is CMD (`dms
+  run`, `qs -p DIR`, ...) instead of Omarchy's. `up` waits until it draws, says when it dies on the
+  way up, and `restart-shell` starts it again
+  ([#321](https://github.com/diogochaves/omabox/issues/321)).
+
 ### Changed
 
 - **omabox is one binary, built by `./install.sh`, which now needs Rust**: `bin/omabox` is a link to
@@ -39,6 +49,12 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ### Fixed
 
+- **`keys` failed with "cannot build keymap" in a box whose Hyprland config leaves `kb_variant`,
+  `kb_model` or `kb_options` unset**: omabox passed Hyprland's `[[EMPTY]]` on as their value. Omarchy
+  sets all three, so no Omarchy box met it.
+- **A box's Hyprland got labwc's `XDG_CURRENT_DESKTOP` (`labwc:wlroots`)**: Hyprland warned on screen
+  that it was set from outside, and a shell could take the box for labwc. Omarchy's config set it
+  back; it is now unset before the box's Hyprland starts.
 - **Plugin settings that held what looks like a key, token or password were copied into every box**:
   `~/.config/omarchy/extensions` went into the box HOME without the check your desk's other files
   get under `--desk-shell`. Such a file now stays on your desk, and `up` names it ("not seeded:

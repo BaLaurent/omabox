@@ -57,6 +57,8 @@ const GIVEN: &[&str] = &[
     "theme-dir",
     "theme",
     "clean",
+    "desktop",
+    "shell",
 ];
 
 /// cmd_up's state: what the options set, then what up worked out from them.
@@ -123,6 +125,10 @@ pub struct Up {
     pub xwayland: bool,
     pub autoreload: bool,
     pub shell: bool,
+    /// `--desktop` (#247): empty for Omarchy's, `plain` for omabox's own small config.
+    pub desktop: Vec<u8>,
+    /// `--shell CMD` (#247): the box's shell is CMD, not Omarchy's.
+    pub shell_cmd: Vec<u8>,
     pub nopointer: bool,
     /// The options given, for up_already.
     pub given: Vec<&'static str>,
@@ -423,6 +429,28 @@ fn parse(ctx: &mut Ctx, args: &[Vec<u8>], u: &mut Up) -> Res<bool> {
                 };
                 u.omarchy_given = val;
             }
+            // #247: a box with nothing of Omarchy's, and a shell of the user's choosing.
+            b"--desktop" => {
+                optarg(ctx, a, v)?;
+                match val.as_slice() {
+                    b"omarchy" => u.desktop.clear(),
+                    b"plain" => u.desktop = val,
+                    _ => {
+                        return Err(
+                            ctx.usage_die(cat!("up: --desktop is omarchy or plain, got ", val))
+                        );
+                    }
+                }
+            }
+            b"--shell" => {
+                optarg(ctx, a, v)?;
+                if val.iter().all(u8::is_ascii_whitespace) {
+                    return Err(
+                        ctx.usage_die("up: --shell takes the command that starts the shell")
+                    );
+                }
+                u.shell_cmd = val;
+            }
             // internal: `run`'s throwaway box goes when this pid does
             b"--owner" => {
                 optarg(ctx, a, v)?;
@@ -502,6 +530,33 @@ fn base_of(g: &[u8]) -> Vec<u8> {
 /// Everything cmd_up checks before it makes anything: false when the box is up already (said).
 fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
     let jailed = in_jail();
+    // --desktop plain (#247): Omarchy's tree is hidden in the box, so what needs it is refused, and
+    // the box has no shell unless --shell names one. --shell needs a shell to replace.
+    if !u.shell_cmd.is_empty() && !u.shell {
+        return Err(ctx.usage_die("up: --shell runs a shell, and --no-shell starts none"));
+    }
+    if u.desktop == b"plain" {
+        for (opt, given) in [
+            ("--plugin", !u.plugin_args.is_empty()),
+            ("--theme", !u.theme.is_empty()),
+            ("--theme-dir", !u.theme_dirs.is_empty()),
+            ("--stock-bar", u.stock_bar),
+            ("--desk-shell", u.desk_shell),
+            ("--clean", u.clean),
+            ("--omarchy", !u.omarchy.is_empty()),
+        ] {
+            if given {
+                return Err(ctx.usage_die(cat!(
+                    "up: ",
+                    opt,
+                    " needs Omarchy, and --desktop plain has none of it"
+                )));
+            }
+        }
+        if u.shell_cmd.is_empty() {
+            u.shell = false;
+        }
+    }
     // --clean (#252, finding 357): a desktop where only what is tested moves. Omarchy's own bar on
     // CLEAN_THEME, a sentinel wallpaper, the clock frozen, English in UTC (finding 363), no pointer,
     // no network, animations off; --keep takes any of them back, --theme and --net choose their own.
@@ -1551,6 +1606,24 @@ pub fn up_already(ctx: &Ctx, u: &Up) -> Res<()> {
     }
     if u.has("no-shell") && jqr(".shell | tostring") != b"false" {
         diff.push(b"--no-shell (it has the shell)".to_vec());
+    }
+    if u.has("desktop") && m("desktop") != u.desktop {
+        diff.push(cat!(
+            "--desktop ",
+            or(u.desktop.clone(), "omarchy"),
+            " (it runs ",
+            or(m("desktop"), "omarchy"),
+            ")"
+        ));
+    }
+    if u.has("shell") && m("shell_cmd") != u.shell_cmd {
+        diff.push(cat!(
+            "--shell ",
+            u.shell_cmd,
+            " (its shell is ",
+            or(m("shell_cmd"), "Omarchy's"),
+            ")"
+        ));
     }
     if u.has("omarchy") && m("omarchy") != u.omarchy {
         diff.push(cat!(
