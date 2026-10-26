@@ -92,12 +92,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if settle != b"0" {
         crate::trap::sleep(&settle);
     }
-    // (the EXIT trap's rm, also on INT, TERM or HUP)
-    let (_, tmp) = shell::mktemp_args(&[b"-d"])?;
-    let t = tmp.clone();
-    let _trap = crate::trap::on_exit(move || {
-        let _ = std::fs::remove_dir_all(shell::path(&t));
-    });
+    // (the EXIT trap's rm, also on INT, TERM or HUP; armed with the making: #360)
+    let (tmp, _trap) = crate::trap::made(|| -> Res<_> {
+        let (_, tmp) = shell::mktemp_args(&[b"-d"])?;
+        let t = tmp.clone();
+        let trap = crate::trap::on_exit(move || {
+            let _ = std::fs::remove_dir_all(shell::path(&t));
+        });
+        Ok((tmp, trap))
+    })?;
     let s = cat!(tmp, "/s");
     // (its first 15 bytes, as the kernel cuts a comm: finding 428)
     let tapp = cpu_tame(&app[..app.len().min(15)]);

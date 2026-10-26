@@ -895,15 +895,54 @@ fn grim_failed_words(mut why: Vec<u8>, grc: i32, zn: &[u8]) -> Vec<u8> {
 }
 
 fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bool) -> Res<()> {
-    let (_, gerr) = shell::mktemp()?;
+    let (pid, mpid) = (Arc::new(AtomicI32::new(0)), Arc::new(AtomicI32::new(0)));
+    let (stop, done) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
+    // A signal during the capture (#386): the grab stopped (its children killed until its thread is
+    // over, at most 3 s, so it makes no file after this), then grim's words and the file it was
+    // writing removed. Armed with the making. Any other end leaves them to the code below. Not under
+    // --no-pointer's hold: its handlers give the pointer back on a signal, and arming trap.rs's would
+    // replace them.
+    let (gerr, _undo) = crate::trap::made(|| -> Res<_> {
+        let (_, gerr) = shell::mktemp()?;
+        if crate::ptr::holding() {
+            return Ok((gerr, None));
+        }
+        let (pid, mpid, stop, done) = (pid.clone(), mpid.clone(), stop.clone(), done.clone());
+        let (err, file) = (gerr.clone(), s.file.clone());
+        let unput = s.tofd.is_empty() || s.changed;
+        let undo = crate::trap::on_exit(move || {
+            if !crate::trap::signalled() {
+                return;
+            }
+            stop.store(true, Ordering::SeqCst);
+            let end = std::time::Instant::now() + Duration::from_secs(3);
+            while !done.load(Ordering::SeqCst) && std::time::Instant::now() < end {
+                for p in [&pid, &mpid] {
+                    let p = p.load(Ordering::SeqCst);
+                    if p > 0 {
+                        kill_tree(n(i64::from(p)).as_slice());
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let _ = std::fs::remove_file(shell::path(&err));
+            if unput {
+                let _ = std::fs::remove_file(shell::path(&file));
+            }
+        });
+        Ok((gerr, Some(undo)))
+    })?;
     let grab = Arc::new(Grab {
         ctx: ctx.clone(),
         grim: s.grim.clone(),
         zoom: s.zoom.clone(),
         err: gerr.clone(),
-        pid: Arc::new(AtomicI32::new(0)),
-        mpid: Arc::new(AtomicI32::new(0)),
-        stop: Arc::new(AtomicBool::new(false)),
+        pid,
+        mpid,
+        stop,
     });
     let to_fd = !s.tofd.is_empty() && !s.changed;
     let tofd = s.tofd.clone();
@@ -967,6 +1006,7 @@ fn capture(ctx: &mut Ctx, s: &mut Shot, _long: i64, lw: i64, lh: i64, scaled: bo
                 std::thread::sleep(Duration::from_millis(100));
                 rc = put();
             }
+            done.store(true, Ordering::SeqCst);
             let _ = tx.send(rc);
         }));
     }

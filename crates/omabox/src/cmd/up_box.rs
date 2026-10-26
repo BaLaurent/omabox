@@ -52,7 +52,8 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     // From here a box dir exists, and from launch.sh on a box may be running: if up fails, it is
     // killed rather than left running unseen. Once box.json is written the dir stays, so the logs
     // up's refusal points at can be read; before that it goes (finding 163). Whatever ends up:
-    // a failure, or an INT, TERM or HUP at any step (finding 434, #356).
+    // a failure, or an INT, TERM or HUP at any step (finding 434, #356). A signal is the caller
+    // stopping up, not a failure with logs to read: the dir and its reaper go too, as down's do (#388).
     let undo_ctx = ctx.clone();
     let launched: Arc<Mutex<Launched>> = Arc::default();
     let undo_launched = Arc::clone(&launched);
@@ -65,7 +66,7 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         if l.child.is_some() || l.asked {
             launched_wait(&undo_ctx, &mut l.child);
         }
-        crate::exit::muted(|| ready::kill_box(&undo_ctx));
+        let gone = crate::exit::muted(|| ready::kill_box(&undo_ctx));
         if let Some(c) = l.child.as_mut()
             && matches!(c.try_wait(), Ok(None))
         {
@@ -73,7 +74,11 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
         }
         drop(l);
         let _ = std::fs::remove_file(undo_ctx.at("starting"));
-        if !undo_ctx.at("box.json").is_file() {
+        // (a PID 1 still exiting keeps its dir: a box that may yet run is never hidden)
+        if crate::trap::signalled() && gone {
+            ready::kill_reapers(&undo_ctx);
+            ready::rm_box(&undo_ctx);
+        } else if !undo_ctx.at("box.json").is_file() {
             ready::rm_box(&undo_ctx);
         }
     })));

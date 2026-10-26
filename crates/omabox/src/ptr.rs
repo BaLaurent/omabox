@@ -342,6 +342,12 @@ fn park_if_stopping() {
 /// The one-off hold of this process (shot --no-pointer), given back when it ends however it ends.
 static HOLD: Mutex<Option<(Ctx, Vec<u8>)>> = Mutex::new(None);
 
+/// Whether a one-off hold (hold_until_exit) is on: its own handlers then take INT, TERM and HUP, so
+/// nothing may arm trap.rs's over them (#386).
+pub fn holding() -> bool {
+    HOLD.lock().map(|h| h.is_some()).unwrap_or(false)
+}
+
 /// ptr_release_quiet TAG: the hold given back; quiet when the box went down meanwhile.
 fn release_quiet(ctx: &Ctx, tag: &[u8]) {
     if !ctx.at("pointer").is_file() {

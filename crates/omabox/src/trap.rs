@@ -49,6 +49,22 @@ pub fn on_exit_code(f: impl FnOnce() + Send + 'static) -> Trap {
     })
 }
 
+/// F, which makes something and arms its undo, as one step: a signal's undo waits for F to finish
+/// (UNDOING), so a signal between the making and the arming never leaves what F made (#360). F's
+/// children run plainly, as an undo's do: main neither parks nor waits for FOREGROUND inside it.
+pub fn made<R>(f: impl FnOnce() -> R) -> R {
+    undoing(f)
+}
+
+/// The signal (INT, TERM or HUP) whose undo is running or ran; 0 when none came. An undo reads it
+/// to tell a command stopped on purpose from one that failed (#388).
+static SIGNALLED: AtomicI32 = AtomicI32::new(0);
+
+/// Whether the undos run because a signal stopped the command, not because it failed or ended.
+pub fn signalled() -> bool {
+    SIGNALLED.load(Ordering::SeqCst) != 0
+}
+
 /// Every undo still pending, the last made first (bash's EXIT trap on the way out).
 pub fn run_undos() {
     undoing(|| {
@@ -73,10 +89,9 @@ thread_local! {
 /// trap dropped at its end or on a refusal) never both, so a signal during main's undo waits for it
 /// to finish rather than finding TRAPS empty and ending the process halfway through it. Main's undos
 /// run their children plainly, never parked (sig::UNDO_MAIN).
-fn undoing(f: impl FnOnce()) {
+fn undoing<R>(f: impl FnOnce() -> R) -> R {
     if IN_UNDO.with(std::cell::Cell::get) {
-        f();
-        return;
+        return f();
     }
     let _u = UNDOING
         .lock()
@@ -86,11 +101,12 @@ fn undoing(f: impl FnOnce()) {
     if main {
         crate::sig::UNDO_MAIN.store(true, Ordering::SeqCst);
     }
-    f();
+    let r = f();
     if main {
         crate::sig::UNDO_MAIN.store(false, Ordering::SeqCst);
     }
     IN_UNDO.with(|c| c.set(false));
+    r
 }
 
 /// Whether an on_exit_code trap is on (a `trap 'exit 143' TERM` of bash's is set).
@@ -316,6 +332,7 @@ fn arm() {
             let _fg = fg;
             // (read before the undo, which drops the code traps' count with them)
             let code = CODE_TRAPS.load(Ordering::SeqCst) > 0;
+            SIGNALLED.store(sig, Ordering::SeqCst);
             run_undos();
             if code {
                 // (bash's `exit 130|143|129`, its EXIT trap run on the way: the first signal's)
@@ -365,6 +382,31 @@ pub fn sleep(secs: &[u8]) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    // #360: a signal's undo that starts while made's F runs waits for F, so it finds what F made
+    // already armed, never made and not yet armed.
+    #[test]
+    fn a_signals_undo_waits_for_made() {
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = Arc::new(Mutex::new(None));
+        let (a, s) = (armed.clone(), seen.clone());
+        made(|| {
+            let t = std::thread::spawn(move || {
+                undoing(|| *s.lock().unwrap() = Some(a.load(Ordering::SeqCst)));
+            });
+            // (the other thread asks for the undo meanwhile)
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            armed.store(true, Ordering::SeqCst);
+            t
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            *seen.lock().unwrap(),
+            Some(true),
+            "the undo ran after F armed"
+        );
+    }
 
     // t_unit_monitors' (an interactive monitor that fails in `up`): the add's own undo, made inside
     // up's, runs when the add ends, and leaves up's in place: up's runs when up ends (bash's

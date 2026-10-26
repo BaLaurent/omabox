@@ -3684,7 +3684,8 @@ sd_stop() {
 # (its stdin closed, not killed) and the pointer tool of drag's button; shot --no-pointer gives the
 # pointer back on INT, TERM and HUP, at any step, its record gone; signals that came ignored (nohup, a
 # script's `&`) stay ignored, for omabox and what it runs; SIGPIPE as it came is what children get;
-# record sheet under a TERM to omabox alone leaves no sheet and no working folder.
+# record sheet under a TERM to omabox alone leaves no sheet and no working folder; a shot stopped
+# during its capture leaves no OUT.part and no grim error file (#386).
 t_unit_signal_cleanup() {
   local r=$TMP/sc fk sg
   rm -rf "$r"; mkdir -p "$r"
@@ -3721,6 +3722,12 @@ t_unit_signal_cleanup() {
     else cx_want=("rc=${code[$sg]}" out= 'state!~^\./n\.png f'); fi
     cx_case "shot --no-pointer and $sg during the capture: the pointer given back" shot -b fk --no-pointer -o "$r/out/n.png"
     check "...shown again, its record gone" sd_shown
+  done
+  # A shot stopped during the capture leaves neither OUT.part nor grim's error file in TMPDIR (#386).
+  for sg in group-INT TERM HUP; do
+    cx_wrap=("$r/rp-sig" "$sg" "$fk/grabbing")
+    cx_want=("rc=${code[$sg]}" out= 'state!~^\./n\.png' 'state!~^\./tmp\.')
+    cx_case "shot and $sg during the capture: no OUT.part, no grim error file left" shot -b fk -o "$r/out/n.png"
   done
   # Signals that came ignored (nohup, a script's `&`) stay ignored, for omabox and what it runs, the
   # --after action and the tools included.
@@ -8473,8 +8480,9 @@ t_up_aborted() {
 # 5.3 runs the EXIT trap of a shell a signal ends with $? 0, so up's `[ $? = 0 ] ||` left the box
 # running, unseen, its `starting` file kept. Here while up waits for the box's shell (wait_ready),
 # each signal to up's group and to up alone (an INT to up alone used to let it go on), INT, TERM and
-# HUP at their defaults (a test run in the background ignores INT): bash's code, the box not up, no
-# `starting` left.
+# HUP at their defaults (a test run in the background ignores INT): bash's code, and the box gone:
+# not up, not listed dead, no dir, `starting` or reaper left (#388: a signal is a stop, not a failure
+# with logs to keep).
 t_up_signals() {
   local r=$TMP/upsig B i=0 sig how rc bd st
   mkdir -p "$r"; rp_sig_write "$r/rp-sig"
@@ -8489,8 +8497,9 @@ t_up_signals() {
       fi
       check_eq "up and $how $sig while it waits for the shell: bash's code" "$(( 128 + $(kill -l "$sig") ))" "$rc"
       st=$(ob ls --json 2>/dev/null | jq -r --arg n "$B" 'first(.[] | select(.name == $n) | .state) // "gone"')
-      check "...the box not up ($st)" test "$st" != up
-      check_fails "...no starting file left" test -e "$bd/starting"
+      check_eq "...the box gone, not left dead (#388)" gone "$st"
+      check_fails "...no box dir left" test -e "$bd"
+      check_eq "...no reaper left" "" "$(pgrep -f "_reap $B " | tr '\n' ' ')"
       ob down "$B" >/dev/null 2>&1
     done
   done
@@ -8510,9 +8519,9 @@ t_up_signals() {
         fi
         check_eq "up and $how $sig at $mark: the signal's code" "$(( 128 + $(kill -l "$sig") ))" "$rc"
         st=$(ob ls --json 2>/dev/null | jq -r --arg n "$B" 'first(.[] | select(.name == $n) | .state) // "gone"')
-        check "...the box not up ($st)" test "$st" != up
-        check_fails "...no starting file left" test -e "$bd/starting"
-        if [ ! -f "$bd/box.json" ]; then check_fails "...a dir with no box.json gone whole" test -e "$bd"; fi
+        check_eq "...the box gone, not left dead (#388)" gone "$st"
+        check_fails "...no box dir left" test -e "$bd"
+        check_eq "...no reaper left" "" "$(pgrep -f "_reap $B " | tr '\n' ' ')"
         ob down "$B" >/dev/null 2>&1
       done
     done
@@ -8528,7 +8537,8 @@ t_up_signals() {
     sleep 4
     check_eq "...no box of it left running once the launcher's hold is over" "" "$(pgrep -f "pasta .* $bd/pasta\.pid" | tr '\n' ' ')"
     st=$(ob ls --json 2>/dev/null | jq -r --arg n "$B" 'first(.[] | select(.name == $n) | .state) // "gone"')
-    check "...the box not up ($st)" test "$st" != up
+    check_eq "...the box gone, not left dead (#388)" gone "$st"
+    check_fails "...no box dir left" test -e "$bd"
     ob down "$B" >/dev/null 2>&1
   done
 }
@@ -14219,6 +14229,7 @@ t_theme() {
   rm -f "$T/bin/omarchy-theme-set"; printf '#!/bin/sh\necho "broken on purpose" >&2\nexit 3\n' > "$T/bin/omarchy-theme-set"; chmod +x "$T/bin/omarchy-theme-set"
   check_match "a failing omarchy-theme-set: up fails, saying why" "died while starting \(up --theme: omarchy-theme-set $t failed: broken on purpose" \
     "$(ob up "$B3" --net isolated --no-shell --omarchy "$T" --theme "$t" 2>&1)"
+  check "...its dir kept for the logs it points at, unlike a signal's stop (finding 163, #388)" test -f "$(ob path "$B3")/box.json"
   ob down "$B3" >/dev/null 2>&1
 }
 

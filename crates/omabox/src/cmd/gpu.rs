@@ -54,12 +54,15 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
     if box_pids_try(ctx).is_none() {
         return Err(ctx.die("gpu: cannot read the box's pid namespace"));
     }
-    // (the EXIT trap's rm, also on INT, TERM or HUP)
-    let (_, tmp) = shell::mktemp_args(&[b"-d"])?;
-    let t = tmp.clone();
-    let _trap = crate::trap::on_exit(move || {
-        let _ = std::fs::remove_dir_all(shell::path(&t));
-    });
+    // (the EXIT trap's rm, also on INT, TERM or HUP; armed with the making: #360)
+    let (tmp, _trap) = crate::trap::made(|| -> Res<_> {
+        let (_, tmp) = shell::mktemp_args(&[b"-d"])?;
+        let t = tmp.clone();
+        let trap = crate::trap::on_exit(move || {
+            let _ = std::fs::remove_dir_all(shell::path(&t));
+        });
+        Ok((tmp, trap))
+    })?;
     let at = |f: &str| cat!(tmp, "/", f);
     let mut via: &str = "drm";
     let figures = if gpu_on_nvidia(ctx) {

@@ -10451,6 +10451,26 @@ from them.
     t_unit_monitor_add_window 143 s to 156 s (its three 5 s waits). Floors reset to about 90%: unit
     2040, full 4740 (531's estimate plus the checks added), --installed 1990 and 4270. cargo test:
     257 and 15 ignored, unchanged. No box test was touched.
+533. **What a signal left behind: up's dead entry, shot's OUT.part, the temp files' window** (2026-10-25,
+    #388, #386, #360; found by hand on the Rust omabox, all three in bash too). (1) up's undo kept
+    the box dir once box.json existed (finding 163, for a failure's logs), so a Ctrl-C during up
+    left the box listed `dead` and its reaper running until `down`. A signal is a stop, not a
+    failure: trap.rs records the signal before the undos run (`trap::signalled`), and up's undo
+    then clears the dir and kills the reaper as down does, once kill_box saw PID 1 gone (a PID 1
+    still exiting keeps its dir, so a box that may run is never hidden). A failure keeps both, as
+    before. (2) shot's capture registered neither OUT.part nor grim's error file: its undo, on a
+    signal only, stops the grab (its children killed until its thread is over, at most 3 s, so
+    grim makes no file after) and removes both. Not under --no-pointer's hold (`ptr::holding`):
+    its own INT, TERM and HUP handlers exec `_ptr-release` to give the pointer back, and arming
+    trap.rs's over them kept the pointer hidden (t_unit_signal_cleanup caught it), so a
+    --no-pointer shot stopped mid-capture still leaves OUT.part. (3) cpu, gpu, record stop (the input's file, its
+    `.record-*` folders) and record_ass (an unregistered TMPDIR file) made a file with mktemp and
+    armed its undo on the next line; `trap::made` runs both under the undo lock (UNDOING), so a
+    signal's undo waits and finds it armed. Inside `made` main runs its children plainly, as in
+    an undo, so it cannot wait on FOREGROUND held by the signal's thread. Tests: t_up_signals (the
+    name gone from ls, no dir, no reaper, after each signal at each step), t_theme (a failing up
+    keeps its dir), t_unit_signal_cleanup (shot under a group INT, TERM and HUP during the capture:
+    no OUT.part, no TMPDIR file), trap.rs `a_signals_undo_waits_for_made`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

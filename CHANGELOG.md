@@ -267,6 +267,15 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   in PATH" in its run's log, its status 127, `check run` exit 3. The bash omabox ran its own
   builtin or function there. Scripts: nothing to change (give a path, as before, for a scenario of
   your own).
+- **A Ctrl-C (or a TERM or HUP) during `omabox up` clears the box**: the box was ended either way,
+  but the bash omabox kept its folder once it was written, so `omabox ls` listed it `dead` and its
+  idle watcher ran until `omabox down`. Now it goes as a `down` would. An `up` that fails still keeps
+  the box's folder and logs, as before (#388). Scripts: nothing to change.
+- **A signal no longer leaves temporary files behind**: `omabox shot` stopped during its capture
+  left an empty `OUT.part` and grim's error file in `$TMPDIR` (#386; with `--no-pointer` the
+  `OUT.part` still can), and a signal in the instant
+  between making and registering `cpu`'s, `gpu`'s or `record stop`'s working files left those
+  (#360). The bash omabox did the same.
 
 ## 1.0.1 — unreleased
 

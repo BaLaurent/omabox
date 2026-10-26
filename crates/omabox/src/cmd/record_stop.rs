@@ -546,18 +546,17 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     rm(&ctx.at("record.glide"));
     // The input it saw (#176): taken out of the box dir's name for it.
     let mut input = Vec::new();
+    // (gone however the stop ends from here, by its trap, armed with the making: findings 432, 452,
+    // #360)
     if ctx.at("record.input").is_file() {
-        if let Ok((_, t)) = shell::mktemp() {
-            if crate::shots::mv_f(shell::bytes(&ctx.at("record.input")), &t) {
-                input = t;
-            } else {
-                rm(&shell::path(&t));
+        crate::trap::made(|| {
+            if let Ok((_, t)) = shell::mktemp() {
+                tmps.add(t.clone());
+                if crate::shots::mv_f(shell::bytes(&ctx.at("record.input")), &t) {
+                    input = t;
+                }
             }
-        }
-    }
-    // (gone however the stop ends from here, by its trap: findings 432, 452)
-    if !input.is_empty() {
-        tmps.add(input.clone());
+        });
     }
     let geo = if ctx.at("record.geo").is_file() {
         let d = std::fs::read(ctx.at("record.geo")).unwrap_or_default();
@@ -788,9 +787,12 @@ fn stop_in(ctx: &mut Ctx, rec: &mut Rec, so: &StopOpts, tmps: &mut Tmps) -> Res<
     if !so.tofd.is_empty() {
         // The marks and captions made in a folder of the box dir's own, then copied into the
         // caller's files.
-        let (_, tmpd) = shell::mktemp_args(&[b"-d", &cat!(ctx.d, "/.record-XXXXXX")])
-            .map_err(|_| ctx.die(cat!("record: cannot write in ", ctx.d)))?;
-        tmps.add(tmpd.clone());
+        let tmpd = crate::trap::made(|| {
+            let (_, t) = shell::mktemp_args(&[b"-d", &cat!(ctx.d, "/.record-XXXXXX")]).ok()?;
+            tmps.add(t.clone());
+            Some(t)
+        })
+        .ok_or_else(|| ctx.die(cat!("record: cannot write in ", ctx.d)))?;
         record_marks(
             ctx,
             &marks,
@@ -1295,7 +1297,12 @@ fn record_ass(
         };
         (gg(1), gg(2))
     };
-    let Ok((_, tmp)) = shell::mktemp() else {
+    // (removed however this ends, armed with the making: #360)
+    let Some((tmp, _tmp_g)) = crate::trap::made(|| {
+        let (_, tmp) = shell::mktemp().ok()?;
+        let t = tmp.clone();
+        Some((tmp, crate::trap::on_exit(move || rm(&shell::path(&t)))))
+    }) else {
         return Ok(None);
     };
     let area0 = cat!(g[3], " ", g[4], " ", g[5], " ", g[6]);
@@ -1767,10 +1774,12 @@ fn sheet_file_in(ctx: &mut Ctx, so: &SheetOpts, tmps: &mut Tmps) -> Res<()> {
                 ")"
             )));
         }
-        let (_, t) = shell::mktemp_args(&[b"-d", &cat!(ctx.d, "/.record-XXXXXX")])
-            .map_err(|_| ctx.die(cat!("record sheet: cannot write in ", ctx.d)))?;
-        tmps.add(t.clone());
-        tmpd = t;
+        tmpd = crate::trap::made(|| {
+            let (_, t) = shell::mktemp_args(&[b"-d", &cat!(ctx.d, "/.record-XXXXXX")]).ok()?;
+            tmps.add(t.clone());
+            Some(t)
+        })
+        .ok_or_else(|| ctx.die(cat!("record sheet: cannot write in ", ctx.d)))?;
         tsv = cat!(tmpd, "/v.marks.tsv");
         outp = cat!(tmpd, "/v.sheet.png");
         // (In 10 s: a file the caller passed is not one to wait on.)
@@ -2057,21 +2066,22 @@ fn record_sheet(
     }
     // The frames copied out into a folder of the box dir's (gone with the box, and on any end of
     // this one), each at most 16 MiB, all of them 256.
-    let Ok((_, tmp)) = shell::mktemp_args(&[b"-d", &cat!(ctx.d, "/.record-XXXXXX")]) else {
-        return Ok(None);
-    };
     // (its own trap, in its subshell: the main shell's ends with the signal unless a code trap of
-    // its own, rec_traps, is on)
-    let tmp_g = {
+    // its own, rec_traps, is on; armed with the making: #360)
+    let Some((tmp, tmp_g)) = crate::trap::made(|| {
+        let (_, tmp) = shell::mktemp_args(&[b"-d", &cat!(ctx.d, "/.record-XXXXXX")]).ok()?;
         let t = tmp.clone();
         let undo = move || {
             let _ = std::fs::remove_dir_all(shell::path(&t));
         };
-        if crate::trap::code_active() {
+        let g = if crate::trap::code_active() {
             crate::trap::on_exit_code(undo)
         } else {
             crate::trap::on_exit(undo)
-        }
+        };
+        Some((tmp, g))
+    }) else {
+        return Ok(None);
     };
     let mut total = 0i64;
     let mut ms: Vec<i64> = Vec::new();
