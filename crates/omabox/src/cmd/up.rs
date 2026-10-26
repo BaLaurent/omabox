@@ -542,7 +542,6 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
             ("--theme-dir", !u.theme_dirs.is_empty()),
             ("--stock-bar", u.stock_bar),
             ("--desk-shell", u.desk_shell),
-            ("--clean", u.clean),
             ("--omarchy", !u.omarchy.is_empty()),
         ] {
             if given {
@@ -566,10 +565,11 @@ fn checks(ctx: &mut Ctx, u: &mut Up) -> Res<bool> {
                 "up: --clean or --desk-shell, not both (--clean starts from Omarchy's bar; --keep bar keeps yours)",
             ));
         }
-        if !u.clean_has("bar") {
+        // (a plain box has no bar or theme of Omarchy's: the rest of --clean is generic, #247)
+        if !u.clean_has("bar") && u.desktop != b"plain" {
             u.stock_bar = true;
         }
-        if u.theme.is_empty() {
+        if u.theme.is_empty() && u.desktop != b"plain" {
             u.theme = upspec::CLEAN_THEME.as_bytes().to_vec();
         }
         if !u.clean_has("pointer") {

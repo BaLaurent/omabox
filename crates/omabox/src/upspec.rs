@@ -10,7 +10,11 @@ pub const CLEAN_WALLPAPER_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQk
 pub const CLEAN_CLOCK: &str = "'Friday 12:00'";
 pub const CLEAN_CLOCK_VERTICAL: &str = "'12'\n'\u{2014}'\n'00'";
 pub const CLEAN_TZ: &str = "UTC";
-pub const CLEAN_KEEPS: &str = "animations bar clock fonts locale pointer wallpaper";
+pub const CLEAN_KEEPS: &str = "animations bar clock fonts identity locale pointer wallpaper";
+/// A clean box's user and host names (#247): nothing of the user's in a shot (a shell's greeting, a
+/// terminal's title, a prompt).
+pub const CLEAN_USER: &str = "user";
+pub const CLEAN_HOST: &str = "omabox";
 
 use crate::boxes;
 use crate::cat;
@@ -529,22 +533,26 @@ pub fn clean_zone_rec(envs: &[(Vec<u8>, Vec<u8>)], clean_zone: &[u8]) -> Vec<u8>
         .map_or(z.clone(), <[u8]>::to_vec)
 }
 
-/// clean_text KEEP THEME NET CLEAN_LANG CLEAN_ZONE: what a clean box is, as up says it.
+/// clean_text KEEP THEME NET CLEAN_LANG CLEAN_ZONE PLAIN: what a clean box is, as up says it. A
+/// plain box (#247) has no bar, theme, wallpaper or clock of Omarchy's to clean.
 pub fn clean_text(
     keep: &[u8],
     theme: &[u8],
     net: &[u8],
     clean_lang: &[u8],
     clean_zone: &[u8],
+    plain: bool,
 ) -> Vec<u8> {
-    let has = |w| clean_has(keep, w);
+    let has = |w| plain || clean_has(keep, w);
     let mut parts: Vec<Vec<u8>> = Vec::new();
-    parts.push(if has("bar") {
-        b"your bar".to_vec()
-    } else {
-        b"Omarchy's bar".to_vec()
-    });
-    parts.push(cat!("theme ", theme));
+    if !plain {
+        parts.push(if has("bar") {
+            b"your bar".to_vec()
+        } else {
+            b"Omarchy's bar".to_vec()
+        });
+        parts.push(cat!("theme ", theme));
+    }
     if !has("wallpaper") {
         parts.push(cat!(
             "wallpaper ",
@@ -555,7 +563,7 @@ pub fn clean_text(
     if !has("clock") {
         parts.push(cat!("the clock at ", CLEAN_CLOCK.replace('\'', "")));
     }
-    if !has("locale") {
+    if !clean_has(keep, "locale") {
         let lang = if clean_lang.is_empty() {
             clean_locale().as_bytes().to_vec()
         } else {
@@ -568,17 +576,20 @@ pub fn clean_text(
         };
         parts.push(cat!("locale ", lang, " in ", zone));
     }
-    if !has("fonts") {
+    if !clean_has(keep, "fonts") {
         parts.push(b"none of your fonts".to_vec());
     }
-    if !has("pointer") {
+    if !clean_has(keep, "pointer") {
         parts.push(b"no pointer".to_vec());
     }
     if net == b"isolated" {
         parts.push(b"no network".to_vec());
     }
-    if !has("animations") {
+    if !clean_has(keep, "animations") {
         parts.push(b"animations off".to_vec());
+    }
+    if !clean_has(keep, "identity") {
+        parts.push(cat!("as ", CLEAN_USER, "@", CLEAN_HOST));
     }
     // (`IFS=,; "${parts[*]}"`, then each comma as ", ": one in a part's own words too)
     let s = parts.join(&b',');
@@ -588,6 +599,37 @@ pub fn clean_text(
         if c == b',' {
             out.push(b' ');
         }
+    }
+    out
+}
+
+/// clean_ids TEXT ME PASSWD (#247): /etc/passwd (PASSWD) or /etc/group as a clean box has it: ME's
+/// entry named CLEAN_USER, in passwd with no full name and the box HOME, and ME in a group's members
+/// CLEAN_USER too. Every other line as it was.
+pub fn clean_ids(text: &[u8], me: &[u8], passwd: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len());
+    for line in text.split_inclusive(|&c| c == b'\n') {
+        let (body, nl) = match line.strip_suffix(b"\n") {
+            Some(b) => (b, &b"\n"[..]),
+            None => (line, &b""[..]),
+        };
+        let mut f: Vec<Vec<u8>> = body.split(|&c| c == b':').map(<[u8]>::to_vec).collect();
+        if !me.is_empty() && f.first().is_some_and(|n| n == me) {
+            f[0] = CLEAN_USER.as_bytes().to_vec();
+            if passwd && f.len() == 7 {
+                f[4].clear();
+                f[5] = b"/home/sbx".to_vec();
+            }
+        }
+        if !passwd && f.len() == 4 && !me.is_empty() {
+            f[3] = f[3]
+                .split(|&c| c == b',')
+                .map(|m| if m == me { CLEAN_USER.as_bytes() } else { m })
+                .collect::<Vec<_>>()
+                .join(&b',');
+        }
+        out.extend_from_slice(&f.join(&b':'));
+        out.extend_from_slice(nl);
     }
     out
 }
@@ -710,7 +752,7 @@ mod tests {
         assert_eq!(r, Err(()));
         assert!(
             said.contains(
-                "takes animations, bar, clock, fonts, locale, pointer, wallpaper (comma-separated), got blur"
+                "takes animations, bar, clock, fonts, identity, locale, pointer, wallpaper (comma-separated), got blur"
             ),
             "--keep: anything else refused, naming what it takes: {said}"
         );
@@ -720,10 +762,11 @@ mod tests {
                 b"tokyo-night",
                 b"isolated",
                 b"en_US.UTF-8",
-                b"UTC"
+                b"UTC",
+                false
             ))
             .unwrap(),
-            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, none of your fonts, no pointer, no network, animations off",
+            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale en_US.UTF-8 in UTC, none of your fonts, no pointer, no network, animations off, as user@omabox",
             "clean_text: all of it"
         );
         assert_eq!(
@@ -732,10 +775,11 @@ mod tests {
                 b"nord",
                 b"connected",
                 b"",
-                b""
+                b"",
+                false
             ))
             .unwrap(),
-            "your bar, theme nord, no pointer",
+            "your bar, theme nord, no pointer, as user@omabox",
             "...what --keep takes back, and a network"
         );
     }
@@ -937,19 +981,27 @@ mod tests {
             b"isolated",
             b"C.UTF-8",
             b"UTC",
+            false,
         );
         assert_eq!(
             String::from_utf8(t).unwrap(),
-            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale C.UTF-8 in UTC, no network"
+            "Omarchy's bar, theme tokyo-night, wallpaper #ff00ff (any of it inside a window or the bar is a hole), the clock at Friday 12:00, locale C.UTF-8 in UTC, no network, as user@omabox"
         );
         let t = clean_text(
-            b"bar,wallpaper,clock,locale,fonts,pointer,animations",
+            b"bar,wallpaper,clock,locale,fonts,pointer,animations,identity",
             b"x",
             b"connected",
             b"",
             b"",
+            false,
         );
         assert_eq!(t, b"your bar, theme x");
+        // A plain box (#247): no bar, theme, wallpaper or clock of Omarchy's to say.
+        let t = clean_text(b"", b"", b"isolated", b"C.UTF-8", b"UTC", true);
+        assert_eq!(
+            String::from_utf8(t).unwrap(),
+            "locale C.UTF-8 in UTC, none of your fonts, no pointer, no network, animations off, as user@omabox"
+        );
         assert_eq!(
             clean_zone_rec(
                 &[
@@ -1018,5 +1070,20 @@ mod tests {
                 "{s:?}"
             );
         }
+    }
+
+    #[test]
+    fn clean_ids_renames_only_me() {
+        let pw = b"root:x:0:0::/root:/bin/bash\nme:x:1000:1000:Me Myself:/home/me:/bin/bash\nmeh:x:1001:1001::/home/meh:/bin/sh\n";
+        assert_eq!(
+            clean_ids(pw, b"me", true),
+            b"root:x:0:0::/root:/bin/bash\nuser:x:1000:1000::/home/sbx:/bin/bash\nmeh:x:1001:1001::/home/meh:/bin/sh\n".to_vec()
+        );
+        let gr = b"wheel:x:998:me,meh\nme:x:1000:\nvideo:x:985:meh,me";
+        assert_eq!(
+            clean_ids(gr, b"me", false),
+            b"wheel:x:998:user,meh\nuser:x:1000:\nvideo:x:985:meh,user".to_vec()
+        );
+        assert_eq!(clean_ids(pw, b"", true), pw.to_vec());
     }
 }

@@ -10494,8 +10494,18 @@ from them.
     click/ipc; restart-shell brings its bar back; a shell exiting at once fails up ("the shell
     exited while starting", the box `dead` with its log, as for Omarchy's); the refusals. Still
     Omarchy's under plain: seed_home's Omarchy half (theme, shell.json, plugins into the HOME,
-    unused there, and up still says "seeded the bar"); `--clean`'s generic parts (locale, pointer)
-    are refused with it; a shell shows the user's login name (the passwd entry).
+    unused there, and up still says "seeded the bar"); a shell shows the user's login name (the
+    passwd entry). (The last two: finding 535.)
+535. **`--clean`'s identity, and `--clean` on a plain box** (2026-10-26, #247; Diogo chose --clean
+    over a separate flag). A shot to publish showed the user's name and host: DMS's dash and control
+    center read the login name from the passwd entry, a terminal title `user@HOST`. Unless `--keep
+    identity`, a clean box gets $D/etc/passwd and $D/etc/group (etc_files, over the host's like
+    locale.conf) where the user's entry is `user` (upspec::clean_ids: no GECOS, HOME /home/sbx, the
+    user's group renamed and their name in member lists), USER and LOGNAME `user`, and bwrap's
+    `--hostname omabox` (the host's name otherwise, finding 54). uid and gid stay the user's (the
+    box's files are theirs). `up` says "as user@omabox". `--clean` under `--desktop plain` sets what is
+    generic (locale and UTC, no pointer, isolated network, animations off, none of the user's fonts,
+    identity) and not the stock bar or CLEAN_THEME, whose theme-set needs Omarchy's tree.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

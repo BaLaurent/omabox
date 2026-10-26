@@ -19,12 +19,17 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A box without Omarchy: `omabox up --desktop plain`**. The box's Hyprland runs omabox's own small
   config instead of Omarchy's and sees no Omarchy tree, for anyone on Hyprland 0.56+ who is not on
   Omarchy (a Hyprland plugin, a compositor change, a shell). No shell unless `--shell` names one;
-  `--plugin`, `--theme`, `--theme-dir`, `--stock-bar`, `--desk-shell`, `--clean` and `--omarchy`
-  need Omarchy and are refused with it ([#247](https://github.com/diogochaves/omabox/issues/247)).
+  `--plugin`, `--theme`, `--theme-dir`, `--stock-bar`, `--desk-shell` and `--omarchy` need Omarchy
+  and are refused with it; `--clean` is all but the bar, theme, wallpaper and clock ([#247](https://github.com/diogochaves/omabox/issues/247)).
 - **Your shell in a box: `omabox up --shell CMD`**, on either desktop: the box's shell is CMD (`dms
   run`, `qs -p DIR`, ...) instead of Omarchy's. `up` waits until it draws, says when it dies on the
   way up, and `restart-shell` starts it again
   ([#321](https://github.com/diogochaves/omabox/issues/321)).
+
+- **`up --clean` shows no name of yours**: the box's user is `user` (no full name, in its own
+  `/etc/passwd` and `/etc/group`) and its host `omabox`, so a shell's greeting, a terminal's title or a
+  prompt in a shot to publish carries neither. `--keep identity` keeps yours. Baselines approved
+  before that show your name or host name will differ once.
 
 ### Changed
 

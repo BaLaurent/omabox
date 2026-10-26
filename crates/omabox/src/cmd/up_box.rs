@@ -469,7 +469,8 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
                 &u.theme,
                 &u.net,
                 &u.clean_lang,
-                &u.clean_zone
+                &u.clean_zone,
+                u.desktop == b"plain"
             )
         ));
     }
@@ -921,6 +922,22 @@ fn etc_files(ctx: &Ctx, u: &Up) -> Res<Etc> {
             shell::path(&cat!(etc, "/localtime")),
         );
     }
+    // --clean's identity (#247): the user's passwd and group entries under CLEAN_USER, no full name,
+    // the box HOME; every other entry as the host has it.
+    for f in ["passwd", "group"] {
+        let _ = std::fs::remove_file(shell::path(&cat!(etc, "/", f)));
+    }
+    if u.clean && !u.clean_has("identity") {
+        let me = procfs::user_name(procfs::uid()).unwrap_or_default();
+        for f in ["passwd", "group"] {
+            if let Ok(t) = std::fs::read(format!("/etc/{f}")) {
+                write(
+                    &cat!(etc, "/", f),
+                    &crate::upspec::clean_ids(&t, me.as_bytes(), f == "passwd"),
+                );
+            }
+        }
+    }
     let mut e = Etc {
         overlay: false,
         files: Vec::new(),
@@ -1012,7 +1029,12 @@ fn bwrap_args(
         own_roots,
     );
     let refused = |e: crate::bwrap::Refused| ctx.die(cat!(ctx.label(), e.0));
-    // The host's name in both network modes (finding 54).
+    // The host's name in both network modes (finding 54); a clean box's own (#247).
+    let host = if u.clean && !u.clean_has("identity") {
+        crate::upspec::CLEAN_HOST.as_bytes().to_vec()
+    } else {
+        hostname()
+    };
     b.words(&[
         b"--info-fd",
         b"3",
@@ -1020,7 +1042,7 @@ fn bwrap_args(
         b"--unshare-ipc",
         b"--unshare-uts",
         b"--hostname",
-        &hostname(),
+        &host,
     ]);
     b.sys_ro("/usr").map_err(refused)?;
     // --desktop plain (#247): the box sees no Omarchy tree, as on a machine without Omarchy, so
@@ -1346,9 +1368,13 @@ fn launch_script(ctx: &Ctx, u: &Up, args: &[Vec<u8>], protect: &net::Ports) -> R
             shell::env_or_empty("XDG_RUNTIME_DIR")
         ));
     }
-    let user = procfs::user_name(procfs::uid())
-        .unwrap_or_default()
-        .into_bytes();
+    let user = if u.clean && !u.clean_has("identity") {
+        crate::upspec::CLEAN_USER.as_bytes().to_vec()
+    } else {
+        procfs::user_name(procfs::uid())
+            .unwrap_or_default()
+            .into_bytes()
+    };
     let login_shell = login_shell(procfs::uid());
     let lang = if !u.clean_lang.is_empty() {
         u.clean_lang.clone()

@@ -7835,6 +7835,12 @@ t_clean() {
   ob reload -b "$B" >/dev/null 2>&1
   check_eq "...still off after a reload" false "$(ob lua -b "$B" 'hl.get_config("animations:enabled")' 2>&1)"
   check_match "...no pointer" '^hidden' "$(cat "$(ob path -b "$B")/pointer" 2>&1)"
+  # #247: no name of the user's in a shot (a shell's greeting, a terminal's title): user@omabox, in
+  # the passwd entry a shell reads too, and the user's uid.
+  check_eq "...as user@omabox: id, hostname, USER, the passwd entry" "user|omabox|user|user:x:$(id -u):$(id -g)::/home/sbx" \
+    "$(ob run -b "$B" -- sh -c 'echo "$(id -un)|$(hostname)|$USER|$(getent passwd "$(id -u)" | cut -d: -f1-6)"' 2>&1)"
+  check_eq "...and in the shell's environment" "USER=user" \
+    "$(ob run -b "$B" -- sh -c 'tr "\0" "\n" < "/proc/$(pgrep -x quickshell | head -n 1)/environ" | grep "^USER="' 2>&1)"
   check_match "up again with another --keep: refused, saying what it keeps" "--keep clock \\(it keeps nothing\\)" \
     "$(ob up "$B" --clean --keep clock 2>&1)"
   # Omarchy 4.5 keeps notifications in the HOME (#293, finding 419): a save's toast comes back over a
@@ -10681,7 +10687,7 @@ t_cli_up() {
   cx_case "up --json: with its shell" up "$U" --net isolated --json
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "net": "connected",$')
   cx_case "up: connected" up "$U" --no-shell
-  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" "err~^omabox: clean: Omarchy's bar, theme tokyo-night, wallpaper #ff00ff .*, no network, animations off$" 'state~^  "bar": "stock",$' 'state~^  "clean": \{$' 'state~^  "net": "isolated",$')
+  cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" "err~^omabox: clean: Omarchy's bar, theme tokyo-night, wallpaper #ff00ff .*, no network, animations off, as user@omabox$" 'state~^  "bar": "stock",$' 'state~^  "clean": \{$' 'state~^  "net": "isolated",$')
   cx_case "up --clean" up "$U" --clean
   cx_want=(rc=0 out= "$(rpu_said 1920x1080@60)" 'state~^  "bar": "stock",$' 'state~^  "xwayland": true$' 'state~^\./pointer f$')
   cx_case "up --stock-bar --no-pointer --xwayland" up "$U" --stock-bar --no-pointer --xwayland --net isolated

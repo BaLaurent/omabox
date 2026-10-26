@@ -11,7 +11,7 @@ omabox: a contained, invisible Hyprland + Omarchy desktop for agents.
             [--desk-shell]                               your desktop's whole shell: every plugin, shell.json, their files
             [--audio]                                    its own PipeWire: a speaker nobody hears, a silent mic
             [--no-pointer]                               the pointer hidden from the start (omabox pointer show)
-            [--clean [--keep animations,bar,clock,fonts,locale,pointer,wallpaper]]   only what is tested moves
+            [--clean [--keep animations,bar,clock,fonts,identity,locale,pointer,wallpaper]]   only what is tested moves
             [--hyprland PATH]                            a Hyprland build of yours instead of the installed one
             [--quickshell PATH]                          a Quickshell build of yours for the box's shell
             [--omarchy DIR]                              an Omarchy tree (a checkout) instead of /usr/share/omarchy
@@ -228,7 +228,7 @@ shell.toml [bar]"). Plugins are placed as without it.
 --desktop plain (#247): the box's Hyprland runs omabox's own small config (share/plain.lua: Hyprland's
   defaults, a terminal on SUPER+RETURN, SUPER+W closes) and sees no /usr/share/omarchy, as on a machine
   without Omarchy. No shell unless --shell names one; --plugin, --theme, --theme-dir, --stock-bar,
-  --desk-shell, --clean and --omarchy need Omarchy and are refused. omarchy (the default) is the
+  --desk-shell and --omarchy need Omarchy and are refused. omarchy (the default) is the
   Omarchy desktop.
 --shell CMD (#247): the box's shell is CMD, run by sh in the box's session (log ~/shell.log), not
   Omarchy's: any shell, on either desktop. up waits until it draws a layer; restart-shell starts it
@@ -239,8 +239,10 @@ Omarchy's bar (--stock-bar) on tokyo-night (or --theme), a #ff00ff wallpaper (no
 it inside a window or the bar is a hole), the bar's clock frozen at "Friday 12:00" (in its place, at
 its width), English (en_US.UTF-8, else C.UTF-8) in UTC for the whole session, no pointer, no network
 (--net connected gives it back), animations off (over reloads too), none of your fonts (--no-seed
-fonts). --keep LIST takes any of animations, bar (yours), clock, fonts (yours), locale (yours and
-your timezone), pointer, wallpaper back. A theme set later in the box brings that theme's wallpaper.
+fonts), and no name of yours: the user is `user` (no full name) and the host `omabox`. --keep LIST
+takes any of animations, bar (yours), clock, fonts (yours), identity (your user and host names),
+locale (yours and your timezone), pointer, wallpaper back. A theme set later in the box brings that
+theme's wallpaper. Under --desktop plain, --clean is all but the bar, theme, wallpaper and clock.
 @ up run audio record
 --audio: the box's own PipeWire, WirePlumber and pipewire-pulse (PipeWire and Pulse apps both play),
 its only devices a speaker nobody hears (omabox-speaker, a null sink: the default output) and a
