@@ -35,6 +35,11 @@ fi
 # read-only install's 0444, and a write to the copy in the box was refused (finding 528).
 cfg=$XDG_RUNTIME_DIR/omabox-hyprland.lua
 cat /opt/omabox/share/hyprland.lua > "$cfg.new" && mv -f "$cfg.new" "$cfg"
-exec env -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u WLR_SCENE_DISABLE_VISIBILITY -u DISPLAY -u OMABOX_HYPRLAND \
+# The parent labwc's XDG_CURRENT_DESKTOP (labwc:wlroots) is not the box desktop's (#247): Hyprland
+# warned on screen that it was set from outside, and shells read it to pick their compositor (Omarchy's
+# config set it back; a plain box's does not). Hyprland sets its own. LABWC_PID stays: omabox's own
+# `labwc --reconfigure` (mon.rs, an NVIDIA box's monitor windows) finds labwc by it, and a shell that
+# reads it does so only when XDG_CURRENT_DESKTOP is unset (noctalia).
+exec env -u XDG_CURRENT_DESKTOP -u WLR_BACKENDS -u WLR_LIBINPUT_NO_DEVICES -u WLR_HEADLESS_OUTPUTS -u WLR_RENDER_DRM_DEVICE -u WLR_SCENE_DISABLE_VISIBILITY -u DISPLAY -u OMABOX_HYPRLAND \
   OMARCHY_PATH="${OMABOX_OMARCHY:-/usr/share/omarchy}" "${lib[@]}" HYPRLAND_NO_SD_NOTIFY=1 HYPRLAND_NO_CRASHREPORTER=1 \
   "${OMABOX_HYPRLAND:-/usr/bin/Hyprland}" --config "$cfg"
