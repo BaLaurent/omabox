@@ -10559,6 +10559,26 @@ from them.
     QML, not run on a desktop). Tests: t_unit_setup (stand-in shells: none, one that lists it, one
     that lists it after a rescan, one a rescan does not change, a "no" remembered), t_setup_prompts
     (in a box, the line run at once enables the widget); both failed on the old code.
+538. **install.sh without a terminal: logs kept, the command to run, a software render node said**
+    (2026-10-27, #395). An agent's run (stdin not a terminal; a VM with sudo needing a password, #390)
+    stopped where it should, with three rough edges. `--check`'s failure named the box's `box.log`
+    and `home/*.log`, which the EXIT trap's `omabox down` had removed: a failed up or shot now copies
+    them to `$XDG_STATE_HOME/omabox/install-check/` first (replaced by every check; one that passes
+    removes it) and says so; the box still goes down. The package stop printed `missing: …` then
+    sudo's own error, which varies: with stdin not a terminal (where pacman reads its `[Y/n]`; also
+    `./install.sh </dev/null` in a pseudo-terminal nobody answers) it now stops before sudo with the
+    line to run, `sudo pacman -S --needed …`, then install.sh again. A render node that renders only
+    in software (virtio-gpu without virgl: `labwc.log` "Software rendering detected") passed
+    `compgen -G /dev/dri/renderD*`, and the box died "while starting". It is told without starting
+    anything: the node's `device` in sysfs is the virtio device (virtio_gpu's DRM device hangs off
+    it), whose `features` lists the negotiated bits as 0/1, bit 0 virgl and bit 4 context init (venus,
+    the other way to render on the host's GPU); with both 0 on every node, install.sh stops and says
+    a box needs GPU rendering. Only every node: one beside a real GPU is `up`'s to say (#396). Tests:
+    t_unit_install (no terminal: no sudo, the command; in a terminal sudo as before; a fake sysfs
+    via `OMABOX_TEST_SYSDRM`: virtio-gpu without virgl stops, with virgl or venus or another driver
+    passes; `--check` with a stand-in omabox whose up dies: logs kept, box down; one that comes up:
+    its screenshot, nothing kept). The sysfs reading is from the kernel's sources (virtio.c's
+    `features_show`, virtio_gpu's probe), not yet seen on a real virtio-gpu VM.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

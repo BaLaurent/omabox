@@ -10595,13 +10595,42 @@ t_unit_install() {
   # not been told to trust): its build (#324) is this checkout's binary put where cargo would leave
   # it (CARGO_TARGET_DIR, as cargo takes it).
   # (--version: the stand-in's, or a rustup's with no toolchain while $stub/notoolchain is there)
-  printf '#!/bin/sh\nif [ "$1" = --version ]; then [ ! -e "%s/notoolchain" ] || { echo "error: rustup could not choose a version of cargo to run" >&2; exit 1; }; echo "cargo (stand-in)"; exit 0; fi\nwhile [ $# -gt 0 ]; do [ "$1" = --manifest-path ] && m=$2; shift; done\nd=${CARGO_TARGET_DIR:-$(dirname "$m")/target}/release\nmkdir -p "$d" && cp "%s/build/omabox" "$d/omabox"\n' "$stub" "$ROOT" > "$stub/cargo"
+  printf '#!/bin/sh\nif [ "$1" = --version ]; then [ ! -e "%s/notoolchain" ] || { echo "error: rustup could not choose a version of cargo to run" >&2; exit 1; }; echo "cargo (stand-in)"; exit 0; fi\nwhile [ $# -gt 0 ]; do [ "$1" = --manifest-path ] && m=$2; shift; done\nd=${CARGO_TARGET_DIR:-$(dirname "$m")/target}/release\nb=%s/build/omabox; [ ! -e "%s/omabox-bin" ] || b=%s/omabox-bin\nmkdir -p "$d" && cp "$b" "$d/omabox"\n' \
+    "$stub" "$ROOT" "$stub" "$stub" > "$stub/cargo"   # ($stub/omabox-bin while there: a stand-in, for --check)
   chmod +x "$stub/sudo" "$stub/pacman" "$stub/make" "$stub/omarchy" "$stub/omarchy-shell" "$stub/cargo"
+  local tty=(env SHELL=/bin/bash script -qec "$(printf %q "$c/install.sh")" /dev/null)
   echo omabox-no-such-package > "$stub/missing"
-  out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); local rc=$?
-  check_eq "a missing package: install.sh installs it with sudo pacman, and stops when that fails" \
-    "1 pacman -S --needed omabox-no-such-package" "$rc $(cat "$stub/sudo-called" 2>&1)"
+  # #395: with no terminal, sudo can only fail (in words of its own, which vary): the command to run.
+  out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1 </dev/null); local rc=$?
+  check_eq "a missing package, no terminal: install.sh stops, without sudo (#395)" "1 " "$rc $(cat "$stub/sudo-called" 2>/dev/null)"
   check_match "...naming it" "missing: omabox-no-such-package" "$out"
+  check_match "...and the command to run, then install.sh again" \
+    "no terminal for sudo's password: run this, then $c/install.sh again: sudo pacman -S --needed omabox-no-such-package" "$(tr '\n' ' ' <<<"$out")"
+  out=$(HOME=$h PATH=$stub:$PATH "${tty[@]}" 2>&1 </dev/null); rc=$?
+  check_eq "...in a terminal: install.sh installs it with sudo pacman, and stops when that fails" \
+    "1 pacman -S --needed omabox-no-such-package" "$rc $(cat "$stub/sudo-called" 2>&1)"
+  rm -f "$stub/sudo-called"
+  # #395: a render node that renders in software only (virtio-gpu without virgl, a VM's) passed, and
+  # the box died "while starting". Its virtio features (one 0/1 per bit) say so: bit 0 virgl, 4
+  # context types (venus). Every render node here, as the test's sysfs has them.
+  local sysdrm=$TMP/ih-sysdrm n
+  rm -rf "$sysdrm"; mkdir -p "$TMP/ih-drivers/virtio_gpu" "$TMP/ih-drivers/amdgpu"
+  for n in /dev/dri/renderD*; do
+    mkdir -p "$sysdrm/${n##*/}/device"; ln -s "$TMP/ih-drivers/virtio_gpu" "$sysdrm/${n##*/}/device/driver"
+    printf '0100000000000000000000000000000001000000000000000000000000000000\n' > "$sysdrm/${n##*/}/device/features"
+  done
+  out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null); rc=$?
+  check_match "a render node that renders in software only (virtio-gpu, no virgl): said (#395)" \
+    "every render node renders in software only \(renderD[0-9]+.*: virtio-gpu without virgl\).*a box needs GPU rendering" "$(tr '\n' ' ' <<<"$out")"
+  check_eq "...stopping install.sh before the packages" "1 0" "$rc $(grep -c '==> Packages' <<<"$out")"
+  for n in "$sysdrm"/*/device/features; do printf '1100000000000000000000000000000001000000000000000000000000000000\n' > "$n"; done
+  out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null)
+  check_fails "...virtio-gpu with virgl renders on the GPU" grep -q "software" <<<"$out"
+  check_match "...on to the packages" "missing: omabox-no-such-package" "$out"
+  for n in "$sysdrm"/*/device/features; do printf '0100100000000000000000000000000001000000000000000000000000000000\n' > "$n"; done
+  check_fails "...and with context types (venus)" grep -q "software" <<<"$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null)"
+  for n in "$sysdrm"/*/device; do rm "$n/driver"; ln -s "$TMP/ih-drivers/amdgpu" "$n/driver"; printf '0\n' > "$n/features"; done
+  check_fails "...another driver: no virtio features to read" grep -q "software" <<<"$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null)"
   rm "$stub/missing"
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); rc=$?
   check_match "a failed tool build stops install.sh" "building tools/keyboard failed" "$out"
@@ -10666,7 +10695,7 @@ t_unit_install() {
   printf '%s\n' "$old" > "$h/.claude/settings.json"
   # ...for the agents that have it, whatever the others' guard (Codex off here) and an earlier "no".
   # "Turn it on?" is for the others, and only a "no" to that is remembered.
-  local guard=(env HOME="$h" "$c/bin/omabox" guard) tty=(env SHELL=/bin/bash script -qec "$(printf %q "$c/install.sh")" /dev/null)
+  local guard=(env HOME="$h" "$c/bin/omabox" guard)
   mkdir -p "$h/.codex"; rm "$h/.config/omabox/guard-declined"
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)
   check_match "Claude Code outdated, Codex off: an update for Claude Code, turning it on for Codex" \
@@ -10685,6 +10714,37 @@ t_unit_install() {
   check_fails "...and the no to the update is not remembered" test -e "$h/.config/omabox/guard-declined"
   rm -rf "$h/.codex"
   rm -f "$h/.claude/settings.json" "$h/.config/omabox/guard-declined"
+  # #395: --check's failure named the box's logs, which the down on exit had removed. A stand-in
+  # omabox (built as install.sh builds it) whose up dies as a box does, leaving its folder; setup passes.
+  local rt=$h/run kept=$h/.local/state/omabox/install-check
+  mkdir -p "$rt"
+  cat > "$stub/omabox-bin" <<EOF
+#!/bin/sh
+d=\$XDG_RUNTIME_DIR/omabox/\$2
+case "\$1" in
+up) [ ! -e "$stub/up-ok" ] || { mkdir -p "\$d"; exit 0; }
+  mkdir -p "\$d/home"; echo "session.sh: labwc ended" > "\$d/box.log"
+  echo "Software rendering detected" > "\$d/home/labwc.log"; echo hl > "\$d/home/hyprland.log"
+  echo "omabox: box '\$2' died while starting; logs: \$d/home/*.log \$d/box.log" >&2; exit 1 ;;
+shot) echo /tmp/shot.png ;;
+down) echo "down \$2" >> "$stub/omabox-called"; rm -rf "\$d" ;;
+esac
+EOF
+  chmod +x "$stub/omabox-bin"
+  out=$(HOME=$h PATH=$stub:$PATH XDG_RUNTIME_DIR=$rt "$c/install.sh" --check 2>&1 </dev/null); rc=$?
+  check_match "install.sh --check, its box dead while starting: where its logs are kept (#395)" \
+    "the check box failed; its logs are kept in $kept" "$out"
+  check_eq "...with a failure" 1 "$rc"
+  check_eq "...those logs, out of the box's folder" \
+    "box.log:session.sh: labwc ended home/hyprland.log:hl home/labwc.log:Software rendering detected" \
+    "$(cd "$kept" 2>/dev/null && grep -r . box.log home | sort | tr '\n' ' ' | sed 's/ $//')"
+  check_eq "...and the box taken down" "down install-check-" "$(sed 's/[0-9]*$//' "$stub/omabox-called" 2>&1)"
+  check_eq "...its folder gone" "" "$(ls -A "$rt/omabox" 2>&1)"
+  : > "$stub/up-ok"; rm -f "$stub/omabox-called"
+  out=$(HOME=$h PATH=$stub:$PATH XDG_RUNTIME_DIR=$rt "$c/install.sh" --check 2>&1 </dev/null); rc=$?
+  check_eq "...a box that comes up: its screenshot, taken down, the old logs gone" "0 screenshot: /tmp/shot.png 1 no" \
+    "$rc $(grep -o 'screenshot: .*' <<<"$out") $(grep -c '^down install-check-' "$stub/omabox-called" 2>&1) $(test -e "$kept" && echo kept || echo no)"
+  rm -f "$stub/omabox-bin" "$stub/up-ok" "$stub/omabox-called"
   printf '#!/bin/sh\necho Hyprland dev build\n' > "$stub/Hyprland"; chmod +x "$stub/Hyprland"
   check_match "an unreadable Hyprland version says so (was silent)" "too old" "$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1)"
   check_fails "...and none of it reached a shell (omarchy, omarchy-shell)" test -e "$stub/shell-called"

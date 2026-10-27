@@ -34,6 +34,13 @@ the old one can notify "omabox: cannot list boxes". That goes away by itself onc
   linked. setup now has the shell rescan its plugins, as `omarchy plugin add` does, and waits until
   it lists the widget, so the line works at once; a shell that still does not know it after 4 s gets
   a line that names the rescan too ([#397](https://github.com/diogochaves/omabox/issues/397)).
+- **`./install.sh` without a terminal**: `--check`'s failure named box logs that its own cleanup had
+  just removed; they are now kept in `~/.local/state/omabox/install-check/`. With missing packages
+  and no terminal for sudo, it prints the exact `sudo pacman -S --needed …` line to run, then
+  `./install.sh` again, instead of sudo's own error. A machine whose only render node renders in
+  software (a VM's virtio-gpu without virgl) is told up front that a box needs GPU rendering,
+  instead of the box dying "while starting"
+  ([#395](https://github.com/diogochaves/omabox/issues/395)).
 
 ## 1.0.0 — 2026-10-27
 

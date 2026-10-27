@@ -26,6 +26,19 @@ case ${1:-} in --check) check=1 ;; "") ;; *) die "usage: ./install.sh [--check]"
 command -v pacman >/dev/null || die "this expects Arch/Omarchy (pacman)"
 command -v Hyprland >/dev/null || die "Hyprland is not installed"
 compgen -G "/dev/dri/renderD*" >/dev/null || die "no GPU render node (/dev/dri/renderD*): a box renders on the GPU"
+# A node that renders in software only passes that, and a box then dies "while starting" (#395):
+# virtio-gpu (a VM's) with neither virgl nor context types (venus), as its virtio device's features
+# say (one 0/1 per bit: 0 virgl, 4 context init). Told without starting anything; only when every
+# node is one (a box on such a node beside a GPU is up's to say).
+SYSDRM=${OMABOX_TEST_SYSDRM:-/sys/class/drm}
+soft=() hw=0
+for n in /dev/dri/renderD*; do
+  drv=$(readlink -f "$SYSDRM/${n##*/}/device/driver") || drv=
+  f=$(cat "$SYSDRM/${n##*/}/device/features" 2>/dev/null) || f=
+  if [ "${drv##*/}" = virtio_gpu ] && [ "${f:0:1}" = 0 ] && [ "${f:4:1}" = 0 ]; then soft+=("${n##*/}"); else hw=1; fi
+done
+[ $hw = 1 ] || die "every render node renders in software only (${soft[*]}: virtio-gpu without virgl):" \
+  "a box needs GPU rendering; in a VM, virtio-gpu with virgl (QEMU's virtio-vga-gl, libvirt's accel3d with an OpenGL display)"
 hv=$(Hyprland --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
 [ "$(vercmp "${hv:-0}" 0.56.0)" -ge 0 ] || die "Hyprland ${hv:-?} is too old: omabox needs 0.56+ (Lua config)"
 
@@ -35,6 +48,9 @@ mapfile -t missing < <(pacman -T "${PKGS[@]}" || true)
 command -v cargo >/dev/null || missing+=(rust)
 if [ ${#missing[@]} -gt 0 ]; then
   echo "missing: ${missing[*]}"
+  # With no terminal (an agent's run, `./install.sh </dev/null`) sudo can only fail, in words of its
+  # own that vary: the command to run instead (#395). Stdin, where pacman reads its [Y/n].
+  [ -t 0 ] || die "no terminal for sudo's password: run this, then $0 again: sudo pacman -S --needed ${missing[*]}"
   sudo pacman -S --needed "${missing[@]}"
 else
   echo "all present"
@@ -75,9 +91,19 @@ step "Links"
 if [ $check = 1 ]; then
   step "Check: a box up, a screenshot, down"
   name=install-check-$$
+  # A failed check's logs are copied out of the box's folder, which the down on exit removes and up's
+  # own failure names (#395). A check that passes removes an earlier one's.
+  kept=${XDG_STATE_HOME:-$HOME/.local/state}/omabox/install-check
+  rm -rf "$kept"
   trap '"$ROOT/bin/omabox" down "$name" >/dev/null 2>&1 || true' EXIT
-  "$ROOT/bin/omabox" up "$name"
-  shot=$("$ROOT/bin/omabox" shot -b "$name")
-  echo "screenshot: $shot"
+  if "$ROOT/bin/omabox" up "$name" && shot=$("$ROOT/bin/omabox" shot -b "$name"); then
+    echo "screenshot: $shot"
+  else
+    box=${XDG_RUNTIME_DIR:-/nonexistent}/omabox/$name
+    mkdir -p "$kept/home" || die "the check box failed, and its logs could not be kept in $kept"
+    cp -P "$box/box.log" "$kept/" 2>/dev/null || true
+    for f in "$box"/home/*.log; do [ ! -f "$f" ] || cp -P "$f" "$kept/home/" || true; done
+    die "the check box failed; its logs are kept in $kept (box.log, home/*.log), the box taken down"
+  fi
 fi
 step "Done. Try: omabox up && omabox shot"
