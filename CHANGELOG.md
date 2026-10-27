@@ -3,7 +3,10 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.0.1 — 2026-10-27
+
+Fixes for what an upgrade from 0.x runs into, and a security fix: a box could take a port on your
+`protect-ports` list while your own service on it was down (S10). Update.
 
 **Upgrading from 0.x:** while `./install.sh` builds the new omabox, the bar widget still running from
 the old one can notify "omabox: cannot list boxes". That goes away by itself once the install is done.
@@ -14,7 +17,8 @@ the old one can notify "omabox: cannot list boxes". That goes away by itself onc
   the newest backup of each file and say how many older ones they removed, also when the guard is
   already on or off, so the upgrade (whose `install.sh` turns the guard on) clears the ones earlier
   versions left. Backups of your own (`settings.json.bak`, `.bak-mine`) stay. `setup --remove` names
-  the backups it leaves ([#398](https://github.com/diogochaves/omabox/issues/398)).
+  the backups it leaves. Thanks to [@btsouth](https://github.com/btsouth)
+  ([#403](https://github.com/diogochaves/omabox/pull/403), [#398](https://github.com/diogochaves/omabox/issues/398)).
 - **A box could take a protected port while your service on it was down**: pasta still forwarded
   the box's servers on `protect-ports` to your `127.0.0.1`, so a box listening there took the port
   and your browser's `localhost:PORT` reached the box. Protected ports are now left out both ways.
