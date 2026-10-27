@@ -28,14 +28,19 @@ command -v Hyprland >/dev/null || die "Hyprland is not installed"
 compgen -G "/dev/dri/renderD*" >/dev/null || die "no GPU render node (/dev/dri/renderD*): a box renders on the GPU"
 # A node that renders in software only passes that, and a box then dies "while starting" (#395):
 # virtio-gpu (a VM's) with neither virgl nor context types (venus), as its virtio device's features
-# say (one 0/1 per bit: 0 virgl, 4 context init). Told without starting anything; only when every
-# node is one (a box on such a node beside a GPU is up's to say).
+# say (one 0/1 per bit: 0 virgl, 4 context init). That virtio device is the node's device's child
+# virtioN on PCI (device/ is virtio-pci's), or device/ itself (virtio-mmio). Told without starting
+# anything; only when every node is one (a box on such a node beside a GPU is up's to say).
 SYSDRM=${OMABOX_TEST_SYSDRM:-/sys/class/drm}
 soft=() hw=0
 for n in /dev/dri/renderD*; do
-  drv=$(readlink -f "$SYSDRM/${n##*/}/device/driver") || drv=
-  f=$(cat "$SYSDRM/${n##*/}/device/features" 2>/dev/null) || f=
-  if [ "${drv##*/}" = virtio_gpu ] && [ "${f:0:1}" = 0 ] && [ "${f:4:1}" = 0 ]; then soft+=("${n##*/}"); else hw=1; fi
+  sw=0
+  for d in "$SYSDRM/${n##*/}/device" "$SYSDRM/${n##*/}/device"/virtio*; do
+    drv=$(readlink -f "$d/driver") || drv=
+    f=$(cat "$d/features" 2>/dev/null) || f=
+    if [ "${drv##*/}" = virtio_gpu ] && [ "${f:0:1}" = 0 ] && [ "${f:4:1}" = 0 ]; then sw=1; fi
+  done
+  if [ $sw = 1 ]; then soft+=("${n##*/}"); else hw=1; fi
 done
 [ $hw = 1 ] || die "every render node renders in software only (${soft[*]}: virtio-gpu without virgl):" \
   "a box needs GPU rendering; in a VM, virtio-gpu with virgl (QEMU's virtio-vga-gl, libvirt's accel3d with an OpenGL display)"

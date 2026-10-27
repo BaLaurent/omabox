@@ -10570,15 +10570,18 @@ from them.
     line to run, `sudo pacman -S --needed …`, then install.sh again. A render node that renders only
     in software (virtio-gpu without virgl: `labwc.log` "Software rendering detected") passed
     `compgen -G /dev/dri/renderD*`, and the box died "while starting". It is told without starting
-    anything: the node's `device` in sysfs is the virtio device (virtio_gpu's DRM device hangs off
-    it), whose `features` lists the negotiated bits as 0/1, bit 0 virgl and bit 4 context init (venus,
-    the other way to render on the host's GPU); with both 0 on every node, install.sh stops and says
-    a box needs GPU rendering. Only every node: one beside a real GPU is `up`'s to say (#396). Tests:
-    t_unit_install (no terminal: no sudo, the command; in a terminal sudo as before; a fake sysfs
-    via `OMABOX_TEST_SYSDRM`: virtio-gpu without virgl stops, with virgl or venus or another driver
-    passes; `--check` with a stand-in omabox whose up dies: logs kept, box down; one that comes up:
-    its screenshot, nothing kept). The sysfs reading is from the kernel's sources (virtio.c's
-    `features_show`, virtio_gpu's probe), not yet seen on a real virtio-gpu VM.
+    anything: on PCI (virtio-vga, an omavm guest's) the node's `device` in sysfs is virtio-pci's
+    and has no `features`; its child `device/virtio0` is the virtio_gpu device, whose `features`
+    lists the negotiated bits as 0/1, bit 0 virgl and bit 4 context init (venus, the other way to
+    render on the host's GPU). Read in two omavm guests (Omarchy 4.0.6): `01000…` without accel3d,
+    `11001…` with. `device/` itself is read too, for a virtio-gpu not on PCI (virtio-mmio). With
+    bits 0 and 4 both 0 on every node, install.sh stops and says a box needs GPU rendering. Only
+    every node: one beside a real GPU is `up`'s to say (#396). A first version read `device/` alone,
+    from the kernel's sources, and missed the PCI layout. Tests: t_unit_install (no terminal: no
+    sudo, the command; in a terminal sudo as before; a fake sysfs via `OMABOX_TEST_SYSDRM` laid out
+    as the guests' with their two feature strings: without virgl stops, with virgl, venus only or
+    another driver passes, virtio-mmio's `device/` stops; `--check` with a stand-in omabox whose up
+    dies: logs kept, box down; one that comes up: its screenshot, nothing kept).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

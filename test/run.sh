@@ -10612,24 +10612,32 @@ t_unit_install() {
   rm -f "$stub/sudo-called"
   # #395: a render node that renders in software only (virtio-gpu without virgl, a VM's) passed, and
   # the box died "while starting". Its virtio features (one 0/1 per bit) say so: bit 0 virgl, 4
-  # context types (venus). Every render node here, as the test's sysfs has them.
-  local sysdrm=$TMP/ih-sysdrm n
-  rm -rf "$sysdrm"; mkdir -p "$TMP/ih-drivers/virtio_gpu" "$TMP/ih-drivers/amdgpu"
+  # context types (venus). Every render node here, as the test's sysfs has them, laid out as an
+  # omavm guest's (virtio-vga, 2026-10-27): device/ is the PCI device (virtio-pci, no features), its
+  # child virtio0 the virtio_gpu device; its features as read there (without accel3d, then with).
+  local sysdrm=$TMP/ih-sysdrm n dv nogl=0100000000000000000000000000110010000000100000000000000000000000
+  local gl=1100100000000000000000000000110010000000100000000000000000000000
+  rm -rf "$sysdrm"; mkdir -p "$TMP/ih-drivers/virtio_gpu" "$TMP/ih-drivers/virtio-pci" "$TMP/ih-drivers/amdgpu"
   for n in /dev/dri/renderD*; do
-    mkdir -p "$sysdrm/${n##*/}/device"; ln -s "$TMP/ih-drivers/virtio_gpu" "$sysdrm/${n##*/}/device/driver"
-    printf '0100000000000000000000000000000001000000000000000000000000000000\n' > "$sysdrm/${n##*/}/device/features"
+    dv=$sysdrm/${n##*/}/device; mkdir -p "$dv/virtio0"
+    ln -s "$TMP/ih-drivers/virtio-pci" "$dv/driver"; ln -s "$TMP/ih-drivers/virtio_gpu" "$dv/virtio0/driver"
+    printf '%s\n' "$nogl" > "$dv/virtio0/features"
   done
   out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null); rc=$?
   check_match "a render node that renders in software only (virtio-gpu, no virgl): said (#395)" \
     "every render node renders in software only \(renderD[0-9]+.*: virtio-gpu without virgl\).*a box needs GPU rendering" "$(tr '\n' ' ' <<<"$out")"
   check_eq "...stopping install.sh before the packages" "1 0" "$rc $(grep -c '==> Packages' <<<"$out")"
-  for n in "$sysdrm"/*/device/features; do printf '1100000000000000000000000000000001000000000000000000000000000000\n' > "$n"; done
+  for n in "$sysdrm"/*/device/virtio0/features; do printf '%s\n' "$gl" > "$n"; done
   out=$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null)
   check_fails "...virtio-gpu with virgl renders on the GPU" grep -q "software" <<<"$out"
   check_match "...on to the packages" "missing: omabox-no-such-package" "$out"
-  for n in "$sysdrm"/*/device/features; do printf '0100100000000000000000000000000001000000000000000000000000000000\n' > "$n"; done
-  check_fails "...and with context types (venus)" grep -q "software" <<<"$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null)"
-  for n in "$sysdrm"/*/device; do rm "$n/driver"; ln -s "$TMP/ih-drivers/amdgpu" "$n/driver"; printf '0\n' > "$n/features"; done
+  for n in "$sysdrm"/*/device/virtio0/features; do printf '%s\n' "${nogl:0:4}1${nogl:5}" > "$n"; done
+  check_fails "...and with context types only (venus)" grep -q "software" <<<"$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null)"
+  # virtio-gpu not on PCI (virtio-mmio): device/ is the virtio device itself.
+  for n in "$sysdrm"/*/device; do rm -r "$n/virtio0" "$n/driver"; ln -s "$TMP/ih-drivers/virtio_gpu" "$n/driver"; printf '%s\n' "$nogl" > "$n/features"; done
+  check_match "...virtio-mmio's, device/ itself: said too" "renders in software only" \
+    "$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null)"
+  for n in "$sysdrm"/*/device; do rm "$n/driver" "$n/features"; ln -s "$TMP/ih-drivers/amdgpu" "$n/driver"; done
   check_fails "...another driver: no virtio features to read" grep -q "software" <<<"$(HOME=$h PATH=$stub:$PATH OMABOX_TEST_SYSDRM=$sysdrm "$c/install.sh" 2>&1 </dev/null)"
   rm "$stub/missing"
   out=$(HOME=$h PATH=$stub:$PATH "$c/install.sh" 2>&1); rc=$?
