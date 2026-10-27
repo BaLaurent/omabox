@@ -10471,6 +10471,15 @@ from them.
     name gone from ls, no dir, no reaper, after each signal at each step), t_theme (a failing up
     keeps its dir), t_unit_signal_cleanup (shot under a group INT, TERM and HUP during the capture:
     no OUT.part, no TMPDIR file), trap.rs `a_signals_undo_waits_for_made`.
+534. **`guard on` and `off` kept every backup they ever made** (2026-10-27, #398). Each change wrote
+    `FILE.bak-SECONDS.NANOSECONDS` beside the agent's settings and none went away: a machine that had
+    tracked omabox since 0.1 had five in `~/.claude/` and three beside Codex's `hooks.json`, and
+    `setup --remove` left them unnamed. `write` now keeps only the backup of the change it just made
+    and removes the older ones, matched by that exact name (the user's own `settings.json.bak`,
+    `.bak-mine`, `.bak-20261004` stay), saying how many went. `setup --remove` names the ones left
+    ("kept: the guard's backups of your agents' settings: ..."). Tests: guard.rs
+    `backups_are_ours_only_oldest_first`, t_unit_guard_settings (one of ours and the user's own after
+    an off), the setup --remove case in test/run.sh.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

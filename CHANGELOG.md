@@ -3,6 +3,15 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased
+
+### Fixed
+
+- **`omabox guard on` and `off` left one more `settings.json.bak-*` each time**: they now keep only
+  the backup of the change they just made, and say how many older ones they removed. Backups of your
+  own (`settings.json.bak`, `.bak-mine`) stay. `setup --remove` names the backups it leaves
+  ([#398](https://github.com/diogochaves/omabox/issues/398)).
+
 ## 1.0.0 — 2026-10-27
 
 omabox is one Rust binary now, with the same commands, options, output and exit codes as before

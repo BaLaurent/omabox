@@ -8814,6 +8814,7 @@ echo "%s $*" >> "$HOME/stub.log"
   check_eq "...keeps the settings and saves, saying so" "bar-icon=auto|yes" \
     "$(cat "$h/.config/omabox/config")|$([ -d "$h/.local/share/omabox/saves/s1" ] && grep -q "kept: your settings" <<<"$out" && echo yes)"
   check_fails "...turns the guard off" grep -q omabox-guard "$h/.claude/settings.json"
+  check_match "...and names the backup that leaves (#398)" "kept: the guard's backups .*/\\.claude/settings\\.json\\.bak-[0-9]" "$out"
   check_fails "...and leaves a widget this HOME has not enabled alone (no omarchy call)" grep -q "plugin disable" <<<"$out"
   check_fails "...and the boxes' home dir, empty (finding 130)" test -e "$h/.cache/omabox"
   check_eq "--remove again: nothing left to do" 0 "$(in_h setup --remove >/dev/null; echo $?)"
@@ -13053,8 +13054,12 @@ t_unit_guard_settings() {
   check_eq "...keeping its mode" 600 "$(stat -c %a "$s")"
   check_match "on again: nothing to do" "already on" "$(g on)"
   check_eq "...and no second backup" 1 "$(compgen -G "$s.bak-*" | wc -l)"
+  : > "$s.bak-mine"
   g off >/dev/null
   check_eq "off gives back the same file" "$orig" "$(cat "$s")"
+  check_eq "...keeping one backup of ours and the user's own (#398)" "1 yes" \
+    "$(compgen -G "$s.bak-[0-9]*" | wc -l) $([ -e "$s.bak-mine" ] && echo yes)"
+  rm -f "$s.bak-mine"
   jq '.hooks.SessionStart += [{hooks: [{type: "command", command: "echo old omabox-guard"}]}]' <<<"$orig" > "$s"
   check_match "an older hook of ours reads outdated" "outdated" "$(g | head -1)"
   jq --arg c 'echo x omabox-guard PATH="/nonexistent/co/share/guard:$PATH"' '.hooks.SessionStart[-1].hooks[0].command = $c' "$s" > "$s.new" && mv "$s.new" "$s"

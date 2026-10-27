@@ -587,6 +587,14 @@ impl Setup {
         if !crate::boxes::list_names(ctx, false).is_empty() {
             out("boxes are still up (omabox ls): omabox down --all\n")?;
         }
+        let baks = super::guard::settings_backups();
+        if !baks.is_empty() {
+            out(cat!(
+                "kept: the guard's backups of your agents' settings: ",
+                baks.join(&b' '),
+                "\n"
+            ))?;
+        }
         out(
             "kept: your settings (~/.config/omabox) and saves (~/.local/share/omabox/saves); delete them yourself if you want them gone\n",
         )

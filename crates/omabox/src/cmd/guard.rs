@@ -251,7 +251,8 @@ fn hooks_set(file: &[u8], hook: &[u8], act: &str) -> Result<(), Vec<u8>> {
 }
 
 /// guard_write FILE CONTENT: written the way both agents need: through a link to its target, a
-/// .bak-<ts> of the old one, its mode kept, renamed into place.
+/// .bak-<ts> of the old one, its mode kept, renamed into place. Only that backup is kept: the ones
+/// earlier changes left go (#398).
 fn write(file: &[u8], content: &[u8], act: &str) -> Result<(), Vec<u8>> {
     let p = shell::path(file);
     if let Some(dir) = p.parent() {
@@ -286,11 +287,21 @@ fn write(file: &[u8], content: &[u8], act: &str) -> Result<(), Vec<u8>> {
     if !ok {
         return Err(cat!("could not write ", file));
     }
-    let was = if bak.is_empty() {
-        Vec::new()
-    } else {
-        cat!(" (was: ", bak, ")")
-    };
+    let mut was = Vec::new();
+    if !bak.is_empty() {
+        let older: Vec<_> = backups(file).into_iter().filter(|b| *b != bak).collect();
+        for b in &older {
+            let _ = std::fs::remove_file(shell::path(b));
+        }
+        was = cat!(" (was: ", bak);
+        if !older.is_empty() {
+            was = cat!(
+                was,
+                format!("; {} older backup(s) of it removed", older.len())
+            );
+        }
+        was = cat!(was, ")");
+    }
     say(cat!(
         "guard ",
         act,
@@ -300,6 +311,48 @@ fn write(file: &[u8], content: &[u8], act: &str) -> Result<(), Vec<u8>> {
         "; new sessions pick it up"
     ));
     Ok(())
+}
+
+/// The backups `write` made of FILE (FILE.bak-SECONDS.NANOSECONDS), oldest first. A user's own
+/// (`settings.json.bak`, `settings.json.bak-mine`) do not match.
+fn backups(file: &[u8]) -> Vec<Vec<u8>> {
+    let p = shell::path(file);
+    let (Some(dir), Some(name)) = (p.parent(), p.file_name()) else {
+        return Vec::new();
+    };
+    let pre = cat!(name.as_bytes(), ".bak-");
+    let mut found: Vec<((u64, u32), Vec<u8>)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name();
+            let (s, ns) = std::str::from_utf8(n.as_bytes().strip_prefix(pre.as_slice())?)
+                .ok()?
+                .split_once('.')?;
+            let digits = |v: &str| !v.is_empty() && v.bytes().all(|c| c.is_ascii_digit());
+            if !digits(s) || !digits(ns) || ns.len() != 9 {
+                return None;
+            }
+            let at = (s.parse().ok()?, ns.parse().ok()?);
+            Some((at, shell::bytes(&e.path()).to_vec()))
+        })
+        .collect();
+    found.sort();
+    found.into_iter().map(|(_, f)| f).collect()
+}
+
+/// The backups `guard on|off` left of the agents' settings, for `setup --remove` to name.
+pub fn settings_backups() -> Vec<Vec<u8>> {
+    let h = codex_home();
+    [
+        cat!(claude_dir(), "/settings.json"),
+        cat!(h, "/config.toml"),
+        cat!(h, "/hooks.json"),
+    ]
+    .into_iter()
+    .flat_map(|f| backups(&resolved(f.clone()).unwrap_or(f)))
+    .collect()
 }
 
 /// `cp -p`: the contents, mode and times.
@@ -485,6 +538,37 @@ fn session_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backups_are_ours_only_oldest_first() {
+        let d = std::env::temp_dir().join(format!("omabox-guard-bak-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        for n in [
+            "s.json",
+            "s.json.bak",
+            "s.json.bak-mine",
+            "s.json.bak-20261004",
+            "s.json.bak-12.12345678",
+            "s.json.bak-9.000000002",
+            "s.json.bak-10.000000001",
+            "s.json.bak-9.000000001",
+            "t.json.bak-1.000000000",
+        ] {
+            std::fs::write(d.join(n), "").unwrap();
+        }
+        let f = shell::bytes(&d.join("s.json")).to_vec();
+        let names: Vec<_> = backups(&f).iter().map(|b| shell::basename(b)).collect();
+        assert_eq!(
+            names,
+            [
+                b"s.json.bak-9.000000001".to_vec(),
+                b"s.json.bak-9.000000002".to_vec(),
+                b"s.json.bak-10.000000001".to_vec()
+            ]
+        );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 
     #[test]
     fn dirs_from_hooks() {
