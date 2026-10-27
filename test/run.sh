@@ -4273,6 +4273,34 @@ EOF
   cx_case "alone: run --env-file, its values off the relay's command line" run --env-file dev.env -- env
   cx_want=(rc=0 'state~^arg: --env-fd$' "state~^env-fd: PASS_RJ_SECRET=s3cret-$P\$" 'state~^open: /memfd:omabox-relay-env' "state!~^arg: .*s3cret")
   cx_case "alone: keys --pass VAR, its value off the relay's command line" keys --pass RJ_SECRET
+  # A relay older than the binary (0.x's, a jail started before the upgrade: #380, finding 536), which
+  # knows no --env-fd: a call that needs it is refused here, run's 125 (not the relay's 2, which run
+  # would hand on as its command's), saying to restart the jail; a call without it goes as before.
+  mkdir -p "$r/obin"; cp "$r/bin/unshare" "$r/obin/unshare"
+  cat > "$r/obin/omabox-relay" <<'EOF'
+#!/bin/bash
+# omabox-relay call as 0.x's parses it: --fd N and --env NAME=VALUE before --, else its usage error.
+a=("$@")
+for ((i = 2; i < ${#a[@]}; i++)); do
+  case ${a[i]} in
+    --) break ;;
+    --fd|--env) i=$((i + 1)) ;;
+    *) echo "omabox-relay: unknown option ${a[i]}" >&2; exit 2 ;;
+  esac
+done
+echo "old relay: ${a[*]:i+1}" >> "$RJ_REC"
+exit 0
+EOF
+  chmod +x "$r/obin/omabox-relay"
+  cx_env=(PATH="$r/obin:/usr/bin" RJ_SECRET="s3cret-$P")
+  cx_want=(rc=125 out= "err=omabox: the omabox-relay at $r/obin/omabox-relay is older than this omabox (it takes no --env-fd, which --pass and --env-file need): restart the jail, which maps the new one" 'state!~old relay')
+  cx_case "alone, an older relay: run --pass VAR: refused, run's 125" run --pass RJ_SECRET -- env
+  cx_want=(rc=125 out= 'err~older than this omabox.*restart the jail' 'state!~old relay')
+  cx_case "...run --env-file: 125" run --env-file dev.env -- env
+  cx_want=(rc=1 out= 'err~older than this omabox.*restart the jail' 'state!~old relay')
+  cx_case "...keys --pass VAR: 1" keys --pass RJ_SECRET
+  cx_want=(rc=0 err= 'state=old relay: run -- true')
+  cx_case "...run with nothing to pass: as before" run -- true
   cx_env=(PATH="$r/bin:/usr/bin")
   cx_want=(rc=1 out= 'err=omabox: omabox-relay is not in reach: map it into the jail (omabox broker on prints how)')
   cx_case "alone: no omabox-relay in reach" ls
@@ -5353,6 +5381,18 @@ a, b = socket.socketpair()
 sys.stdout.write(subprocess.run(sys.argv[1:], stdin=a, capture_output=True, text=True).stdout)' "$R" call "$d/sock" -- x)
   check_match "...its PATH stays fixed with a socket for stdin (no ~/.bashrc)" "\|PATH=/usr/local/bin:/usr/bin\|" "$out"
   check_match "a variable name that is not one is refused" "bad --env" "$("$R" call "$d/sock" --env 'BASH_FUNC_x%%=1' -- x 2>&1)"
+  # The call's own usage errors (#380, finding 536): 2, or OMABOX_RELAY_FAIL's status when omabox sets
+  # one (run's 125), never a 2 that run would hand on as its command's.
+  rc_of() { local rc=0 o; o=$("$@" 2>&1) || rc=$?; echo "$rc $o"; }
+  check_eq "a bad --env-fd: 2" "2 omabox-relay: bad --env-fd 9" "$(rc_of "$R" call "$d/sock" --env-fd 9 -- x)"
+  check_eq "...with OMABOX_RELAY_FAIL=125: 125" "125 omabox-relay: bad --env-fd 9" "$(OMABOX_RELAY_FAIL=125 rc_of "$R" call "$d/sock" --env-fd 9 -- x)"
+  check_eq "...an --env-fd entry not NUL-ended: 125" "125 omabox-relay: bad --env-fd 5: an entry not NUL-ended" \
+    "$(OMABOX_RELAY_FAIL=125 rc_of "$R" call "$d/sock" --env-fd 5 -- x 5< <(printf 'A=1'))"
+  check_eq "...an --env-fd entry with no good NAME=: 125" "125 omabox-relay: bad --env-fd 5: an entry with no good NAME=" \
+    "$(OMABOX_RELAY_FAIL=125 rc_of "$R" call "$d/sock" --env-fd 5 -- x 5< <(printf '1A=1\0'))"
+  check_eq "...an option it does not know: 125" "125 omabox-relay: unknown option --nope" "$(OMABOX_RELAY_FAIL=125 rc_of "$R" call "$d/sock" --nope -- x)"
+  check_eq "...a bad --env: 125" "125 omabox-relay: bad --env A" "$(OMABOX_RELAY_FAIL=125 rc_of "$R" call "$d/sock" --env A -- x)"
+  check_eq "...no -- before the command: 125" "125 omabox-relay: no -- before the command" "$(OMABOX_RELAY_FAIL=125 rc_of "$R" call "$d/sock" --env A=1)"
   echo passed > "$d/f"
   check_match "an --fd file reaches the command as fd 3" "fd3=passed" "$("$R" call "$d/sock" --fd 5 -- x 5<"$d/f" 2>&1)"
   timeout 1 "$R" call "$d/sock" -- sleep >/dev/null 2>&1

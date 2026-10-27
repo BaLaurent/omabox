@@ -21,6 +21,10 @@ the old one can notify "omabox: cannot list boxes". That goes away by itself onc
   And a missing or failing `nft` no longer shows as "bwrap did not start" after 10 s: `up` looks for
   it in `/usr/bin`, where the box's start runs it, and says at once when setting the rule failed,
   with nft's error ([#364](https://github.com/diogochaves/omabox/issues/364)).
+- **`run --pass` from an agent in ai-jail started before the upgrade exited 2**, as if its command
+  had: the jail still had 0.x's `omabox-relay`, which does not know how 1.0 hands it the values. It
+  now exits 125, `run`'s own, saying to restart the jail; the relay's own usage errors are `run`'s
+  125 too ([#380](https://github.com/diogochaves/omabox/issues/380)).
 
 ## 1.0.0 — 2026-10-27
 

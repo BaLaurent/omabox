@@ -10508,6 +10508,22 @@ from them.
     caller's PATH refused in ms naming /usr/bin, and one that fails said in ~0.1 s, no box left up:
     each failed before, 10 s and "bwrap did not start"); net.rs `pasta_opens_what_it_should` (every
     `-t`/`-u` rule too); exec.rs `executable_in_the_path_given`; up_box.rs `net_failed_says_what_failed`.
+536. **`run --pass` through a relay older than the binary exited 2, as if its command had** (2026-10-27,
+    #380). Since 1.0 a jailed caller's `--pass` and `--env-file` values go to omabox-relay on an fd
+    (`--env-fd`, finding 503). A jail started before the upgrade still maps 0.x's relay, which answers
+    `--env-fd` with "unknown option", exit 2, before the broker is reached; `run` hands on any status
+    but its own 125 as its command's, so the caller saw its command fail with 2. The new relay's own
+    usage errors (a bad `--env-fd`, `--env`, `--fd`, an unknown word, no `--`) were 2 as well, though
+    OMABOX_RELAY_FAIL (125 for `run`) already set its other failures. **Fix**: the relay's call
+    returns OMABOX_RELAY_FAIL's status for its usage errors too (2 when it is not set); and before a
+    call that needs `--env-fd`, the binary asks its relay whether it takes it, without the broker: a
+    call to a socket path longer than any (`NO_SOCKET`), `--env-fd` on /dev/null, OMABOX_RELAY_FAIL
+    unset, ends with 1 from a relay that read its options and 2 from one that did not. An older relay
+    is refused there with run's 125 (1 for `keys --pass`), saying to restart the jail; a call with
+    nothing to pass goes to it as before. The question costs one exec of the relay, only on calls
+    that pass values. Tests: t_unit_relay (each usage error 2, and 125 with OMABOX_RELAY_FAIL=125),
+    t_unit_jailed_caller ("alone, an older relay": a stand-in that parses as 0.x's), relay.rs
+    `takes_env_fd_tells_an_older_relay`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

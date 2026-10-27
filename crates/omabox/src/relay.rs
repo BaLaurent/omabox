@@ -84,6 +84,34 @@ fn secret_fd(ctx: &Ctx, entries: &[Vec<u8>]) -> Res<Option<OwnedFd>> {
     Ok(Some(OwnedFd::from(f)))
 }
 
+/// A socket path no socket can have (108 bytes and more): a call to it fails once its options are
+/// read, before anything is sent.
+const NO_SOCKET: &str = "/omabox-relay-probe/no-socket-has-a-path-this-long/................................................................................";
+
+/// Whether the relay takes --env-fd. 0.x's, still mapped into a jail started before the upgrade,
+/// answer it with their usage error, 2, which `run` would hand on as its command's (#380, finding
+/// 536). Asked with a call to NO_SOCKET, its --env-fd /dev/null: 1 from a relay that read its
+/// options, 2 from one that did not; one that cannot be asked is left to the call to say so.
+fn takes_env_fd(relay: &[u8]) -> bool {
+    let Ok(null) = std::fs::File::open("/dev/null") else {
+        return true;
+    };
+    if !inherited(null.as_raw_fd()) {
+        return true;
+    }
+    let mut c = crate::sig::command(OsStr::from_bytes(relay));
+    c.arg("call")
+        .arg(NO_SOCKET)
+        .arg("--env-fd")
+        .arg(null.as_raw_fd().to_string())
+        .args(["--", "true"])
+        .env_remove("OMABOX_RELAY_FAIL")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    crate::sig::run_status(c).map_or(true, |rc| rc != 2)
+}
+
 /// `"$relay" call "$BROKER_SOCK" [--fd N]... ENV... -- WORDS...`: the command, and the files it
 /// must keep open until the relay is done with them.
 fn call_cmd(
@@ -100,6 +128,15 @@ fn call_cmd(
         c.arg("--fd").arg(fd.to_string());
     }
     c.args(env.open.iter().map(|a| OsStr::from_bytes(a)));
+    // (asked before the values' fd is made: the question's relay never holds it)
+    if !env.secret.is_empty() && !takes_env_fd(relay) {
+        say(cat!(
+            "the omabox-relay at ",
+            relay,
+            " is older than this omabox (it takes no --env-fd, which --pass and --env-file need): restart the jail, which maps the new one"
+        ));
+        return Err(Exit(ctx.die_rc.unwrap_or(1)));
+    }
     let sf = secret_fd(ctx, &env.secret)?;
     if let Some(f) = &sf {
         if !inherited(f.as_raw_fd()) {
@@ -846,6 +883,64 @@ fn record(ctx: &mut Ctx, relay: &[u8], mut env: Env, args: &[Vec<u8>]) -> Res<()
                 return Ok(());
             }
             Err(code(if rc != 0 { rc } else { 1 }))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stand-in relay, written by a shell of its own: no fd of this process ever holds it open for
+    /// writing, which a fork in another test's thread would carry into an exec of it (ETXTBSY).
+    fn stand_in(name: &str, body: &str) -> String {
+        let d = std::env::temp_dir().join(format!("omabox-relay-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let f = d.join("omabox-relay").to_str().unwrap().to_string();
+        let ok = Command::new("sh")
+            .args([
+                "-c",
+                "printf '%s\\n' \"$1\" > \"$2\" && chmod +x \"$2\"",
+                "sh",
+            ])
+            .args([body, &f])
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "the stand-in {f} written");
+        f
+    }
+
+    // #380, finding 536: an older relay is told by its answer to --env-fd.
+    #[test]
+    fn takes_env_fd_tells_an_older_relay() {
+        // (0.x's call: --fd and --env before --, anything else its usage error, 2)
+        let old = stand_in(
+            "old",
+            "#!/bin/sh\nshift 2\nwhile [ \"$1\" != -- ]; do case $1 in --fd|--env) shift 2 ;; \
+             *) echo \"omabox-relay: unknown option $1\" >&2; exit 2 ;; esac; done\nexit 0",
+        );
+        assert!(!takes_env_fd(old.as_bytes()), "0.x's relay: no --env-fd");
+        // (1.0's: the question as asked, its options read, then a socket path too long: its own 1,
+        // OMABOX_RELAY_FAIL not set for the question; asked anything else, a usage error)
+        let new = stand_in(
+            "new",
+            &format!(
+                "#!/bin/sh\n[ \"$1 $2 $3 $5 $6 $#\" = 'call {NO_SOCKET} --env-fd -- true 6' ] && \
+                 [ -r \"/proc/$$/fd/$4\" ] && [ -z \"${{OMABOX_RELAY_FAIL+x}}\" ] || exit 2\n\
+                 echo 'omabox-relay: socket path too long' >&2\nexit 1"
+            ),
+        );
+        assert!(takes_env_fd(new.as_bytes()), "1.0's relay takes --env-fd");
+        assert!(
+            NO_SOCKET.len() >= 108,
+            "NO_SOCKET: longer than any socket's path"
+        );
+        // (one that cannot be run: the call says so, as it did)
+        assert!(takes_env_fd(b"/nonexistent/omabox-relay"));
+        for f in [old, new] {
+            let _ = std::fs::remove_dir_all(std::path::Path::new(&f).parent().unwrap());
         }
     }
 }

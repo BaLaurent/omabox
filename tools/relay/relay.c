@@ -66,6 +66,10 @@ struct header {
 // The exit status of call's own failures (the broker not reached, a call it turned away): 1, or
 // OMABOX_RELAY_FAIL's 1-255. bin/omabox sets 125 for `run`, whose other statuses are its command's.
 static int own_fail = 1;
+// A call's usage errors (a word it does not know, a bad --fd, --env or --env-fd): 2, or
+// OMABOX_RELAY_FAIL's status when omabox sets one, so run never takes the relay's 2 for its
+// command's (#380, finding 536).
+static int usage_fail = 2;
 
 static void die(const char *what) {
     fprintf(stderr, "omabox-relay: %s: %s\n", what, strerror(errno));
@@ -109,8 +113,8 @@ static int good_name(const char *s, size_t n) {
 
 static int cmd_call(int argc, char **argv) {
     const char *f = getenv("OMABOX_RELAY_FAIL");
-    if (f) { char *e; long v = strtol(f, &e, 10); if (*f && !*e && v >= 1 && v <= 255) own_fail = (int)v; }
-    if (argc < 2) { fprintf(stderr, "usage: omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... [--env-fd N] -- ARG...\n"); return 2; }
+    if (f) { char *e; long v = strtol(f, &e, 10); if (*f && !*e && v >= 1 && v <= 255) own_fail = usage_fail = (int)v; }
+    if (argc < 2) { fprintf(stderr, "usage: omabox-relay call SOCKET [--fd N]... [--env NAME=VALUE]... [--env-fd N] -- ARG...\n"); return usage_fail; }
     const char *path = argv[1];
     // A broker at its cap closes the connection as soon as it accepts it (#197): a write after that
     // is EPIPE, said below, not a SIGPIPE ending the caller with 141.
@@ -122,7 +126,7 @@ static int cmd_call(int argc, char **argv) {
 #define PUT(tag, s)                                                                      \
     do {                                                                                 \
         size_t l_ = strlen(s);                                                           \
-        if (len + l_ + 3 > MAX_PAYLOAD) { fprintf(stderr, "omabox-relay: too long\n"); return 2; } \
+        if (len + l_ + 3 > MAX_PAYLOAD) { fprintf(stderr, "omabox-relay: too long\n"); return usage_fail; } \
         payload[len++] = (tag), payload[len++] = ':';                                    \
         memcpy(payload + len, (s), l_ + 1), len += l_ + 1;                               \
     } while (0)
@@ -135,18 +139,18 @@ static int cmd_call(int argc, char **argv) {
             long fd = strtol(argv[++i], &end, 10);
             if (*end || fd < 3 || fcntl((int)fd, F_GETFD) < 0 || nfds == MAX_FDS) {
                 fprintf(stderr, "omabox-relay: bad --fd %s\n", argv[i]);
-                return 2;
+                return usage_fail;
             }
             fds[nfds++] = (int)fd;
         } else if (strcmp(argv[i], "--env") == 0 && i + 1 < argc) {
             const char *kv = argv[++i], *eq = strchr(kv, '=');
-            if (!eq || !good_name(kv, (size_t)(eq - kv))) { fprintf(stderr, "omabox-relay: bad --env %s\n", kv); return 2; }
+            if (!eq || !good_name(kv, (size_t)(eq - kv))) { fprintf(stderr, "omabox-relay: bad --env %s\n", kv); return usage_fail; }
             PUT('E', kv);
         } else if (strcmp(argv[i], "--env-fd") == 0 && i + 1 < argc) {
             // Entries read here and the fd closed: it is not one the broker gets.
             char *end;
             long fd = strtol(argv[++i], &end, 10);
-            if (*end || fd < 3 || fcntl((int)fd, F_GETFD) < 0) { fprintf(stderr, "omabox-relay: bad --env-fd %s\n", argv[i]); return 2; }
+            if (*end || fd < 3 || fcntl((int)fd, F_GETFD) < 0) { fprintf(stderr, "omabox-relay: bad --env-fd %s\n", argv[i]); return usage_fail; }
             char *buf = malloc(MAX_PAYLOAD);
             size_t n = 0;
             if (!buf) die("malloc");
@@ -156,24 +160,24 @@ static int cmd_call(int argc, char **argv) {
                 if (r < 0) die("--env-fd");
                 if (r == 0) break;
                 n += (size_t)r;
-                if (n == MAX_PAYLOAD) { fprintf(stderr, "omabox-relay: too long\n"); return 2; }
+                if (n == MAX_PAYLOAD) { fprintf(stderr, "omabox-relay: too long\n"); return usage_fail; }
             }
             close((int)fd);
-            if (n > 0 && buf[n - 1] != '\0') { fprintf(stderr, "omabox-relay: bad --env-fd %s: an entry not NUL-ended\n", argv[i]); return 2; }
+            if (n > 0 && buf[n - 1] != '\0') { fprintf(stderr, "omabox-relay: bad --env-fd %s: an entry not NUL-ended\n", argv[i]); return usage_fail; }
             for (size_t o = 0; o < n;) {
                 const char *kv = buf + o, *eq = strchr(kv, '=');
                 // (the name only: never a value on stderr either)
-                if (!eq || !good_name(kv, (size_t)(eq - kv))) { fprintf(stderr, "omabox-relay: bad --env-fd %s: an entry with no good NAME=\n", argv[i]); return 2; }
+                if (!eq || !good_name(kv, (size_t)(eq - kv))) { fprintf(stderr, "omabox-relay: bad --env-fd %s: an entry with no good NAME=\n", argv[i]); return usage_fail; }
                 PUT('E', kv);
                 o += strlen(kv) + 1;
             }
             free(buf);
         } else {
             fprintf(stderr, "omabox-relay: unknown option %s\n", argv[i]);
-            return 2;
+            return usage_fail;
         }
     }
-    if (i >= argc) { fprintf(stderr, "omabox-relay: no -- before the command\n"); return 2; }
+    if (i >= argc) { fprintf(stderr, "omabox-relay: no -- before the command\n"); return usage_fail; }
     for (i++; i < argc; i++) PUT('A', argv[i]);
 
     struct sockaddr_un addr = {.sun_family = AF_UNIX};
