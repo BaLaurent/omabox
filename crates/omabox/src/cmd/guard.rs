@@ -244,7 +244,7 @@ fn hooks_set(file: &[u8], hook: &[u8], act: &str) -> Result<(), Vec<u8>> {
     let want = r.text();
     let sorted = |v: &[u8]| jq::jq(&["-S", "."], Some(v), jq::Err::Inherit).text();
     if sorted(&want) == sorted(&cur) {
-        say(cat!("guard already ", act, " in ", file));
+        already(&file, act);
         return Ok(());
     }
     write(&file, &cat!(want, "\n"), act)
@@ -289,23 +289,7 @@ fn write(file: &[u8], content: &[u8], act: &str) -> Result<(), Vec<u8>> {
     }
     let mut was = Vec::new();
     if !bak.is_empty() {
-        // by name: FILE may be spelled with a doubled slash that the listed paths lose
-        let keep = shell::basename(&bak);
-        let older: Vec<_> = backups(file)
-            .into_iter()
-            .filter(|b| shell::basename(b) != keep)
-            .collect();
-        for b in &older {
-            let _ = std::fs::remove_file(shell::path(b));
-        }
-        was = cat!(" (was: ", bak);
-        if !older.is_empty() {
-            was = cat!(
-                was,
-                format!("; {} older backup(s) of it removed", older.len())
-            );
-        }
-        was = cat!(was, ")");
+        was = cat!(" (was: ", bak, pruned(file, &shell::basename(&bak)), ")");
     }
     say(cat!(
         "guard ",
@@ -316,6 +300,35 @@ fn write(file: &[u8], content: &[u8], act: &str) -> Result<(), Vec<u8>> {
         "; new sessions pick it up"
     ));
     Ok(())
+}
+
+/// FILE unchanged: still, only its newest backup is kept, so an upgrade (whose guard step finds the
+/// guard on) clears the ones older versions left (#398).
+fn already(file: &[u8], act: &str) {
+    let keep = backups(file).last().map(|b| shell::basename(b));
+    let n = keep.map(|k| pruned(file, &k)).unwrap_or_default();
+    let n = n
+        .strip_prefix(b"; ")
+        .map(|v| cat!(" (", v, ")"))
+        .unwrap_or_default();
+    say(cat!("guard already ", act, " in ", file, n));
+}
+
+/// Removes FILE's backups but KEEP (a name: FILE may be spelled with a doubled slash that the
+/// listed paths lose); "; N older backup(s) of it removed", or nothing when none went.
+fn pruned(file: &[u8], keep: &[u8]) -> Vec<u8> {
+    let older: Vec<_> = backups(file)
+        .into_iter()
+        .filter(|b| shell::basename(b) != keep)
+        .collect();
+    for b in &older {
+        let _ = std::fs::remove_file(shell::path(b));
+    }
+    if older.is_empty() {
+        Vec::new()
+    } else {
+        format!("; {} older backup(s) of it removed", older.len()).into_bytes()
+    }
 }
 
 /// The backups `write` made of FILE (FILE.bak-SECONDS.NANOSECONDS), oldest first. A user's own
@@ -442,7 +455,7 @@ fn codex_set(g: &Guard, act: &str) -> Result<(), Vec<u8>> {
     }
     let o = codex_py(g, act, &file)?;
     if o == b"SAME" {
-        say(cat!("guard already ", act, " in ", file));
+        already(&file, act);
     } else if let Some(w) = o.strip_prefix(b"WANT\n") {
         write(&file, w.strip_suffix(b".").unwrap_or(w), act)?;
     }

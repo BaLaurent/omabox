@@ -10482,7 +10482,13 @@ from them.
     an off), the setup --remove case in test/run.sh. The backup just made is told from the older
     ones by its name, not its path: `CLAUDE_CONFIG_DIR=~/.claude/` spells FILE with a doubled slash
     that the listed paths lose, and a path compare removed every backup, the new one too (guard.rs
-    `write_keeps_its_backup_through_a_doubled_slash`).
+    `write_keeps_its_backup_through_a_doubled_slash`). Pruning only on a rewrite left an upgrade's
+    backups alone (a VM upgrade test, 2026-10-27: from 1.0.0 all 18 stayed, since install.sh's guard
+    step finds the guard on; from 0.5.4 Codex's `config.toml`, unchanged since 0.2.0, kept its four):
+    "already on/off" now keeps only the newest too and says how many went (t_unit_guard_settings
+    "on again with an older version's backups"). The same test found a 0.x checkout's bar widget
+    notifying "cannot list boxes" while install.sh builds (`bin/omabox` links to a binary not built
+    yet; the old release's QML does it, so only the 1.0.1 upgrade note can help).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

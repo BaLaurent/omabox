@@ -5,12 +5,16 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
 ## Unreleased
 
+**Upgrading from 0.x:** while `./install.sh` builds the new omabox, the bar widget still running from
+the old one can notify "omabox: cannot list boxes". That goes away by itself once the install is done.
+
 ### Fixed
 
 - **`omabox guard on` and `off` left one more `settings.json.bak-*` each time**: they now keep only
-  the backup of the change they just made, and say how many older ones they removed. Backups of your
-  own (`settings.json.bak`, `.bak-mine`) stay. `setup --remove` names the backups it leaves
-  ([#398](https://github.com/diogochaves/omabox/issues/398)).
+  the newest backup of each file and say how many older ones they removed, also when the guard is
+  already on or off, so the upgrade (whose `install.sh` turns the guard on) clears the ones earlier
+  versions left. Backups of your own (`settings.json.bak`, `.bak-mine`) stay. `setup --remove` names
+  the backups it leaves ([#398](https://github.com/diogochaves/omabox/issues/398)).
 
 ## 1.0.0 — 2026-10-27
 

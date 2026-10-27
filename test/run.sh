@@ -13054,6 +13054,9 @@ t_unit_guard_settings() {
   check_eq "...keeping its mode" 600 "$(stat -c %a "$s")"
   check_match "on again: nothing to do" "already on" "$(g on)"
   check_eq "...and no second backup" 1 "$(compgen -G "$s.bak-*" | wc -l)"
+  : > "$s.bak-1.000000001"; : > "$s.bak-2.000000002"
+  check_match "on again with an older version's backups: they go (#398)" "already on.*2 older backup" "$(g on)"
+  check_eq "...keeping the newest" "1|$orig" "$(compgen -G "$s.bak-*" | wc -l)|$(cat "$s".bak-*)"
   : > "$s.bak-mine"
   g off >/dev/null
   check_eq "off gives back the same file" "$orig" "$(cat "$s")"
