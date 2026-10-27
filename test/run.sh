@@ -6932,7 +6932,7 @@ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", int(s
   check_eq "a protect-ports that is not ports: refused, exit 2" 2 "$rc"
   check_match "...saying which line, and why" "protect-ports=$p,x is not a list of ports .*no box starts until it is one" "$out"
   check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
-  t_protect_ports_nft "$h"
+  protect_ports_nft "$h"
 }
 
 # #364: the protected ports' rule is set by nft, which the box's start runs with PATH=/usr/bin. Under a
@@ -6940,8 +6940,8 @@ s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", int(s
 # namespace mapped back to the user, not bwrap's, whose no_new_privs would leave the box no network):
 # with none there but one on the caller's PATH, up refuses at once naming /usr/bin; with one that
 # fails, up says so as soon as it does, not "bwrap did not start" after its 10 s wait.
-# t_protect_ports_nft HOME
-t_protect_ports_nft() {
+# protect_ports_nft HOME
+protect_ports_nft() {
   local h=$1 B=$P-protnft fake=$TMP/protnft out rc t0 t
   # with_nft FILE CMD...: CMD with FILE as /usr/bin/nft
   with_nft() {
