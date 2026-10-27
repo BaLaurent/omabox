@@ -289,7 +289,12 @@ fn write(file: &[u8], content: &[u8], act: &str) -> Result<(), Vec<u8>> {
     }
     let mut was = Vec::new();
     if !bak.is_empty() {
-        let older: Vec<_> = backups(file).into_iter().filter(|b| *b != bak).collect();
+        // by name: FILE may be spelled with a doubled slash that the listed paths lose
+        let keep = shell::basename(&bak);
+        let older: Vec<_> = backups(file)
+            .into_iter()
+            .filter(|b| shell::basename(b) != keep)
+            .collect();
         for b in &older {
             let _ = std::fs::remove_file(shell::path(b));
         }
@@ -567,6 +572,23 @@ mod tests {
                 b"s.json.bak-10.000000001".to_vec()
             ]
         );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn write_keeps_its_backup_through_a_doubled_slash() {
+        // CLAUDE_CONFIG_DIR=~/.claude/ makes FILE ~/.claude//settings.json: the backup just made
+        // must not read as an older one, or every backup goes
+        let d = std::env::temp_dir().join(format!("omabox-guard-slash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("s.json"), "{}").unwrap();
+        std::fs::write(d.join("s.json.bak-9.000000001"), "").unwrap();
+        let f = cat!(shell::bytes(&d), "//s.json");
+        write(&f, b"{\"a\":1}\n", "on").unwrap();
+        let left = backups(&f);
+        assert_eq!(left.len(), 1);
+        assert_eq!(std::fs::read(shell::path(&left[0])).unwrap(), b"{}");
         std::fs::remove_dir_all(&d).unwrap();
     }
 

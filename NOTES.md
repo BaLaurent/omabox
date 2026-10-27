@@ -10479,7 +10479,10 @@ from them.
     `.bak-mine`, `.bak-20261004` stay), saying how many went. `setup --remove` names the ones left
     ("kept: the guard's backups of your agents' settings: ..."). Tests: guard.rs
     `backups_are_ours_only_oldest_first`, t_unit_guard_settings (one of ours and the user's own after
-    an off), the setup --remove case in test/run.sh.
+    an off), the setup --remove case in test/run.sh. The backup just made is told from the older
+    ones by its name, not its path: `CLAUDE_CONFIG_DIR=~/.claude/` spells FILE with a doubled slash
+    that the listed paths lose, and a path compare removed every backup, the new one too (guard.rs
+    `write_keeps_its_backup_through_a_doubled_slash`).
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
