@@ -1055,7 +1055,9 @@ t_unit_json() {
     "$(sv saves --json | jq -r --arg s "$P-js" '.[] | select(.name == $s) | "\((.size_kb | type == "number") and .size_kb >= 290) \(.size | type == "string")"')"
   rm -rf -- "${TMP:?}/data/omabox/saves/$P-js"
   # F8 (#273, #287): since 1.0 a region beside --window is the window's own, with no warning (0.9's).
-  check_eq "wait still --window --ignore: no warning (only the box asked)" "omabox: no box '$P-nobox' is up (start one with: omabox up $P-nobox)" \
+  # (the boxes up beside it are listed, "up: A B ; ", and the user's own may be up during the suite)
+  check_match "wait still --window --ignore: no warning (only the box asked)" \
+    "^omabox: no box '$P-nobox' is up \\((up: [^;]*; )?start one with: omabox up $P-nobox\\)\$" \
     "$("$CLI" wait still --window foo --ignore "1,1 2x2" -b "$P-nobox" 2>&1)"
   check_fails "...click --window --wait -g --ignore: none" grep -q warning <<<"$("$CLI" click --window foo --wait -g "0,0 9x9" --ignore "1,1 2x2" 1 1 -b "$P-nobox" 2>&1)"
   # (settle_in_window, -g's and --ignore's regions moved by the window's place, and settle_opts_check
