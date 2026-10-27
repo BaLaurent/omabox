@@ -1405,8 +1405,13 @@ pub fn exec_failed(prog: &[u8], e: &std::io::Error) -> (String, u8) {
 
 /// `command -v NAME >/dev/null` for a program: an executable file of that name in a dir of PATH.
 pub fn executable_on_path(name: &[u8]) -> bool {
-    shell::env_or_empty("PATH")
-        .split(|&c| c == b':')
+    executable_in(&shell::env_or_empty("PATH"), name)
+}
+
+/// NAME is an executable file in one of PATH's folders (`a:b`, an empty one the current folder): what
+/// a shell run with PATH finds (a box's start runs with up_box's LAUNCH_PATH, not the caller's, #364).
+pub fn executable_in(path: &[u8], name: &[u8]) -> bool {
+    path.split(|&c| c == b':')
         .map(|d| cat!(if d.is_empty() { b".".as_slice() } else { d }, "/", name))
         .any(|p| executable(&p) && shell::path(&p).is_file())
 }
@@ -1617,6 +1622,29 @@ fn drain(outs: Vec<Child>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #364: a program is looked for in the PATH given, not the caller's: an nft only on the caller's
+    // PATH is not one a box's start (PATH=/usr/bin) finds; a file that cannot run, or a folder, is none.
+    #[test]
+    fn executable_in_the_path_given() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = std::env::temp_dir().join(format!("omabox-exin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for sub in ["a", "b", "c/prog"] {
+            std::fs::create_dir_all(d.join(sub)).unwrap();
+        }
+        std::fs::write(d.join("a/prog"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(d.join("a/prog"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(d.join("b/prog"), "").unwrap();
+        let dir = |s: &str| d.join(s).into_os_string().into_encoded_bytes();
+        assert!(executable_in(&dir("a"), b"prog"));
+        assert!(executable_in(&cat!(dir("b"), ":", dir("a")), b"prog"));
+        assert!(!executable_in(&dir("b"), b"prog"), "not executable");
+        assert!(!executable_in(&dir("c"), b"prog"), "a folder");
+        assert!(!executable_in(&dir("b"), b"other"));
+        assert!(!executable_in(b"", b"no-such-prog-here"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     // As t_unit_box_gone checks bash's ns_said, but for what bash added (finding 440), and with the
     // entry's own words (finding 490).

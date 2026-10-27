@@ -6841,6 +6841,27 @@ while True:
   check_fails "...nft cannot flush the rule" env HOME="$h" "$CLI" run -b "$B" -- nft flush ruleset
   check_fails "...nor from a user namespace of the box's own" env HOME="$h" "$CLI" run -b "$B" -- unshare -Ur nft flush ruleset
   check_eq "...and the protected ports stay unreached" "" "$(tcp 127.0.0.1 "$p")$(tcp 127.0.0.1 "$q")"
+  # #364: a box server on a protected port the host's service has let go of (here: none on s) does not
+  # take the host's 127.0.0.1:s, TCP or UDP, while one on a port not protected (v) still does.
+  local s v udp='import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", int(sys.argv[1]))); time.sleep(600)'
+  until s=$(free_port) && [ "$s" != "$p" ] && [ "$s" != "$q" ] && [ "$s" != "$r" ] && [ "$s" != "$w" ]; do :; done
+  until v=$(free_port) && [ "$v" != "$s" ] && [ "$v" != "$p" ] && [ "$v" != "$q" ] && [ "$v" != "$r" ] && [ "$v" != "$w" ]; do :; done
+  HOME=$h ob down "$B" >/dev/null 2>&1
+  printf 'protect-ports=%s,%s,%s\n' "$q" "$p" "$s" > "$h/.config/omabox/config"
+  if ! UP_OUT=$(HOME=$h ob up "$B" --no-shell --theme tokyo-night --stock-bar 2>&1); then no "up with a protected port nothing on the host holds" "$UP_OUT"; return; fi
+  check_match "...pasta leaves it out of its -t and -u rules too" "-t 127\.0\.0\.1/(~[0-9]+,)*~$s,(~[0-9]+,)*auto .*-u 127\.0\.0\.1/(~[0-9]+,)*~$s,(~[0-9]+,)*auto" \
+    "$(tr '\0' ' ' < "/proc/$(cat "$XDG_RUNTIME_DIR/omabox/$B/pasta.pid")/cmdline" 2>/dev/null)"
+  HOME=$h ob run -b "$B" -d -- python3 -I -c "$srv" 127.0.0.1 "$s" >/dev/null
+  HOME=$h ob run -b "$B" -d -- python3 -I -c "$udp" "$s" >/dev/null
+  HOME=$h ob run -b "$B" -d -- python3 -I -c "$srv" 127.0.0.1 "$v" >/dev/null
+  HOME=$h ob run -b "$B" -d -- python3 -I -c "$udp" "$v" >/dev/null
+  check "a box server on a port not protected reaches the host's 127.0.0.1, TCP and UDP (the control)" until_ok 10 bash -c \
+    "ss -Htln 'sport = :$v' | grep -q . && ss -Huln 'sport = :$v' | grep -q ."
+  check "...the box listens on the protected one, TCP and UDP" until_ok 10 env HOME="$h" "$CLI" run -b "$B" -- bash -c \
+    "ss -Htln 'sport = :$s' | grep -q . && ss -Huln 'sport = :$s' | grep -q ."
+  sleep 2   # (pasta's scan of the box's ports: once a second)
+  check_eq "...and does not take the host's 127.0.0.1:$s, TCP or UDP" "" "$(ss -Htuln "sport = :$s")"
   HOME=$h ob down "$B" >/dev/null 2>&1
   # An isolated box's --allow of a protected port is refused.
   check_match "--allow of a protected port: refused" "up: --allow $q: a protected port" "$(HOME=$h ob up "$B" --no-shell --theme tokyo-night --net isolated --allow "$q" 2>&1)"
@@ -6852,6 +6873,48 @@ while True:
   check_eq "a protect-ports that is not ports: refused, exit 2" 2 "$rc"
   check_match "...saying which line, and why" "protect-ports=$p,x is not a list of ports .*no box starts until it is one" "$out"
   check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
+  t_protect_ports_nft "$h"
+}
+
+# #364: the protected ports' rule is set by nft, which the box's start runs with PATH=/usr/bin. Under a
+# mount namespace of the test's own whose /usr/bin/nft is a stand-in (the host's untouched; in a user
+# namespace mapped back to the user, not bwrap's, whose no_new_privs would leave the box no network):
+# with none there but one on the caller's PATH, up refuses at once naming /usr/bin; with one that
+# fails, up says so as soon as it does, not "bwrap did not start" after its 10 s wait.
+# t_protect_ports_nft HOME
+t_protect_ports_nft() {
+  local h=$1 B=$P-protnft fake=$TMP/protnft out rc t0 t
+  # with_nft FILE CMD...: CMD with FILE as /usr/bin/nft
+  with_nft() {
+    unshare -Urm sh -c 'f=$1 u=$2 g=$3; shift 3; mount --bind "$f" /usr/bin/nft && exec unshare -U --map-user="$u" --map-group="$g" -- "$@"' \
+      _ "$1" "$(id -u)" "$(id -g)" "${@:2}"
+  }
+  if ! with_nft /dev/null true 2>/dev/null; then skip "a missing or failing nft (#364)" "no user namespace of the test's own here"; return; fi
+  printf 'protect-ports=%s\n' "$(free_port)" > "$h/.config/omabox/config"
+  rm -rf "$fake"; mkdir -p "$fake/bin"
+  printf '#!/bin/sh\nexit 0\n' > "$fake/bin/nft"; chmod 755 "$fake/bin/nft"
+  : > "$fake/none"
+  printf '#!/bin/sh\necho "nft stand-in: refused" >&2\nexit 1\n' > "$fake/failing"; chmod 755 "$fake/failing"
+  # (the caller's PATH has an nft; /usr/bin's is a file that is not executable)
+  rc=0; t0=$(now_ms)
+  out=$(with_nft "$fake/none" env HOME="$h" PATH="$fake/bin:$PATH" \
+    "$CLI" up "$B" --no-shell --theme tokyo-night 2>&1) || rc=$?
+  t=$(( $(now_ms) - t0 ))
+  check_match "no nft in /usr/bin, one on the caller's PATH: refused (#364)" "^1 .*protect-ports .*needs nft in /usr/bin" "$rc $out"
+  check "...at once (${t} ms)" test "$t" -lt 3000
+  check_fails "...no box made" test -e "$XDG_RUNTIME_DIR/omabox/$B"
+  HOME=$h ob down "$B" >/dev/null 2>&1
+  rc=0; t0=$(now_ms)
+  out=$(with_nft "$fake/failing" env HOME="$h" \
+    "$CLI" up "$B" --no-shell --theme tokyo-night 2>&1) || rc=$?
+  t=$(( $(now_ms) - t0 ))
+  check_match "an nft that fails: up says so (#364)" "^1 .*could not set the protected ports rule in the box network .*nft stand-in: refused" "$rc $out"
+  check_fails "...not that bwrap did not start" grep -q "bwrap did not start" <<<"$out"
+  check "...before its 10 s wait for the box (${t} ms)" test "$t" -lt 6000
+  check_eq "...no box left up (its dir kept for box.log)" "" \
+    "$(ob ls --json | jq -r --arg n "$B" '.[] | select(.name == $n and .state == "up") | .name')"
+  check_fails "...nor its pasta" pgrep -f "^pasta .*$XDG_RUNTIME_DIR/omabox/$B/pasta.pid"
+  HOME=$h ob down "$B" >/dev/null 2>&1
 }
 
 t_connected() {

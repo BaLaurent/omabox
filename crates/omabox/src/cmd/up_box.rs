@@ -36,6 +36,14 @@ const BOX_EVENTS: &str = "/opt/omabox/bin/omabox-events";
 const BOX_BURST: &str = "/opt/omabox/bin/omabox-burst";
 const BOX_TREE: &str = "/opt/omabox/bin/omabox-tree";
 
+/// The PATH a box's start (launch.sh, and pasta's shell in it) runs with: up looks there for what
+/// that start runs, as nft (#364), not on the caller's.
+pub const LAUNCH_PATH: &[u8] = b"/usr/bin";
+/// What pasta's shell says before it ends the start when it could not set the box's network up: the
+/// --addr addresses (#229) or the protected ports' rule (#355). up says it at once (#364).
+const ADDR_FAILED: &str = "omabox: could not add the --addr addresses to the box loopback";
+const NFT_FAILED: &str = "omabox: could not set the protected ports rule in the box network";
+
 fn os(v: &[u8]) -> &std::ffi::OsStr {
     std::os::unix::ffi::OsStrExt::from_bytes(v)
 }
@@ -344,6 +352,11 @@ pub fn make(ctx: &mut Ctx, mut u: Up) -> Res<()> {
     let pid = loop {
         if let BoxPid::Pid(p) = box_pid(&d) {
             break p;
+        }
+        // pasta's shell could not set the box's network up, and ended the start: said now, with
+        // what failed, not as "bwrap did not start" after the wait (#364).
+        if let Some(why) = net_failed(&std::fs::read(ctx.at("box.log")).unwrap_or_default()) {
+            return Err(ctx.die(cat!(ctx.label(), why, "; see ", d, "/box.log")));
         }
         if crate::settle::past(end) {
             // bwrap writes info.json as it starts: with it there, the box started and was already
@@ -1269,7 +1282,9 @@ fn launch_script(ctx: &Ctx, u: &Up, args: &[Vec<u8>], protect: &net::Ports) -> R
             wrap = cat!(
                 "{ ",
                 add,
-                ":; } || { echo 'omabox: could not add the --addr addresses to the box loopback' >&2; exit 1; }; ",
+                ":; } || { echo '",
+                ADDR_FAILED,
+                "' >&2; exit 1; }; ",
                 wrap
             );
         }
@@ -1281,7 +1296,9 @@ fn launch_script(ctx: &Ctx, u: &Up, args: &[Vec<u8>], protect: &net::Ports) -> R
                 wrap = cat!(
                     "nft ",
                     quote_q(rules.as_bytes()),
-                    " || { echo 'omabox: could not set the protected ports rule in the box network' >&2; exit 1; }; ",
+                    " || { echo '",
+                    NFT_FAILED,
+                    "' >&2; exit 1; }; ",
                     wrap
                 );
             }
@@ -1354,7 +1371,7 @@ fn launch_script(ctx: &Ctx, u: &Up, args: &[Vec<u8>], protect: &net::Ports) -> R
     for w in [
         b"env".to_vec(),
         b"-i".to_vec(),
-        b"PATH=/usr/bin".to_vec(),
+        cat!("PATH=", LAUNCH_PATH),
         b"TERM=dumb".to_vec(),
         cat!("LANG=", lang),
         cat!("USER=", user),
@@ -1403,6 +1420,25 @@ fn launch_script(ctx: &Ctx, u: &Up, args: &[Vec<u8>], protect: &net::Ports) -> R
     }
     s.push(b'\n');
     Ok(s)
+}
+
+/// What pasta's shell said in BOXLOG when it could not set the box's network up (ADDR_FAILED,
+/// NFT_FAILED), as up says it: `could not ... (the first line before it: what failed, ip's or nft's)`.
+fn net_failed(boxlog: &[u8]) -> Option<Vec<u8>> {
+    let lines: Vec<&[u8]> = boxlog.split(|&c| c == b'\n').collect();
+    let i = lines
+        .iter()
+        .position(|l| *l == ADDR_FAILED.as_bytes() || *l == NFT_FAILED.as_bytes())?;
+    let said = lines[i].strip_prefix(b"omabox: ").unwrap_or(lines[i]);
+    Some(
+        match lines[..i]
+            .iter()
+            .find(|l| !l.iter().all(u8::is_ascii_whitespace))
+        {
+            Some(first) => cat!(said, " (", shell::cut_line(first, 300), ")"),
+            None => said.to_vec(),
+        },
+    )
 }
 
 /// LANGUAGE and every LC_* the caller has set to something, in bash's order for `${!LC_*}` (byte
@@ -1618,6 +1654,36 @@ fn mount_points(info: &[u8]) -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #364: pasta's shell's own line, with the first thing said before it (what failed), is what up
+    // says at once; a box.log without it (a start under way) is nothing yet.
+    #[test]
+    fn net_failed_says_what_failed() {
+        let log = cat!(
+            "\nError: Could not process rule: No such file or directory\nadd table inet omabox\n^^^^^\n",
+            NFT_FAILED,
+            "\n"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&net_failed(&log).unwrap_or_default()),
+            "could not set the protected ports rule in the box network (Error: Could not process rule: No such file or directory)"
+        );
+        assert_eq!(
+            net_failed(&cat!("sh: line 1: ip: command not found\n", ADDR_FAILED)),
+            Some(
+                b"could not add the --addr addresses to the box loopback (sh: line 1: ip: command not found)"
+                    .to_vec()
+            )
+        );
+        assert_eq!(
+            net_failed(NFT_FAILED.as_bytes()),
+            Some(b"could not set the protected ports rule in the box network".to_vec())
+        );
+        assert_eq!(net_failed(b""), None);
+        assert_eq!(net_failed(b"bwrap: Can't mount proc\n"), None);
+        // (a line that only starts like it, from anything else, is not it)
+        assert_eq!(net_failed(&cat!("x ", NFT_FAILED, "\n")), None);
+    }
 
     #[test]
     fn mountinfo() {

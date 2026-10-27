@@ -15,6 +15,12 @@ the old one can notify "omabox: cannot list boxes". That goes away by itself onc
   already on or off, so the upgrade (whose `install.sh` turns the guard on) clears the ones earlier
   versions left. Backups of your own (`settings.json.bak`, `.bak-mine`) stay. `setup --remove` names
   the backups it leaves ([#398](https://github.com/diogochaves/omabox/issues/398)).
+- **A box could take a protected port while your service on it was down**: pasta still forwarded
+  the box's servers on `protect-ports` to your `127.0.0.1`, so a box listening there took the port
+  and your browser's `localhost:PORT` reached the box. Protected ports are now left out both ways.
+  And a missing or failing `nft` no longer shows as "bwrap did not start" after 10 s: `up` looks for
+  it in `/usr/bin`, where the box's start runs it, and says at once when setting the rule failed,
+  with nft's error ([#364](https://github.com/diogochaves/omabox/issues/364)).
 
 ## 1.0.0 — 2026-10-27
 

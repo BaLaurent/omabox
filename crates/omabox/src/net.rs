@@ -3,12 +3,14 @@
 //!
 //! Protected ports (#355, S10): `protect-ports=PORT[,PORT...]` in ~/.config/omabox/config, none by
 //! default. A connected box gets each one excluded (`~PORT`) from both of pasta's `-T` rules and both
-//! `-U` rules, so its loopback forwards none of them to the host's; and, set up before anything in
-//! the box runs by pasta's own shell (root in pasta's namespaces, which the box's user namespace below
-//! maps back to the user with no capabilities), an nftables rule in the box's network namespace that
-//! rejects a connection to any of the host's addresses on those ports, as a server listening on all
-//! of them (0.0.0.0) would otherwise take one through the host's docker bridge or VPN address. An
-//! isolated box reaches only its --allow ports, and a protected one is refused there.
+//! `-U` rules, so its loopback forwards none of them to the host's, and from both `-t` and both `-u`
+//! rules, so a box server on one never takes the host's 127.0.0.1:PORT (#364); and, set up before
+//! anything in the box runs by pasta's own shell (root in pasta's namespaces, which the box's user
+//! namespace below maps back to the user with no capabilities), an nftables rule in the box's
+//! network namespace that rejects a connection to any of the host's addresses on those ports, as a
+//! server listening on all of them (0.0.0.0) would otherwise take one through the host's docker
+//! bridge or VPN address. An isolated box reaches only its --allow ports, and a protected one is
+//! refused there.
 
 use crate::cat;
 
@@ -59,6 +61,10 @@ pub fn pasta_args(net: &Net, pid_file: &[u8], eph: &[u8]) -> Vec<Vec<u8>> {
                 .collect();
             let auto = cat!(ex, "auto");
             let eph_auto = cat!(ex, eph, ",auto");
+            // (and out of the box-bound ones, #364: a box server on a protected port the host's
+            // service has let go of would take the host's 127.0.0.1:PORT, and its clients)
+            let lo_auto = cat!("127.0.0.1/", auto);
+            let lo_eph_auto = cat!("127.0.0.1/", eph_auto);
             add(&[
                 b"--config-net",
                 b"--no-map-gw",
@@ -68,13 +74,13 @@ pub fn pasta_args(net: &Net, pid_file: &[u8], eph: &[u8]) -> Vec<Vec<u8>> {
                 b"none",
                 b"--host-lo-to-ns-lo",
                 b"-t",
-                b"127.0.0.1/auto",
+                &lo_auto,
                 b"-t",
-                &cat!("127.0.0.1/", eph, ",auto"),
+                &lo_eph_auto,
                 b"-u",
-                b"127.0.0.1/auto",
+                &lo_auto,
                 b"-u",
-                &cat!("127.0.0.1/", eph, ",auto"),
+                &lo_eph_auto,
                 b"-T",
                 &auto,
                 b"-T",
@@ -307,7 +313,8 @@ mod tests {
 
     proptest! {
         // S5: an isolated box's pasta opens exactly its --allow ports (spliced, TCP only) and nothing
-        // else; a connected box's every host-bound rule leaves out each protected port.
+        // else; a connected box's every rule, host-bound and box-bound (#364), leaves out each
+        // protected port, and its box-bound ones listen on the host's 127.0.0.1 only.
         #[test]
         fn pasta_opens_what_it_should(ports in prop::collection::btree_set(1u16..=65535, 0..6)) {
             let csv = ports.iter().map(u16::to_string).collect::<Vec<_>>().join(",");
@@ -322,11 +329,13 @@ mod tests {
             prop_assert!(a.iter().any(|w| w == b"--splice-only"));
             prop_assert_eq!(a.iter().filter(|w| w.starts_with(b"-") && w.len() == 2 && w[1].is_ascii_alphabetic() && w.as_slice() != b"-q" && w.as_slice() != b"-P").count(), 4);
             let c = pasta_args(&Net::Connected { protect: set.clone() }, b"/p", b"32768-60999");
-            let mut host_rules = 0;
+            let (mut host_rules, mut box_rules) = (0, 0);
             for (i, w) in c.iter().enumerate() {
-                if w == b"-T" || w == b"-U" {
-                    host_rules += 1;
+                let to_box = w == b"-t" || w == b"-u";
+                if to_box || w == b"-T" || w == b"-U" {
+                    if to_box { box_rules += 1 } else { host_rules += 1 }
                     let spec = String::from_utf8_lossy(&c[i + 1]).into_owned();
+                    prop_assert!(!to_box || spec.starts_with("127.0.0.1/"), "{}", spec);
                     for p in set.ports() {
                         let ex = format!("~{p},");
                         prop_assert!(spec.contains(&ex), "{} lacks ~{}", spec, p);
@@ -334,6 +343,7 @@ mod tests {
                 }
             }
             prop_assert_eq!(host_rules, 4);
+            prop_assert_eq!(box_rules, 4);
         }
     }
 }

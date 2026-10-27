@@ -10489,6 +10489,25 @@ from them.
     "on again with an older version's backups"). The same test found a 0.x checkout's bar widget
     notifying "cannot list boxes" while install.sh builds (`bin/omabox` links to a binary not built
     yet; the old release's QML does it, so only the 1.0.1 upgrade note can help).
+535. **A box took a protected port the host had let go of; a missing or failing nft waited 10 s**
+    (2026-10-27, #364 items 1 and 4). (1) protect-ports (S10, finding 459) left each port out of
+    pasta's `-T`/`-U` (box to host) only: `-t 127.0.0.1/auto` and `-u` (host to box) still forwarded
+    it, so with the host's service on it down or restarting, a box server on that port took the
+    host's `127.0.0.1:PORT`, and a browser's `localhost:PORT` reached the box. All eight rules now
+    carry the `~PORT,` exclusions (`-t 127.0.0.1/~P,auto`, and the ephemeral range's
+    `-t 127.0.0.1/~P,32768-60999,auto`; pasta takes the address prefix before the exclusions). (2) up
+    looked for nft on the caller's PATH, but launch.sh runs pasta's shell with `PATH=/usr/bin`: an
+    nft only in `~/bin` passed the check, and a missing or failing nft ended pasta's shell with its
+    line in box.log while up waited 10 s for a pid and said "bwrap did not start". up now looks in
+    up_box's `LAUNCH_PATH` (what launch.sh sets) and names it; and its wait for the pid reads box.log
+    for pasta's shell's own failure lines (the nft rule's, and --addr's, exact lines), saying at once
+    what failed with the first line before it (nft's or ip's error). Tests: t_protect_ports (a box's
+    TCP and UDP servers on a protected port nothing on the host holds stay off the host's 127.0.0.1,
+    with a port not protected as the control; pasta's `-t`/`-u` words; under a user and mount
+    namespace of the test's own whose `/usr/bin/nft` is a stand-in, an empty file with an nft on the
+    caller's PATH refused in ms naming /usr/bin, and one that fails said in ~0.1 s, no box left up:
+    each failed before, 10 s and "bwrap did not start"); net.rs `pasta_opens_what_it_should` (every
+    `-t`/`-u` rule too); exec.rs `executable_in_the_path_given`; up_box.rs `net_failed_says_what_failed`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
