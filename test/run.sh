@@ -5266,25 +5266,44 @@ t_jail_held() {
 }
 
 # omabox broker on/off writes a socket and a service for the user manager (systemctl stubbed: the real
-# one is never touched) and prints the lines for ~/.ai-jail; it never edits that file.
+# one is never touched; the runtime dir a stand-in, so off never removes the real broker's socket) and
+# prints the lines for ~/.ai-jail; it never edits that file.
 t_unit_broker_units() {
-  local h=$TMP/bh stub=$TMP/bstub out; mkdir -p "$h" "$stub"
+  local h=$TMP/bh stub=$TMP/bstub rt=$TMP/brt out; mkdir -p "$h" "$stub" "$rt"
   printf '#!/bin/sh\necho "$*" >> %q\n' "$TMP/systemctl.log" > "$stub/systemctl"; chmod +x "$stub/systemctl"
   echo 'ro_maps = ["/x"]' > "$h/.ai-jail"
-  out=$(HOME=$h PATH=$stub:$PATH "$CLI" broker on 2>&1)
+  bk() { env -u OMABOX_BROKER_SOCK HOME="$h" XDG_RUNTIME_DIR="$rt" PATH="$stub:$PATH" "$CLI" broker "$@"; }
+  out=$(bk on 2>&1)
   local u=$h/.config/systemd/user
   check_match "on: the socket" "ListenStream=%t/omabox/.broker/sock" "$(cat "$u/omabox-broker.socket" 2>&1)"
   check_match "...private to the user" "SocketMode=0600" "$(cat "$u/omabox-broker.socket" 2>&1)"
+  check_match "...its file gone when it stops (#393)" "RemoveOnStop=yes" "$(cat "$u/omabox-broker.socket" 2>&1)"
   check_match "on: the service runs the relay on this checkout's omabox" "ExecStart=$ROOT/tools/relay/omabox-relay listen -- $ROOT/bin/omabox" "$(cat "$u/omabox-broker.service" 2>&1)"
   check_match "...and boxes outlive it" "KillMode=process" "$(cat "$u/omabox-broker.service" 2>&1)"
   check_match "on: the socket enabled" "enable --now omabox-broker.socket" "$(cat "$TMP/systemctl.log")"
-  check_match "on: prints the ~/.ai-jail lines" "ro_maps = \[\"$ROOT/bin/omabox:.*/omabox-relay\", \"$ROOT/skill\", \"$XDG_RUNTIME_DIR/omabox/.broker\"\]" "$out"
+  check_match "on: prints the ~/.ai-jail lines" "ro_maps = \[\"$ROOT/bin/omabox:.*/omabox-relay\", \"$ROOT/skill\", \"$rt/omabox/.broker\"\]" "$out"
   check_eq "...and leaves ~/.ai-jail alone" 'ro_maps = ["/x"]' "$(cat "$h/.ai-jail")"
   if command -v systemd-analyze >/dev/null; then
     check "the units are valid" systemd-analyze --user verify "$u/omabox-broker.socket" "$u/omabox-broker.service"
   else skip "the units are valid" "no systemd-analyze"; fi
-  HOME=$h PATH=$stub:$PATH "$CLI" broker off >/dev/null 2>&1
+  # off puts the runtime dir back as on found it (#393): the socket file the user manager made (left by
+  # an older omabox's unit, which had no RemoveOnStop) goes, and its folder with it; anything else in
+  # that folder is not ours and stays, and the folder with it.
+  local bd=$rt/omabox/.broker
+  mksock() { mkdir -p "$bd"; python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$bd/sock"; }
+  mksock; bk off >/dev/null 2>&1
   check_fails "off: the units gone" test -e "$u/omabox-broker.service"
+  check_fails "...the socket file gone (#393)" test -e "$bd/sock"
+  check_fails "...its folder too" test -e "$bd"
+  check "...omabox's runtime dir stays" test -d "$rt/omabox"
+  bk on >/dev/null 2>&1; mksock; echo mine > "$bd/notes"
+  bk off >/dev/null 2>&1
+  check_fails "off with someone else's file beside it: the socket gone" test -e "$bd/sock"
+  check_eq "...their file stays" mine "$(cat "$bd/notes" 2>&1)"
+  rm -f "$bd/notes"; echo mine > "$bd/sock"
+  bk off >/dev/null 2>&1
+  check_eq "off: a sock that is no socket is not ours: it stays" mine "$(cat "$bd/sock" 2>&1)"
+  check_match "off: says so" "^broker off" "$(bk off 2>&1)"
 }
 
 # The relay itself, host to host: what reaches the command, and what does not.

@@ -25,6 +25,10 @@ the old one can notify "omabox: cannot list boxes". That goes away by itself onc
   had: the jail still had 0.x's `omabox-relay`, which does not know how 1.0 hands it the values. It
   now exits 125, `run`'s own, saying to restart the jail; the relay's own usage errors are `run`'s
   125 too ([#380](https://github.com/diogochaves/omabox/issues/380)).
+- **`omabox broker off` left the broker's socket file behind** in `$XDG_RUNTIME_DIR/omabox/.broker/`:
+  the socket unit now removes it whenever it stops, and `off` removes it (and `.broker/`, when
+  nothing else is in it) itself, so the first `off` after upgrading also clears what an earlier
+  version's unit left ([#393](https://github.com/diogochaves/omabox/issues/393)).
 
 ## 1.0.0 — 2026-10-27
 

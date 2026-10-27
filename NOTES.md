@@ -10524,6 +10524,20 @@ from them.
     that pass values. Tests: t_unit_relay (each usage error 2, and 125 with OMABOX_RELAY_FAIL=125),
     t_unit_jailed_caller ("alone, an older relay": a stand-in that parses as 0.x's), relay.rs
     `takes_env_fd_tells_an_older_relay`.
+537. **`broker off` left the broker's socket file behind** (2026-10-27, #393). The socket unit listens
+    on `%t/omabox/.broker/sock` and the user manager makes that file (and `.broker/`) when it starts
+    the unit; stopping it closed the socket but kept the file, so after `off` a dead socket stayed,
+    and anything that looks for it (a jailed omabox's `relay_wanted`) saw a broker that was not
+    there. Two parts, since either alone misses a case: the unit now says `RemoveOnStop=yes`, so any
+    stop of it (`off`, or `systemctl --user stop`) takes the file; and `off` itself removes
+    `$XDG_RUNTIME_DIR/omabox/.broker/sock` when it is a socket (a file of that name that is not one is
+    not ours) and then `.broker/` only when it is empty, which also cleans what an older omabox's unit
+    (no RemoveOnStop) leaves on the first `off` after an upgrade. It uses the runtime dir, not
+    OMABOX_BROKER_SOCK (where a jail looks). The suite's broker case ran `off` on the real
+    XDG_RUNTIME_DIR; it now runs on a stand-in one, since `off` removes files there. Tests:
+    t_unit_broker_units (the socket and its folder gone after `off`, another file there kept with
+    its folder, a non-socket `sock` kept; RemoveOnStop in the unit, which `systemd-analyze verify`
+    accepts), broker.rs `clear_sock_takes_only_the_socket_and_an_empty_folder`.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

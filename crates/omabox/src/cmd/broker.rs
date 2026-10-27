@@ -47,7 +47,7 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             let socket_unit = cat!(
                 "# Written by omabox broker on (",
                 root,
-                "): lets an agent inside ai-jail drive its own boxes.\n[Unit]\nDescription=omabox broker socket (agents inside ai-jail)\n\n[Socket]\nListenStream=%t/omabox/.broker/sock\nSocketMode=0600\nDirectoryMode=0700\n\n[Install]\nWantedBy=sockets.target\n"
+                "): lets an agent inside ai-jail drive its own boxes.\n[Unit]\nDescription=omabox broker socket (agents inside ai-jail)\n\n[Socket]\nListenStream=%t/omabox/.broker/sock\nSocketMode=0600\nDirectoryMode=0700\nRemoveOnStop=yes\n\n[Install]\nWantedBy=sockets.target\n"
             );
             // KillMode=process: the boxes it starts outlive the broker (their own reapers end them).
             let service_unit = cat!(
@@ -77,6 +77,10 @@ pub fn run(ctx: &mut Ctx, args: &[Vec<u8>]) -> Res<()> {
             let _ = systemctl_quiet_err(&["stop", "omabox-broker.service"]);
             let _ = std::fs::remove_file(shell::path(&sock));
             let _ = std::fs::remove_file(shell::path(&svc));
+            // The unit's ListenStream (%t, the runtime dir this omabox's boxes live in, not
+            // OMABOX_BROKER_SOCK: that is where a jail looks for it). RemoveOnStop takes it as the
+            // socket stops; an older omabox's unit had none (#393).
+            clear_sock(&cat!(ctx.boxes, "/.broker"));
             systemctl(&["daemon-reload"], false)?;
             out("broker off (the lines in ~/.ai-jail, if you added them, can go)\n")
         }
@@ -102,6 +106,17 @@ fn broker_sock(ctx: &Ctx) -> Vec<u8> {
     } else {
         s
     }
+}
+
+/// What the broker's socket unit left in DIR (`.broker/`), gone (#393): its `sock` when it is a socket
+/// (a file of that name that is not one is not ours), then DIR itself when nothing else is in it.
+fn clear_sock(dir: &[u8]) {
+    use std::os::unix::fs::FileTypeExt;
+    let s = cat!(dir, "/sock");
+    if std::fs::symlink_metadata(shell::path(&s)).is_ok_and(|m| m.file_type().is_socket()) {
+        let _ = std::fs::remove_file(shell::path(&s));
+    }
+    let _ = std::fs::remove_dir(shell::path(dir));
 }
 
 /// `systemctl --user ARGS` (QUIET: `>/dev/null 2>&1`): its failure ends the command with its status,
@@ -159,4 +174,46 @@ fn recipe(root: &[u8], relay: &[u8], bsock: &[u8]) -> Vec<u8> {
         dir,
         " claude\n\n(omabox itself and its relay, the agent skill your agents link to, and the broker's socket; all read-only.)\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::net::UnixListener;
+
+    #[test]
+    fn clear_sock_takes_only_the_socket_and_an_empty_folder() {
+        let d = std::env::temp_dir().join(format!("omabox-brk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let b = d.join(".broker");
+        let bb = shell::bytes(&b).to_vec();
+        // The socket left behind: it and its folder go, the runtime dir above stays.
+        std::fs::create_dir_all(&b).expect("dirs");
+        drop(UnixListener::bind(b.join("sock")).expect("a socket"));
+        clear_sock(&bb);
+        assert!(!b.exists());
+        assert!(d.is_dir());
+        // Something else beside it: the socket goes, the folder and the other file stay.
+        std::fs::create_dir_all(&b).expect("dirs");
+        drop(UnixListener::bind(b.join("sock")).expect("a socket"));
+        std::fs::write(b.join("notes"), "mine").expect("a file");
+        clear_sock(&bb);
+        assert!(!b.join("sock").exists());
+        assert_eq!(
+            std::fs::read_to_string(b.join("notes")).ok().as_deref(),
+            Some("mine")
+        );
+        // A `sock` that is no socket is not ours.
+        std::fs::remove_file(b.join("notes")).expect("rm");
+        std::fs::write(b.join("sock"), "mine").expect("a file");
+        clear_sock(&bb);
+        assert_eq!(
+            std::fs::read_to_string(b.join("sock")).ok().as_deref(),
+            Some("mine")
+        );
+        // Nothing there at all: nothing to do.
+        let _ = std::fs::remove_dir_all(&d);
+        clear_sock(&bb);
+        assert!(!d.exists());
+    }
 }
