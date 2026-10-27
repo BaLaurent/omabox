@@ -43,7 +43,7 @@ real desktop saw no window at all.
   (`omabox setup --aquamarine`); your system's copy is not touched. That build also carries fixes
   of omabox's for interactive boxes: a key held when the box's window loses focus is released, in a
   monitor's window your pointer lands on that monitor and your cursor stays shown, and each
-  monitor's window has a class of its own, which keeps it off your workspace (next release; monitors
+  monitor's window has a class of its own, which keeps it off your workspace (since 1.0; monitors
   on an interactive box need it). No system aquamarine has those, so `omabox setup --aquamarine`
   builds them even when yours has PR #415 (enough on its own for headless NVIDIA boxes and
   confirm-close, not for those).

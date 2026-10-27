@@ -3,7 +3,22 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
-## Unreleased
+## 1.0.0 — 2026-10-27
+
+omabox is one Rust binary now, with the same commands, options, output and exit codes as before
+except where this section says otherwise ("Changes from the bash omabox" lists each). What scripts
+and agents branch on is kept from this release on: exit codes and `--json` fields stay as they are
+within 1.x, or change only by addition, and a command, option or variable that has to change warns
+for one minor release first (`omabox: deprecated: …`, naming the new form) before it is refused.
+README, "Stability", says what that covers and what it does not (message wording, help text,
+defaults and heuristics, image pixels, what other programs report through omabox). The forms 0.9.0
+deprecated are refused now, and a region given beside `--window` is the window's everywhere. Also:
+protected ports no box reaches, boxes at home on Omarchy 4.5 (1.0.x keeps working on 4.0; 1.1 will
+need 4.5), and the fixes from a review of every rule in SECURITY.md.
+
+**Upgrading from 0.x:** take your boxes down (`omabox down --all`), then `git pull && ./install.sh`
+in one go: it now builds omabox, and needs Rust (it installs Arch's `rust` when there is no `cargo`).
+Restart any agent running in ai-jail. Every path in your HOME stays where it was.
 
 ### Added
 
@@ -15,6 +30,10 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `omabox config protect-ports 8080,5432` (checked as `up` reads it, kept sorted; `default` removes
   it); `omabox config` lists it, `--json` as `protect_ports`
   ([#355](https://github.com/diogochaves/omabox/issues/355)).
+
+- **`OMABOX_STRICT=1`** refuses a deprecated form at once (exit 2) instead of warning, for CI.
+  Every deprecation warning from 1.0 on starts `omabox: deprecated:` and names what to write; 1.0
+  itself has none ([#287](https://github.com/diogochaves/omabox/issues/287)).
 
 ### Changed
 
@@ -36,6 +55,47 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   (`omabox setup --aquamarine`, then a new box). Two `monitor add`s on one interactive box now take turns (the
   box's lock: the second waits up to 60 s, then says the box is busy)
   ([#349](https://github.com/diogochaves/omabox/issues/349)).
+
+- **Beside `--window`, `-g` and `--ignore` are the window's own coordinates everywhere** (0,0 its top
+  left corner), as `click`'s X Y, `shot -g` and `check point` already were: `wait still|change
+  --window SEL --ignore`, and `--wait`'s `-g` and `--ignore` beside `--window` on `keys`, `click`,
+  `scroll` and `drag`. 0.9 took them in the screen's, with a warning. A 124's `--ignore "X,Y WxH" if
+  that is an animation` gives the window's coordinates there too. To watch a part of the screen
+  whatever the window, `-g` without `--window`.
+
+- The skill's reference says a box turns PipeWire's realtime module off for its clients, which hides
+  a realtime-limit bug, and how to run one client without that
+  ([#305](https://github.com/diogochaves/omabox/issues/305)).
+- The reference says plainly that wgpu apps (eframe's default renderer, iced, Bevy) do not start in
+  a box on NVIDIA, and what to do: a GL renderer, or a box on the AMD/Mesa GPU
+  ([#306](https://github.com/diogochaves/omabox/issues/306)).
+- Parallel subagents of one session share its default box name: the reference tells each to take a
+  box of its own (`up --new` or `-b` a name of its task), and `omabox brief` to take down no box it
+  did not start ([#295](https://github.com/diogochaves/omabox/issues/295)).
+
+- **Where box windows open**: the widget's Settings offers workspaces 1-10 and **Its own
+  (special:omabox)**, a special workspace of omabox's: full size, opened by the widget's Show, hidden
+  by a workspace switch. It no longer offers the scratchpad, which Omarchy 4.5 made its Quake console
+  (a half-height panel that starts the default agent when it opens empty). `special` still works
+  (`--workspace`, `omabox config workspace`), and a config that names it is kept and shown as it is;
+  on 4.5 `omabox` says what the scratchpad is now. The README gives a key binding for `special:omabox`
+  ([#292](https://github.com/diogochaves/omabox/issues/292)).
+
+### Removed
+
+- The forms deprecated in 0.9.0 are refused (exit 2; `run`'s 125) with one line naming what to
+  write, never read another way ([#287](https://github.com/diogochaves/omabox/issues/287)):
+  - `wait cmd`: write `wait until -- CMD`.
+  - `up --idle 45` and `OMABOX_IDLE=45`, a bare number (minutes up to 0.9): write `45m`.
+  - `keys -s 300` and `pointer -- sleep 300`, a bare number (milliseconds up to 0.9): write `300ms`.
+  - `up -i`: write `--interactive`. `save -f`: write `--force`.
+  - `shot` and `calibrate` given two files: name one.
+  - A box name given with characters a box name cannot have, or past 40 of them (`-b "my box"`):
+    the refusal names the one that fits (`my-box`).
+  - `keys --delay MS`: for a pause, `-s DURATION`.
+- The JSON fields 0.9 kept beside their successors: `config --json`'s kebab-case keys (`bar-icon`,
+  `confirm-close-available`, `gpu-now`...: read `bar_icon`...), `ls --json`'s `allow` (read
+  `allowed`), `ports --json`'s `address` (read `addresses`).
 
 ### Fixed
 
@@ -97,6 +157,100 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 - **A call right after a box's Hyprland crashed could say it "did not answer (hung?)"**: the call
   that hit the crash said the box went down while the box was still ending. It now says so once
   the box is down (within a second), and the next call says the box is dead and why.
+
+- **`tree --window` printed another window's tree for a window its app does not publish**
+  ([#302](https://github.com/diogochaves/omabox/issues/302)). An app that puts only one of its
+  windows on the accessibility bus (egui's root viewport, not its child ones) had that window's tree
+  printed for every other one. Now the app's only window stands for one of another title only when
+  it is that window's size and no other window of the app is; else `tree` says the window has no
+  tree, or that which one it is cannot be told, exit 1.
+
+- **`run -d` in a repo no longer says to start a box when your session has one up elsewhere**
+  ([#296](https://github.com/diogochaves/omabox/issues/296)). After `omabox up` in a scratch folder,
+  `run -d` back in the repo said `omabox up <repo>-…`, and agents started a second box. It now names
+  the session's box to pass with `-b`, as the other commands do there.
+
+- **`up --desk-shell` leaves omabox's own bar widget out**
+  ([#304](https://github.com/diogochaves/omabox/issues/304)). It lists your boxes with `omabox ls`,
+  which a box does not have, so the box's shell logged a warning for it (and would have notified).
+  `up` says it left it out; `--plugin` still mounts it.
+
+- **`up`'s line names every monitor** ([#308](https://github.com/diogochaves/omabox/issues/308)):
+  `box 'NAME' up (1920x1080@60 + 1080x1920@60)` for a box started with `--monitor 1080x1920`, not
+  the main screen alone.
+
+- **`run -d --wait` said `satisfied` for a command that had already died**
+  ([#297](https://github.com/diogochaves/omabox/issues/297)), when something else on the screen
+  settled meanwhile (the last app's window closing, another agent's window), and its end only came
+  as a warning on the next command. Now a command killed or ended with a status other than 0 by the
+  time the screen settles makes the answer `unsatisfied`, says its end and its log's last lines, and
+  exits with its status. One that ends with 0 having changed the screen stays satisfied.
+
+- **A `run -d` job's warning said "its words were not kept" for ordinary jobs**
+  ([#298](https://github.com/diogochaves/omabox/issues/298)). The next command's warning about a
+  job that ended lost what the job was when it died at once, when the box was slow to make it a
+  session of its own, when `--replace` or another command had looked at it first, or when another
+  command touched the job records at the same moment. A job's record is now always kept until its
+  end has been said, so the warning names the command and its pid.
+
+- **The warning about a `run -d` job that ended fired for jobs you stopped yourself**
+  ([#300](https://github.com/diogochaves/omabox/issues/300)): after `omabox run -- pkill APP`, the
+  next command said the job "was killed by SIGTERM". A job killed (SIGTERM, SIGINT or SIGKILL) while
+  an `omabox run` ran in its box, or within 2 s of one ending, is no longer said; exits and crashes
+  still are.
+
+- **A box going down could show on your desktop as "Process crashed: Xwayland"** (`up --xwayland`).
+  Hyprland starts Xwayland with `-core`, which raised its core limit back past the 1 byte everything
+  in a box gets, so its abort when the box's compositor went was recorded as a crash. A box's Xwayland
+  now keeps the 1-byte limit (unless you raised it yourself).
+- **The shell-crash warning fired for any Quickshell in the box, and missed a killed shell.** A
+  Quickshell of your own crashing (to test its crash handling) was reported as the shell crashing,
+  and omabox closed its crash dialog; now only the box shell's crashes count and only its dialog is
+  closed. A shell killed outright (`kill -9`) and started again by Omarchy's launcher is now said by
+  the next command: `the shell was killed by SIGKILL (137) since the last command and was started
+  again`.
+- **`run` printed bash's `line N: PID Killed prlimit …` for a command killed by a signal**; it now
+  says `the command was killed by SIGKILL (137)`, with the same exit status.
+
+- **`wait` and `--wait` could print a garbled answer under load**
+  ([#310](https://github.com/diogochaves/omabox/issues/310)), such as `unsatisfied: changingt=2002`,
+  when the screen watcher's answer arrived in two pieces split at a space. The space is kept now.
+
+- **An interactive `monitor add` could open its window on your workspace, focused**, when the box
+  took more than 5 s to make it: `hyprctl` stops waiting after 5 s, and omabox took that for a
+  refusal and turned off the rule that sends the window to the box's workspace. Now an answer that
+  says nothing either way counts as "maybe made": the add removes the monitor again, waiting for the
+  box to answer (about 20 s at most), and only then turns the rule off, also when the add is
+  interrupted or its terminal hangs up; `monitor add` returns only once the rule is off, whatever the
+  signal. The add still fails, saying the box did not answer
+  ([#349](https://github.com/diogochaves/omabox/issues/349)). While the rule is on (about 35 s at
+  worst), a nested Hyprland of your own opening a window is caught by it too, as before.
+- **A shell a test starts itself, under `omabox run`, no longer loses plugin hot-reload.** The box's
+  stand-in that keeps its own shell from reloading a mounted plugin on every save also caught other
+  shells, so Omarchy's own `runtime-smoke-test.sh` failed in a box. Now it applies to the box's
+  session only ([#317](https://github.com/diogochaves/omabox/issues/317)).
+- **The first shot after `up` could be a black screen**: 4.5's shell covers every screen for a new
+  login until the theme's intro has played, which in a box (no OWE daemon) took up to 5 s past `up`.
+  A box's start is now marked as had, and `up` also waits out the cover
+  ([#291](https://github.com/diogochaves/omabox/issues/291)).
+- **A box's screen came up on workspace 11**: 4.5 gives each monitor ten workspaces of its own, and
+  Hyprland's stand-in output took the first ten. The main screen is on 1-10 again, monitors added
+  after it on 11-20 and on; an interactive box closed with confirm-close and opened again keeps its
+  workspaces ([#292](https://github.com/diogochaves/omabox/issues/292)).
+- **`omarchy-theme-set` reloaded Hyprland about a second after it returned** in a box, on themes with
+  intros: now before it returns, so `wait still` and a shot see the new theme.
+- **A desk's `centerAnchor` and a plugin's `center` section** are placed as 4.5 places them
+  (`centerBegin`, `center`, `centerEnd`), also for a desk on an older Omarchy in an `--omarchy` box.
+- **`up --clean --from SAVE` showed the save's notifications**: 4.5 keeps them in the HOME; a clean box
+  starts without them.
+- **`up --omarchy` of a 4.5 tree on an older host**: the tree's xkb files go into the box (its keyboard
+  option), and `up` says which of owe, omasnap and the titlebars plugin the host lacks
+  ([#293](https://github.com/diogochaves/omabox/issues/293)).
+- **`click --window --no-raise` was refused over 4.5's notifications column and dock with nothing
+  there**: both stay mapped while idle and take input only on their items. A layer spanning the
+  screen's height or width (and not reserving its edge, as a bar does) is now said as one the input
+  may go to, like a full-screen one, and never refused; the message says "a layer spanning the screen"
+  where it said "a full-screen layer" ([#311](https://github.com/diogochaves/omabox/issues/311)).
 
 ### Changes from the bash omabox
 
@@ -276,168 +430,6 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   `OUT.part` still can), and a signal in the instant
   between making and registering `cpu`'s, `gpu`'s or `record stop`'s working files left those
   (#360). The bash omabox did the same.
-
-## 1.0.1 — unreleased
-
-Boxes on Omarchy 4.5.
-
-### Changed
-
-- **Where box windows open**: the widget's Settings offers workspaces 1-10 and **Its own
-  (special:omabox)**, a special workspace of omabox's: full size, opened by the widget's Show, hidden
-  by a workspace switch. It no longer offers the scratchpad, which Omarchy 4.5 made its Quake console
-  (a half-height panel that starts the default agent when it opens empty). `special` still works
-  (`--workspace`, `omabox config workspace`), and a config that names it is kept and shown as it is;
-  on 4.5 `omabox` says what the scratchpad is now. The README gives a key binding for `special:omabox`
-  ([#292](https://github.com/diogochaves/omabox/issues/292)).
-
-### Fixed
-
-- **An interactive `monitor add` could open its window on your workspace, focused**, when the box
-  took more than 5 s to make it: `hyprctl` stops waiting after 5 s, and omabox took that for a
-  refusal and turned off the rule that sends the window to the box's workspace. Now an answer that
-  says nothing either way counts as "maybe made": the add removes the monitor again, waiting for the
-  box to answer (about 20 s at most), and only then turns the rule off, also when the add is
-  interrupted or its terminal hangs up; `monitor add` returns only once the rule is off, whatever the
-  signal. The add still fails, saying the box did not answer
-  ([#349](https://github.com/diogochaves/omabox/issues/349)). While the rule is on (about 35 s at
-  worst), a nested Hyprland of your own opening a window is caught by it too, as before.
-- **A shell a test starts itself, under `omabox run`, no longer loses plugin hot-reload.** The box's
-  stand-in that keeps its own shell from reloading a mounted plugin on every save also caught other
-  shells, so Omarchy's own `runtime-smoke-test.sh` failed in a box. Now it applies to the box's
-  session only ([#317](https://github.com/diogochaves/omabox/issues/317)).
-- **The first shot after `up` could be a black screen**: 4.5's shell covers every screen for a new
-  login until the theme's intro has played, which in a box (no OWE daemon) took up to 5 s past `up`.
-  A box's start is now marked as had, and `up` also waits out the cover
-  ([#291](https://github.com/diogochaves/omabox/issues/291)).
-- **A box's screen came up on workspace 11**: 4.5 gives each monitor ten workspaces of its own, and
-  Hyprland's stand-in output took the first ten. The main screen is on 1-10 again, monitors added
-  after it on 11-20 and on; an interactive box closed with confirm-close and opened again keeps its
-  workspaces ([#292](https://github.com/diogochaves/omabox/issues/292)).
-- **`omarchy-theme-set` reloaded Hyprland about a second after it returned** in a box, on themes with
-  intros: now before it returns, so `wait still` and a shot see the new theme.
-- **A desk's `centerAnchor` and a plugin's `center` section** are placed as 4.5 places them
-  (`centerBegin`, `center`, `centerEnd`), also for a desk on an older Omarchy in an `--omarchy` box.
-- **`up --clean --from SAVE` showed the save's notifications**: 4.5 keeps them in the HOME; a clean box
-  starts without them.
-- **`up --omarchy` of a 4.5 tree on an older host**: the tree's xkb files go into the box (its keyboard
-  option), and `up` says which of owe, omasnap and the titlebars plugin the host lacks
-  ([#293](https://github.com/diogochaves/omabox/issues/293)).
-- **`click --window --no-raise` was refused over 4.5's notifications column and dock with nothing
-  there**: both stay mapped while idle and take input only on their items. A layer spanning the
-  screen's height or width (and not reserving its edge, as a bar does) is now said as one the input
-  may go to, like a full-screen one, and never refused; the message says "a layer spanning the screen"
-  where it said "a full-screen layer" ([#311](https://github.com/diogochaves/omabox/issues/311)).
-
-## 1.0.0 — unreleased
-
-What scripts and agents branch on is kept from this release: exit codes and `--json` fields stay as
-they are within 1.x, or change only by addition, and a command, option or variable that has to
-change warns for one minor release first (`omabox: deprecated: …`, naming the new form) before it
-is refused. README, "Stability", says what that covers and what it does not (message wording, help
-text, defaults and heuristics, image pixels, what other programs report through omabox). The forms
-0.9.0 deprecated are refused now, and a region given beside `--window` is the window's everywhere.
-
-### Added
-
-- **`OMABOX_STRICT=1`** refuses a deprecated form at once (exit 2) instead of warning, for CI.
-  Every deprecation warning from 1.0 on starts `omabox: deprecated:` and names what to write; 1.0
-  itself has none ([#287](https://github.com/diogochaves/omabox/issues/287)).
-
-### Changed
-
-- **Beside `--window`, `-g` and `--ignore` are the window's own coordinates everywhere** (0,0 its top
-  left corner), as `click`'s X Y, `shot -g` and `check point` already were: `wait still|change
-  --window SEL --ignore`, and `--wait`'s `-g` and `--ignore` beside `--window` on `keys`, `click`,
-  `scroll` and `drag`. 0.9 took them in the screen's, with a warning. A 124's `--ignore "X,Y WxH" if
-  that is an animation` gives the window's coordinates there too. To watch a part of the screen
-  whatever the window, `-g` without `--window`.
-
-- The skill's reference says a box turns PipeWire's realtime module off for its clients, which hides
-  a realtime-limit bug, and how to run one client without that
-  ([#305](https://github.com/diogochaves/omabox/issues/305)).
-- The reference says plainly that wgpu apps (eframe's default renderer, iced, Bevy) do not start in
-  a box on NVIDIA, and what to do: a GL renderer, or a box on the AMD/Mesa GPU
-  ([#306](https://github.com/diogochaves/omabox/issues/306)).
-- Parallel subagents of one session share its default box name: the reference tells each to take a
-  box of its own (`up --new` or `-b` a name of its task), and `omabox brief` to take down no box it
-  did not start ([#295](https://github.com/diogochaves/omabox/issues/295)).
-
-### Removed
-
-- The forms deprecated in 0.9.0 are refused (exit 2; `run`'s 125) with one line naming what to
-  write, never read another way ([#287](https://github.com/diogochaves/omabox/issues/287)):
-  - `wait cmd`: write `wait until -- CMD`.
-  - `up --idle 45` and `OMABOX_IDLE=45`, a bare number (minutes up to 0.9): write `45m`.
-  - `keys -s 300` and `pointer -- sleep 300`, a bare number (milliseconds up to 0.9): write `300ms`.
-  - `up -i`: write `--interactive`. `save -f`: write `--force`.
-  - `shot` and `calibrate` given two files: name one.
-  - A box name given with characters a box name cannot have, or past 40 of them (`-b "my box"`):
-    the refusal names the one that fits (`my-box`).
-  - `keys --delay MS`: for a pause, `-s DURATION`.
-- The JSON fields 0.9 kept beside their successors: `config --json`'s kebab-case keys (`bar-icon`,
-  `confirm-close-available`, `gpu-now`...: read `bar_icon`...), `ls --json`'s `allow` (read
-  `allowed`), `ports --json`'s `address` (read `addresses`).
-
-### Fixed
-
-- **`tree --window` printed another window's tree for a window its app does not publish**
-  ([#302](https://github.com/diogochaves/omabox/issues/302)). An app that puts only one of its
-  windows on the accessibility bus (egui's root viewport, not its child ones) had that window's tree
-  printed for every other one. Now the app's only window stands for one of another title only when
-  it is that window's size and no other window of the app is; else `tree` says the window has no
-  tree, or that which one it is cannot be told, exit 1.
-
-- **`run -d` in a repo no longer says to start a box when your session has one up elsewhere**
-  ([#296](https://github.com/diogochaves/omabox/issues/296)). After `omabox up` in a scratch folder,
-  `run -d` back in the repo said `omabox up <repo>-…`, and agents started a second box. It now names
-  the session's box to pass with `-b`, as the other commands do there.
-
-- **`up --desk-shell` leaves omabox's own bar widget out**
-  ([#304](https://github.com/diogochaves/omabox/issues/304)). It lists your boxes with `omabox ls`,
-  which a box does not have, so the box's shell logged a warning for it (and would have notified).
-  `up` says it left it out; `--plugin` still mounts it.
-
-- **`up`'s line names every monitor** ([#308](https://github.com/diogochaves/omabox/issues/308)):
-  `box 'NAME' up (1920x1080@60 + 1080x1920@60)` for a box started with `--monitor 1080x1920`, not
-  the main screen alone.
-
-- **`run -d --wait` said `satisfied` for a command that had already died**
-  ([#297](https://github.com/diogochaves/omabox/issues/297)), when something else on the screen
-  settled meanwhile (the last app's window closing, another agent's window), and its end only came
-  as a warning on the next command. Now a command killed or ended with a status other than 0 by the
-  time the screen settles makes the answer `unsatisfied`, says its end and its log's last lines, and
-  exits with its status. One that ends with 0 having changed the screen stays satisfied.
-
-- **A `run -d` job's warning said "its words were not kept" for ordinary jobs**
-  ([#298](https://github.com/diogochaves/omabox/issues/298)). The next command's warning about a
-  job that ended lost what the job was when it died at once, when the box was slow to make it a
-  session of its own, when `--replace` or another command had looked at it first, or when another
-  command touched the job records at the same moment. A job's record is now always kept until its
-  end has been said, so the warning names the command and its pid.
-
-- **The warning about a `run -d` job that ended fired for jobs you stopped yourself**
-  ([#300](https://github.com/diogochaves/omabox/issues/300)): after `omabox run -- pkill APP`, the
-  next command said the job "was killed by SIGTERM". A job killed (SIGTERM, SIGINT or SIGKILL) while
-  an `omabox run` ran in its box, or within 2 s of one ending, is no longer said; exits and crashes
-  still are.
-
-- **A box going down could show on your desktop as "Process crashed: Xwayland"** (`up --xwayland`).
-  Hyprland starts Xwayland with `-core`, which raised its core limit back past the 1 byte everything
-  in a box gets, so its abort when the box's compositor went was recorded as a crash. A box's Xwayland
-  now keeps the 1-byte limit (unless you raised it yourself).
-- **The shell-crash warning fired for any Quickshell in the box, and missed a killed shell.** A
-  Quickshell of your own crashing (to test its crash handling) was reported as the shell crashing,
-  and omabox closed its crash dialog; now only the box shell's crashes count and only its dialog is
-  closed. A shell killed outright (`kill -9`) and started again by Omarchy's launcher is now said by
-  the next command: `the shell was killed by SIGKILL (137) since the last command and was started
-  again`.
-- **`run` printed bash's `line N: PID Killed prlimit …` for a command killed by a signal**; it now
-  says `the command was killed by SIGKILL (137)`, with the same exit status.
-
-- **`wait` and `--wait` could print a garbled answer under load**
-  ([#310](https://github.com/diogochaves/omabox/issues/310)), such as `unsatisfied: changingt=2002`,
-  when the screen watcher's answer arrived in two pieces split at a space. The space is kept now.
 
 ## 0.9.2 — 2026-10-20
 
