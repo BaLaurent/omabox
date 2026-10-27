@@ -27,8 +27,8 @@ CMD`, which runs on your real desktop on purpose.
 
 ## The rules
 
-A change that weakens a rule updates its row; how each will be held by construction, and what no
-test checks yet, is #355.
+A change that weakens a rule updates its row; what no test checks yet is in the issues of the
+[Hardening](https://github.com/diogochaves/omabox/milestone/10) milestone.
 
 | Rule | Enforced in | Proven by |
 |---|---|---|
