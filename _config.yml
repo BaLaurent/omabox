@@ -2,4 +2,4 @@
 # Jekyll, which stops at bin/omabox: a link to build/omabox, made by ./install.sh, so it leads
 # nowhere in a fresh checkout. Nothing under bin/ is served.
 exclude:
-  - bin/
+  - bin   # no trailing slash: Jekyll 3 matches "bin/" only inside the folder, never the folder
