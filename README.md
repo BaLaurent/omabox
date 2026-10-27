@@ -614,7 +614,7 @@ These projects are good at what it does not do.
   Akita, fences the agent in: bubblewrap, Landlock and seccomp on Linux, `sandbox-exec` on macOS, so
   your home, keys and cloud credentials are out of reach. ai-jail answers what the agent can touch,
   omabox where it draws, and they stack. To run a build you do not trust yet with the box's screen as
-  its only display (tested with ai-jail 2.8.1 and omabox 0.5.2):
+  its only display (tested with ai-jail 2.10.0 and omabox 1.0):
 
   ```bash
   omabox up
@@ -643,8 +643,8 @@ These projects are good at what it does not do.
   without naming it. A shot or a recording (`record`, its marks, captions and contact sheet) is written into
   the jail by its own `omabox`; the broker never opens a path the jail names.
   Since ai-jail 2.8, a bare `ai-jail claude` reaches its model's API and nothing else; its boxes
-  still get no network. `omabox broker off` turns it off. Checked with ai-jail 2.2.1, 2.6.2 and
-  2.8.1 (omabox 0.5.2).
+  still get no network. `omabox broker off` turns it off. Checked with ai-jail 2.2.1, 2.6.2,
+  2.8.1 (omabox 0.5.2), 2.10.0 and 2.12.0 (omabox 1.0).
 - **[omarchy-in-omarchy](https://github.com/jankeesvw/omarchy-in-omarchy)** is a disposable Omarchy
   in QEMU/KVM (8 GB of RAM by default, minutes on its first start): for what needs a whole machine,
   an installer or an `omarchy-update` migration, system services, audio, suspend, a reboot, where a

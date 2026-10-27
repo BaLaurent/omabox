@@ -125,8 +125,8 @@ share one version (`omabox --version`). Update with `git pull && ./install.sh`.
   or a loop), saying so and naming it; the bash omabox exited 1 there without a word. The link is
   kept. A config that cannot be read stops every `up` (exit 2) and `config` says so; the bash
   omabox read it as empty, protecting no port. Scripts: nothing to change.
-- **Entering a box is omabox's own**, not `nsenter`'s (`omabox run -b B -- true` takes about a third
-  less time). What a failed entry says is in omabox's words, "omabox: cannot enter the box: REASON",
+- **Entering a box is omabox's own**, not `nsenter`'s (`omabox run -b B -- true` takes about 3 ms
+  on a box already up). What a failed entry says is in omabox's words, "omabox: cannot enter the box: REASON",
   where nsenter's own line was printed (and "dropped N bytes of other output on the box entry's
   stderr" where it said "nsenter's stderr"). A TERM or KILL sent to omabox alone, or to the process
   that waits for a box command (`pkill -f 'omabox run'` reaches it), ends the command and what it
