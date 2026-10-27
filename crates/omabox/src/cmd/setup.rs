@@ -122,6 +122,41 @@ fn have(name: &[u8]) -> bool {
     crate::exec::executable_on_path(name)
 }
 
+/// Whether the running shell lists the bar widget (`omarchy-shell shell listPlugins`); None when no
+/// shell answers (none running, or no omarchy-shell).
+fn shell_lists_widget() -> Option<bool> {
+    let mut c = crate::sig::command("omarchy-shell");
+    c.args(["shell", "listPlugins"]).stderr(Stdio::null());
+    match crate::sig::run_output(c) {
+        Ok((0, o)) => Some(crate::exit::contains(&o, b"\"chaves.omabox\"")),
+        _ => None,
+    }
+}
+
+/// Finding 539 (#397): the running shell made to know the widget setup just linked, as `omarchy
+/// plugin add` does. Its plugins dir watcher reloads on the link, but some 0.3 s later (an Omarchy
+/// 4.0.6 VM), and a box's shell has none (finding 196): `omarchy plugin enable` run in that time
+/// says "is not known". A shell that does not list it yet is asked to rescan (Omarchy 4.0.0 to 4.5
+/// all have `rescanPlugins` and `-q`), then listed again until it does, up to 4 s; one that lists it
+/// already is left alone (a rescan reloads every plugin). Some(false): a shell that still does not.
+fn shell_knows_widget() -> Option<bool> {
+    if shell_lists_widget()? {
+        return Some(true);
+    }
+    let mut c = crate::sig::command("omarchy-shell");
+    c.args(["-q", "shell", "rescanPlugins"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let _ = crate::sig::run_status(c);
+    for _ in 0..20 {
+        if shell_lists_widget()? {
+            return Some(true);
+        }
+        crate::sig::sleep(std::time::Duration::from_millis(200));
+    }
+    Some(false)
+}
+
 impl Setup {
     fn omabox(&self) -> Vec<u8> {
         cat!(self.root, "/bin/omabox")
@@ -263,7 +298,8 @@ impl Setup {
 
     /// setup_widget (finding 133): the bar widget in the user's bar, asked in a terminal, yes by
     /// default, a "no" remembered. As `omarchy plugin add` does: the shell rescans its plugins dir
-    /// first, and enabling waits for it to know the widget.
+    /// first, and enabling waits for it to know the widget. Without a terminal the line it prints
+    /// works at once (finding 539): the same rescan, and a wait until the shell lists the widget.
     fn widget(&self) -> Res<()> {
         let shell_json = std::fs::read(shell::path(&self.in_home(".config/omarchy/shell.json")))
             .unwrap_or_default();
@@ -282,19 +318,23 @@ impl Setup {
             ));
         }
         if !terminal() {
-            return out(
-                "bar widget: not asked (no terminal): omarchy plugin enable chaves.omabox\n",
-            );
+            // A shell still blind to the link after the wait: the line names the rescan too.
+            let rescan = if shell_knows_widget() == Some(false) {
+                "omarchy-shell shell rescanPlugins, then "
+            } else {
+                ""
+            };
+            return out(cat!(
+                "bar widget: not asked (no terminal): ",
+                rescan,
+                "omarchy plugin enable chaves.omabox\n"
+            ));
         }
         if ask_no("Show the omabox widget in your bar? [Y/n] ")? {
             remember(&declined);
             return Ok(());
         }
-        let mut c = crate::sig::command("omarchy-shell");
-        c.args(["shell", "rescanPlugins"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let _ = crate::sig::run_status(c);
+        shell_knows_widget();
         let mut said = Vec::new();
         for _ in 0..20 {
             let mut c = crate::sig::command("omarchy");

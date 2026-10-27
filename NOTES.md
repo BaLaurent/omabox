@@ -10538,6 +10538,27 @@ from them.
     t_unit_broker_units (the socket and its folder gone after `off`, another file there kept with
     its folder, a non-socket `sock` kept; RemoveOnStop in the unit, which `systemd-analyze verify`
     accepts), broker.rs `clear_sock_takes_only_the_socket_and_an_empty_folder`.
+539. **setup's widget line said "is not known" when run right after setup** (2026-10-27, #397).
+    Without a terminal setup prints `omarchy plugin enable chaves.omabox`; run at once (the 1.0.0
+    package test, Omarchy 4.0.6), it failed with "plugin 'chaves.omabox' is not known; run:
+    omarchy-shell shell rescanPlugins". A race, not a missing reload: the shell's PluginRegistry
+    watches its plugins dir (`inotifywait -m -r`, Omarchy 4.0.0 to 4.5.0-rc1 alike) and reloads on the
+    new link, but through a 150 ms timer and a scan: in a 4.0.6 VM `ln -s` then `omarchy plugin
+    enable` failed 3 times of 3, and the shell listed the plugin about 0.3 s after the link. A box's
+    shell has no watcher at all (finding 196), so there the line failed until a rescan. Only the
+    terminal's "yes" path rescanned (finding 133). setup now asks the shell (`omarchy-shell shell
+    listPlugins`) whether it lists the widget; if not, it rescans as `omarchy plugin add` does
+    (`omarchy-shell -q shell rescanPlugins`; `-q`, `rescanPlugins` and `listPlugins` are in every
+    4.x tag) and lists again every 200 ms until it does, up to 4 s. A shell that lists it already is
+    left alone (a rescan reloads every plugin; a re-run of setup re-makes the link and the shell keeps
+    listing it), no shell running costs one failed call, and a "no" remembered calls no shell (the
+    user said no; t_unit_install relies on it). A shell that still does not list it after 4 s gets
+    the line with both steps (`omarchy-shell shell rescanPlugins, then omarchy plugin enable ...`).
+    In the 4.0.6 VM, setup then `omarchy plugin enable` worked 3 times of 3 (setup ~0.35 s; a re-run
+    40 ms, no rescan). Omarchy 4.5 has the same watcher and timer, so the same race (read from its
+    QML, not run on a desktop). Tests: t_unit_setup (stand-in shells: none, one that lists it, one
+    that lists it after a rescan, one a rescan does not change, a "no" remembered), t_setup_prompts
+    (in a box, the line run at once enables the widget); both failed on the old code.
 
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 

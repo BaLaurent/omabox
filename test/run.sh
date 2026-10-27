@@ -2299,7 +2299,7 @@ for path in sys.argv[1:]:
 '
 # The shell's methods omabox and its skill use, METHOD:ARGS:WHO. Every one the skill names is here
 # (t_unit_omarchy_contract checks).
-OMARCHY_IPC='listPlugins:0:plugin_check rescanPlugins:0:setup ping:0:skill summon:2:skill toggle:2:skill
+OMARCHY_IPC='listPlugins:0:plugin_check,setup rescanPlugins:0:setup ping:0:skill summon:2:skill toggle:2:skill
   hide:1:skill call:3:skill listShellConfig:0:skill moveBarWidget:2:skill putBarWidget:2:skill
   setBarWidget:4:skill enablePlugin:2:skill setPluginEnabled:2:skill reloadConfig:0:skill
   debugBarGeometry:0:skill togglePanelAt:2:skill'
@@ -8866,7 +8866,32 @@ t_unit_setup() {
   mkdir -p "$h/.codex" "$h/.config/omarchy"
   echo '{"bar": {"layout": {"right": [{"id": "x.y"}]}}}' > "$h/.config/omarchy/shell.json"
   # (The XDG dirs too: the user's session sets them, and --remove deletes the aquamarine build there.)
-  in_h() { HOME=$h XDG_DATA_HOME=$h/.local/share XDG_CACHE_HOME=$h/.cache XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state "$CLI" "$@" 2>&1; }
+  # omarchy and omarchy-shell are stand-ins: setup's widget step talks to the running shell (#397),
+  # which is the real desktop's whatever HOME says. The shell's stand-in logs each call to
+  # $h/shell.log and answers as $h/shell-mode says: none (no file) is no shell running; known, a
+  # shell that lists the widget; unknown, one that lists it once a rescan has been asked and a list
+  # made after it (a rescan returns before the scan is done); stuck, one a rescan does not change.
+  local hst=$TMP/$P-setup-shell
+  mkdir -p "$hst"
+  printf '#!/bin/sh\necho "omarchy $*" >> "$HOME/shell.log"; exit 1\n' > "$hst/omarchy"
+  cat > "$hst/omarchy-shell" <<'EOF'
+#!/bin/sh
+echo "omarchy-shell $*" >> "$HOME/shell.log"
+m=$(cat "$HOME/shell-mode" 2>/dev/null) || { echo "omarchy-shell is not running" >&2; exit 1; }
+[ "$1" != -q ] || shift
+case $2 in
+  rescanPlugins) [ "$m" = stuck ] || : > "$HOME/rescanned" ;;
+  listPlugins)
+    if [ "$m" = known ] || { [ -e "$HOME/rescanned" ] && [ -e "$HOME/listed" ]; }; then
+      echo '[{"id":"x.y","enabled":true},{"id":"chaves.omabox","enabled":false}]'
+    else
+      [ ! -e "$HOME/rescanned" ] || : > "$HOME/listed"
+      echo '[{"id":"x.y","enabled":true}]'
+    fi ;;
+esac
+EOF
+  chmod +x "$hst/omarchy" "$hst/omarchy-shell"
+  in_h() { HOME=$h XDG_DATA_HOME=$h/.local/share XDG_CACHE_HOME=$h/.cache XDG_CONFIG_HOME=$h/.config XDG_STATE_HOME=$h/.local/state PATH=$hst:$PATH "$CLI" "$@" 2>&1; }
   out=$(in_h setup); local rc=$?
   check_eq "setup in a clean HOME" 0 "$rc"
   # (No ~/.local/bin/omabox for a system install: its command is /usr/bin/omabox.)
@@ -8878,6 +8903,26 @@ t_unit_setup() {
   check_fails "...not for an agent that is not installed" test -e "$h/.hermes"
   check "...the settings dir" test -d "$h/.config/omabox"
   check_match "...the guard not turned on without a terminal" "not asked \(no terminal\): omabox guard on" "$out"
+  # finding 539 (#397): the widget's line without a terminal works as soon as setup is done. The
+  # running shell had not seen the new link yet, so `omarchy plugin enable` said "is not known". A shell
+  # that does not list the widget is asked to rescan, and setup waits until it lists it.
+  local sl
+  setup_shell() { rm -f "$h/shell.log" "$h/rescanned" "$h/listed"; if [ "$1" = none ]; then rm -f "$h/shell-mode"; else echo "$1" > "$h/shell-mode"; fi; out=$(in_h setup); sl=$(cat "$h/shell.log" 2>/dev/null); }
+  check_match "...no shell running: the line as it was" "bar widget: not asked \(no terminal\): omarchy plugin enable chaves\.omabox" "$out"
+  setup_shell unknown
+  check_match "a shell that has not seen the new link: the same line" "bar widget: not asked \(no terminal\): omarchy plugin enable chaves\.omabox" "$out"
+  check_eq "...after a rescan, and a wait until the shell lists the widget (#397)" \
+    "omarchy-shell shell listPlugins|omarchy-shell -q shell rescanPlugins|omarchy-shell shell listPlugins|omarchy-shell shell listPlugins" "$(tr '\n' '|' <<<"$sl" | sed 's/|$//')"
+  setup_shell known
+  check_eq "a shell that lists it already: no rescan (it reloads every plugin)" "omarchy-shell shell listPlugins" "$sl"
+  setup_shell none
+  check_eq "no shell running: asked once, no rescan" "omarchy-shell shell listPlugins" "$sl"
+  setup_shell stuck
+  check_match "a shell that still does not list it after the rescan: the line names both steps" \
+    "bar widget: not asked \(no terminal\): omarchy-shell shell rescanPlugins, then omarchy plugin enable chaves\.omabox" "$out"
+  date -Is > "$h/.config/omabox/widget-declined"; setup_shell unknown
+  check_eq "...a no remembered: not a call to the shell" "" "$sl"
+  rm -f "$h/.config/omabox/widget-declined" "$h/shell-mode" "$h/shell.log"
   # finding 326: the feedback skill is opt-in. No link from a plain setup; --feedback-skill links it
   # where the omabox skill goes, a later plain setup keeps it, --no-feedback-skill takes it out.
   local fbl=(.claude/skills/omabox-feedback .agents/skills/omabox-feedback .codex/skills/omabox-feedback) l
@@ -14409,7 +14454,16 @@ t_setup_prompts() {
   if [[ $ROOT == /usr/* ]]; then
     sys=1; answers=$'y\ny\n'; mkdir -p "$H/.local/bin"; ln -sfn /nowhere/omabox/bin/omabox "$H/.local/bin/omabox"
   fi
-  local out; out=$(in_tty "$answers")
+  # finding 539 (#397): without a terminal, the widget's line works as soon as setup is done. The box's
+  # shell does not watch its plugins dir (finding 196), so without setup's rescan the widget stayed
+  # unknown to it ("is not known"), as a desktop's shell is for the moment its watcher takes.
+  local out; out=$(ob run -b "$B" -- "$CLI" setup </dev/null 2>&1)
+  check_match "setup without a terminal: the widget's line" "bar widget: not asked \(no terminal\): omarchy plugin enable chaves\.omabox" "$out"
+  check "...which works right away (#397)" ob run -b "$B" -- omarchy plugin enable chaves.omabox
+  check "...the widget in the box's bar" until_ok 5 grep -q '"chaves.omabox"' "$H/.config/omarchy/shell.json"
+  ob run -b "$B" -- omarchy plugin disable chaves.omabox >/dev/null 2>&1
+  until_ok 5 bash -c "! grep -q '\"chaves.omabox\"' '$H/.config/omarchy/shell.json'"
+  out=$(in_tty "$answers")
   check_match "setup in a terminal asks to show the widget" "Show the omabox widget in your bar\? \[Y/n\]" "$out"
   check "...yes: it is in the box's bar" until_ok 5 grep -q '"chaves.omabox"' "$H/.config/omarchy/shell.json"
   if [ "$sys" = 1 ]; then

@@ -29,6 +29,11 @@ the old one can notify "omabox: cannot list boxes". That goes away by itself onc
   the socket unit now removes it whenever it stops, and `off` removes it (and `.broker/`, when
   nothing else is in it) itself, so the first `off` after upgrading also clears what an earlier
   version's unit left ([#393](https://github.com/diogochaves/omabox/issues/393)).
+- **`omabox setup`'s `omarchy plugin enable chaves.omabox` line failed when run right after it**
+  ("plugin 'chaves.omabox' is not known"): the running shell had not yet seen the widget setup just
+  linked. setup now has the shell rescan its plugins, as `omarchy plugin add` does, and waits until
+  it lists the widget, so the line works at once; a shell that still does not know it after 4 s gets
+  a line that names the rescan too ([#397](https://github.com/diogochaves/omabox/issues/397)).
 
 ## 1.0.0 — 2026-10-27
 
