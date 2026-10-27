@@ -1,0 +1,5 @@
+# GitHub Pages serves this repo's files (the README's demo video, docs/media/). It builds them with
+# Jekyll, which stops at bin/omabox: a link to build/omabox, made by ./install.sh, so it leads
+# nowhere in a fresh checkout. Nothing under bin/ is served.
+exclude:
+  - bin/

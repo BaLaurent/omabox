@@ -1,4 +1,6 @@
-# What a release tarball (release.sh, git archive) leaves out: demo media, the original spike, CI.
+# What a release tarball (release.sh, git archive) leaves out: demo media, the original spike, CI,
+# GitHub Pages' config.
 docs/media/ export-ignore
 spike/ export-ignore
 .github/ export-ignore
+_config.yml export-ignore
