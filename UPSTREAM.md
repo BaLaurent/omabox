@@ -24,7 +24,7 @@ workaround, re-run `./install.sh --check`, and move the entry to "Dropped" with 
 - **Then drop:** what is #415's alone: the refusals and the confirm-close downgrade in
   `cmd_up`/`cmd_config` with `aq_lacks`/`AQ_HOWTO`, the fix's detection (`AQ_FIX_SYMBOL`,
   `aq_has_fix`, `aq_ver_fixed`, `AQ_SYSDIR` and their checks in `t_unit_aquamarine`), `aq_unfixed`
-  in the suite, and #415's mentions in README.md and AGENTS.md's "Developed against". Keep
+  in the suite, and #415's mention in AGENTS.md's "Developed against". Keep
   `confirm-close.sh`'s fallback. Only once omabox's own patches are gone too (below), the
   private build itself: `setup_aquamarine` (or all of `setup`, if #49 has not given it other parts),
   the private-build half of `aq_pick` (`AQ_COMMIT`, `AQ_BUILD`, `AQ_USER`, the stale-soname note,
