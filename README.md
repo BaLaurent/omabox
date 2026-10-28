@@ -16,7 +16,7 @@
 [![Rust](https://img.shields.io/badge/rust-1.85+-blue)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-<!-- TODO(#401): the 1.0 video, as a user-attachments link from Diogo's upload of renders/1.0-post.mp4 -->
+https://github.com/user-attachments/assets/8dca4735-140e-472a-9bb8-b05412a4649a
 
 ## What omabox is (and isn't)
 
