@@ -1,0 +1,89 @@
+# The agent guard
+
+What the guard does, what it sets for each agent, and what it does not stop. Back to the
+[README](../README.md).
+
+The skill is advice: an agent that does not think of `./build/tests/tst_x` as GUI work still opens
+its windows on your desktop, because its shell holds your real display. The guard (opt-in; Claude
+Code and Codex, or any agent through `guard exec`) makes that fail instead: agents' shells get a
+display that does not exist, so a stray window, `hyprctl`, `grim` or `omarchy-theme-set` fails with
+an error the skill explains, and a link an agent opens is refused instead of landing in your
+browser. `install.sh` asks (yes by default); it never turns the guard on by itself.
+
+```bash
+omabox guard on               # every installed agent (or: on claude | on codex); a backup next to each file
+omabox guard off              # take it out again (each file as it was)
+omabox guard                  # is it on, per agent; what it does
+omabox host -- CMD            # from a guarded shell: one command on your real desktop, when you asked for it
+omabox guard exec -- AGENT    # any other agent: start it under the guard
+```
+
+## What the guard sets, per agent, and what it does not stop
+
+Agents' shell commands get `WAYLAND_DISPLAY=omabox-guard`, `HYPRLAND_INSTANCE_SIGNATURE=omabox-guard`,
+an empty `DISPLAY`, an empty `QT_QPA_PLATFORMTHEME` (Omarchy's `gtk3` would make even an offscreen Qt
+test start GTK, which needs a display, so `ctest` with `QT_QPA_PLATFORM=offscreen` keeps working) and
+`QT_FORCE_STDERR_LOGGING=1` (a Qt program with no display aborts; this way the agent reads why).
+A browser already running on your desktop takes a URL over its own socket, not the display, and with
+`misc:focus_on_activate` takes focus too. So `BROWSER` and `GH_BROWSER` name omabox's
+`share/guard/xdg-open`, which fails with a note to give you the link instead, and Claude Code and
+`guard exec` also put it first on PATH as `xdg-open`. Inside a box, links open as usual. Quickshell's
+own IPC needs no display either, so `quickshell kill` or `qs ipc` from a guarded shell would reach
+your desktop's shell (`omarchy restart shell` stopped it, and could not start it again): the same
+PATH puts `share/guard/quickshell` and `qs` first, which refuse `kill` and `ipc` and pass the rest on.
+Omarchy 4.5's `omarchy-shell` goes further: given a display that does not exist, it finds your
+session's and talks to the shell's own socket. The guard leaves an empty `omabox-guard` file in your
+runtime directory, so the guard's display exists and `omarchy-shell` stays with it, and its own
+`share/guard/omarchy-shell` refuses with a reason.
+
+- **Claude Code**: one `SessionStart` hook in `~/.claude/settings.json` (merged with yours). Every
+  shell command of the session gets the variables, subagents' too, plus a core limit of 1 byte, so a
+  Qt program's abort never becomes a "Process crashed" notification on your desktop. It also tells
+  the agent in one line what the error means and when `omabox host` is allowed. Claude Code's own
+  process is not changed (clipboard paste, opening the browser). Your own `!` commands in Claude Code
+  run in the session's shell, so they get the guard too: run desktop commands (`omarchy restart
+  shell`, `hyprctl reload`, a theme switch) in your own terminal, or ask the agent to use `omabox
+  host`. If omabox is gone (deleted without `guard off`), the hook applies nothing
+  and says so in one line.
+- **Codex**: `[shell_environment_policy.set]` in a marked block of `~/.codex/config.toml`, or, when
+  the config has its own `set` table, the guard's keys marked inside it (`guard off` keeps yours; a
+  value of your own for one of them, or an inline table, is refused, untouched), and a
+  `SessionStart` hook in `~/.codex/hooks.json` that gives the agent the same note. Codex runs that
+  hook only after you trust it once (`/hooks` in Codex). No core limit. The block's values are fixed,
+  so they stay if omabox is gone: the hook then tells the agent how to take them out. The variables
+  were checked through `codex sandbox`, the hook only by what Codex's hooks.json takes, not in a
+  logged-in session.
+- **Anything else**: `omabox guard exec -- AGENT` starts the agent itself under the guard. Its own
+  process loses the display too (clipboard, opening a browser to log in; `xdg-open` refuses). It also
+  gets a session of its own (`OMABOX_SESSION`), so its default box is its own, as in Claude Code and
+  Codex.
+
+When an omabox update changes what `guard on` writes, the Claude Code and Codex hooks say so at
+session start, in one more line, until `omabox guard on` renews them.
+
+omabox keeps working under the guard: boxes have their own display, and `up --interactive`, `peek`
+and `--size host` find your session by themselves. Work you ask for on your real desktop ("switch my
+theme", `hyprctl reload` after editing your config) goes through `omabox host -- CMD`: your session's
+display, `DISPLAY` and Qt theme for that one command, which it names on stderr, so it stays on the
+record.
+
+It stops accidents. It does not stop:
+
+- an agent that sets the variables back, or runs `omabox host` unasked, on purpose;
+- processes the agent starts itself rather than through its shell (MCP servers: a headed browser
+  MCP opens on your desktop);
+- file writes: your shell watches `~/.config/omarchy/shell.json` and `~/.config/omarchy/plugins/`,
+  so an agent editing them (or running `omarchy plugin add` on the host) changes your real bar at
+  once; the skill sends those writes to the box's HOME;
+- anything over the session bus or the user manager (notifications, the keyring, apps started over
+  D-Bus, `uwsm-app` and `systemd-run --user`, which run in your session's environment);
+- links opened by other routes: a browser started directly with a URL (it hands the URL to the one
+  already running), `gio open` (it starts your URL handler itself), npm's `open` (it runs its own
+  copy of xdg-open), or, under Codex, a plain `xdg-open` (Codex gets `BROWSER` and `GH_BROWSER` but
+  not the PATH entry). Python's `webbrowser` stops at omabox's `xdg-open` (it counts one that has
+  started as a success), except under `guard exec` from an omabox at a path with a space: there it
+  tries the next browser when that one fails.
+
+For a fence, run the agent in a sandbox that blocks Unix sockets (Claude Code's `sandbox`: it also
+blocks the network and every other socket, omabox's included), or see
+[ai-jail](ai-jail.md).
