@@ -3,6 +3,14 @@
 What changed in each version of omabox, newest first. The CLI, the agent skill and the bar widget
 share one version (`omabox --version`). Update with `git pull && ./install.sh`.
 
+## Unreleased (fork BaLaurent/omabox)
+
+### Fixed
+
+- **A repo on a removable drive (`/run/media/$USER/...`) was never mounted in a box**: everything
+  under `/run` was refused. Paths inside one of your udisks drives are now mounted like any other
+  repo; the rest of `/run`, `/run/media/$USER` itself and other users' drives stay refused.
+
 ## 1.0.1 — 2026-10-27
 
 Fixes for what an upgrade from 0.x runs into, and a security fix: a box could take a port on your

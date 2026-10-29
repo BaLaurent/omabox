@@ -10583,6 +10583,15 @@ from them.
     QML, not run on a desktop). Tests: t_unit_setup (stand-in shells: none, one that lists it, one
     that lists it after a rescan, one a rescan does not change, a "no" remembered), t_setup_prompts
     (in a box, the line run at once enables the widget); both failed on the old code.
+
+540. **A repo on a removable drive was never mounted** (2026-10-29, fork BaLaurent/omabox). udisks
+    mounts the user's drives at `/run/media/$USER/DRIVE`, and refuse_path refused all of `/run`
+    ("secrets or live sockets"): `up` started the box without the repo ("not mounting the repo"),
+    `run` overlaid nothing, and t_unit_mount_rules' "a repo is fine" failed for a checkout on such a
+    drive. refuse_path now lets a path strictly inside `/run/media/$USER/` through the `/run` entry;
+    `/run/media`, `/run/media/$USER` itself (every drive at once), another user's drives and the rest
+    of `/run` stay refused, as does every other entry of the list. Tests: repo.rs
+    user_drives_are_mountable; t_unit_mount_rules passes from a checkout on a drive (failed before).
 ## Dead ends (kept so we don't retry them; probes in `spike/dead-ends/`)
 
 - Headless output inside the real Hyprland: shares seat/focus with the user; black-output bugs.

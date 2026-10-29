@@ -197,7 +197,8 @@ Tested with ai-jail 2.10.0 and 2.12.0 and omabox 1.0 on Linux, and before that w
   gcloud's, azure's and 1Password's `op` config; the coding agents' own, `~/.claude`, `~/.codex`, OpenCode's,
   pi's, Hermes' and Gemini's; the browsers' profiles, `~/.mozilla`, Chromium's, Chrome's, Brave's, Vivaldi's,
   Edge's, and `~/.pki`), omabox's own saves and box HOMEs
-  (`~/.local/share/omabox`, `~/.cache/omabox`), your runtime dir, `/run`, `/dev`, `/proc`, `/sys`.
+  (`~/.local/share/omabox`, `~/.cache/omabox`), your runtime dir, `/run` (but inside one of your
+  drives, `/run/media/$USER/DRIVE`), `/dev`, `/proc`, `/sys`.
 - **Its HOME** is fake, seeded with your theme and shell settings and nothing secret (no API keys,
   keyrings or tokens), and `omabox down` deletes it with whatever a plugin or app changed there.
 - **Its session**: a private session bus, its own accessibility (AT-SPI) bus and a throwaway keyring

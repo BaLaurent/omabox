@@ -321,9 +321,16 @@ pub fn refuse_path(p: &[u8], look: bool) -> Option<Vec<u8>> {
     for pre in ["tmux-", "ssh-", "gpg-"] {
         list.extend(glob_prefix("/tmp", pre));
     }
+    // udisks mounts the user's drives at /run/media/$USER/DRIVE: a project on one of them is a
+    // project like any other, not one of /run's sockets. Only inside a drive; /run/media/$USER
+    // itself (every drive at once) stays refused.
+    let user = shell::env_or_empty("USER");
+    let media = cat!("/run/media/", user, "/");
+    let on_drive =
+        !user.is_empty() && !user.contains(&b'/') && s.len() > media.len() && s.starts_with(&media);
     for x in list {
         // (a glob that matched nothing; an agent's config dir variable that is not set)
-        if x.contains(&b'*') || x.is_empty() {
+        if x.contains(&b'*') || x.is_empty() || (on_drive && x == b"/run") {
             continue;
         }
         let x = slash(&x);
@@ -706,6 +713,21 @@ mod tests {
         assert_eq!(realpath_ms(b"/a/./b/../c//d/"), Some(b"/a/c/d".to_vec()));
         assert_eq!(realpath_ms(b"/.."), Some(b"/".to_vec()));
         assert_eq!(realpath_ms(b"/"), Some(b"/".to_vec()));
+    }
+
+    #[test]
+    fn user_drives_are_mountable() {
+        let user = shell::env_or_empty("USER");
+        if user.is_empty() {
+            return;
+        }
+        let media = cat!("/run/media/", user);
+        assert!(refuse_path(&cat!(media, "/Games/proj"), false).is_none());
+        assert!(refuse_path(&cat!(media, "/Games"), false).is_none());
+        assert!(refuse_path(&media, false).is_some(), "every drive at once");
+        assert!(refuse_path(b"/run/media", false).is_some());
+        assert!(refuse_path(b"/run/media/someone-else/x", false).is_some());
+        assert!(refuse_path(b"/run/dbus", false).is_some());
     }
 
     // readlink_f against GNU's own on links, dangling ones, loops, files with more after them.
